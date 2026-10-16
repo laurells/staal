@@ -1,0 +1,7 @@
+// expect: E101
+type Inner { d: Done }
+type Outer { inner: Inner }
+
+fn f() {
+    let x = propose(Outer, instruct: "x")
+}

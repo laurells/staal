@@ -1,0 +1,6 @@
+// A recursive type does not hang the forgery check.
+type Node { label: Text, next: Node }
+
+fn f() {
+    let n = propose(Node, instruct: "x", tokens: 10)
+}

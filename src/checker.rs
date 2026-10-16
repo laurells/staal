@@ -913,11 +913,33 @@ fn check_call_blind(ctx: &mut Ctx, name: &str, args: &[Expr], params: &[(Ty, boo
     }
 }
 
+/// The first runtime-only type (Receipt, Outcome, Done, a capability) found anywhere
+/// inside `ty`, following record fields. `seen` guards against recursive types.
+fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<String> {
+    match ty {
+        Ty::Cap { .. } => Some("capability".into()),
+        Ty::Proposed(inner) => runtime_only_inside(ctx, inner, seen),
+        Ty::Named(n) if n == "Receipt" || n == "Outcome" || n == "Done" => Some(n.clone()),
+        Ty::Named(n) => {
+            if !seen.insert(n.clone()) {
+                return None;
+            }
+            let fields = ctx.fields.get(n)?.clone();
+            fields.iter().find_map(|(_, fty)| runtime_only_inside(ctx, fty, seen))
+        }
+    }
+}
+
 /// Returns the expression's type and whether its value is trusted.
 fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
     match e {
         Expr::Str(..) => Some((named("Text"), true)),
-        Expr::Int(..) => Some((named("Int"), true)),
+        Expr::Int(n, pos) => {
+            if *n > i64::MAX as u64 {
+                ctx.err("E101", *pos, format!("integer {n} is too large; the largest Int is {}", i64::MAX));
+            }
+            Some((named("Int"), true))
+        }
         Expr::Bool(..) => Some((named("Bool"), true)),
         Expr::Var(n, pos) => match env.get(n) {
             Some(b) => Some((b.ty.clone(), b.trusted)),
@@ -1032,6 +1054,16 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
         }
         Expr::Propose { ty, instruct, data, blind_to, pos, .. } => {
             check_ty_known(ctx, ty, *pos);
+            if let Some(bad) = runtime_only_inside(ctx, ty, &mut HashSet::new()) {
+                ctx.err(
+                    "E101",
+                    *pos,
+                    format!(
+                        "a model cannot produce a {bad}: only the runtime creates receipts, outcomes and \
+                         Done values, so model output of type {ty} could forge one"
+                    ),
+                );
+            }
             check_blind(ctx, instruct.as_deref(), data, blind_to, env, *pos);
             if let Some(ins) = instruct {
                 if let Some((ity, trusted)) = type_of(ctx, ins, env) {

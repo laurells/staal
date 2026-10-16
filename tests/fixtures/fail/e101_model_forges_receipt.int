@@ -1,0 +1,9 @@
+// expect: E101
+// A model must never be able to produce a receipt and cite it as evidence.
+type Fake { r: Receipt }
+
+fn f() -> Done {
+    let fake: Fake = validate propose(Fake, instruct: "Make up a receipt.")
+    let r = fake.r
+    return done(evidence: [r])
+}
