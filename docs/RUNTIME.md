@@ -122,7 +122,7 @@ Evaluation is strictly left to right and statement by statement.
 Two deployment limits apply to every run; exceeding either is a failure
 (`step_limit`, `depth_limit`):
 
-- `max_steps` (default 1,000,000) counts statements executed.
+- `max_steps` (default 1,000,000) counts statements executed and loop iterations.
 - `max_depth` (default 256) bounds nested function calls.
 
 These limits are safeguards, like a timeout; they are not part of a program's
@@ -199,6 +199,7 @@ A failure has a kind and a message:
 | `budget` | a model call would exceed a token limit or a budget |
 | `provider` | the model provider failed or misbehaved |
 | `step_limit`, `depth_limit` | a deployment limit was reached |
+| `internal` | a state the compiler should have ruled out (a bug in intentc), reported instead of crashing |
 
 A failure stops the current function and every caller up to the nearest
 enclosing `try`. `try e` evaluates `e`: on success it yields

@@ -1,0 +1,749 @@
+// The reference interpreter. It implements docs/RUNTIME.md directly and is the
+// oracle any other backend is tested against.
+//
+// Rules for this module:
+//  - It never panics. A state the compiler should have made impossible becomes a
+//    failure of kind `internal`, not a crash.
+//  - It re-checks at runtime what matters for safety (capabilities never sent to
+//    models, runtime-only values never accepted from outside), so a bug in the
+//    compiler is caught here rather than trusted.
+
+pub mod adapter;
+pub mod broker;
+pub mod money;
+pub mod provider;
+pub mod value;
+
+use crate::ast::*;
+use adapter::{Adapter, SimulatedAdapter};
+use broker::Broker;
+use money::{Currency, Money};
+use provider::{ModelRequest, Provider, ScriptProvider};
+use serde_json::{json, Map, Value as Json};
+use std::collections::HashMap;
+use std::fmt;
+use value::{from_json, schema, to_json, Receipt, Types, Value};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailKind {
+    Action,
+    Capability,
+    Validation,
+    Budget,
+    Provider,
+    StepLimit,
+    DepthLimit,
+    /// A state the compiler should have ruled out: a bug, reported instead of crashing.
+    Internal,
+}
+
+impl fmt::Display for FailKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            FailKind::Action => "action",
+            FailKind::Capability => "capability",
+            FailKind::Validation => "validation",
+            FailKind::Budget => "budget",
+            FailKind::Provider => "provider",
+            FailKind::StepLimit => "step_limit",
+            FailKind::DepthLimit => "depth_limit",
+            FailKind::Internal => "internal",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Failure {
+    pub kind: FailKind,
+    pub message: String,
+}
+
+fn fail<T>(kind: FailKind, message: impl Into<String>) -> Result<T, Failure> {
+    Err(Failure { kind, message: message.into() })
+}
+
+fn internal<T>(message: impl Into<String>) -> Result<T, Failure> {
+    fail(FailKind::Internal, message)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub max_steps: u64,
+    pub max_depth: usize,
+    pub default_max_tokens: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits { max_steps: 1_000_000, max_depth: 256, default_max_tokens: 1024 }
+    }
+}
+
+/// The hard ceiling on `max_depth`: deeper nesting could exhaust the interpreter's stack.
+pub const MAX_DEPTH_CEILING: usize = 2_000;
+/// Stack for the interpreter thread, sized so MAX_DEPTH_CEILING nested calls fit.
+const INTERP_STACK_BYTES: usize = 512 * 1024 * 1024;
+
+/// The outcome of a run: the entry function's result or a failure, and the log.
+#[derive(Debug)]
+pub struct RunResult {
+    pub result: Result<Json, Failure>,
+    pub log: Vec<Json>,
+}
+
+/// Runs a checked program with the providers and adapters named in its config.
+/// Returns Err for a bad config; nothing runs in that case.
+pub fn run_config(prog: &Program, config: &Json) -> Result<RunResult, String> {
+    let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
+    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
+    let provider = ScriptProvider::from_config(model)?;
+    let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
+    run_with(prog, config, Box::new(provider), Box::new(adapter))
+}
+
+/// Runs a checked program with the given provider and adapter.
+pub fn run_with(
+    prog: &Program,
+    config: &Json,
+    provider: Box<dyn Provider + Send>,
+    adapter: Box<dyn Adapter + Send>,
+) -> Result<RunResult, String> {
+    let setup = Setup::from_config(prog, config)?;
+    // The interpreter recurses once per nested call, so it runs on a thread with a
+    // stack large enough for the depth ceiling, whatever thread called us.
+    std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .stack_size(INTERP_STACK_BYTES)
+            .spawn_scoped(s, move || {
+                let mut it = Interp::new(prog, setup.limits, provider, adapter);
+                it.run(&setup)
+            })
+            .map_err(|e| format!("could not start the interpreter thread: {e}"))?
+            .join()
+            .map_err(|_| "the interpreter thread crashed; this is a bug in intentc".to_string())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Run config (RUNTIME.md section 1)
+
+struct Setup {
+    entry: String,
+    /// Entry arguments in parameter order: data values, or grants for capabilities.
+    args: Vec<Arg>,
+    limits: Limits,
+}
+
+enum Arg {
+    Data(Value),
+    Grant { path: String, limit: Option<Money> },
+}
+
+/// Converts a limit written in source (`max: 500 USD`) to money.
+fn source_limit(l: &Limit) -> Result<Money, String> {
+    let unit = l.unit.as_deref().ok_or_else(|| {
+        format!("capability limit 'max: {}' has no currency, so it cannot be enforced; write e.g. 'max: {} USD'", l.amount, l.amount)
+    })?;
+    let currency = Currency::parse(unit)?;
+    Money::from_major(l.amount, currency)
+}
+
+impl Setup {
+    fn from_config(prog: &Program, config: &Json) -> Result<Setup, String> {
+        let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
+        for k in cfg.keys() {
+            if !["entry", "inputs", "grants", "model", "adapters", "limits"].contains(&k.as_str()) {
+                return Err(format!("run config: unknown key '{k}'"));
+            }
+        }
+        // Every capability limit in the program must be enforceable before anything runs.
+        check_all_limits(prog)?;
+
+        let entry = cfg.get("entry").and_then(Json::as_str).ok_or("run config: \"entry\" must name a function")?;
+        let f = prog.fns.iter().find(|f| f.name == entry).ok_or(format!("run config: no function named '{entry}'"))?;
+        let types = types_of(prog);
+        let empty = Map::new();
+        let inputs = match cfg.get("inputs") {
+            None => &empty,
+            Some(v) => v.as_object().ok_or("inputs: expected an object")?,
+        };
+        let grants = match cfg.get("grants") {
+            None => &empty,
+            Some(v) => v.as_object().ok_or("grants: expected an object")?,
+        };
+        for k in inputs.keys() {
+            match f.params.iter().find(|p| &p.name == k) {
+                None => return Err(format!("inputs.{k}: '{entry}' has no parameter named '{k}'")),
+                Some(p) if matches!(p.ty, Ty::Cap { .. }) => {
+                    return Err(format!("inputs.{k}: is a capability; capabilities are given in \"grants\""))
+                }
+                _ => {}
+            }
+        }
+        for k in grants.keys() {
+            match f.params.iter().find(|p| &p.name == k) {
+                None => return Err(format!("grants.{k}: '{entry}' has no parameter named '{k}'")),
+                Some(p) if !matches!(p.ty, Ty::Cap { .. }) => {
+                    return Err(format!("grants.{k}: is not a capability parameter; give it in \"inputs\""))
+                }
+                _ => {}
+            }
+        }
+
+        let mut args = Vec::new();
+        for p in &f.params {
+            match &p.ty {
+                Ty::Cap { path, max } => {
+                    let at = format!("grants.{}", p.name);
+                    let g = grants.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this capability"))?;
+                    let g = g.as_object().ok_or(format!("{at}: expected an object"))?;
+                    for k in g.keys() {
+                        if k != "cap" && k != "max" {
+                            return Err(format!("{at}: unknown key '{k}'"));
+                        }
+                    }
+                    let gpath = g.get("cap").and_then(Json::as_str).ok_or(format!("{at}.cap: expected a string"))?;
+                    let want = path.join(".");
+                    if gpath != want {
+                        return Err(format!("{at}.cap: is '{gpath}', but the parameter needs '{want}'"));
+                    }
+                    let limit = match g.get("max") {
+                        None => None,
+                        Some(m) => match from_json(&Ty::Named("Money".into()), m, &types, &format!("{at}.max"))? {
+                            Value::Money(m) => Some(m),
+                            _ => return Err(format!("{at}.max: expected money")),
+                        },
+                    };
+                    if let (Some(gl), Some(declared)) = (limit, max) {
+                        let d = source_limit(declared)?;
+                        if gl.currency != d.currency {
+                            return Err(format!(
+                                "{at}.max: granted in {}, but the parameter's limit is in {}",
+                                gl.currency.code, d.currency.code
+                            ));
+                        }
+                    }
+                    args.push(Arg::Grant { path: want, limit });
+                }
+                Ty::Proposed(_) => {
+                    return Err(format!("inputs.{}: an entry parameter cannot be Proposed; only model calls produce those", p.name))
+                }
+                ty => {
+                    let at = format!("inputs.{}", p.name);
+                    let j = inputs.get(&p.name).ok_or(format!("{at}: missing"))?;
+                    args.push(Arg::Data(from_json(ty, j, &types, &at)?));
+                }
+            }
+        }
+
+        let mut limits = Limits::default();
+        if let Some(l) = cfg.get("limits") {
+            let l = l.as_object().ok_or("limits: expected an object")?;
+            for (k, v) in l {
+                let n = v.as_u64().filter(|n| *n > 0).ok_or(format!("limits.{k}: expected a positive whole number"))?;
+                match k.as_str() {
+                    "max_steps" => limits.max_steps = n,
+                    "default_max_tokens" => limits.default_max_tokens = n,
+                    "max_depth" => {
+                        if n > MAX_DEPTH_CEILING as u64 {
+                            return Err(format!("limits.max_depth: at most {MAX_DEPTH_CEILING}"));
+                        }
+                        limits.max_depth = n as usize;
+                    }
+                    _ => return Err(format!("limits: unknown key '{k}'")),
+                }
+            }
+        }
+        Ok(Setup { entry: entry.to_string(), args, limits })
+    }
+}
+
+fn types_of(prog: &Program) -> Types {
+    let mut t = Types::new();
+    t.insert("Outcome".into(), vec![("ok".into(), Ty::Named("Bool".into())), ("error".into(), Ty::Named("Text".into()))]);
+    for d in &prog.types {
+        t.insert(d.name.clone(), d.fields.clone());
+    }
+    t
+}
+
+fn check_all_limits(prog: &Program) -> Result<(), String> {
+    fn ty(t: &Ty, where_: &str) -> Result<(), String> {
+        if let Ty::Cap { max: Some(l), .. } = t {
+            source_limit(l).map_err(|e| format!("{where_}: {e}"))?;
+        }
+        Ok(())
+    }
+    fn block(body: &[Stmt], fname: &str) -> Result<(), String> {
+        for s in body {
+            match s {
+                Stmt::Let { ty: Some(t), name, .. } => ty(t, &format!("in '{fname}', let {name}"))?,
+                Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => block(body, fname)?,
+                Stmt::If { then, els, .. } => {
+                    block(then, fname)?;
+                    block(els, fname)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    for f in &prog.fns {
+        for p in &f.params {
+            ty(&p.ty, &format!("in '{}', parameter {}", f.name, p.name))?;
+        }
+        block(&f.body, &f.name)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The interpreter
+
+struct Meter {
+    calls_left: Option<u64>,
+    tokens_left: Option<u64>,
+}
+
+enum Flow {
+    Next,
+    Break,
+    Return(Value),
+}
+
+/// Variables of one function invocation: a stack of block scopes.
+struct Frame {
+    scopes: Vec<HashMap<String, Value>>,
+}
+
+impl Frame {
+    fn get(&self, name: &str) -> Result<Value, Failure> {
+        for s in self.scopes.iter().rev() {
+            if let Some(v) = s.get(name) {
+                return Ok(v.clone());
+            }
+        }
+        internal(format!("undefined variable '{name}'"))
+    }
+
+    fn set(&mut self, name: &str, v: Value) -> Result<(), Failure> {
+        match self.scopes.last_mut() {
+            Some(s) => {
+                s.insert(name.to_string(), v);
+                Ok(())
+            }
+            None => internal("no scope to bind into"),
+        }
+    }
+}
+
+struct Interp<'p> {
+    fns: HashMap<&'p str, &'p FnDecl>,
+    types: Types,
+    provider: Box<dyn Provider + Send>,
+    adapter: Box<dyn Adapter + Send>,
+    broker: Broker,
+    meters: Vec<Meter>,
+    log: Vec<Json>,
+    steps: u64,
+    depth: usize,
+    limits: Limits,
+}
+
+impl<'p> Interp<'p> {
+    fn new(
+        prog: &'p Program,
+        limits: Limits,
+        provider: Box<dyn Provider + Send>,
+        adapter: Box<dyn Adapter + Send>,
+    ) -> Self {
+        Interp {
+            fns: prog.fns.iter().map(|f| (f.name.as_str(), f)).collect(),
+            types: types_of(prog),
+            provider,
+            adapter,
+            broker: Broker::default(),
+            meters: Vec::new(),
+            log: Vec::new(),
+            steps: 0,
+            depth: 0,
+            limits,
+        }
+    }
+
+    fn emit(&mut self, event: &str, mut fields: Json) {
+        if let Some(obj) = fields.as_object_mut() {
+            obj.insert("seq".into(), json!(self.log.len() + 1));
+            obj.insert("event".into(), json!(event));
+        }
+        self.log.push(fields);
+    }
+
+    fn run(&mut self, setup: &Setup) -> RunResult {
+        self.emit("run_start", json!({ "entry": setup.entry }));
+        let mut args = Vec::new();
+        for a in &setup.args {
+            match a {
+                Arg::Data(v) => args.push(v.clone()),
+                Arg::Grant { path, limit } => {
+                    let h = self.broker.grant(path, *limit);
+                    self.emit("grant", json!({ "capability": path, "max": limit.map(|m| m.to_string()) }));
+                    args.push(Value::Cap(h));
+                }
+            }
+        }
+        let result = self.call(&setup.entry, args).and_then(|v| {
+            if let Value::Done(_) = &v {
+                let mut ev = Vec::new();
+                flatten_evidence(&v, &mut ev);
+                self.emit("evidence", json!({ "items": ev }));
+            }
+            to_json(&v, false).or_else(internal)
+        });
+        match &result {
+            Ok(v) => self.emit("run_end", json!({ "ok": true, "result": v })),
+            Err(f) => self.emit("run_end", json!({ "ok": false, "failure": f.kind.to_string(), "message": f.message })),
+        }
+        RunResult { result, log: std::mem::take(&mut self.log) }
+    }
+
+    fn narrow(&mut self, v: Value, limit: &Limit) -> Result<Value, Failure> {
+        let Value::Cap(h) = v else { return internal("a non-capability flowed into a capability slot") };
+        let m = source_limit(limit).or_else(internal)?;
+        let child = self.broker.narrow(h, m).or_else(internal)?;
+        Ok(Value::Cap(child))
+    }
+
+    fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        let Some(&f) = self.fns.get(name) else { return internal(format!("undefined function '{name}'")) };
+        if f.params.len() != args.len() {
+            return internal(format!("'{name}' called with {} arguments, expects {}", args.len(), f.params.len()));
+        }
+        if self.depth >= self.limits.max_depth {
+            return fail(FailKind::DepthLimit, format!("calls nested more than {} deep", self.limits.max_depth));
+        }
+        let mut frame = Frame { scopes: vec![HashMap::new()] };
+        for (p, v) in f.params.iter().zip(args) {
+            let v = match &p.ty {
+                Ty::Cap { max: Some(l), .. } => self.narrow(v, l)?,
+                _ => v,
+            };
+            frame.set(&p.name, v)?;
+        }
+        let metered = f.budget.is_some();
+        if let Some(b) = &f.budget {
+            self.meters.push(Meter { calls_left: b.calls, tokens_left: b.tokens });
+        }
+        self.depth += 1;
+        let flow = self.exec_block(&mut frame, &f.body);
+        self.depth -= 1;
+        if metered {
+            self.meters.pop();
+        }
+        match flow? {
+            Flow::Return(v) => Ok(v),
+            Flow::Next if f.ret.is_none() => Ok(Value::Unit),
+            Flow::Next => internal(format!("'{name}' finished without returning a value")),
+            Flow::Break => internal(format!("`break` escaped from '{name}'")),
+        }
+    }
+
+    fn exec_block(&mut self, frame: &mut Frame, body: &[Stmt]) -> Result<Flow, Failure> {
+        frame.scopes.push(HashMap::new());
+        let mut result = Ok(Flow::Next);
+        for s in body {
+            match self.exec_stmt(frame, s) {
+                Ok(Flow::Next) => continue,
+                other => {
+                    result = other;
+                    break;
+                }
+            }
+        }
+        frame.scopes.pop();
+        result
+    }
+
+    /// Counts one step: every statement, and every loop iteration (so an empty
+    /// `loop { }` still reaches the limit instead of spinning forever).
+    fn tick(&mut self) -> Result<(), Failure> {
+        self.steps += 1;
+        if self.steps > self.limits.max_steps {
+            return fail(FailKind::StepLimit, format!("more than {} steps executed", self.limits.max_steps));
+        }
+        Ok(())
+    }
+
+    fn exec_stmt(&mut self, frame: &mut Frame, s: &Stmt) -> Result<Flow, Failure> {
+        self.tick()?;
+        match s {
+            Stmt::Let { name, ty, value, .. } => {
+                let mut v = self.eval(frame, value)?;
+                if let Some(Ty::Cap { max: Some(l), .. }) = ty {
+                    v = self.narrow(v, l)?;
+                }
+                frame.set(name, v)?;
+                Ok(Flow::Next)
+            }
+            Stmt::Expr(e) => {
+                self.eval(frame, e)?;
+                Ok(Flow::Next)
+            }
+            Stmt::Return(None, _) => Ok(Flow::Return(Value::Unit)),
+            Stmt::Return(Some(e), _) => Ok(Flow::Return(self.eval(frame, e)?)),
+            Stmt::Repeat { count, body, .. } => {
+                for _ in 0..*count {
+                    self.tick()?;
+                    match self.exec_block(frame, body)? {
+                        Flow::Next => {}
+                        Flow::Break => break,
+                        r @ Flow::Return(_) => return Ok(r),
+                    }
+                }
+                Ok(Flow::Next)
+            }
+            Stmt::Loop { body, .. } => loop {
+                self.tick()?;
+                match self.exec_block(frame, body)? {
+                    Flow::Next => {}
+                    Flow::Break => return Ok(Flow::Next),
+                    r @ Flow::Return(_) => return Ok(r),
+                }
+            },
+            Stmt::If { cond, then, els, .. } => match self.eval(frame, cond)? {
+                Value::Bool(true) => self.exec_block(frame, then),
+                Value::Bool(false) => self.exec_block(frame, els),
+                _ => internal("`if` condition was not a Bool"),
+            },
+            Stmt::Break(_) => Ok(Flow::Break),
+        }
+    }
+
+    fn eval(&mut self, frame: &mut Frame, e: &Expr) -> Result<Value, Failure> {
+        match e {
+            Expr::Var(n, _) => frame.get(n),
+            Expr::Str(s, _) => Ok(Value::Text(s.clone())),
+            Expr::Bool(b, _) => Ok(Value::Bool(*b)),
+            Expr::Int(n, _) => match i64::try_from(*n) {
+                Ok(n) => Ok(Value::Int(n)),
+                Err(_) => internal(format!("integer literal {n} is out of range")),
+            },
+            Expr::Field { base, field, .. } => match self.eval(frame, base)? {
+                Value::Record { fields, .. } => match fields.into_iter().find(|(f, _)| f == field) {
+                    Some((_, v)) => Ok(v),
+                    None => internal(format!("no field '{field}'")),
+                },
+                Value::Outcome { ok, error, .. } => match field.as_str() {
+                    "ok" => Ok(Value::Bool(ok)),
+                    "error" => Ok(Value::Text(error)),
+                    _ => internal(format!("Outcome has no field '{field}'")),
+                },
+                _ => internal(format!("cannot read '.{field}' of this value")),
+            },
+            Expr::Cmp { op, left, right, .. } => {
+                let l = self.eval(frame, left)?;
+                let r = self.eval(frame, right)?;
+                compare(*op, &l, &r).map(Value::Bool)
+            }
+            Expr::Call { name, args, .. } => {
+                let mut vals = Vec::with_capacity(args.len());
+                for a in args {
+                    vals.push(self.eval(frame, a)?);
+                }
+                self.call(name, vals)
+            }
+            Expr::Action { receiver, method, args, .. } => {
+                let Value::Cap(h) = frame.get(receiver)? else {
+                    return internal(format!("'{receiver}' is not a capability"));
+                };
+                let mut vals = Vec::with_capacity(args.len());
+                for a in args {
+                    vals.push(self.eval(frame, a)?);
+                }
+                self.action(h, method, vals)
+            }
+            Expr::Propose { ty, instruct, data, tokens, .. } => {
+                let instruction = match instruct {
+                    Some(i) => match self.eval(frame, i)? {
+                        Value::Text(t) => t,
+                        _ => return internal("`instruct` was not Text"),
+                    },
+                    None => "Respond with a value of the requested type.".to_string(),
+                };
+                let mut payload = Vec::with_capacity(data.len());
+                for d in data {
+                    let v = self.eval(frame, d)?;
+                    // Re-checked here even though the compiler forbids it.
+                    payload.push(to_json(&v, true).or_else(internal)?);
+                }
+                self.model_call(ty, instruction, payload, *tokens)
+            }
+            Expr::Validate(inner, _) => match self.eval(frame, inner)? {
+                Value::Proposed { ty, raw } => match from_json(&ty, &raw, &self.types, "model output") {
+                    Ok(v) => {
+                        self.emit("validated", json!({ "type": ty.to_string(), "ok": true }));
+                        Ok(v)
+                    }
+                    Err(msg) => {
+                        self.emit("validated", json!({ "type": ty.to_string(), "ok": false, "error": msg }));
+                        fail(FailKind::Validation, msg)
+                    }
+                },
+                _ => internal("`validate` applied to a value that is not Proposed"),
+            },
+            Expr::Try(inner, _) => match self.eval(frame, inner) {
+                Ok(v) => Ok(Value::Outcome { ok: true, error: String::new(), held: Some(Box::new(v)) }),
+                Err(f) => {
+                    let error = format!("{}: {}", f.kind, f.message);
+                    self.emit("caught", json!({ "failure": f.kind.to_string(), "message": f.message }));
+                    Ok(Value::Outcome { ok: false, error, held: None })
+                }
+            },
+            Expr::Done { evidence, .. } => {
+                let mut items = Vec::with_capacity(evidence.len());
+                for it in evidence {
+                    items.push(self.eval(frame, it)?);
+                }
+                Ok(Value::Done(items))
+            }
+        }
+    }
+
+    // RUNTIME.md section 6
+    fn action(&mut self, h: usize, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        let path = self.broker.path(h).or_else(internal)?.to_string();
+        let amount = self.adapter.amount(&path, method, &args);
+        let amount_text = amount.map(|m| m.to_string());
+        self.emit("action_requested", json!({ "capability": path, "method": method, "amount": amount_text }));
+        if let Err(why) = self.broker.authorize(h, amount) {
+            self.emit("action_refused", json!({ "capability": path, "method": method, "reason": why }));
+            return fail(FailKind::Capability, why);
+        }
+        let mut args_json = Vec::with_capacity(args.len());
+        for a in &args {
+            match to_json(a, true) {
+                Ok(j) => args_json.push(j),
+                Err(_) => {
+                    let why = "a capability cannot be passed to an action".to_string();
+                    self.emit("action_refused", json!({ "capability": path, "method": method, "reason": why }));
+                    return fail(FailKind::Capability, why);
+                }
+            }
+        }
+        match self.adapter.perform(&path, method, &args_json) {
+            Ok(id) => {
+                self.broker.charge(h, amount).or_else(internal)?;
+                self.emit(
+                    "action_performed",
+                    json!({ "capability": path, "method": method, "amount": amount_text, "args": args_json, "receipt": id }),
+                );
+                Ok(Value::Receipt(Receipt { id, capability: path, method: method.to_string() }))
+            }
+            Err(msg) => {
+                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg }));
+                fail(FailKind::Action, msg)
+            }
+        }
+    }
+
+    // RUNTIME.md sections 5 and 7
+    fn model_call(&mut self, ty: &Ty, instruction: String, data: Vec<Json>, tokens: Option<u64>) -> Result<Value, Failure> {
+        let mut req =
+            ModelRequest { instruction, data, output_schema: schema(ty, &self.types), max_output_tokens: 0 };
+        let input = match self.provider.count_input_tokens(&req) {
+            Ok(n) => n,
+            Err(e) => return fail(FailKind::Provider, format!("could not count input tokens: {e}")),
+        };
+        let max_output = match tokens {
+            Some(n) if input >= n => {
+                let why = format!("the request alone is {input} tokens, but this call may use at most {n}");
+                self.emit("model_refused", json!({ "reason": why }));
+                return fail(FailKind::Budget, why);
+            }
+            Some(n) => n - input,
+            None => self.limits.default_max_tokens,
+        };
+        let Some(worst) = input.checked_add(max_output) else { return internal("token count overflow") };
+        for m in &self.meters {
+            let why = match (m.calls_left, m.tokens_left) {
+                (Some(0), _) => Some("no model calls left in the budget".to_string()),
+                (_, Some(t)) if t < worst => {
+                    Some(format!("this call may use {worst} tokens, but the budget has {t} left"))
+                }
+                _ => None,
+            };
+            if let Some(why) = why {
+                self.emit("model_refused", json!({ "reason": why }));
+                return fail(FailKind::Budget, why);
+            }
+        }
+        req.max_output_tokens = max_output;
+        // The call counts against every open budget as soon as it is attempted.
+        for m in &mut self.meters {
+            if let Some(c) = &mut m.calls_left {
+                *c -= 1; // checked above: every limited meter has at least one call left
+            }
+        }
+        self.emit("model_request", json!({ "request": req.to_json(), "input_tokens_counted": input }));
+        let reply = match self.provider.complete(&req) {
+            Ok(r) => r,
+            Err(e) => {
+                self.emit("model_error", json!({ "error": e }));
+                return fail(FailKind::Provider, e);
+            }
+        };
+        let actual = reply.input_tokens.saturating_add(reply.output_tokens);
+        for m in &mut self.meters {
+            if let Some(t) = &mut m.tokens_left {
+                *t = t.saturating_sub(actual);
+            }
+        }
+        self.emit(
+            "model_reply",
+            json!({ "output": reply.output, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens }),
+        );
+        if reply.output_tokens > max_output || actual > worst {
+            return fail(
+                FailKind::Provider,
+                format!(
+                    "the provider used {actual} tokens ({} output), exceeding the limit of {worst} ({max_output} output)",
+                    reply.output_tokens
+                ),
+            );
+        }
+        Ok(Value::Proposed { ty: ty.clone(), raw: reply.output })
+    }
+}
+
+fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, Failure> {
+    use std::cmp::Ordering;
+    let ord: Option<Ordering> = match (l, r) {
+        (Value::Int(a), Value::Int(b)) => Some(a.cmp(b)),
+        (Value::Money(a), Value::Money(b)) if a.currency == b.currency => Some(a.minor.cmp(&b.minor)),
+        // Different currencies: never equal, never ordered (RUNTIME.md section 2).
+        (Value::Money(_), Value::Money(_)) => {
+            return Ok(op == CmpOp::Ne);
+        }
+        _ => None,
+    };
+    match (op, ord) {
+        (CmpOp::Eq, _) => Ok(l == r),
+        (CmpOp::Ne, _) => Ok(l != r),
+        (CmpOp::Lt, Some(o)) => Ok(o == Ordering::Less),
+        (CmpOp::Le, Some(o)) => Ok(o != Ordering::Greater),
+        (CmpOp::Gt, Some(o)) => Ok(o == Ordering::Greater),
+        (CmpOp::Ge, Some(o)) => Ok(o != Ordering::Less),
+        _ => internal(format!("cannot order these values with `{op}`")),
+    }
+}
+
+/// Receipts reachable from a Done: directly, through successful outcomes, and
+/// through nested Done values.
+fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
+    match v {
+        Value::Receipt(r) => out.push(json!({ "receipt": r.id, "capability": r.capability, "method": r.method })),
+        Value::Outcome { ok: true, held: Some(h), .. } => flatten_evidence(h, out),
+        Value::Done(items) => items.iter().for_each(|i| flatten_evidence(i, out)),
+        _ => {}
+    }
+}

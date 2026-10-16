@@ -9,7 +9,7 @@ fn files(dir: &str) -> Vec<std::path::PathBuf> {
     let mut v: Vec<_> = fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join(dir))
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().map_or(false, |e| e == "int"))
+        .filter(|p| p.extension().is_some_and(|e| e == "int"))
         .collect();
     v.sort();
     assert!(!v.is_empty(), "no fixtures in {dir}");

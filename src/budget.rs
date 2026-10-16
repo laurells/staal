@@ -195,8 +195,8 @@ impl<'a> Analyzer<'a> {
                 }
                 Stmt::Loop { body, pos } => {
                     let c = self.block(body, stack, cycles, diags.as_deref_mut());
-                    if !c.calls.is_zero() {
-                        if let Some(d) = diags.as_deref_mut() {
+                    if !c.calls.is_zero()
+                        && let Some(d) = diags.as_deref_mut() {
                             d.push(Diagnostic {
                                 code: "E005",
                                 pos: *pos,
@@ -204,7 +204,6 @@ impl<'a> Analyzer<'a> {
                                     .into(),
                             });
                         }
-                    }
                     c.forever()
                 }
             };

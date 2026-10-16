@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod budget;
 pub mod checker;
+pub mod interp;
 pub mod lexer;
 pub mod parser;
 

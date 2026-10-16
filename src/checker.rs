@@ -758,11 +758,10 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 }
                 let t1 = check_block(ctx, f, ret, then, then_env, in_loop);
                 let t2 = check_block(ctx, f, ret, els, else_env, in_loop);
-                if let Some(var) = after_if_proven {
-                    if let Some(b) = env.get_mut(&var) {
+                if let Some(var) = after_if_proven
+                    && let Some(b) = env.get_mut(&var) {
                         b.proven_ok = true;
                     }
-                }
                 ctx.pc = here;
                 // Code after this `if` only runs through a branch that can complete
                 // normally. A branch that always returns cannot influence it, so its
@@ -1065,8 +1064,8 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 );
             }
             check_blind(ctx, instruct.as_deref(), data, blind_to, env, *pos);
-            if let Some(ins) = instruct {
-                if let Some((ity, trusted)) = type_of(ctx, ins, env) {
+            if let Some(ins) = instruct
+                && let Some((ity, trusted)) = type_of(ctx, ins, env) {
                     if ity != named("Text") {
                         ctx.err("E101", ins.pos(), format!("`instruct` must be Text, found {ity}"));
                     } else if !trusted {
@@ -1079,7 +1078,6 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                         );
                     }
                 }
-            }
             for d in data {
                 if let Some((Ty::Cap { .. }, _)) = type_of(ctx, d, env) {
                     ctx.err("E101", d.pos(), "a capability cannot be sent to a model as data".into());
