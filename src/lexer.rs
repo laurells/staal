@@ -4,6 +4,7 @@
 pub enum Tok {
     Ident(String),
     Str(String),
+    Num(u64),
     // keywords
     Fn,
     Type,
@@ -85,6 +86,19 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
             i += 1;
             col += 1;
             out.push(Token { tok: Tok::Str(s), pos });
+            continue;
+        }
+        if c.is_ascii_digit() {
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            let text: String = chars[start..i].iter().collect();
+            col += i - start;
+            let n = text
+                .parse::<u64>()
+                .map_err(|_| (pos, format!("number '{text}' is too large")))?;
+            out.push(Token { tok: Tok::Num(n), pos });
             continue;
         }
         if c.is_alphabetic() || c == '_' {

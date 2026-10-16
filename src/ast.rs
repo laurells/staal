@@ -6,8 +6,25 @@ use crate::lexer::Pos;
 pub enum Ty {
     Named(String),
     Proposed(Box<Ty>),
-    /// A capability, e.g. `cap email.send` -> Cap(["email", "send"])
-    Cap(Vec<String>),
+    /// A capability, e.g. `cap payments.refund(max: 500 USD)`.
+    /// `max: None` means the capability has no upper limit.
+    Cap { path: Vec<String>, max: Option<Limit> },
+}
+
+/// An upper bound on a capability, e.g. `500 USD`. `unit` is None for a bare number.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Limit {
+    pub amount: u64,
+    pub unit: Option<String>,
+}
+
+impl std::fmt::Display for Limit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.unit {
+            Some(u) => write!(f, "{} {u}", self.amount),
+            None => write!(f, "{}", self.amount),
+        }
+    }
 }
 
 impl std::fmt::Display for Ty {
@@ -15,7 +32,8 @@ impl std::fmt::Display for Ty {
         match self {
             Ty::Named(n) => write!(f, "{n}"),
             Ty::Proposed(t) => write!(f, "Proposed<{t}>"),
-            Ty::Cap(p) => write!(f, "cap {}", p.join(".")),
+            Ty::Cap { path, max: None } => write!(f, "cap {}", path.join(".")),
+            Ty::Cap { path, max: Some(m) } => write!(f, "cap {}(max: {m})", path.join(".")),
         }
     }
 }
@@ -53,6 +71,9 @@ pub enum Stmt {
 pub enum Expr {
     Var(String, Pos),
     Str(String, Pos),
+    Int(u64, Pos),
+    /// `name(args)` — a call to a function defined in the program
+    Call { name: String, args: Vec<Expr>, pos: Pos },
     /// `propose(T)` — ask a model for a value of type T
     Propose(Ty, Pos),
     /// `validate x` — turn Proposed<T> into T
@@ -64,8 +85,12 @@ pub enum Expr {
 impl Expr {
     pub fn pos(&self) -> Pos {
         match self {
-            Expr::Var(_, p) | Expr::Str(_, p) | Expr::Propose(_, p) | Expr::Validate(_, p) => *p,
-            Expr::Action { pos, .. } => *pos,
+            Expr::Var(_, p)
+            | Expr::Str(_, p)
+            | Expr::Int(_, p)
+            | Expr::Propose(_, p)
+            | Expr::Validate(_, p) => *p,
+            Expr::Action { pos, .. } | Expr::Call { pos, .. } => *pos,
         }
     }
 }

@@ -1,0 +1,3 @@
+// expect: E901
+fn handle(pay: cap payments.refund(min: 5 USD)) {
+}

@@ -1,0 +1,11 @@
+// expect: E003
+type Refund { amount: Money }
+
+fn any_refund(pay: cap payments.refund, r: Refund) {
+    pay.refund(r)
+}
+
+fn handle(pay: cap payments.refund(max: 500 USD)) {
+    let r = validate propose(Refund)
+    any_refund(pay, r)
+}

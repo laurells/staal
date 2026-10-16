@@ -1,0 +1,4 @@
+// expect: E003
+fn handle(pay: cap payments.refund(max: 50 USD)) {
+    let big: cap payments.refund(max: 500 USD) = pay
+}

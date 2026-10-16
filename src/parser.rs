@@ -5,11 +5,15 @@
 //   typedecl := "type" IDENT "{" (IDENT ":" ty ","?)* "}"
 //   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty)? block
 //   param    := IDENT ":" ty
-//   ty       := "cap" IDENT ("." IDENT)* | IDENT ("<" ty ">")?
+//   ty       := "cap" IDENT ("." IDENT)* ("(" "max" ":" NUM IDENT? ")")?
+//             | IDENT ("<" ty ">")?
 //   block    := "{" stmt* "}"
 //   stmt     := "let" IDENT (":" ty)? "=" expr | "return" expr | expr
 //   expr     := "propose" "(" ty ")" | "validate" expr
-//             | IDENT "." IDENT "(" (expr ("," expr)*)? ")" | IDENT | STRING
+//             | IDENT "." IDENT args      (action through a capability)
+//             | IDENT args                (call to a program function)
+//             | IDENT | STRING | NUM
+//   args     := "(" (expr ("," expr)*)? ")"
 
 use crate::ast::*;
 use crate::lexer::{Pos, Tok, Token};
@@ -131,7 +135,33 @@ impl Parser {
                 self.bump();
                 path.push(self.ident()?);
             }
-            return Ok(Ty::Cap(path));
+            let mut max = None;
+            if *self.peek() == Tok::LParen {
+                self.bump();
+                let kpos = self.pos();
+                let key = self.ident()?;
+                if key != "max" {
+                    return Err((kpos, format!("unknown capability limit '{key}'; only 'max' is supported")));
+                }
+                self.expect(Tok::Colon, "':'")?;
+                let amount = match self.peek().clone() {
+                    Tok::Num(n) => {
+                        self.bump();
+                        n
+                    }
+                    other => return Err((self.pos(), format!("expected a number, found {other:?}"))),
+                };
+                let unit = match self.peek().clone() {
+                    Tok::Ident(u) => {
+                        self.bump();
+                        Some(u)
+                    }
+                    _ => None,
+                };
+                self.expect(Tok::RParen, "')'")?;
+                max = Some(Limit { amount, unit });
+            }
+            return Ok(Ty::Cap { path, max });
         }
         let name = self.ident()?;
         if *self.peek() == Tok::Lt {
@@ -201,24 +231,20 @@ impl Parser {
                 self.bump();
                 Ok(Expr::Str(s, pos))
             }
+            Tok::Num(n) => {
+                self.bump();
+                Ok(Expr::Int(n, pos))
+            }
             Tok::Ident(name) => {
                 self.bump();
+                if *self.peek() == Tok::LParen {
+                    let args = self.args()?;
+                    return Ok(Expr::Call { name, args, pos });
+                }
                 if *self.peek() == Tok::Dot {
                     self.bump();
                     let method = self.ident()?;
-                    self.expect(Tok::LParen, "'('")?;
-                    let mut args = Vec::new();
-                    if *self.peek() != Tok::RParen {
-                        loop {
-                            args.push(self.expr()?);
-                            if *self.peek() == Tok::Comma {
-                                self.bump();
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    self.expect(Tok::RParen, "')'")?;
+                    let args = self.args()?;
                     Ok(Expr::Action { receiver: name, method, args, pos })
                 } else {
                     Ok(Expr::Var(name, pos))
@@ -226,5 +252,23 @@ impl Parser {
             }
             other => Err((pos, format!("expected expression, found {other:?}"))),
         }
+    }
+
+    /// "(" (expr ("," expr)*)? ")"
+    fn args(&mut self) -> PResult<Vec<Expr>> {
+        self.expect(Tok::LParen, "'('")?;
+        let mut args = Vec::new();
+        if *self.peek() != Tok::RParen {
+            loop {
+                args.push(self.expr()?);
+                if *self.peek() == Tok::Comma {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect(Tok::RParen, "')'")?;
+        Ok(args)
     }
 }

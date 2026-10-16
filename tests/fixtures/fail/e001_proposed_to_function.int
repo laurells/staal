@@ -1,0 +1,10 @@
+// expect: E001
+type Refund { amount: Money }
+
+fn apply(r: Refund) {
+}
+
+fn handle() {
+    let draft = propose(Refund)
+    apply(draft)
+}

@@ -1,0 +1,31 @@
+type Refund { amount: Money }
+
+// A helper that needs only a small refund power.
+fn small_refund(pay: cap payments.refund(max: 50 USD), r: Refund) {
+    pay.refund(r)
+}
+
+// The caller holds 500 USD of authority and hands down only 50: narrowing is allowed.
+fn handle(pay: cap payments.refund(max: 500 USD)) {
+    let r = validate propose(Refund)
+    small_refund(pay, r)
+}
+
+// An unlimited capability can be narrowed to any limit.
+fn admin(pay: cap payments.refund) {
+    let r = validate propose(Refund)
+    small_refund(pay, r)
+}
+
+// Narrowing through a typed let.
+fn narrow_let(pay: cap payments.refund(max: 500 USD)) {
+    let small: cap payments.refund(max: 50 USD) = pay
+    let r = validate propose(Refund)
+    small.refund(r)
+}
+
+// Equal limits are fine.
+fn same(pay: cap payments.refund(max: 50 USD)) {
+    let r = validate propose(Refund)
+    small_refund(pay, r)
+}

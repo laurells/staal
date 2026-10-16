@@ -10,14 +10,27 @@ It checks them and rejects the ones that break Intent's rules.
 | ---- | ------- |
 | E001 | A model's `Proposed<T>` reaches an action or a non-Proposed return without `validate` |
 | E002 | An action is performed without a matching capability in scope |
-| E100 | Undefined name |
-| E101 | Type mismatch |
+| E003 | A capability is widened: passed, assigned or returned with more authority than it holds |
+| E100 | Undefined name or function |
+| E101 | Type mismatch or wrong number of arguments |
 | E102 | Unknown type |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
-E003 to E008 from the spec (capability widening, budgets, unbounded loops,
-untrusted instructions, blind_to leaks, evidence) are not implemented yet.
+E004 to E008 from the spec (budgets, unbounded loops, untrusted instructions,
+blind_to leaks, evidence) are not implemented yet.
+
+## Capability limits
+
+    fn small_refund(pay: cap payments.refund(max: 50 USD), r: Refund) { ... }
+
+A capability may be narrowed (500 USD -> 50 USD, unlimited -> 50 USD) and never
+widened (50 USD -> 500 USD, 50 USD -> unlimited). Limits in different units are
+never converted. Only `max` is supported, and limits are whole numbers.
+
+The checker controls how much authority code is handed. It does not yet stop a
+single action from exceeding the limit at runtime (e.g. refunding 600 through a
+500 USD capability); that check belongs to the runtime capability broker.
 
 ## Requirements
 

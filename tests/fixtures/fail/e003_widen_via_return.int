@@ -1,0 +1,4 @@
+// expect: E003
+fn leak(pay: cap payments.refund(max: 50 USD)) -> cap payments.refund {
+    return pay
+}

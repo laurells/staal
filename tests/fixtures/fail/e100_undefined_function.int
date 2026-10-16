@@ -1,0 +1,4 @@
+// expect: E100
+fn handle() {
+    missing()
+}

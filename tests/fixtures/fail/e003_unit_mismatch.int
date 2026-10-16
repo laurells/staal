@@ -1,0 +1,11 @@
+// expect: E003
+type Refund { amount: Money }
+
+fn naira_refund(pay: cap payments.refund(max: 50000 NGN), r: Refund) {
+    pay.refund(r)
+}
+
+fn handle(pay: cap payments.refund(max: 500 USD)) {
+    let r = validate propose(Refund)
+    naira_refund(pay, r)
+}

@@ -1,0 +1,7 @@
+// expect: E101
+fn needs_pay(pay: cap payments.refund) {
+}
+
+fn handle(mail: cap email.send) {
+    needs_pay(mail)
+}

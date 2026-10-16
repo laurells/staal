@@ -1,6 +1,4 @@
 // expect: E101
-type Refund { amount: Money }
-
-fn bad() {
-    let r: Refund = propose(Refund)
+fn handle() {
+    let n: Int = "not a number"
 }
