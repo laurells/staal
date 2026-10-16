@@ -1,0 +1,8 @@
+// expect: E105
+fn f(flag: Bool) -> Int {
+    loop {
+        if flag {
+            break
+        }
+    }
+}

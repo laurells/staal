@@ -1,0 +1,5 @@
+// expect: E008
+// A caller can hand over any receipt; it says nothing about this function's work.
+fn f(r: Receipt) -> Done {
+    return done(evidence: [r])
+}

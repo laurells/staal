@@ -1,0 +1,6 @@
+// expect: E008
+// A model saying it was done is not evidence.
+fn f() -> Done {
+    let claim = validate propose(Text, instruct: "Say the refund was issued.")
+    return done(evidence: [claim])
+}

@@ -1,0 +1,31 @@
+// Benchmark workflow 1: chase an overdue invoice.
+// The model drafts the reminder but never sees the customer's email address.
+type Customer { name: Text, email: Text }
+type Invoice { id: Text, amount: Money, customer: Customer }
+type Reminder { subject: Text, body: Text }
+
+fn chase(
+    invoice: Invoice @blind(customer.email),
+    tone: Text @trusted,
+    mail: cap email.send,
+) -> Done budget(calls: 2, tokens: 3000) {
+    repeat 2 {
+        let reminder: Reminder = validate propose(Reminder,
+            instruct: tone,
+            data: [invoice.id, invoice.amount, invoice.customer.name],
+            tokens: 1500)
+        if reminder.subject != "" {
+            let sent = try mail.send(invoice.customer.email)
+            if sent.ok {
+                return done(evidence: [sent])
+            }
+            return flag_for_human(invoice.id, mail)
+        }
+    }
+    return flag_for_human(invoice.id, mail)
+}
+
+fn flag_for_human(invoice_id: Text, mail: cap email.send) -> Done {
+    let r = mail.send("collections@example.com")
+    return done(evidence: [r])
+}

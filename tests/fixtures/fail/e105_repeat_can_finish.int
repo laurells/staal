@@ -1,0 +1,10 @@
+// expect: E105
+// A bounded loop can run out without returning.
+fn f(mail: cap email.send) -> Done {
+    repeat 3 {
+        let sent = try mail.send("x")
+        if sent.ok {
+            return done(evidence: [sent])
+        }
+    }
+}

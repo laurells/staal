@@ -142,6 +142,8 @@ pub enum Expr {
     },
     /// `validate x` — turn Proposed<T> into T
     Validate(Box<Expr>, Pos),
+    /// `done(evidence: [e, ...])` — the only way to make a `Done`: proof of completed work.
+    Done { evidence: Vec<Expr>, pos: Pos },
     /// `try action` or `try call(...)`: a failure becomes an `Outcome` value
     /// instead of stopping the function.
     Try(Box<Expr>, Pos),
@@ -158,7 +160,7 @@ impl Expr {
             | Expr::Bool(_, p)
             | Expr::Validate(_, p)
             | Expr::Try(_, p) => *p,
-            Expr::Cmp { pos, .. } | Expr::Field { pos, .. } => *pos,
+            Expr::Cmp { pos, .. } | Expr::Field { pos, .. } | Expr::Done { pos, .. } => *pos,
             Expr::Propose { pos, .. } => *pos,
             Expr::Action { pos, .. } | Expr::Call { pos, .. } => *pos,
         }

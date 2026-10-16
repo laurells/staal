@@ -1,0 +1,4 @@
+// expect: E008
+fn f(d: Done) -> Done {
+    return done(evidence: [d])
+}

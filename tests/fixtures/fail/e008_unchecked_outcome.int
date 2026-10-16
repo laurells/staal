@@ -1,0 +1,6 @@
+// expect: E008
+// The send may have failed; that is not proof it happened.
+fn f(mail: cap email.send) -> Done {
+    let sent = try mail.send("x")
+    return done(evidence: [sent])
+}

@@ -18,6 +18,7 @@
 //   primary  := atom ("." IDENT)*         (field access, e.g. order.customer.email)
 //   atom     := "propose" "(" ty ("," popt)* ")" | "validate" primary
 //             | "try" primary             (an action or call; failure becomes an Outcome)
+//             | "done" "(" "evidence" ":" list ")"
 //             | IDENT "." IDENT args      (action through a capability variable)
 //             | IDENT args                (call to a program function)
 //             | IDENT | STRING | NUM | "true" | "false"
@@ -459,6 +460,19 @@ impl Parser {
             Tok::Try => {
                 self.bump();
                 Ok(Expr::Try(Box::new(self.atom()?), pos))
+            }
+            Tok::Done => {
+                self.bump();
+                self.expect(Tok::LParen, "'('")?;
+                let kpos = self.pos();
+                let key = self.ident()?;
+                if key != "evidence" {
+                    return Err((kpos, format!("expected 'evidence', found '{key}'")));
+                }
+                self.expect(Tok::Colon, "':'")?;
+                let evidence = self.list()?;
+                self.expect(Tok::RParen, "')'")?;
+                Ok(Expr::Done { evidence, pos })
             }
             Tok::True => {
                 self.bump();

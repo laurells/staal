@@ -15,15 +15,20 @@ It checks them and rejects the ones that break Intent's rules.
 | E005 | A model call (direct or through a called function) is inside an unbounded `loop` |
 | E006 | An untrusted value is used as a model instruction, or flows into an `@trusted` slot |
 | E007 | Blinded data can reach a model: through a call's inputs, through the decision to make the call, or through a function that does not promise to keep it blinded |
+| E008 | `done(evidence: [...])` cites something that is not proof of this function's own work |
 | E100 | Undefined name or function |
 | E101 | Type mismatch or wrong number of arguments |
 | E102 | Unknown type |
 | E103 | `break` outside `repeat` or `loop` |
 | E104 | Unknown field, or a field read on a value that has no fields |
+| E105 | A function with a return type can finish without returning |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
-E008 from the spec (evidence) is not implemented yet.
+All eight safety checks from the spec (E001-E008) are implemented. Phase 1's
+gate is met: every one is rejected by tests, and 20 valid programs compile,
+including the two benchmark workflows (`workflow_*.int`).
+
 The language has no record literals (building a value of a declared type in
 code), arithmetic, or parentheses yet.
 
@@ -89,6 +94,30 @@ the operation was given (an error message can quote the address it failed on).
 
 `try` catches failure, not a computation that never ends: a call to a function
 containing `loop` or recursion can still stall, under `try` or not.
+
+## Claiming completion: `Done` and evidence
+
+    fn refund(...) -> Done {
+        let paid = pay.refund(r)
+        let sent = try mail.send(order.customer.email)
+        if sent.ok { return done(evidence: [paid, sent]) }
+        return done(evidence: [paid])
+    }
+
+`Done` is built in, and `done(evidence: [...])` is the only way to make one.
+Each item must be proof of work this function did: an action's `Receipt`, a
+`try` outcome on a path where `.ok` is known to be true (inside `if x.ok`, or
+after `if x.ok == false { return ... }`), or another function's `Done`.
+Rejected as evidence (E008): an empty list, model output, literals, an
+unchecked outcome, and anything passed in by the caller. A function that
+returns a value must return on every path (E105), so a `Done` function cannot
+fall off the end without proof.
+
+What it guarantees: a function can only claim completion by citing receipts
+of actions it actually performed. What it does not guarantee: that the action
+achieved what the business intended (a receipt shows the refund was issued,
+not that it was the right amount). The runtime stores the evidence with the
+execution log.
 
 ## Fields
 
@@ -222,7 +251,9 @@ Other limits:
 - **Over-caution.** The analysis is conservative and rejects some safe
   programs: a loop with a blinded `break` taints its whole body, and an action
   with blinded arguments that is not under `try` taints everything after it
-  (use `try` when code must continue past it).
+  (use `try` when code must continue past it). A branch that always returns
+  is recognised as unable to affect later code, which removes the most common
+  false alarm (send-then-return-either-way inside a retry loop).
 
 ## Requirements
 

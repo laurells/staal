@@ -1,0 +1,15 @@
+// expect: E007
+// Only ONE branch returns: later iterations still depend on the email. Must be rejected.
+type Customer { email: Text }
+type Order { customer: Customer }
+fn f(order: Order @blind(customer.email), mail: cap email.send) -> Done {
+    repeat 2 {
+        let s = propose(Text, instruct: "Draft.", tokens: 10)
+        let sent = try mail.send(order.customer.email)
+        if sent.ok {
+            return done(evidence: [sent])
+        }
+    }
+    let r = mail.send("ops@example.com")
+    return done(evidence: [r])
+}

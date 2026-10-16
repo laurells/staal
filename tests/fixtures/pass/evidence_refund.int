@@ -1,0 +1,52 @@
+// The spec's refund program, now claiming completion with proof.
+type Customer { name: Text, email: Text }
+type Order { id: Text, total: Money, customer: Customer }
+type Refund { order_id: Text, amount: Money, reason: Text }
+
+fn handle_refund(
+    message: Text,
+    order: Order,
+    pay: cap payments.refund(max: 500 USD),
+    mail: cap email.send,
+) -> Done budget(calls: 1, tokens: 2000) {
+    let refund: Refund = validate propose(Refund,
+        instruct: "Decide a fair refund for the customer message about this order.",
+        data: [message, order],
+        tokens: 2000)
+    if refund.amount <= order.total {
+        let paid = pay.refund(refund)
+        let sent = try mail.send(order.customer.email)
+        if sent.ok {
+            return done(evidence: [paid, sent])
+        }
+        return done(evidence: [paid])
+    }
+    return escalate(order, mail)
+}
+
+// A helper's Done is evidence for its caller.
+fn escalate(order: Order, mail: cap email.send) -> Done {
+    let r = mail.send("support@example.com")
+    return done(evidence: [r])
+}
+
+// After `if x.ok == false { return ... }`, x is proven for the rest of the block.
+fn early_exit(mail: cap email.send) -> Done {
+    let sent = try mail.send("ops@example.com")
+    if sent.ok == false {
+        return escalate_simple(mail)
+    }
+    return done(evidence: [sent])
+}
+
+fn escalate_simple(mail: cap email.send) -> Done {
+    let r = mail.send("support@example.com")
+    return done(evidence: [r])
+}
+
+// A loop that is never left counts as never finishing, so no return is missing.
+fn forever(mail: cap email.send) -> Done {
+    loop {
+        mail.send("tick")
+    }
+}

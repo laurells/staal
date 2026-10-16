@@ -1,0 +1,21 @@
+// Benchmark workflow 2: triage a support ticket.
+// Customer text is data, never instructions; paging on-call needs its own capability.
+type Ticket { subject: Text, body: Text }
+type Triage { category: Text, urgent: Bool }
+
+fn triage(
+    ticket: Ticket,
+    pager: cap oncall.page,
+    mail: cap email.send,
+) -> Done budget(calls: 1, tokens: 800) {
+    let t: Triage = validate propose(Triage,
+        instruct: "Classify this support ticket and say whether it is urgent.",
+        data: [ticket.subject, ticket.body],
+        tokens: 800)
+    if t.urgent {
+        let paged = pager.page(t.category)
+        return done(evidence: [paged])
+    }
+    let queued = mail.send(t.category)
+    return done(evidence: [queued])
+}

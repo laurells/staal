@@ -1,0 +1,10 @@
+// expect: E104
+fn g(mail: cap email.send) -> Done {
+    let r = mail.send("x")
+    return done(evidence: [r])
+}
+
+fn f(mail: cap email.send) {
+    let d = g(mail)
+    let x = d.evidence
+}

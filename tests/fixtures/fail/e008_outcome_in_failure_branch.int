@@ -1,0 +1,8 @@
+// expect: E008
+fn f(mail: cap email.send) -> Done {
+    let sent = try mail.send("x")
+    if sent.ok == false {
+        return done(evidence: [sent])
+    }
+    return done(evidence: [sent])
+}

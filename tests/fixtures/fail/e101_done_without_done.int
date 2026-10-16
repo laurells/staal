@@ -1,0 +1,6 @@
+// expect: E101
+// A Done can only be made with done(...).
+fn f(mail: cap email.send) -> Done {
+    let r = mail.send("x")
+    return r
+}

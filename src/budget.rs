@@ -216,6 +216,9 @@ impl<'a> Analyzer<'a> {
     fn expr(&mut self, e: &Expr, stack: &mut Vec<&'a str>, cycles: &mut HashSet<&'a str>) -> Cost {
         match e {
             Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => Cost::ZERO,
+            Expr::Done { evidence, .. } => {
+                evidence.iter().fold(Cost::ZERO, |acc, e| acc.add(self.expr(e, stack, cycles)))
+            }
             Expr::Cmp { left, right, .. } => self.expr(left, stack, cycles).add(self.expr(right, stack, cycles)),
             Expr::Propose { tokens, instruct, data, .. } => {
                 let mut c = Cost { calls: Bound::Fin(1), tokens: tokens.map_or(Bound::Unbounded, Bound::Fin) };

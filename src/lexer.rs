@@ -22,6 +22,7 @@ pub enum Tok {
     True,
     False,
     Try,
+    Done,
     // symbols
     LParen,
     RParen,
@@ -141,6 +142,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
                 "true" => Tok::True,
                 "false" => Tok::False,
                 "try" => Tok::Try,
+                "done" => Tok::Done,
                 _ => Tok::Ident(word),
             };
             out.push(Token { tok, pos });

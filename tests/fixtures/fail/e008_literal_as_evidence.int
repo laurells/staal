@@ -1,0 +1,4 @@
+// expect: E008
+fn f() -> Done {
+    return done(evidence: ["refund issued"])
+}

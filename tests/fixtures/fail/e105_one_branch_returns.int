@@ -1,0 +1,8 @@
+// expect: E105
+// If the condition is false, the function falls off the end without proof.
+fn f(flag: Bool, mail: cap email.send) -> Done {
+    if flag {
+        let r = mail.send("x")
+        return done(evidence: [r])
+    }
+}

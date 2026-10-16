@@ -14,6 +14,10 @@
 //   E102  unknown type
 //   E103  `break` outside a loop
 //   E104  unknown field, or field access on a value that has no fields
+//   E105  a function with a return type can finish without returning
+//   E008  `done(evidence: [...])` cites something that is not proof of this function's work:
+//         not a Receipt / checked Outcome / Done, an unchecked Outcome, a parameter,
+//         or no evidence at all
 //
 // `try action` / `try call(...)` turns a failure into an `Outcome { ok, error }` value
 // instead of stopping the function, so code after it runs either way.
@@ -57,6 +61,8 @@ struct Ctx<'a> {
     fn_blind: Vec<(Vec<String>, String)>,
     /// Functions that can make a model call, directly or transitively.
     model_fns: HashSet<String>,
+    /// Parameter names of the function being checked.
+    params: HashSet<String>,
     /// Functions that may fail: an action, or a call to a failing function, not under `try`.
     fail_fns: HashSet<String>,
     /// Functions that may never finish: `loop` or recursion, directly or through any call.
@@ -75,6 +81,8 @@ struct Binding {
     ty: Ty,
     trusted: bool,
     reveals: Vec<Src>,
+    /// For an `Outcome`: the code has checked `.ok` is true on this path.
+    proven_ok: bool,
 }
 
 /// A source a value can reveal. `path` is rooted at a parameter, e.g. ["order", "customer"].
@@ -117,7 +125,7 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
             v.extend(reveals(right, env));
             inexact(v)
         }
-        Expr::Call { args, .. } | Expr::Action { args, .. } => {
+        Expr::Call { args, .. } | Expr::Action { args, .. } | Expr::Done { evidence: args, .. } => {
             inexact(args.iter().flat_map(|a| reveals(a, env)).collect())
         }
         Expr::Propose { instruct, data, .. } => {
@@ -140,6 +148,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Validate(inner, _) => format!("validate {}", expr_text(inner)),
         Expr::Try(inner, _) => format!("try {}", expr_text(inner)),
         Expr::Propose { .. } => "propose(...)".into(),
+        Expr::Done { .. } => "done(...)".into(),
         Expr::Cmp { left, op, right, .. } => format!("{} {op} {}", expr_text(left), expr_text(right)),
         Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => "literal".into(),
     }
@@ -170,10 +179,12 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
         model_fns: model_calling_fns(prog),
         fail_fns: HashSet::new(),
         diverge_fns: HashSet::new(),
+        params: HashSet::new(),
     };
     (ctx.fail_fns, ctx.diverge_fns) = partial_fns(prog);
     // Built-in result of `try`.
     ctx.known.insert("Outcome".into());
+    ctx.known.insert("Done".into()); // built-in; made only by `done(evidence: [...])`
     ctx.fields.insert("Outcome".into(), vec![("ok".into(), named("Bool")), ("error".into(), named("Text"))]);
     for t in &prog.types {
         if ctx.known.contains(&t.name) {
@@ -239,7 +250,9 @@ fn model_calling_fns(prog: &Program) -> HashSet<String> {
                 calls.insert(name.clone());
                 args.iter().for_each(|a| scan_expr(a, direct, calls));
             }
-            Expr::Action { args, .. } => args.iter().for_each(|a| scan_expr(a, direct, calls)),
+            Expr::Action { args, .. } | Expr::Done { evidence: args, .. } => {
+                args.iter().for_each(|a| scan_expr(a, direct, calls))
+            }
             Expr::Validate(inner, _) | Expr::Field { base: inner, .. } | Expr::Try(inner, _) => {
                 scan_expr(inner, direct, calls)
             }
@@ -312,6 +325,7 @@ fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
                 args.iter().for_each(|a| scan_expr(a, false, i));
             }
             Expr::Try(inner, _) => scan_expr(inner, true, i),
+            Expr::Done { evidence, .. } => evidence.iter().for_each(|a| scan_expr(a, false, i)),
             Expr::Propose { instruct, data, .. } => {
                 for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
                     scan_expr(x, false, i);
@@ -417,6 +431,11 @@ fn collect_partial(ctx: &Ctx, e: &Expr, env: &Env, tried: bool, out: &mut Vec<Sr
             }
         }
         Expr::Try(inner, _) => collect_partial(ctx, inner, env, true, out),
+        Expr::Done { evidence, .. } => {
+            for a in evidence {
+                collect_partial(ctx, a, env, false, out);
+            }
+        }
         Expr::Propose { instruct, data, .. } => {
             for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
                 collect_partial(ctx, x, env, false, out);
@@ -441,6 +460,7 @@ fn may_stop(ctx: &Ctx, body: &[Stmt]) -> bool {
         match e {
             Expr::Action { args, .. } | Expr::Call { args, .. } => args.iter().any(|a| expr_partial(ctx, a, false)),
             Expr::Try(inner, _) => expr_partial(ctx, inner, true),
+            Expr::Done { evidence, .. } => evidence.iter().any(|a| expr_partial(ctx, a, false)),
             Expr::Propose { instruct, data, .. } => {
                 instruct.iter().any(|i| expr_partial(ctx, i, false)) || data.iter().any(|d| expr_partial(ctx, d, false))
             }
@@ -513,6 +533,7 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
     let mut env = Env::new();
     ctx.fn_blind.clear();
     ctx.pc.clear();
+    ctx.params = f.params.iter().map(|p| p.name.clone()).collect();
     for p in &f.params {
         check_ty_known(ctx, &p.ty, f.pos);
         for rel in &p.blind {
@@ -530,11 +551,66 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
             ctx.fn_blind.push((path, format!("{text} (blinded by parameter '{}')", p.name)));
         }
         let reveals = vec![Src { path: vec![p.name.clone()], exact: true }];
-        env.insert(p.name.clone(), Binding { ty: p.ty.clone(), trusted: p.trusted, reveals });
+        env.insert(p.name.clone(), Binding { ty: p.ty.clone(), trusted: p.trusted, reveals, proven_ok: false });
     }
     let ret = f.ret.clone().unwrap_or_else(|| named("Unit"));
     check_ty_known(ctx, &ret, f.pos);
     check_block(ctx, f, &ret, &f.body, env, false);
+    if ret != named("Unit") && !always_returns(&f.body) {
+        ctx.err("E105", f.pos, format!("'{}' can finish without returning a value of type {ret}", f.name));
+    }
+}
+
+fn f_params_contains(ctx: &Ctx, name: &str) -> bool {
+    ctx.params.contains(name)
+}
+
+/// Does every path through this block end in `return` (or in a `loop` that is never left)?
+fn always_returns(body: &[Stmt]) -> bool {
+    fn has_break(body: &[Stmt]) -> bool {
+        body.iter().any(|s| match s {
+            Stmt::Break(_) => true,
+            Stmt::If { then, els, .. } => has_break(then) || has_break(els),
+            Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => has_break(body),
+            _ => false,
+        })
+    }
+    body.iter().any(|s| match s {
+        Stmt::Return(..) => true,
+        Stmt::If { then, els, .. } => always_returns(then) && always_returns(els),
+        Stmt::Loop { body, .. } => !has_break(body),
+        _ => false,
+    })
+}
+
+/// Recognises `x.ok`, `x.ok == true`, `x.ok != false` (positive) and `x.ok == false`,
+/// `x.ok != true` (negative), where x is a variable.
+fn ok_test(cond: &Expr) -> Option<(String, bool)> {
+    fn ok_var(e: &Expr) -> Option<String> {
+        match e {
+            Expr::Field { base, field, .. } if field == "ok" => match base.as_ref() {
+                Expr::Var(v, _) => Some(v.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    if let Some(v) = ok_var(cond) {
+        return Some((v, true));
+    }
+    if let Expr::Cmp { op, left, right, .. } = cond {
+        let (v, lit) = match (ok_var(left), ok_var(right), left.as_ref(), right.as_ref()) {
+            (Some(v), _, _, Expr::Bool(b, _)) => (v, *b),
+            (_, Some(v), Expr::Bool(b, _), _) => (v, *b),
+            _ => return None,
+        };
+        return match op {
+            CmpOp::Eq => Some((v, lit)),
+            CmpOp::Ne => Some((v, !lit)),
+            _ => None,
+        };
+    }
+    None
 }
 
 fn field_path_exists(ctx: &Ctx, ty: &Ty, rel: &[String]) -> bool {
@@ -589,7 +665,9 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 };
                 let mut r = reveals(value, &env);
                 add_srcs(&mut r, ctx.pc.clone());
-                env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r });
+                // `let y = x` keeps what is known about x's outcome.
+                let proven_ok = matches!(value, Expr::Var(v, _) if env.get(v).is_some_and(|b| b.proven_ok));
+                env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r, proven_ok });
             }
             Stmt::Expr(e) => {
                 type_of(ctx, e, &env);
@@ -656,13 +734,49 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 let cond_srcs = reveals(cond, &env);
                 let here = ctx.pc.clone();
                 add_srcs(&mut ctx.pc, cond_srcs.clone());
-                let t1 = check_block(ctx, f, ret, then, env.clone(), in_loop);
-                let t2 = check_block(ctx, f, ret, els, env.clone(), in_loop);
+                // `if x.ok { ... }` proves x succeeded inside the branch; and after
+                // `if x.ok == false { return }` it is proven for the rest of the block.
+                let mut then_env = env.clone();
+                let mut else_env = env.clone();
+                let mut after_if_proven: Option<String> = None;
+                if let Some((var, positive)) = ok_test(cond) {
+                    if positive {
+                        if let Some(b) = then_env.get_mut(&var) {
+                            b.proven_ok = true;
+                        }
+                        if always_returns(els) && !els.is_empty() {
+                            after_if_proven = Some(var);
+                        }
+                    } else {
+                        if let Some(b) = else_env.get_mut(&var) {
+                            b.proven_ok = true;
+                        }
+                        if always_returns(then) {
+                            after_if_proven = Some(var);
+                        }
+                    }
+                }
+                let t1 = check_block(ctx, f, ret, then, then_env, in_loop);
+                let t2 = check_block(ctx, f, ret, els, else_env, in_loop);
+                if let Some(var) = after_if_proven {
+                    if let Some(b) = env.get_mut(&var) {
+                        b.proven_ok = true;
+                    }
+                }
                 ctx.pc = here;
+                // Code after this `if` only runs through a branch that can complete
+                // normally. A branch that always returns cannot influence it, so its
+                // inner taint is dropped; if both always return, nothing after runs at
+                // all, so the condition cannot influence it either.
+                let (then_ret, else_ret) = (always_returns(then), always_returns(els));
                 let mut t = Vec::new();
-                add_srcs(&mut t, t1);
-                add_srcs(&mut t, t2);
-                if may_stop(ctx, then) || may_stop(ctx, els) {
+                if !then_ret {
+                    add_srcs(&mut t, t1);
+                }
+                if !else_ret {
+                    add_srcs(&mut t, t2);
+                }
+                if !(then_ret && else_ret) && (may_stop(ctx, then) || may_stop(ctx, els)) {
                     add_srcs(&mut t, cond_srcs);
                 }
                 if !t.is_empty() {
@@ -812,6 +926,52 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 None
             }
         },
+        Expr::Done { evidence, pos } => {
+            if evidence.is_empty() {
+                ctx.err("E008", *pos, "`done` needs at least one piece of evidence".into());
+            }
+            for item in evidence {
+                let Some((ity, _)) = type_of(ctx, item, env) else { continue };
+                let text = expr_text(item);
+                match &ity {
+                    Ty::Named(n) if n == "Receipt" || n == "Done" => {}
+                    Ty::Named(n) if n == "Outcome" => {
+                        let proven = matches!(item, Expr::Var(v, _) if env.get(v).is_some_and(|b| b.proven_ok));
+                        if !proven {
+                            ctx.err(
+                                "E008",
+                                item.pos(),
+                                format!("'{text}' may be a failure; check `{text}.ok` before citing it as evidence"),
+                            );
+                            continue;
+                        }
+                    }
+                    other => {
+                        ctx.err(
+                            "E008",
+                            item.pos(),
+                            format!(
+                                "'{text}' is a {other}, not evidence; evidence is an action's Receipt, a checked \
+                                 Outcome, or another function's Done"
+                            ),
+                        );
+                        continue;
+                    }
+                }
+                // Evidence must come from this function's own work, not from a caller.
+                let from_param = reveals(item, env)
+                    .iter()
+                    .any(|s| s.exact && f_params_contains(ctx, &s.path[0]));
+                if from_param {
+                    ctx.err(
+                        "E008",
+                        item.pos(),
+                        format!("'{text}' was passed in by the caller, so it proves nothing about this function's work"),
+                    );
+                }
+            }
+            Some((named("Done"), false))
+        }
         Expr::Try(inner, pos) => {
             if !matches!(inner.as_ref(), Expr::Action { .. } | Expr::Call { .. }) {
                 ctx.err("E101", *pos, "`try` applies to an action or a function call".into());
