@@ -1,0 +1,7 @@
+// expect: E006
+type Plan { next_instruction: Text }
+
+fn f() {
+    let plan: Plan = validate propose(Plan, instruct: "Plan the next step.")
+    let n = propose(Text, instruct: plan.next_instruction)
+}

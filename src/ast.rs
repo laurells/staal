@@ -119,6 +119,8 @@ pub enum Expr {
     Str(String, Pos),
     Int(u64, Pos),
     Bool(bool, Pos),
+    /// `base.field`, e.g. `order.total` or `ticket.customer.email`
+    Field { base: Box<Expr>, field: String, pos: Pos },
     /// `left op right`, e.g. `count <= 3`
     Cmp { op: CmpOp, left: Box<Expr>, right: Box<Expr>, pos: Pos },
     /// `name(args)` — a call to a function defined in the program
@@ -141,7 +143,7 @@ impl Expr {
             | Expr::Int(_, p)
             | Expr::Bool(_, p)
             | Expr::Validate(_, p) => *p,
-            Expr::Cmp { pos, .. } => *pos,
+            Expr::Cmp { pos, .. } | Expr::Field { pos, .. } => *pos,
             Expr::Propose { pos, .. } => *pos,
             Expr::Action { pos, .. } | Expr::Call { pos, .. } => *pos,
         }

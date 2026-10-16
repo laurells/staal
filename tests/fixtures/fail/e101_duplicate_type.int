@@ -1,0 +1,3 @@
+// expect: E101
+type Order { total: Money }
+type Order { id: Text }

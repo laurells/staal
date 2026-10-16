@@ -1,0 +1,4 @@
+// expect: E104
+fn f(pay: cap payments.refund(max: 50 USD)) {
+    let m = pay.max
+}

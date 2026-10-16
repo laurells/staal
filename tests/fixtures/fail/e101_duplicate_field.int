@@ -1,0 +1,2 @@
+// expect: E101
+type Order { total: Money, total: Int }

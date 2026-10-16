@@ -1,0 +1,7 @@
+// expect: E101
+type Order { total: Money, id: Text }
+
+fn f(order: Order) {
+    if order.total == order.id {
+    }
+}

@@ -1,0 +1,8 @@
+// expect: E001
+// Reading a field does not validate the guess it came from.
+type Refund { amount: Money }
+
+fn f(pay: cap payments.refund) {
+    let draft = propose(Refund)
+    let a = draft.amount
+}

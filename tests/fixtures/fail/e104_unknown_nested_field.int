@@ -1,0 +1,7 @@
+// expect: E104
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order) {
+    let p = order.customer.phone
+}

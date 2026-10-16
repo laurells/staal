@@ -18,12 +18,13 @@ It checks them and rejects the ones that break Intent's rules.
 | E101 | Type mismatch or wrong number of arguments |
 | E102 | Unknown type |
 | E103 | `break` outside `repeat` or `loop` |
+| E104 | Unknown field, or a field read on a value that has no fields |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
 E007 and E008 from the spec (blind_to leaks, evidence) are not implemented yet.
-The language has no field access (`order.total`), records/struct literals, or
-arithmetic yet.
+The language has no record literals (building a value of a declared type in
+code), arithmetic, or parentheses yet.
 
 ## Capability limits
 
@@ -72,6 +73,21 @@ declared `tokens:`.
 Conditions must be `Bool`. Comparisons are `== != < <= > >=`, cannot be
 chained, and `< <= > >=` need `Int` or `Money`. A model's unvalidated output
 cannot be used as a condition or compared (E001).
+
+## Fields
+
+    type Customer { name: Text, email: Text }
+    type Order { id: Text, total: Money, customer: Customer }
+
+    if refund.amount <= order.total { mail.send(order.customer.email) }
+
+Fields are read with `.`, to any depth. Reading a field of an unvalidated
+`Proposed<T>` is E001: validate first, then read (`let r = validate draft`,
+then `r.amount`). A field is exactly as trusted as the value it came from.
+Type fields cannot be capabilities, so authority cannot travel inside data
+sent to a model. `a.b.c(...)` is a syntax error: actions are called directly
+on a capability variable. Because there are no parentheses yet,
+`(validate draft).amount` cannot be written; bind it with `let` first.
 
 ## Trust and prompt injection
 

@@ -8,6 +8,7 @@
 //   E101  type mismatch or wrong number of arguments
 //   E102  unknown type
 //   E103  `break` outside a loop
+//   E104  unknown field, or field access on a value that has no fields
 //
 // Every place a value flows into a slot (call argument, typed `let`, `return`)
 // goes through `assignable`, so the authority rules are decided in one place.
@@ -37,6 +38,8 @@ struct Sig {
 
 struct Ctx<'a> {
     known: HashSet<String>,
+    /// Declared types and their fields, in declaration order.
+    fields: HashMap<String, Vec<(String, Ty)>>,
     sigs: HashMap<&'a str, Sig>,
     diags: Vec<Diagnostic>,
 }
@@ -63,11 +66,34 @@ fn named(n: &str) -> Ty {
 pub fn check(prog: &Program) -> Vec<Diagnostic> {
     let mut ctx = Ctx {
         known: ["Text", "Int", "Bool", "Money", "Unit", "Receipt"].iter().map(|s| s.to_string()).collect(),
+        fields: HashMap::new(),
         sigs: HashMap::new(),
         diags: Vec::new(),
     };
     for t in &prog.types {
+        if ctx.known.contains(&t.name) {
+            ctx.err("E101", t.pos, format!("type '{}' is already defined", t.name));
+            continue;
+        }
         ctx.known.insert(t.name.clone());
+        let mut seen = HashSet::new();
+        for (fname, fty) in &t.fields {
+            if !seen.insert(fname.as_str()) {
+                ctx.err("E101", t.pos, format!("type '{}' declares field '{fname}' twice", t.name));
+            }
+            if let Ty::Cap { .. } = fty {
+                ctx.err(
+                    "E101",
+                    t.pos,
+                    format!(
+                        "field '{}.{fname}' cannot be a capability; pass capabilities as parameters so they \
+                         cannot travel inside data",
+                        t.name
+                    ),
+                );
+            }
+        }
+        ctx.fields.insert(t.name.clone(), t.fields.clone());
     }
     for f in &prog.fns {
         if ctx.sigs.contains_key(f.name.as_str()) {
@@ -227,6 +253,34 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 None
             }
         },
+        Expr::Field { base, field, pos } => {
+            let (bty, trusted) = type_of(ctx, base, env)?;
+            match &bty {
+                Ty::Proposed(_) => {
+                    ctx.err(
+                        "E001",
+                        *pos,
+                        format!("cannot read '.{field}' of unvalidated {bty}; use `validate` first"),
+                    );
+                    None
+                }
+                Ty::Named(tname) => match ctx.fields.get(tname).map(|fs| fs.iter().find(|(n, _)| n == field)) {
+                    Some(Some((_, fty))) => Some((fty.clone(), trusted)),
+                    Some(None) => {
+                        ctx.err("E104", *pos, format!("type '{tname}' has no field '{field}'"));
+                        None
+                    }
+                    None => {
+                        ctx.err("E104", *pos, format!("{tname} has no fields; cannot read '.{field}'"));
+                        None
+                    }
+                },
+                Ty::Cap { .. } => {
+                    ctx.err("E104", *pos, format!("a capability has no fields; cannot read '.{field}'"));
+                    None
+                }
+            }
+        }
         Expr::Cmp { op, left, right, pos } => {
             let l = type_of(ctx, left, env);
             let r = type_of(ctx, right, env);

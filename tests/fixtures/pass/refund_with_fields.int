@@ -1,0 +1,28 @@
+// The spec's refund example, now expressible: the model's proposal is checked
+// against real order data before any money moves.
+type Customer { name: Text, email: Text }
+type Order { id: Text, total: Money, customer: Customer }
+type Refund { order_id: Text, amount: Money, reason: Text }
+
+fn handle_refund(
+    message: Text,
+    order: Order,
+    pay: cap payments.refund(max: 500 USD),
+    mail: cap email.send,
+) -> Bool budget(calls: 2, tokens: 4000) {
+    repeat 2 {
+        let draft = propose(Refund,
+            instruct: "Decide a fair refund for the customer message about this order.",
+            data: [message, order],
+            tokens: 2000)
+        let refund: Refund = validate draft
+        if refund.amount <= order.total {
+            if refund.order_id == order.id {
+                pay.refund(refund)
+                mail.send(order.customer.email)
+                return true
+            }
+        }
+    }
+    return false
+}

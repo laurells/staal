@@ -13,8 +13,9 @@
 //             | "repeat" NUM block | "loop" block | "break"
 //             | "if" expr block ("else" (block | if-stmt))? | expr
 //   expr     := primary (("==" | "!=" | "<" | "<=" | ">" | ">=") primary)?
-//   primary  := "propose" "(" ty ("," popt)* ")" | "validate" primary
-//             | IDENT "." IDENT args      (action through a capability)
+//   primary  := atom ("." IDENT)*         (field access, e.g. order.customer.email)
+//   atom     := "propose" "(" ty ("," popt)* ")" | "validate" primary
+//             | IDENT "." IDENT args      (action through a capability variable)
 //             | IDENT args                (call to a program function)
 //             | IDENT | STRING | NUM | "true" | "false"
 //   popt     := "instruct" ":" expr | "data" ":" "[" (expr ("," expr)*)? "]" | "tokens" ":" NUM
@@ -374,7 +375,25 @@ impl Parser {
         Ok(Expr::Propose { ty, instruct, data: data.unwrap_or_default(), tokens, pos })
     }
 
+    /// An atom followed by any number of `.field` accesses.
     fn primary(&mut self) -> PResult<Expr> {
+        let mut e = self.atom()?;
+        while *self.peek() == Tok::Dot {
+            self.bump();
+            let pos = self.pos();
+            let field = self.ident()?;
+            if *self.peek() == Tok::LParen {
+                return Err((
+                    pos,
+                    format!("'{field}(...)' is not allowed here: actions must be called directly on a capability variable"),
+                ));
+            }
+            e = Expr::Field { base: Box::new(e), field, pos };
+        }
+        Ok(e)
+    }
+
+    fn atom(&mut self) -> PResult<Expr> {
         let pos = self.pos();
         match self.peek().clone() {
             Tok::Propose => self.propose(),
@@ -404,7 +423,11 @@ impl Parser {
                     let args = self.args()?;
                     return Ok(Expr::Call { name, args, pos });
                 }
-                if *self.peek() == Tok::Dot {
+                // `name.method(` is an action; `name.field` is left to `primary`.
+                let is_action = *self.peek() == Tok::Dot
+                    && matches!(self.toks.get(self.i + 1).map(|t| &t.tok), Some(Tok::Ident(_)))
+                    && matches!(self.toks.get(self.i + 2).map(|t| &t.tok), Some(Tok::LParen));
+                if is_action {
                     self.bump();
                     let method = self.ident()?;
                     let args = self.args()?;

@@ -1,0 +1,7 @@
+// expect: E006
+// A field inherits its parent's trust: customer data stays untrusted.
+type Ticket { subject: Text, body: Text }
+
+fn f(ticket: Ticket) {
+    let n = propose(Text, instruct: ticket.subject)
+}

@@ -1,0 +1,4 @@
+// expect: E104
+fn f(name: Text) {
+    let n = name.length
+}

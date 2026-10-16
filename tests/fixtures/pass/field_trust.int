@@ -1,0 +1,19 @@
+type Policy { tone: Text, rules: Text }
+
+// Fields of a trusted value are trusted.
+fn ask(policy: Policy @trusted, message: Text) {
+    let n = propose(Text, instruct: policy.tone, data: [message, policy.rules])
+}
+
+// Fields of function results are readable.
+fn current() -> Policy @trusted {
+    return default_policy()
+}
+
+fn default_policy() -> Policy @trusted {
+    return current()
+}
+
+fn use_result() {
+    let n = propose(Text, instruct: current().tone)
+}

@@ -1,0 +1,7 @@
+// expect: E104
+type Order { total: Money }
+
+fn f(order: Order) {
+    if order.amount == order.total {
+    }
+}
