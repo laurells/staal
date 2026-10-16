@@ -1,0 +1,12 @@
+// expect: E101
+// A name bound to a computed value is not data you can blind; name its source.
+type Order { id: Text }
+
+fn describe(o: Order) -> Text {
+    return "x"
+}
+
+fn f(order: Order) {
+    let d = describe(order)
+    let s = propose(Text, instruct: "Hi.", blind_to: [d])
+}

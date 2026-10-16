@@ -1,0 +1,9 @@
+// expect: E007
+// Even a yes/no answer about a blinded field reveals something about it.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order) {
+    let is_vip = order.customer.email == "ceo@example.com"
+    let s = propose(Text, instruct: "Summarise.", data: [is_vip], blind_to: [order.customer.email])
+}

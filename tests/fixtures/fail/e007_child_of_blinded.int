@@ -1,0 +1,8 @@
+// expect: E007
+// Blinding a record blinds every field inside it.
+type Customer { name: Text, email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order) {
+    let s = propose(Text, instruct: "Greet.", data: [order.customer.name], blind_to: [order.customer])
+}

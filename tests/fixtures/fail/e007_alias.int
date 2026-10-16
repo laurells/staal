@@ -1,0 +1,8 @@
+// expect: E007
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order) {
+    let e = order.customer.email
+    let s = propose(Text, instruct: "Summarise.", data: [e], blind_to: [order.customer.email])
+}

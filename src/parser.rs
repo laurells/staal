@@ -18,7 +18,8 @@
 //             | IDENT "." IDENT args      (action through a capability variable)
 //             | IDENT args                (call to a program function)
 //             | IDENT | STRING | NUM | "true" | "false"
-//   popt     := "instruct" ":" expr | "data" ":" "[" (expr ("," expr)*)? "]" | "tokens" ":" NUM
+//   popt     := "instruct" ":" expr | "data" ":" list | "blind_to" ":" list | "tokens" ":" NUM
+//   list     := "[" (expr ("," expr)*)? "]"
 //   args     := "(" (expr ("," expr)*)? ")"
 
 use crate::ast::*;
@@ -335,7 +336,7 @@ impl Parser {
         self.expect(Tok::Propose, "'propose'")?;
         self.expect(Tok::LParen, "'('")?;
         let ty = self.ty()?;
-        let (mut instruct, mut data, mut tokens) = (None, None, None);
+        let (mut instruct, mut data, mut blind_to, mut tokens) = (None, None, None, None);
         while *self.peek() == Tok::Comma {
             self.bump();
             let kpos = self.pos();
@@ -344,26 +345,12 @@ impl Parser {
             let dup = match key.as_str() {
                 "instruct" => instruct.replace(Box::new(self.expr()?)).is_some(),
                 "tokens" => tokens.replace(self.num()?).is_some(),
-                "data" => {
-                    self.expect(Tok::LBracket, "'['")?;
-                    let mut items = Vec::new();
-                    if *self.peek() != Tok::RBracket {
-                        loop {
-                            items.push(self.expr()?);
-                            if *self.peek() == Tok::Comma {
-                                self.bump();
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    self.expect(Tok::RBracket, "']'")?;
-                    data.replace(items).is_some()
-                }
+                "data" => data.replace(self.list()?).is_some(),
+                "blind_to" => blind_to.replace(self.list()?).is_some(),
                 _ => {
                     return Err((
                         kpos,
-                        format!("unknown propose option '{key}'; use 'instruct', 'data' or 'tokens'"),
+                        format!("unknown propose option '{key}'; use 'instruct', 'data', 'blind_to' or 'tokens'"),
                     ))
                 }
             };
@@ -372,7 +359,32 @@ impl Parser {
             }
         }
         self.expect(Tok::RParen, "')'")?;
-        Ok(Expr::Propose { ty, instruct, data: data.unwrap_or_default(), tokens, pos })
+        Ok(Expr::Propose {
+            ty,
+            instruct,
+            data: data.unwrap_or_default(),
+            blind_to: blind_to.unwrap_or_default(),
+            tokens,
+            pos,
+        })
+    }
+
+    /// "[" (expr ("," expr)*)? "]"
+    fn list(&mut self) -> PResult<Vec<Expr>> {
+        self.expect(Tok::LBracket, "'['")?;
+        let mut items = Vec::new();
+        if *self.peek() != Tok::RBracket {
+            loop {
+                items.push(self.expr()?);
+                if *self.peek() == Tok::Comma {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect(Tok::RBracket, "']'")?;
+        Ok(items)
     }
 
     /// An atom followed by any number of `.field` accesses.

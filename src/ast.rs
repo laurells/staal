@@ -125,10 +125,17 @@ pub enum Expr {
     Cmp { op: CmpOp, left: Box<Expr>, right: Box<Expr>, pos: Pos },
     /// `name(args)` — a call to a function defined in the program
     Call { name: String, args: Vec<Expr>, pos: Pos },
-    /// `propose(T, instruct: E, data: [E, ...], tokens: N)` — ask a model for a T.
-    /// All options are optional. `instruct` must be trusted (E006); `data` may be anything.
-    /// `tokens` is the most this one call may use; None means no declared limit.
-    Propose { ty: Ty, instruct: Option<Box<Expr>>, data: Vec<Expr>, tokens: Option<u64>, pos: Pos },
+    /// `propose(T, instruct: E, data: [E, ...], blind_to: [path, ...], tokens: N)` — ask a model for a T.
+    /// All options are optional. `instruct` must be trusted (E006); `data` may be anything
+    /// except what `blind_to` names (E007). `tokens` is the most this one call may use.
+    Propose {
+        ty: Ty,
+        instruct: Option<Box<Expr>>,
+        data: Vec<Expr>,
+        blind_to: Vec<Expr>,
+        tokens: Option<u64>,
+        pos: Pos,
+    },
     /// `validate x` — turn Proposed<T> into T
     Validate(Box<Expr>, Pos),
     /// `receiver.method(args)` — an action performed through a capability

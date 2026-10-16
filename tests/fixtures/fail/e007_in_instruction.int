@@ -1,0 +1,7 @@
+// expect: E007
+// blind_to covers the instruction too, even when it is trusted.
+type Policy { secret: Text, tone: Text }
+
+fn f(policy: Policy @trusted) {
+    let s = propose(Text, instruct: policy.secret, blind_to: [policy.secret])
+}

@@ -1,0 +1,10 @@
+// expect: E101
+type Order { id: Text }
+
+fn describe(o: Order) -> Text {
+    return "x"
+}
+
+fn f(order: Order) {
+    let s = propose(Text, instruct: "Hi.", blind_to: [describe(order)])
+}

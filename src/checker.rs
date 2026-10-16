@@ -3,6 +3,7 @@
 //   E002  an action is performed without a matching capability in scope
 //   E003  a capability is widened (given more authority than it holds)
 //   E006  an untrusted value is used as a model instruction, or flows into an @trusted slot
+//   E007  a model call's input can reveal a path listed in its `blind_to`
 // plus ordinary errors:
 //   E100  undefined name or function
 //   E101  type mismatch or wrong number of arguments
@@ -50,11 +51,87 @@ impl Ctx<'_> {
     }
 }
 
-/// A variable's type and whether its value is trusted.
+/// A variable's type, whether its value is trusted, and what data it can reveal.
 #[derive(Clone)]
 struct Binding {
     ty: Ty,
     trusted: bool,
+    reveals: Vec<Src>,
+}
+
+/// A source a value can reveal. `path` is rooted at a parameter, e.g. ["order", "customer"].
+/// `exact` means the value IS that path (an alias, so `.field` narrows it);
+/// otherwise the value is merely derived from it and may reveal anything beneath it.
+#[derive(Clone, Debug)]
+struct Src {
+    path: Vec<String>,
+    exact: bool,
+}
+
+/// Two paths overlap when one contains the other: ["order"] and ["order","customer","email"].
+fn overlaps(a: &[String], b: &[String]) -> bool {
+    let n = a.len().min(b.len());
+    a[..n] == b[..n]
+}
+
+/// What data an expression's value can reveal. Literals reveal nothing. Anything
+/// computed (calls, actions, comparisons, model output) can reveal all of its inputs.
+fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
+    let inexact = |v: Vec<Src>| v.into_iter().map(|s| Src { path: s.path, exact: false }).collect::<Vec<_>>();
+    match e {
+        Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => Vec::new(),
+        Expr::Var(n, _) => env.get(n).map(|b| b.reveals.clone()).unwrap_or_default(),
+        Expr::Field { base, field, .. } => reveals(base, env)
+            .into_iter()
+            .map(|s| {
+                if s.exact {
+                    let mut path = s.path;
+                    path.push(field.clone());
+                    Src { path, exact: true }
+                } else {
+                    s
+                }
+            })
+            .collect(),
+        Expr::Validate(inner, _) => inexact(reveals(inner, env)),
+        Expr::Cmp { left, right, .. } => {
+            let mut v = reveals(left, env);
+            v.extend(reveals(right, env));
+            inexact(v)
+        }
+        Expr::Call { args, .. } | Expr::Action { args, .. } => {
+            inexact(args.iter().flat_map(|a| reveals(a, env)).collect())
+        }
+        Expr::Propose { instruct, data, .. } => {
+            let mut v: Vec<Src> = data.iter().flat_map(|d| reveals(d, env)).collect();
+            if let Some(i) = instruct {
+                v.extend(reveals(i, env));
+            }
+            inexact(v)
+        }
+    }
+}
+
+/// The text of a name/field expression, for messages: `order.customer.email`.
+fn expr_text(e: &Expr) -> String {
+    match e {
+        Expr::Var(n, _) => n.clone(),
+        Expr::Field { base, field, .. } => format!("{}.{field}", expr_text(base)),
+        Expr::Call { name, .. } => format!("{name}(...)"),
+        Expr::Action { receiver, method, .. } => format!("{receiver}.{method}(...)"),
+        Expr::Validate(inner, _) => format!("validate {}", expr_text(inner)),
+        Expr::Propose { .. } => "propose(...)".into(),
+        Expr::Cmp { left, op, right, .. } => format!("{} {op} {}", expr_text(left), expr_text(right)),
+        Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => "literal".into(),
+    }
+}
+
+fn is_path(e: &Expr) -> bool {
+    match e {
+        Expr::Var(..) => true,
+        Expr::Field { base, .. } => is_path(base),
+        _ => false,
+    }
 }
 
 type Env = HashMap<String, Binding>;
@@ -165,7 +242,8 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
     let mut env = Env::new();
     for p in &f.params {
         check_ty_known(ctx, &p.ty, f.pos);
-        env.insert(p.name.clone(), Binding { ty: p.ty.clone(), trusted: p.trusted });
+        let reveals = vec![Src { path: vec![p.name.clone()], exact: true }];
+        env.insert(p.name.clone(), Binding { ty: p.ty.clone(), trusted: p.trusted, reveals });
     }
     let ret = f.ret.clone().unwrap_or_else(|| named("Unit"));
     check_ty_known(ctx, &ret, f.pos);
@@ -188,7 +266,8 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     }
                     None => vty,
                 };
-                env.insert(name.clone(), Binding { ty: bound, trusted });
+                let r = reveals(value, &env);
+                env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r });
             }
             Stmt::Expr(e) => {
                 type_of(ctx, e, &env);
@@ -234,6 +313,54 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
             Stmt::Break(pos) => {
                 if !in_loop {
                     ctx.err("E103", *pos, "`break` is only allowed inside `repeat` or `loop`".into());
+                }
+            }
+        }
+    }
+}
+
+/// E007: no input of a model call may reveal a path the call is blind to.
+fn check_blind(ctx: &mut Ctx, instruct: Option<&Expr>, data: &[Expr], blind_to: &[Expr], env: &Env) {
+    let mut blind: Vec<(Vec<String>, String)> = Vec::new();
+    for b in blind_to {
+        if !is_path(b) {
+            ctx.err("E101", b.pos(), "`blind_to` entries must be names or fields, e.g. order.customer.email".into());
+            continue;
+        }
+        if type_of(ctx, b, env).is_none() {
+            continue; // undefined name or unknown field, already reported
+        }
+        let srcs = reveals(b, env);
+        if srcs.is_empty() || srcs.iter().any(|s| !s.exact) {
+            ctx.err(
+                "E101",
+                b.pos(),
+                format!(
+                    "`blind_to` must name data directly; '{}' is a computed value, so name the data it came from",
+                    expr_text(b)
+                ),
+            );
+            continue;
+        }
+        for s in srcs {
+            blind.push((s.path, expr_text(b)));
+        }
+    }
+    let inputs = instruct.into_iter().chain(data.iter());
+    for input in inputs {
+        let mut reported = HashSet::new();
+        for src in reveals(input, env) {
+            for (bpath, btext) in &blind {
+                if overlaps(&src.path, bpath) && reported.insert(btext.clone()) {
+                    ctx.err(
+                        "E007",
+                        input.pos(),
+                        format!(
+                            "model input '{}' can reveal '{}', which this call is blind to",
+                            expr_text(input),
+                            btext
+                        ),
+                    );
                 }
             }
         }
@@ -301,8 +428,9 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             }
             Some((named("Bool"), ltr && rtr))
         }
-        Expr::Propose { ty, instruct, data, pos, .. } => {
+        Expr::Propose { ty, instruct, data, blind_to, pos, .. } => {
             check_ty_known(ctx, ty, *pos);
+            check_blind(ctx, instruct.as_deref(), data, blind_to, env);
             if let Some(ins) = instruct {
                 if let Some((ity, trusted)) = type_of(ctx, ins, env) {
                     if ity != named("Text") {

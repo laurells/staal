@@ -1,0 +1,13 @@
+// expect: E007
+// A function's result may contain anything from its arguments.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn describe(o: Order) -> Text {
+    return "an order"
+}
+
+fn f(order: Order) {
+    let d = describe(order)
+    let s = propose(Text, instruct: "Summarise.", data: [d], blind_to: [order.customer.email])
+}

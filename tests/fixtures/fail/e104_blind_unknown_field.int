@@ -1,0 +1,6 @@
+// expect: E104
+type Order { id: Text }
+
+fn f(order: Order) {
+    let s = propose(Text, instruct: "Hi.", data: [order.id], blind_to: [order.email])
+}

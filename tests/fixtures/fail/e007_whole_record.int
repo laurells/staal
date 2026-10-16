@@ -1,0 +1,8 @@
+// expect: E007
+// Sending the whole order sends the email inside it.
+type Customer { email: Text }
+type Order { id: Text, customer: Customer }
+
+fn f(order: Order) {
+    let s = propose(Text, instruct: "Summarise.", data: [order], blind_to: [order.customer.email])
+}

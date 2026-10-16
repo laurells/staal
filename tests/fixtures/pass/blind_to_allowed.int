@@ -1,0 +1,26 @@
+type Customer { name: Text, email: Text }
+type Order { id: Text, total: Money, customer: Customer }
+
+// Sending sibling fields of a blinded field is fine.
+fn summarise(order: Order) {
+    let s = propose(Text,
+        instruct: "Summarise this order.",
+        data: [order.id, order.total, order.customer.name],
+        blind_to: [order.customer.email])
+}
+
+// Blinding works through an alias, and siblings through the alias are fine.
+fn via_alias(order: Order) {
+    let c = order.customer
+    let s = propose(Text, instruct: "Greet the customer.", data: [c.name], blind_to: [c.email])
+}
+
+// Literals reveal nothing.
+fn literal_only(order: Order) {
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], blind_to: [order])
+}
+
+// A different parameter is unaffected by another's blinding.
+fn two_orders(a: Order, b: Order) {
+    let s = propose(Text, instruct: "Compare.", data: [b], blind_to: [a])
+}

@@ -1,0 +1,9 @@
+// expect: E007
+// A first model saw the email; its output cannot be shown to a model blind to it.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order) {
+    let notes = validate propose(Text, instruct: "Take notes.", data: [order])
+    let s = propose(Text, instruct: "Summarise.", data: [notes], blind_to: [order.customer.email])
+}

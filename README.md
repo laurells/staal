@@ -14,6 +14,7 @@ It checks them and rejects the ones that break Intent's rules.
 | E004 | A function's worst-case model use can exceed its declared `budget(...)` |
 | E005 | A model call (direct or through a called function) is inside an unbounded `loop` |
 | E006 | An untrusted value is used as a model instruction, or flows into an `@trusted` slot |
+| E007 | A model call's input can reveal a path listed in its `blind_to` |
 | E100 | Undefined name or function |
 | E101 | Type mismatch or wrong number of arguments |
 | E102 | Unknown type |
@@ -22,7 +23,7 @@ It checks them and rejects the ones that break Intent's rules.
 | E900 | Lexer error |
 | E901 | Syntax error |
 
-E007 and E008 from the spec (blind_to leaks, evidence) are not implemented yet.
+E008 from the spec (evidence) is not implemented yet.
 The language has no record literals (building a value of a declared type in
 code), arithmetic, or parentheses yet.
 
@@ -110,6 +111,35 @@ guarantee: that a model ignores instructions hidden inside `data`. Keeping data
 in a separate slot lets the runtime delimit it, but the type system cannot make
 a model obey that boundary. Whoever marks a parameter `@trusted` is responsible
 for that claim.
+
+## Keeping data from a model: `blind_to`
+
+    let s = propose(Text,
+        instruct: "Summarise this order.",
+        data: [order.id, order.total, order.customer.name],
+        blind_to: [order.customer.email])
+
+No input of the call, instruction or data, may reveal a path in `blind_to`.
+Paths overlap when one contains the other, so sending `order` or
+`order.customer` reveals `order.customer.email`, and blinding `order.customer`
+blinds every field inside it. Sibling fields are fine.
+
+The check follows data through `let` aliases (`let c = order.customer`), and
+treats anything computed as able to reveal all of its inputs: function
+results, action results, comparisons, and model output (a model that saw the
+email may repeat it). `blind_to` entries must name data directly; a computed
+value cannot be blinded, so name what it came from.
+
+Two leaks it does not catch, and why:
+
+- **Other functions.** `blind_to` protects one model call. If you pass `order`
+  to a helper that makes its own model call, that call has its own inputs and
+  its own `blind_to`. A function-level guarantee (a parameter marked as blind
+  for everything downstream) is not built yet.
+- **Branches.** In `if order.customer.email == x { let a = "yes" }`, sending
+  `a` reveals a fact about the email through which branch ran. The checker
+  tracks values, not control flow, so it does not see this. Sending the
+  comparison result itself *is* caught.
 
 ## Requirements
 

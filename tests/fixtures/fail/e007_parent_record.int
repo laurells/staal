@@ -1,0 +1,7 @@
+// expect: E007
+type Customer { name: Text, email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order) {
+    let s = propose(Text, instruct: "Greet.", data: [order.customer], blind_to: [order.customer.email])
+}
