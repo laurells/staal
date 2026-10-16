@@ -1,0 +1,9 @@
+// expect: E007
+// The error message can quote the address it failed on.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email), mail: cap email.send) {
+    let sent = try mail.send(order.customer.email)
+    let s = propose(Text, instruct: "Explain this error.", data: [sent.error], tokens: 10)
+}

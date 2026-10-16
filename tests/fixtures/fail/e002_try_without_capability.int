@@ -1,0 +1,4 @@
+// expect: E002
+fn f() {
+    let r = try email.send("x")
+}

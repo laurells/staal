@@ -1,0 +1,39 @@
+// v0.8 had to reject "send the email, then call a model", because the call only
+// happened if the send succeeded. With `try`, execution continues either way.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+
+fn confirm(order: Order @blind(customer.email), mail: cap email.send) budget(calls: 1, tokens: 500) {
+    let sent = try mail.send(order.customer.email)
+    let s = propose(Text, instruct: "Summarise this order.", data: [order.id], tokens: 500)
+    if sent.ok {
+        return
+    }
+}
+
+// A helper that handles its own failures with `try` cannot fail, so callers
+// need no `try` around it.
+fn notify(e: Text, mail: cap email.send) {
+    let r = try mail.send(e)
+}
+
+fn uses_safe_helper(order: Order @blind(customer.email), mail: cap email.send) {
+    notify(order.customer.email, mail)
+    let s = propose(Text, instruct: "Summarise.", data: [order.id], tokens: 100)
+}
+
+// `try` around a failing helper call works the same way.
+fn strict_notify(e: Text, mail: cap email.send) {
+    mail.send(e)
+}
+
+fn tries_helper(order: Order @blind(customer.email), mail: cap email.send) {
+    let r = try strict_notify(order.customer.email, mail)
+    let s = propose(Text, instruct: "Summarise.", data: [order.id], tokens: 100)
+}
+
+// Outcomes are ordinary values: their fields can be read and compared.
+fn report(mail: cap email.send) -> Bool {
+    let r = try mail.send("ops@example.com")
+    return r.ok
+}

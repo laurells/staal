@@ -15,6 +15,9 @@
 //   E103  `break` outside a loop
 //   E104  unknown field, or field access on a value that has no fields
 //
+// `try action` / `try call(...)` turns a failure into an `Outcome { ok, error }` value
+// instead of stopping the function, so code after it runs either way.
+//
 // Every place a value flows into a slot (call argument, typed `let`, `return`)
 // goes through `assignable`, so the authority rules are decided in one place.
 //
@@ -54,9 +57,10 @@ struct Ctx<'a> {
     fn_blind: Vec<(Vec<String>, String)>,
     /// Functions that can make a model call, directly or transitively.
     model_fns: HashSet<String>,
-    /// Functions that might not finish normally: they contain an action (which can fail),
-    /// a `loop`, or recursion, directly or through calls.
-    partial_fns: HashSet<String>,
+    /// Functions that may fail: an action, or a call to a failing function, not under `try`.
+    fail_fns: HashSet<String>,
+    /// Functions that may never finish: `loop` or recursion, directly or through any call.
+    diverge_fns: HashSet<String>,
 }
 
 impl Ctx<'_> {
@@ -107,7 +111,7 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
                 }
             })
             .collect(),
-        Expr::Validate(inner, _) => inexact(reveals(inner, env)),
+        Expr::Validate(inner, _) | Expr::Try(inner, _) => inexact(reveals(inner, env)),
         Expr::Cmp { left, right, .. } => {
             let mut v = reveals(left, env);
             v.extend(reveals(right, env));
@@ -134,6 +138,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Call { name, .. } => format!("{name}(...)"),
         Expr::Action { receiver, method, .. } => format!("{receiver}.{method}(...)"),
         Expr::Validate(inner, _) => format!("validate {}", expr_text(inner)),
+        Expr::Try(inner, _) => format!("try {}", expr_text(inner)),
         Expr::Propose { .. } => "propose(...)".into(),
         Expr::Cmp { left, op, right, .. } => format!("{} {op} {}", expr_text(left), expr_text(right)),
         Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => "literal".into(),
@@ -163,8 +168,13 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
         pc: Vec::new(),
         fn_blind: Vec::new(),
         model_fns: model_calling_fns(prog),
-        partial_fns: partial_fns(prog),
+        fail_fns: HashSet::new(),
+        diverge_fns: HashSet::new(),
     };
+    (ctx.fail_fns, ctx.diverge_fns) = partial_fns(prog);
+    // Built-in result of `try`.
+    ctx.known.insert("Outcome".into());
+    ctx.fields.insert("Outcome".into(), vec![("ok".into(), named("Bool")), ("error".into(), named("Text"))]);
     for t in &prog.types {
         if ctx.known.contains(&t.name) {
             ctx.err("E101", t.pos, format!("type '{}' is already defined", t.name));
@@ -230,7 +240,9 @@ fn model_calling_fns(prog: &Program) -> HashSet<String> {
                 args.iter().for_each(|a| scan_expr(a, direct, calls));
             }
             Expr::Action { args, .. } => args.iter().for_each(|a| scan_expr(a, direct, calls)),
-            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => scan_expr(inner, direct, calls),
+            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } | Expr::Try(inner, _) => {
+                scan_expr(inner, direct, calls)
+            }
             Expr::Cmp { left, right, .. } => {
                 scan_expr(left, direct, calls);
                 scan_expr(right, direct, calls);
@@ -272,145 +284,178 @@ fn model_calling_fns(prog: &Program) -> HashSet<String> {
     }
 }
 
-/// Functions that might not finish normally (see `Ctx::partial_fns`).
-fn partial_fns(prog: &Program) -> HashSet<String> {
-    fn scan_expr(e: &Expr, direct: &mut bool, calls: &mut HashSet<String>) {
+/// Per function: whether it may fail (an action not under `try`, or a call to a failing
+/// function not under `try`) and whether it may never finish (`loop`, recursion, or a
+/// call to such a function; `try` cannot catch that). Returns (may_fail, may_diverge).
+fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
+    #[derive(Default)]
+    struct Info {
+        fails: bool,
+        diverges: bool,
+        calls_untried: HashSet<String>,
+        calls_tried: HashSet<String>,
+    }
+    fn scan_expr(e: &Expr, tried: bool, i: &mut Info) {
         match e {
             Expr::Action { args, .. } => {
-                *direct = true; // actions reach the outside world and can fail
-                args.iter().for_each(|a| scan_expr(a, direct, calls));
+                if !tried {
+                    i.fails = true;
+                }
+                args.iter().for_each(|a| scan_expr(a, false, i));
             }
             Expr::Call { name, args, .. } => {
-                calls.insert(name.clone());
-                args.iter().for_each(|a| scan_expr(a, direct, calls));
+                if tried {
+                    i.calls_tried.insert(name.clone());
+                } else {
+                    i.calls_untried.insert(name.clone());
+                }
+                args.iter().for_each(|a| scan_expr(a, false, i));
             }
+            Expr::Try(inner, _) => scan_expr(inner, true, i),
             Expr::Propose { instruct, data, .. } => {
                 for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
-                    scan_expr(x, direct, calls);
+                    scan_expr(x, false, i);
                 }
             }
-            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => scan_expr(inner, direct, calls),
+            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => scan_expr(inner, false, i),
             Expr::Cmp { left, right, .. } => {
-                scan_expr(left, direct, calls);
-                scan_expr(right, direct, calls);
+                scan_expr(left, false, i);
+                scan_expr(right, false, i);
             }
             Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => {}
         }
     }
-    fn scan_block(body: &[Stmt], direct: &mut bool, calls: &mut HashSet<String>) {
+    fn scan_block(body: &[Stmt], i: &mut Info) {
         for s in body {
             match s {
-                Stmt::Let { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => scan_expr(e, direct, calls),
+                Stmt::Let { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => scan_expr(e, false, i),
                 Stmt::Loop { body, .. } => {
-                    *direct = true; // `loop` may never end
-                    scan_block(body, direct, calls);
+                    i.diverges = true; // `loop` may never end
+                    scan_block(body, i);
                 }
-                Stmt::Repeat { body, .. } => scan_block(body, direct, calls),
+                Stmt::Repeat { body, .. } => scan_block(body, i),
                 Stmt::If { cond, then, els, .. } => {
-                    scan_expr(cond, direct, calls);
-                    scan_block(then, direct, calls);
-                    scan_block(els, direct, calls);
+                    scan_expr(cond, false, i);
+                    scan_block(then, i);
+                    scan_block(els, i);
                 }
                 Stmt::Return(None, _) | Stmt::Break(_) => {}
             }
         }
     }
-    let mut graph: HashMap<String, (bool, HashSet<String>)> = HashMap::new();
+    let mut graph: HashMap<String, Info> = HashMap::new();
     for f in &prog.fns {
-        let (mut direct, mut calls) = (false, HashSet::new());
-        scan_block(&f.body, &mut direct, &mut calls);
-        graph.entry(f.name.clone()).or_insert((direct, calls));
+        let mut i = Info::default();
+        scan_block(&f.body, &mut i);
+        graph.entry(f.name.clone()).or_insert(i);
     }
-    // Recursion: a function that can reach itself through calls may never end.
+    // Recursion: a function that can reach itself through any call may never end.
     let reaches_self = |start: &str| -> bool {
+        let next = |n: &str| -> Vec<String> {
+            graph.get(n).map(|i| i.calls_untried.iter().chain(&i.calls_tried).cloned().collect()).unwrap_or_default()
+        };
         let mut seen = HashSet::new();
-        let mut stack: Vec<String> = graph.get(start).map(|(_, c)| c.iter().cloned().collect()).unwrap_or_default();
+        let mut stack = next(start);
         while let Some(n) = stack.pop() {
             if n == start {
                 return true;
             }
             if seen.insert(n.clone()) {
-                if let Some((_, c)) = graph.get(&n) {
-                    stack.extend(c.iter().cloned());
-                }
+                stack.extend(next(&n));
             }
         }
         false
     };
-    let mut out: HashSet<String> =
-        graph.iter().filter(|(n, (d, _))| *d || reaches_self(n)).map(|(n, _)| n.clone()).collect();
+    let mut fails: HashSet<String> = graph.iter().filter(|(_, i)| i.fails).map(|(n, _)| n.clone()).collect();
+    let mut diverges: HashSet<String> =
+        graph.iter().filter(|(n, i)| i.diverges || reaches_self(n)).map(|(n, _)| n.clone()).collect();
     loop {
-        let before = out.len();
-        for (name, (_, calls)) in &graph {
-            if calls.iter().any(|c| out.contains(c)) {
-                out.insert(name.clone());
+        let before = (fails.len(), diverges.len());
+        for (name, i) in &graph {
+            if i.calls_untried.iter().any(|c| fails.contains(c)) {
+                fails.insert(name.clone());
+            }
+            if i.calls_untried.iter().chain(&i.calls_tried).any(|c| diverges.contains(c)) {
+                diverges.insert(name.clone());
             }
         }
-        if out.len() == before {
-            return out;
+        if (fails.len(), diverges.len()) == before {
+            return (fails, diverges);
         }
     }
 }
 
-/// Everything the partial operations in `e` (actions, calls to partial functions) take as
-/// arguments. Whether execution continues past them can depend on those arguments.
+/// Is this operation partial, i.e. can execution fail to get past it? `tried` means it
+/// sits directly under `try`, which catches failure but not a computation that never ends.
+fn op_is_partial(ctx: &Ctx, e: &Expr, tried: bool) -> bool {
+    match e {
+        Expr::Action { .. } => !tried,
+        Expr::Call { name, .. } => {
+            ctx.diverge_fns.contains(name) || (!tried && ctx.fail_fns.contains(name))
+        }
+        _ => false,
+    }
+}
+
+/// Everything the partial operations in `e` take as arguments. Whether execution
+/// continues past them can depend on those arguments.
 fn partial_taint(ctx: &Ctx, e: &Expr, env: &Env) -> Vec<Src> {
     let mut out = Vec::new();
-    collect_partial(ctx, e, env, &mut out);
+    collect_partial(ctx, e, env, false, &mut out);
     out
 }
 
-fn collect_partial(ctx: &Ctx, e: &Expr, env: &Env, out: &mut Vec<Src>) {
+fn collect_partial(ctx: &Ctx, e: &Expr, env: &Env, tried: bool, out: &mut Vec<Src>) {
     match e {
-        Expr::Action { args, .. } => {
-            for a in args {
-                add_srcs(out, reveals(a, env));
-                collect_partial(ctx, a, env, out);
-            }
-        }
-        Expr::Call { name, args, .. } => {
-            let partial = ctx.partial_fns.contains(name);
+        Expr::Action { args, .. } | Expr::Call { args, .. } => {
+            let partial = op_is_partial(ctx, e, tried);
             for a in args {
                 if partial {
                     add_srcs(out, reveals(a, env));
                 }
-                collect_partial(ctx, a, env, out);
+                collect_partial(ctx, a, env, false, out);
             }
         }
+        Expr::Try(inner, _) => collect_partial(ctx, inner, env, true, out),
         Expr::Propose { instruct, data, .. } => {
             for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
-                collect_partial(ctx, x, env, out);
+                collect_partial(ctx, x, env, false, out);
             }
         }
-        Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => collect_partial(ctx, inner, env, out),
+        Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => collect_partial(ctx, inner, env, false, out),
         Expr::Cmp { left, right, .. } => {
-            collect_partial(ctx, left, env, out);
-            collect_partial(ctx, right, env, out);
+            collect_partial(ctx, left, env, false, out);
+            collect_partial(ctx, right, env, false, out);
         }
         Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => {}
     }
 }
 
 /// Does this block contain anything that can stop execution early: `return`, `break`,
-/// an action, or a call to a partial function?
+/// `loop`, or a partial operation?
 fn may_stop(ctx: &Ctx, body: &[Stmt]) -> bool {
-    fn expr_partial(ctx: &Ctx, e: &Expr) -> bool {
+    fn expr_partial(ctx: &Ctx, e: &Expr, tried: bool) -> bool {
+        if op_is_partial(ctx, e, tried) {
+            return true;
+        }
         match e {
-            Expr::Action { .. } => true,
-            Expr::Call { name, args, .. } => ctx.partial_fns.contains(name) || args.iter().any(|a| expr_partial(ctx, a)),
+            Expr::Action { args, .. } | Expr::Call { args, .. } => args.iter().any(|a| expr_partial(ctx, a, false)),
+            Expr::Try(inner, _) => expr_partial(ctx, inner, true),
             Expr::Propose { instruct, data, .. } => {
-                instruct.iter().any(|i| expr_partial(ctx, i)) || data.iter().any(|d| expr_partial(ctx, d))
+                instruct.iter().any(|i| expr_partial(ctx, i, false)) || data.iter().any(|d| expr_partial(ctx, d, false))
             }
-            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => expr_partial(ctx, inner),
-            Expr::Cmp { left, right, .. } => expr_partial(ctx, left) || expr_partial(ctx, right),
+            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => expr_partial(ctx, inner, false),
+            Expr::Cmp { left, right, .. } => expr_partial(ctx, left, false) || expr_partial(ctx, right, false),
             Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => false,
         }
     }
     body.iter().any(|s| match s {
         Stmt::Return(..) | Stmt::Break(_) | Stmt::Loop { .. } => true,
-        Stmt::Let { value: e, .. } | Stmt::Expr(e) => expr_partial(ctx, e),
+        Stmt::Let { value: e, .. } | Stmt::Expr(e) => expr_partial(ctx, e, false),
         Stmt::Repeat { body, .. } => may_stop(ctx, body),
-        Stmt::If { cond, then, els, .. } => expr_partial(ctx, cond) || may_stop(ctx, then) || may_stop(ctx, els),
+        Stmt::If { cond, then, els, .. } => {
+            expr_partial(ctx, cond, false) || may_stop(ctx, then) || may_stop(ctx, els)
+        }
     })
 }
 
@@ -767,6 +812,16 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 None
             }
         },
+        Expr::Try(inner, pos) => {
+            if !matches!(inner.as_ref(), Expr::Action { .. } | Expr::Call { .. }) {
+                ctx.err("E101", *pos, "`try` applies to an action or a function call".into());
+                return None;
+            }
+            // All the usual checks (capabilities, validation, trust, blinding) still apply.
+            type_of(ctx, inner, env)?;
+            // The outcome comes from the outside world, so it is untrusted.
+            Some((named("Outcome"), false))
+        }
         Expr::Field { base, field, pos } => {
             let (bty, trusted) = type_of(ctx, base, env)?;
             match &bty {

@@ -75,6 +75,21 @@ Conditions must be `Bool`. Comparisons are `== != < <= > >=`, cannot be
 chained, and `< <= > >=` need `Int` or `Money`. A model's unvalidated output
 cannot be used as a condition or compared (E001).
 
+## Errors: `try`
+
+    let sent = try mail.send(order.customer.email)
+    if sent.ok { ... } else { ... }      // sent.error: Text
+
+An action can fail. Without `try`, a failure stops the function and passes up
+to its caller, which stops too unless it called with `try`. With `try`, the
+failure becomes an `Outcome { ok: Bool, error: Text }` value and the function
+continues either way. `try` applies to an action or a function call. The
+outcome comes from the outside world, so it is untrusted, and it reveals what
+the operation was given (an error message can quote the address it failed on).
+
+`try` catches failure, not a computation that never ends: a call to a function
+containing `loop` or recursion can still stall, under `try` or not.
+
 ## Fields
 
     type Customer { name: Text, email: Text }
@@ -156,17 +171,25 @@ blinded data (later iterations run only if it was not taken).
 ### Through operations that might not finish
 
 An action can fail (a bad address, a declined payment), and a function with a
-`loop` or recursion might never return. Either way, the code after it only
-runs for some argument values. So an operation is *partial* if it is an
-action, or a call to a function that contains an action, `loop` or recursion
-(directly or through calls). Everything after a partial operation counts as
-depending on its arguments, and everything after a branch containing one
-counts as depending on the branch condition. Pure helpers that always finish
-(no actions, no `loop`, no recursion; `repeat N` is fine) are unaffected.
+`loop` or recursion might never return. Either way, code after it only runs
+for some argument values. The compiler tracks two properties per function:
+it **may fail** if it contains an action, or a call to a failing function, not
+under `try`; it **may not finish** if it contains `loop` or recursion, or calls
+anything that may not finish (`try` does not help). An operation is *partial*
+if it is an action not under `try`, a call to a failing function not under
+`try`, or any call to a function that may not finish. Everything after a
+partial operation counts as depending on its arguments, and everything after
+a branch containing one counts as depending on the branch condition. Pure
+helpers (no actions, `loop` or recursion; `repeat N` is fine) are unaffected.
 
-In practice: with `@blind(customer.email)`, `mail.send(order.customer.email)`
-followed by a model call is rejected, because the call only happens if the
-send succeeded. Make the model call first, or send the email last.
+In practice, with `@blind(customer.email)`:
+
+    mail.send(order.customer.email)              // stops here if it fails...
+    let s = propose(...)                         // ...so this call reveals success: E007
+
+    let sent = try mail.send(order.customer.email)
+    let s = propose(...)                         // runs either way: allowed
+    if sent.ok { let t = propose(...) }          // depends on success: E007
 
 ### Side channels: what is closed and what is not
 
@@ -197,10 +220,9 @@ Other limits:
   across calls would show call two the inputs of call one, which were checked
   against call one's `blind_to`, not call two's.
 - **Over-caution.** The analysis is conservative and rejects some safe
-  programs: a loop with a blinded `break` taints its whole body, and any
-  action with blinded arguments taints everything after it. Making action
-  failures values the program handles, instead of aborts, would remove much
-  of the second case; that needs error handling in the language.
+  programs: a loop with a blinded `break` taints its whole body, and an action
+  with blinded arguments that is not under `try` taints everything after it
+  (use `try` when code must continue past it).
 
 ## Requirements
 

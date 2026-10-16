@@ -1,0 +1,6 @@
+// expect: E006
+// Error text comes from the outside world and can carry instructions.
+fn f(mail: cap email.send) {
+    let r = try mail.send("x")
+    let s = propose(Text, instruct: r.error)
+}

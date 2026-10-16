@@ -1,0 +1,5 @@
+// expect: E104
+fn f(mail: cap email.send) {
+    let r = try mail.send("x")
+    let c = r.code
+}

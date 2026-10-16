@@ -17,6 +17,7 @@
 //   expr     := primary (("==" | "!=" | "<" | "<=" | ">" | ">=") primary)?
 //   primary  := atom ("." IDENT)*         (field access, e.g. order.customer.email)
 //   atom     := "propose" "(" ty ("," popt)* ")" | "validate" primary
+//             | "try" primary             (an action or call; failure becomes an Outcome)
 //             | IDENT "." IDENT args      (action through a capability variable)
 //             | IDENT args                (call to a program function)
 //             | IDENT | STRING | NUM | "true" | "false"
@@ -454,6 +455,10 @@ impl Parser {
             Tok::Validate => {
                 self.bump();
                 Ok(Expr::Validate(Box::new(self.primary()?), pos))
+            }
+            Tok::Try => {
+                self.bump();
+                Ok(Expr::Try(Box::new(self.atom()?), pos))
             }
             Tok::True => {
                 self.bump();

@@ -142,6 +142,9 @@ pub enum Expr {
     },
     /// `validate x` — turn Proposed<T> into T
     Validate(Box<Expr>, Pos),
+    /// `try action` or `try call(...)`: a failure becomes an `Outcome` value
+    /// instead of stopping the function.
+    Try(Box<Expr>, Pos),
     /// `receiver.method(args)` — an action performed through a capability
     Action { receiver: String, method: String, args: Vec<Expr>, pos: Pos },
 }
@@ -153,7 +156,8 @@ impl Expr {
             | Expr::Str(_, p)
             | Expr::Int(_, p)
             | Expr::Bool(_, p)
-            | Expr::Validate(_, p) => *p,
+            | Expr::Validate(_, p)
+            | Expr::Try(_, p) => *p,
             Expr::Cmp { pos, .. } | Expr::Field { pos, .. } => *pos,
             Expr::Propose { pos, .. } => *pos,
             Expr::Action { pos, .. } | Expr::Call { pos, .. } => *pos,

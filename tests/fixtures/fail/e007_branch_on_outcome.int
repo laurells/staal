@@ -1,0 +1,12 @@
+// expect: E007
+// `try` keeps execution going, but branching on the outcome reveals whether the
+// send succeeded, which depends on the email.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email), mail: cap email.send) {
+    let sent = try mail.send(order.customer.email)
+    if sent.ok {
+        let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+    }
+}

@@ -1,0 +1,7 @@
+// expect: E001
+type Refund { amount: Money }
+
+fn f(pay: cap payments.refund) {
+    let draft = propose(Refund)
+    let r = try pay.refund(draft)
+}

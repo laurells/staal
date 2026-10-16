@@ -1,0 +1,15 @@
+// expect: E007
+// `try` catches failure, not a computation that never ends.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn stall(e: Text) {
+    loop {
+        if e != "ceo@example.com" { break }
+    }
+}
+
+fn f(order: Order @blind(customer.email)) {
+    let r = try stall(order.customer.email)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

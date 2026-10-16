@@ -1,0 +1,5 @@
+// expect: E101
+// Model calls already return Proposed values; `try` is for actions and calls.
+fn f() {
+    let r = try propose(Text)
+}

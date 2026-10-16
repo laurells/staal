@@ -1,0 +1,11 @@
+// expect: E007
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email), mail: cap email.send) {
+    let sent = try mail.send(order.customer.email)
+    if sent.ok == false {
+        return
+    }
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

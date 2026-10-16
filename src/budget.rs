@@ -227,7 +227,9 @@ impl<'a> Analyzer<'a> {
                 }
                 c
             }
-            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => self.expr(inner, stack, cycles),
+            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } | Expr::Try(inner, _) => {
+                self.expr(inner, stack, cycles)
+            }
             Expr::Action { args, .. } => {
                 args.iter().fold(Cost::ZERO, |acc, a| acc.add(self.expr(a, stack, cycles)))
             }
