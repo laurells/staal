@@ -1,0 +1,12 @@
+// expect: E007 E007
+// Inside the branch, `a` is a literal, but it only exists because the email matched:
+// both the data and the decision to call the model reveal that.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order, x: Text) {
+    if order.customer.email == x {
+        let a = "yes"
+        let s = propose(Text, instruct: "Summarise.", data: [a], blind_to: [order.customer.email])
+    }
+}

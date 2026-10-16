@@ -1,0 +1,8 @@
+// expect: E007
+// A parameter's @blind is enforced inside the function that declares it.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn helper(o: Order @blind(customer.email)) {
+    let s = propose(Text, instruct: "Summarise.", data: [o.customer])
+}

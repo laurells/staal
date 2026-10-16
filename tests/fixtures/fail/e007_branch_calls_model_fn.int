@@ -1,0 +1,13 @@
+// expect: E007
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn ping() {
+    let s = propose(Text, instruct: "Ping.")
+}
+
+fn f(order: Order @blind(customer.email)) {
+    if order.customer.email == "ceo@example.com" {
+        ping()
+    }
+}

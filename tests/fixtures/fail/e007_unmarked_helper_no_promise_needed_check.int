@@ -1,0 +1,16 @@
+// expect: E007
+// A helper that reaches a model only through another function still needs the promise.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn leaf(o: Order) {
+    let s = propose(Text, instruct: "Hi.", data: [o])
+}
+
+fn middle(o: Order) {
+    leaf(o)
+}
+
+fn top(order: Order @blind(customer.email)) {
+    middle(order)
+}

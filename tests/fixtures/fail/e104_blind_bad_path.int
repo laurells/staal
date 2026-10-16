@@ -1,0 +1,6 @@
+// expect: E104
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.phone)) {
+}

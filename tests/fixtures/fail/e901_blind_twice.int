@@ -1,0 +1,3 @@
+// expect: E901
+fn f(x: Text @blind @blind) {
+}

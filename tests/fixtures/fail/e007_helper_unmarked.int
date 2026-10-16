@@ -1,0 +1,11 @@
+// expect: E007
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn helper(o: Order) {
+    let s = propose(Text, instruct: "Summarise.", data: [o])
+}
+
+fn top(order: Order @blind(customer.email)) {
+    helper(order)
+}

@@ -14,7 +14,7 @@ It checks them and rejects the ones that break Intent's rules.
 | E004 | A function's worst-case model use can exceed its declared `budget(...)` |
 | E005 | A model call (direct or through a called function) is inside an unbounded `loop` |
 | E006 | An untrusted value is used as a model instruction, or flows into an `@trusted` slot |
-| E007 | A model call's input can reveal a path listed in its `blind_to` |
+| E007 | Blinded data can reach a model: through a call's inputs, through the decision to make the call, or through a function that does not promise to keep it blinded |
 | E100 | Undefined name or function |
 | E101 | Type mismatch or wrong number of arguments |
 | E102 | Unknown type |
@@ -130,16 +130,40 @@ results, action results, comparisons, and model output (a model that saw the
 email may repeat it). `blind_to` entries must name data directly; a computed
 value cannot be blinded, so name what it came from.
 
-Two leaks it does not catch, and why:
+### Across functions: `@blind` parameters
 
-- **Other functions.** `blind_to` protects one model call. If you pass `order`
-  to a helper that makes its own model call, that call has its own inputs and
-  its own `blind_to`. A function-level guarantee (a parameter marked as blind
-  for everything downstream) is not built yet.
-- **Branches.** In `if order.customer.email == x { let a = "yes" }`, sending
-  `a` reveals a fact about the email through which branch ran. The checker
-  tracks values, not control flow, so it does not see this. Sending the
-  comparison result itself *is* caught.
+    fn greet(o: Order @blind(customer.email)) { ... }
+    fn top(order: Order @blind(customer.email)) { greet(order) }
+
+`@blind(path, ...)` on a parameter promises that those fields never reach a
+model inside this function or anything it calls; `@blind` alone blinds the
+whole value. Every model call in the function is checked against it, as if
+listed in its `blind_to`. Passing blinded data to another function requires
+that function's parameter to make the same promise (blinding a parent such as
+`customer` covers `customer.email`), so the guarantee holds at every depth.
+Functions that cannot reach a model, directly or through calls, need no
+promise; their results still count as revealing their arguments.
+
+### Through branches
+
+Whether code runs reveals the conditions that led to it. So inside
+`if order.customer.email == x { ... }`, every value bound counts as revealing
+the email, and so does the decision to call a model or a model-calling
+function there. The same applies to code after an `if` whose branch can
+`return` or `break`, and to a whole loop body when a `break` depends on
+blinded data (later iterations run only if it was not taken).
+
+### What is still not covered
+
+- **Actions.** `@blind` and `blind_to` keep data from *models*. Sending
+  `order.customer.email` through an email capability is allowed; that is what
+  capabilities are for.
+- **Side channels.** Timing, token counts, budget exhaustion or a runtime
+  error could in principle correlate with blinded data. The checker tracks
+  values and control flow, not these.
+- **Over-caution.** The analysis is conservative. A loop with a blinded
+  `break` taints its whole body, even code that would run identically either
+  way, so some safe programs are rejected.
 
 ## Requirements
 

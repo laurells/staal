@@ -51,6 +51,10 @@ pub struct Param {
     pub ty: Ty,
     /// `name: T @trusted` — callers may only pass trusted values here.
     pub trusted: bool,
+    /// `@blind` (whole value, stored as one empty path) or `@blind(customer.email, ...)`:
+    /// paths inside this parameter that must never reach a model, here or in anything
+    /// this function passes them to.
+    pub blind: Vec<Vec<String>>,
 }
 
 #[derive(Debug)]

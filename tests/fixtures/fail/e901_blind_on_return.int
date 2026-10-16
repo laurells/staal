@@ -1,0 +1,4 @@
+// expect: E901
+fn f() -> Text @blind {
+    return "x"
+}

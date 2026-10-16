@@ -1,0 +1,10 @@
+// expect: E007
+// Even with harmless data, making the call at all reveals the comparison.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email)) {
+    if order.customer.email == "ceo@example.com" {
+        let s = propose(Text, instruct: "Say hello.", data: ["hello"])
+    }
+}

@@ -1,0 +1,13 @@
+// expect: E007
+// Later iterations only run if an earlier break was not taken.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email)) {
+    repeat 3 {
+        let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+        if order.customer.email == "ceo@example.com" {
+            break
+        }
+    }
+}

@@ -3,7 +3,9 @@
 //   E002  an action is performed without a matching capability in scope
 //   E003  a capability is widened (given more authority than it holds)
 //   E006  an untrusted value is used as a model instruction, or flows into an @trusted slot
-//   E007  a model call's input can reveal a path listed in its `blind_to`
+//   E007  a model call's input, or the decision to make it, can reveal a path the call
+//         is blind to (via `blind_to` or an @blind parameter); or blinded data is passed
+//         to a function that does not promise to keep it blinded
 // plus ordinary errors:
 //   E100  undefined name or function
 //   E101  type mismatch or wrong number of arguments
@@ -32,7 +34,8 @@ pub struct Diagnostic {
 }
 
 struct Sig {
-    params: Vec<(Ty, bool)>,
+    /// (type, @trusted, @blind paths) per parameter
+    params: Vec<(Ty, bool, Vec<Vec<String>>)>,
     ret: Ty,
     ret_trusted: bool,
 }
@@ -43,6 +46,12 @@ struct Ctx<'a> {
     fields: HashMap<String, Vec<(String, Ty)>>,
     sigs: HashMap<&'a str, Sig>,
     diags: Vec<Diagnostic>,
+    /// What reaching the current statement reveals (see `check_block`).
+    pc: Vec<Src>,
+    /// Absolute paths blinded by the current function's @blind parameters, with display text.
+    fn_blind: Vec<(Vec<String>, String)>,
+    /// Functions that can make a model call, directly or transitively.
+    model_fns: HashSet<String>,
 }
 
 impl Ctx<'_> {
@@ -146,6 +155,9 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
         fields: HashMap::new(),
         sigs: HashMap::new(),
         diags: Vec::new(),
+        pc: Vec::new(),
+        fn_blind: Vec::new(),
+        model_fns: model_calling_fns(prog),
     };
     for t in &prog.types {
         if ctx.known.contains(&t.name) {
@@ -180,7 +192,7 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
         ctx.sigs.insert(
             &f.name,
             Sig {
-                params: f.params.iter().map(|p| (p.ty.clone(), p.trusted)).collect(),
+                params: f.params.iter().map(|p| (p.ty.clone(), p.trusted, p.blind.clone())).collect(),
                 ret: f.ret.clone().unwrap_or_else(|| named("Unit")),
                 ret_trusted: f.ret_trusted,
             },
@@ -195,6 +207,82 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
         check_fn(&mut ctx, f);
     }
     ctx.diags
+}
+
+/// Names of functions that can make a model call, directly or through calls.
+fn model_calling_fns(prog: &Program) -> HashSet<String> {
+    fn scan_expr(e: &Expr, direct: &mut bool, calls: &mut HashSet<String>) {
+        match e {
+            Expr::Propose { instruct, data, .. } => {
+                *direct = true;
+                for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
+                    scan_expr(x, direct, calls);
+                }
+            }
+            Expr::Call { name, args, .. } => {
+                calls.insert(name.clone());
+                args.iter().for_each(|a| scan_expr(a, direct, calls));
+            }
+            Expr::Action { args, .. } => args.iter().for_each(|a| scan_expr(a, direct, calls)),
+            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => scan_expr(inner, direct, calls),
+            Expr::Cmp { left, right, .. } => {
+                scan_expr(left, direct, calls);
+                scan_expr(right, direct, calls);
+            }
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => {}
+        }
+    }
+    fn scan_block(body: &[Stmt], direct: &mut bool, calls: &mut HashSet<String>) {
+        for s in body {
+            match s {
+                Stmt::Let { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => scan_expr(e, direct, calls),
+                Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => scan_block(body, direct, calls),
+                Stmt::If { cond, then, els, .. } => {
+                    scan_expr(cond, direct, calls);
+                    scan_block(then, direct, calls);
+                    scan_block(els, direct, calls);
+                }
+                Stmt::Return(None, _) | Stmt::Break(_) => {}
+            }
+        }
+    }
+    let mut info = Vec::new();
+    for f in &prog.fns {
+        let (mut direct, mut calls) = (false, HashSet::new());
+        scan_block(&f.body, &mut direct, &mut calls);
+        info.push((f.name.clone(), direct, calls));
+    }
+    let mut out: HashSet<String> = info.iter().filter(|(_, d, _)| *d).map(|(n, _, _)| n.clone()).collect();
+    loop {
+        let before = out.len();
+        for (name, _, calls) in &info {
+            if calls.iter().any(|c| out.contains(c)) {
+                out.insert(name.clone());
+            }
+        }
+        if out.len() == before {
+            return out;
+        }
+    }
+}
+
+/// Does this block contain a `return` or `break` anywhere?
+fn may_exit(body: &[Stmt]) -> bool {
+    body.iter().any(|s| match s {
+        Stmt::Return(..) | Stmt::Break(_) => true,
+        Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => may_exit(body),
+        Stmt::If { then, els, .. } => may_exit(then) || may_exit(els),
+        _ => false,
+    })
+}
+
+/// Adds sources to a set, as "derived" (inexact), without duplicates.
+fn add_srcs(into: &mut Vec<Src>, from: Vec<Src>) {
+    for s in from {
+        if !into.iter().any(|x| x.path == s.path && !x.exact) {
+            into.push(Src { path: s.path, exact: false });
+        }
+    }
 }
 
 fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
@@ -240,8 +328,24 @@ fn assignable(from: &Ty, to: &Ty) -> Result<(), (&'static str, String)> {
 
 fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
     let mut env = Env::new();
+    ctx.fn_blind.clear();
+    ctx.pc.clear();
     for p in &f.params {
         check_ty_known(ctx, &p.ty, f.pos);
+        for rel in &p.blind {
+            if !rel.is_empty() && !field_path_exists(ctx, &p.ty, rel) {
+                ctx.err(
+                    "E104",
+                    f.pos,
+                    format!("@blind on '{}': {} has no field path '{}'", p.name, p.ty, rel.join(".")),
+                );
+                continue;
+            }
+            let mut path = vec![p.name.clone()];
+            path.extend(rel.iter().cloned());
+            let text = path.join(".");
+            ctx.fn_blind.push((path, format!("{text} (blinded by parameter '{}')", p.name)));
+        }
         let reveals = vec![Src { path: vec![p.name.clone()], exact: true }];
         env.insert(p.name.clone(), Binding { ty: p.ty.clone(), trusted: p.trusted, reveals });
     }
@@ -250,8 +354,27 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
     check_block(ctx, f, &ret, &f.body, env, false);
 }
 
+fn field_path_exists(ctx: &Ctx, ty: &Ty, rel: &[String]) -> bool {
+    let mut cur = ty.clone();
+    for name in rel {
+        let Ty::Named(t) = &cur else { return false };
+        let Some(fields) = ctx.fields.get(t) else { return false };
+        let Some((_, fty)) = fields.iter().find(|(n, _)| n == name) else { return false };
+        cur = fty.clone();
+    }
+    true
+}
+
 /// Checks a block. `env` is a copy, so names bound inside a nested block do not leak out.
-fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env, in_loop: bool) {
+///
+/// `ctx.pc` holds what reaching the current point reveals: inside `if c { ... }` it
+/// includes what `c` reveals, and after an `if` whose branch can `return` or `break`
+/// it includes that condition for the rest of the block. Values bound here, and the
+/// decision to call a model here, carry `ctx.pc`. Returns what this block's early
+/// exits reveal, so enclosing blocks can taint the code that runs after them.
+fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env, in_loop: bool) -> Vec<Src> {
+    let saved_pc = ctx.pc.clone();
+    let mut exit_taint: Vec<Src> = Vec::new();
     for stmt in body {
         match stmt {
             Stmt::Let { name, ty, value, pos } => {
@@ -266,7 +389,8 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     }
                     None => vty,
                 };
-                let r = reveals(value, &env);
+                let mut r = reveals(value, &env);
+                add_srcs(&mut r, ctx.pc.clone());
                 env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r });
             }
             Stmt::Expr(e) => {
@@ -291,7 +415,31 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 }
             }
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => {
-                check_block(ctx, f, ret, body, env.clone(), true);
+                // A `break` taken in one iteration decides whether later iterations run,
+                // so the body is checked under its own exit taint, repeated until stable.
+                // Diagnostics from the trial passes are discarded.
+                let outer_pc = ctx.pc.clone();
+                let mut taint: Vec<Src> = Vec::new();
+                for _ in 0..8 {
+                    let mark = ctx.diags.len();
+                    ctx.pc = outer_pc.clone();
+                    add_srcs(&mut ctx.pc, taint.clone());
+                    let t = check_block(ctx, f, ret, body, env.clone(), true);
+                    ctx.diags.truncate(mark);
+                    let before = taint.len();
+                    add_srcs(&mut taint, t);
+                    if taint.len() == before {
+                        break;
+                    }
+                }
+                ctx.pc = outer_pc;
+                add_srcs(&mut ctx.pc, taint.clone());
+                let t = check_block(ctx, f, ret, body, env.clone(), true);
+                add_srcs(&mut taint, t);
+                ctx.pc = saved_pc.clone();
+                add_srcs(&mut ctx.pc, exit_taint.clone());
+                add_srcs(&mut exit_taint, taint.clone());
+                add_srcs(&mut ctx.pc, taint);
             }
             Stmt::If { cond, then, els, .. } => {
                 if let Some((cty, _)) = type_of(ctx, cond, &env) {
@@ -307,8 +455,20 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                         _ => {}
                     }
                 }
-                check_block(ctx, f, ret, then, env.clone(), in_loop);
-                check_block(ctx, f, ret, els, env.clone(), in_loop);
+                let cond_srcs = reveals(cond, &env);
+                let here = ctx.pc.clone();
+                add_srcs(&mut ctx.pc, cond_srcs.clone());
+                let t1 = check_block(ctx, f, ret, then, env.clone(), in_loop);
+                let t2 = check_block(ctx, f, ret, els, env.clone(), in_loop);
+                ctx.pc = here;
+                if may_exit(then) || may_exit(els) {
+                    let mut t = Vec::new();
+                    add_srcs(&mut t, cond_srcs);
+                    add_srcs(&mut t, t1);
+                    add_srcs(&mut t, t2);
+                    add_srcs(&mut exit_taint, t.clone());
+                    add_srcs(&mut ctx.pc, t);
+                }
             }
             Stmt::Break(pos) => {
                 if !in_loop {
@@ -317,10 +477,14 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
             }
         }
     }
+    ctx.pc = saved_pc;
+    exit_taint
 }
 
-/// E007: no input of a model call may reveal a path the call is blind to.
-fn check_blind(ctx: &mut Ctx, instruct: Option<&Expr>, data: &[Expr], blind_to: &[Expr], env: &Env) {
+/// E007: no input of a model call may reveal a path the call is blind to, either
+/// through `blind_to` on the call or through an @blind parameter of this function.
+/// Whether the call happens at all counts as an input (`ctx.pc`).
+fn check_blind(ctx: &mut Ctx, instruct: Option<&Expr>, data: &[Expr], blind_to: &[Expr], env: &Env, pos: Pos) {
     let mut blind: Vec<(Vec<String>, String)> = Vec::new();
     for b in blind_to {
         if !is_path(b) {
@@ -346,6 +510,8 @@ fn check_blind(ctx: &mut Ctx, instruct: Option<&Expr>, data: &[Expr], blind_to: 
             blind.push((s.path, expr_text(b)));
         }
     }
+    blind.extend(ctx.fn_blind.iter().cloned());
+
     let inputs = instruct.into_iter().chain(data.iter());
     for input in inputs {
         let mut reported = HashSet::new();
@@ -355,11 +521,77 @@ fn check_blind(ctx: &mut Ctx, instruct: Option<&Expr>, data: &[Expr], blind_to: 
                     ctx.err(
                         "E007",
                         input.pos(),
+                        format!("model input '{}' can reveal '{}', which this call is blind to", expr_text(input), btext),
+                    );
+                }
+            }
+        }
+    }
+    let mut reported = HashSet::new();
+    for src in ctx.pc.clone() {
+        for (bpath, btext) in &blind {
+            if overlaps(&src.path, bpath) && reported.insert(btext.clone()) {
+                ctx.err(
+                    "E007",
+                    pos,
+                    format!("whether this model call happens depends on '{btext}', which it is blind to"),
+                );
+            }
+        }
+    }
+}
+
+/// E007 at a call: blinded data passed to another function must stay blinded there.
+fn check_call_blind(ctx: &mut Ctx, name: &str, args: &[Expr], params: &[(Ty, bool, Vec<Vec<String>>)], env: &Env, pos: Pos) {
+    let fn_blind = ctx.fn_blind.clone();
+    // A function that cannot reach a model (directly or through calls) cannot leak to one.
+    // Its result still reveals its arguments, which the caller tracks.
+    let callee_uses_models = ctx.model_fns.contains(name);
+    for (arg, (_, _, pblind)) in args.iter().zip(params).filter(|_| callee_uses_models) {
+        let mut reported = HashSet::new();
+        for src in reveals(arg, env) {
+            for (bpath, btext) in &fn_blind {
+                if !overlaps(&src.path, bpath) {
+                    continue;
+                }
+                // If the argument is exactly a parent of the blinded path, the callee must
+                // blind the remaining sub-path (or a parent of it). Otherwise the argument
+                // lies inside the blinded data or is computed from it: the whole parameter
+                // must be blind.
+                let covered = if src.exact && bpath.len() > src.path.len() {
+                    let rest = &bpath[src.path.len()..];
+                    pblind.iter().any(|q| q.len() <= rest.len() && q[..] == rest[..q.len()])
+                } else {
+                    pblind.iter().any(|q| q.is_empty())
+                };
+                if !covered && reported.insert(btext.clone()) {
+                    let need = if src.exact && bpath.len() > src.path.len() {
+                        format!("@blind({})", bpath[src.path.len()..].join("."))
+                    } else {
+                        "@blind".to_string()
+                    };
+                    ctx.err(
+                        "E007",
+                        arg.pos(),
                         format!(
-                            "model input '{}' can reveal '{}', which this call is blind to",
-                            expr_text(input),
-                            btext
+                            "in call to '{name}': argument '{}' can reveal '{btext}', but '{name}' does not \
+                             promise to keep it from models; mark that parameter {need}",
+                            expr_text(arg)
                         ),
+                    );
+                }
+            }
+        }
+    }
+    if ctx.model_fns.contains(name) {
+        let mut reported = HashSet::new();
+        for src in ctx.pc.clone() {
+            for (bpath, btext) in &fn_blind {
+                if overlaps(&src.path, bpath) && reported.insert(btext.clone()) {
+                    ctx.err(
+                        "E007",
+                        pos,
+                        format!("'{name}' makes model calls, and whether it runs here depends on '{btext}'"),
                     );
                 }
             }
@@ -430,7 +662,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
         }
         Expr::Propose { ty, instruct, data, blind_to, pos, .. } => {
             check_ty_known(ctx, ty, *pos);
-            check_blind(ctx, instruct.as_deref(), data, blind_to, env);
+            check_blind(ctx, instruct.as_deref(), data, blind_to, env, *pos);
             if let Some(ins) = instruct {
                 if let Some((ity, trusted)) = type_of(ctx, ins, env) {
                     if ity != named("Text") {
@@ -468,6 +700,9 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 return None;
             };
             let (params, ret, ret_trusted) = (sig.params.clone(), sig.ret.clone(), sig.ret_trusted);
+            if params.len() == args.len() {
+                check_call_blind(ctx, name, args, &params, env, *pos);
+            }
             if params.len() != args.len() {
                 ctx.err(
                     "E101",
@@ -476,7 +711,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 );
                 return Some((ret, ret_trusted));
             }
-            for ((arg, aty), (pty, ptrusted)) in args.iter().zip(arg_tys).zip(&params) {
+            for ((arg, aty), (pty, ptrusted, _)) in args.iter().zip(arg_tys).zip(&params) {
                 let Some((aty, atrusted)) = aty else { continue };
                 if let Err((code, msg)) = assignable(&aty, pty) {
                     ctx.err(code, arg.pos(), format!("in call to '{name}': {msg}"));

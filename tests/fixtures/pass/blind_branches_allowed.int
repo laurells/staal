@@ -1,0 +1,20 @@
+type Customer { name: Text, email: Text }
+type Order { total: Money, customer: Customer }
+
+fn no_models(o: Order) -> Text {
+    return "done"
+}
+
+// Branching on data that is not blinded is fine.
+fn big(order: Order @blind(customer.email), limit: Money) {
+    if order.total > limit {
+        let s = propose(Text, instruct: "Flag this order.", data: [order.total])
+    }
+}
+
+// Branching on blinded data is fine when no model is involved.
+fn local(order: Order @blind(customer.email)) {
+    if order.customer.email == "vip@example.com" {
+        let x = no_models(order)
+    }
+}

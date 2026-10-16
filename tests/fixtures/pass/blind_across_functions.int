@@ -1,0 +1,29 @@
+type Customer { name: Text, email: Text }
+type Order { id: Text, total: Money, customer: Customer }
+
+// The helper promises to keep the email from models, so it may receive the order.
+fn greet(o: Order @blind(customer.email)) {
+    let s = propose(Text, instruct: "Greet the customer by name.", data: [o.customer.name])
+}
+
+// Blinding a parent covers the child: @blind(customer) covers customer.email.
+fn careful(o: Order @blind(customer)) {
+    let s = propose(Text, instruct: "Summarise the order total.", data: [o.total])
+}
+
+// A helper that takes only unrelated data needs no promise.
+fn by_id(id: Text) {
+    let s = propose(Text, instruct: "Look up this order id.", data: [id])
+}
+
+// Functions that never call a model may receive anything.
+fn no_models(o: Order) -> Text {
+    return "done"
+}
+
+fn top(order: Order @blind(customer.email)) {
+    greet(order)
+    careful(order)
+    by_id(order.id)
+    let x = no_models(order)
+}

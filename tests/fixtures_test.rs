@@ -1,6 +1,6 @@
 // Every file in tests/fixtures/pass must compile with no errors.
 // Every file in tests/fixtures/fail must start with `// expect: CODE`
-// and the compiler must report exactly that code.
+// and the compiler must report exactly those codes, in order (e.g. `// expect: E007 E007`).
 
 use std::fs;
 use std::path::Path;
@@ -29,14 +29,14 @@ fn valid_programs_compile() {
 fn invalid_programs_are_rejected_with_the_right_code() {
     for f in files("tests/fixtures/fail") {
         let src = fs::read_to_string(&f).unwrap();
-        let expected = src
+        let expected: Vec<&str> = src
             .lines()
             .next()
             .and_then(|l| l.strip_prefix("// expect: "))
             .unwrap_or_else(|| panic!("{} lacks `// expect: CODE`", f.display()))
-            .trim()
-            .to_string();
+            .split_whitespace()
+            .collect();
         let codes: Vec<&str> = intentc::compile_check(&src).iter().map(|d| d.code).collect();
-        assert_eq!(codes, vec![expected.as_str()], "{}", f.display());
+        assert_eq!(codes, expected, "{}", f.display());
     }
 }

@@ -1,0 +1,11 @@
+// expect: E007
+// Code after an early return only runs if the condition was false.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email)) {
+    if order.customer.email == "ceo@example.com" {
+        return
+    }
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"])
+}

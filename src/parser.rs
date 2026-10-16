@@ -3,9 +3,11 @@
 // Grammar (v0.1 subset):
 //   program  := (typedecl | fndecl)*
 //   typedecl := "type" IDENT "{" (IDENT ":" ty ","?)* "}"
-//   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty trust?)? budget? block
+//   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty ("@" "trusted")?)? budget? block
 //   budget   := "budget" "(" limit ("," limit)* ")"      limit := ("calls" | "tokens") ":" NUM
-//   param    := IDENT ":" ty trust?             trust := "@" "trusted"
+//   param    := IDENT ":" ty mark*
+//   mark     := "@" "trusted" | "@" "blind" ("(" field_path ("," field_path)* ")")?
+//   field_path := IDENT ("." IDENT)*
 //   ty       := "cap" IDENT ("." IDENT)* ("(" "max" ":" NUM IDENT? ")")?
 //             | IDENT ("<" ty ">")?
 //   block    := "{" stmt* "}"
@@ -78,7 +80,7 @@ impl Parser {
         }
     }
 
-    /// Optional `@trusted` after a parameter or return type.
+    /// Optional `@trusted` after a return type.
     fn trust_mark(&mut self) -> PResult<bool> {
         if *self.peek() != Tok::At {
             return Ok(false);
@@ -86,10 +88,50 @@ impl Parser {
         self.bump();
         let pos = self.pos();
         let label = self.ident()?;
-        if label != "trusted" {
-            return Err((pos, format!("unknown label '@{label}'; only '@trusted' is supported")));
+        match label.as_str() {
+            "trusted" => Ok(true),
+            "blind" => Err((pos, "'@blind' applies to parameters, not return types".into())),
+            _ => Err((pos, format!("unknown label '@{label}'; use '@trusted' or '@blind'"))),
         }
-        Ok(true)
+    }
+
+    /// Zero or more `@trusted` / `@blind(...)` marks after a parameter type.
+    fn param_marks(&mut self) -> PResult<(bool, Vec<Vec<String>>)> {
+        let (mut trusted, mut blind) = (false, Vec::new());
+        let mut seen_blind = false;
+        while *self.peek() == Tok::At {
+            self.bump();
+            let pos = self.pos();
+            let label = self.ident()?;
+            match label.as_str() {
+                "trusted" if !trusted => trusted = true,
+                "blind" if !seen_blind => {
+                    seen_blind = true;
+                    if *self.peek() == Tok::LParen {
+                        self.bump();
+                        loop {
+                            let mut path = vec![self.ident()?];
+                            while *self.peek() == Tok::Dot {
+                                self.bump();
+                                path.push(self.ident()?);
+                            }
+                            blind.push(path);
+                            if *self.peek() == Tok::Comma {
+                                self.bump();
+                            } else {
+                                break;
+                            }
+                        }
+                        self.expect(Tok::RParen, "')'")?;
+                    } else {
+                        blind.push(Vec::new()); // the whole value
+                    }
+                }
+                "trusted" | "blind" => return Err((pos, format!("'@{label}' given twice"))),
+                _ => return Err((pos, format!("unknown label '@{label}'; use '@trusted' or '@blind'"))),
+            }
+        }
+        Ok((trusted, blind))
     }
 
     fn budget(&mut self) -> PResult<Budget> {
@@ -165,8 +207,8 @@ impl Parser {
                 let pname = self.ident()?;
                 self.expect(Tok::Colon, "':'")?;
                 let ty = self.ty()?;
-                let trusted = self.trust_mark()?;
-                params.push(Param { name: pname, ty, trusted });
+                let (trusted, blind) = self.param_marks()?;
+                params.push(Param { name: pname, ty, trusted, blind });
                 if *self.peek() == Tok::Comma {
                     self.bump();
                     if *self.peek() == Tok::RParen {

@@ -1,0 +1,16 @@
+// expect: E007
+// The promise must hold all the way down: c breaks the chain.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn c(o: Order) {
+    let s = propose(Text, instruct: "Hi.", data: [o])
+}
+
+fn b(o: Order @blind(customer.email)) {
+    c(o)
+}
+
+fn a(order: Order @blind(customer.email)) {
+    b(order)
+}
