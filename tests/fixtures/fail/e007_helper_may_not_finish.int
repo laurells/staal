@@ -1,0 +1,14 @@
+// expect: E007
+// Attack: a helper with no model calls loops forever for one email value,
+// so the later model call happens only for other values.
+type Customer { email: Text }
+type Order { customer: Customer }
+fn stall(e: Text) {
+    loop {
+        if e != "ceo@example.com" { break }
+    }
+}
+fn f(order: Order @blind(customer.email)) {
+    stall(order.customer.email)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

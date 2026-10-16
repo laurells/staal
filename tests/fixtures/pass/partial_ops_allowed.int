@@ -1,0 +1,32 @@
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+
+// A pure helper always finishes, so calling it with blinded data changes nothing.
+fn is_vip(e: Text) -> Bool {
+    return e == "ceo@example.com"
+}
+
+// A bounded loop with no actions always finishes too.
+fn scan(e: Text) {
+    repeat 5 {
+        let x = e == "a"
+    }
+}
+
+// Model call first, then an action with the email: nothing runs after the action.
+fn summarise_then_notify(order: Order @blind(customer.email), mail: cap email.send) {
+    let s = propose(Text, instruct: "Summarise.", data: [order.id], tokens: 100)
+    mail.send(order.customer.email)
+}
+
+// Actions whose arguments are not blinded do not taint what follows.
+fn notify_then_summarise(order: Order @blind(customer.email), mail: cap email.send) {
+    mail.send(order.customer.name)
+    let s = propose(Text, instruct: "Summarise.", data: [order.id], tokens: 100)
+}
+
+fn pure_helpers(order: Order @blind(customer.email)) {
+    let v = is_vip(order.customer.email)
+    scan(order.customer.email)
+    let s = propose(Text, instruct: "Summarise.", data: [order.id], tokens: 100)
+}

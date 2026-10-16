@@ -1,0 +1,11 @@
+// expect: E007
+// A failing action in one iteration stops the model calls of later iterations.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email), mail: cap email.send) {
+    repeat 3 {
+        let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+        mail.send(order.customer.email)
+    }
+}

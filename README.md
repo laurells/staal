@@ -153,17 +153,54 @@ function there. The same applies to code after an `if` whose branch can
 `return` or `break`, and to a whole loop body when a `break` depends on
 blinded data (later iterations run only if it was not taken).
 
-### What is still not covered
+### Through operations that might not finish
+
+An action can fail (a bad address, a declined payment), and a function with a
+`loop` or recursion might never return. Either way, the code after it only
+runs for some argument values. So an operation is *partial* if it is an
+action, or a call to a function that contains an action, `loop` or recursion
+(directly or through calls). Everything after a partial operation counts as
+depending on its arguments, and everything after a branch containing one
+counts as depending on the branch condition. Pure helpers that always finish
+(no actions, no `loop`, no recursion; `repeat N` is fine) are unaffected.
+
+In practice: with `@blind(customer.email)`, `mail.send(order.customer.email)`
+followed by a model call is rejected, because the call only happens if the
+send succeeded. Make the model call first, or send the email last.
+
+### Side channels: what is closed and what is not
+
+Two observers matter. The **model** sees only each request's instruction and
+data; it has no clock, and Intent gives programs none. The **provider** (or
+anyone on the network path) also sees when requests arrive, how many there
+are, and their sizes.
+
+Closed by the rules above, for both observers: whether a model call happens,
+how many happen, their order, their inputs, and therefore their token use and
+budget consumption. No model call may depend on blinded data, so the whole
+sequence of model calls is fixed by non-blinded data.
+
+Not closed, and not closable by a type system: **wall-clock timing**. Slow
+work done only for some blinded values shifts when an identical model call
+starts. A provider with precise timestamps could infer which branch ran, at
+most one bit per blinded decision per observation, never the value itself.
+The model cannot observe it. The mitigation belongs to the runtime (releasing
+model calls on a fixed schedule, at a latency cost).
+
+Other limits:
 
 - **Actions.** `@blind` and `blind_to` keep data from *models*. Sending
   `order.customer.email` through an email capability is allowed; that is what
   capabilities are for.
-- **Side channels.** Timing, token counts, budget exhaustion or a runtime
-  error could in principle correlate with blinded data. The checker tracks
-  values and control flow, not these.
-- **Over-caution.** The analysis is conservative. A loop with a blinded
-  `break` taints its whole body, even code that would run identically either
-  way, so some safe programs are rejected.
+- **Stateless calls (runtime requirement).** All of the above assumes every
+  model call starts from a fresh context. A runtime that reused a conversation
+  across calls would show call two the inputs of call one, which were checked
+  against call one's `blind_to`, not call two's.
+- **Over-caution.** The analysis is conservative and rejects some safe
+  programs: a loop with a blinded `break` taints its whole body, and any
+  action with blinded arguments taints everything after it. Making action
+  failures values the program handles, instead of aborts, would remove much
+  of the second case; that needs error handling in the language.
 
 ## Requirements
 

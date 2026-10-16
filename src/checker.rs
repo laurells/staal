@@ -5,7 +5,9 @@
 //   E006  an untrusted value is used as a model instruction, or flows into an @trusted slot
 //   E007  a model call's input, or the decision to make it, can reveal a path the call
 //         is blind to (via `blind_to` or an @blind parameter); or blinded data is passed
-//         to a function that does not promise to keep it blinded
+//         to a function that does not promise to keep it blinded. "The decision to make
+//         it" covers branches, early exits, and operations that might not finish
+//         (actions can fail; `loop` and recursion might not end).
 // plus ordinary errors:
 //   E100  undefined name or function
 //   E101  type mismatch or wrong number of arguments
@@ -52,6 +54,9 @@ struct Ctx<'a> {
     fn_blind: Vec<(Vec<String>, String)>,
     /// Functions that can make a model call, directly or transitively.
     model_fns: HashSet<String>,
+    /// Functions that might not finish normally: they contain an action (which can fail),
+    /// a `loop`, or recursion, directly or through calls.
+    partial_fns: HashSet<String>,
 }
 
 impl Ctx<'_> {
@@ -158,6 +163,7 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
         pc: Vec::new(),
         fn_blind: Vec::new(),
         model_fns: model_calling_fns(prog),
+        partial_fns: partial_fns(prog),
     };
     for t in &prog.types {
         if ctx.known.contains(&t.name) {
@@ -266,13 +272,145 @@ fn model_calling_fns(prog: &Program) -> HashSet<String> {
     }
 }
 
-/// Does this block contain a `return` or `break` anywhere?
-fn may_exit(body: &[Stmt]) -> bool {
+/// Functions that might not finish normally (see `Ctx::partial_fns`).
+fn partial_fns(prog: &Program) -> HashSet<String> {
+    fn scan_expr(e: &Expr, direct: &mut bool, calls: &mut HashSet<String>) {
+        match e {
+            Expr::Action { args, .. } => {
+                *direct = true; // actions reach the outside world and can fail
+                args.iter().for_each(|a| scan_expr(a, direct, calls));
+            }
+            Expr::Call { name, args, .. } => {
+                calls.insert(name.clone());
+                args.iter().for_each(|a| scan_expr(a, direct, calls));
+            }
+            Expr::Propose { instruct, data, .. } => {
+                for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
+                    scan_expr(x, direct, calls);
+                }
+            }
+            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => scan_expr(inner, direct, calls),
+            Expr::Cmp { left, right, .. } => {
+                scan_expr(left, direct, calls);
+                scan_expr(right, direct, calls);
+            }
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => {}
+        }
+    }
+    fn scan_block(body: &[Stmt], direct: &mut bool, calls: &mut HashSet<String>) {
+        for s in body {
+            match s {
+                Stmt::Let { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => scan_expr(e, direct, calls),
+                Stmt::Loop { body, .. } => {
+                    *direct = true; // `loop` may never end
+                    scan_block(body, direct, calls);
+                }
+                Stmt::Repeat { body, .. } => scan_block(body, direct, calls),
+                Stmt::If { cond, then, els, .. } => {
+                    scan_expr(cond, direct, calls);
+                    scan_block(then, direct, calls);
+                    scan_block(els, direct, calls);
+                }
+                Stmt::Return(None, _) | Stmt::Break(_) => {}
+            }
+        }
+    }
+    let mut graph: HashMap<String, (bool, HashSet<String>)> = HashMap::new();
+    for f in &prog.fns {
+        let (mut direct, mut calls) = (false, HashSet::new());
+        scan_block(&f.body, &mut direct, &mut calls);
+        graph.entry(f.name.clone()).or_insert((direct, calls));
+    }
+    // Recursion: a function that can reach itself through calls may never end.
+    let reaches_self = |start: &str| -> bool {
+        let mut seen = HashSet::new();
+        let mut stack: Vec<String> = graph.get(start).map(|(_, c)| c.iter().cloned().collect()).unwrap_or_default();
+        while let Some(n) = stack.pop() {
+            if n == start {
+                return true;
+            }
+            if seen.insert(n.clone()) {
+                if let Some((_, c)) = graph.get(&n) {
+                    stack.extend(c.iter().cloned());
+                }
+            }
+        }
+        false
+    };
+    let mut out: HashSet<String> =
+        graph.iter().filter(|(n, (d, _))| *d || reaches_self(n)).map(|(n, _)| n.clone()).collect();
+    loop {
+        let before = out.len();
+        for (name, (_, calls)) in &graph {
+            if calls.iter().any(|c| out.contains(c)) {
+                out.insert(name.clone());
+            }
+        }
+        if out.len() == before {
+            return out;
+        }
+    }
+}
+
+/// Everything the partial operations in `e` (actions, calls to partial functions) take as
+/// arguments. Whether execution continues past them can depend on those arguments.
+fn partial_taint(ctx: &Ctx, e: &Expr, env: &Env) -> Vec<Src> {
+    let mut out = Vec::new();
+    collect_partial(ctx, e, env, &mut out);
+    out
+}
+
+fn collect_partial(ctx: &Ctx, e: &Expr, env: &Env, out: &mut Vec<Src>) {
+    match e {
+        Expr::Action { args, .. } => {
+            for a in args {
+                add_srcs(out, reveals(a, env));
+                collect_partial(ctx, a, env, out);
+            }
+        }
+        Expr::Call { name, args, .. } => {
+            let partial = ctx.partial_fns.contains(name);
+            for a in args {
+                if partial {
+                    add_srcs(out, reveals(a, env));
+                }
+                collect_partial(ctx, a, env, out);
+            }
+        }
+        Expr::Propose { instruct, data, .. } => {
+            for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
+                collect_partial(ctx, x, env, out);
+            }
+        }
+        Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => collect_partial(ctx, inner, env, out),
+        Expr::Cmp { left, right, .. } => {
+            collect_partial(ctx, left, env, out);
+            collect_partial(ctx, right, env, out);
+        }
+        Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => {}
+    }
+}
+
+/// Does this block contain anything that can stop execution early: `return`, `break`,
+/// an action, or a call to a partial function?
+fn may_stop(ctx: &Ctx, body: &[Stmt]) -> bool {
+    fn expr_partial(ctx: &Ctx, e: &Expr) -> bool {
+        match e {
+            Expr::Action { .. } => true,
+            Expr::Call { name, args, .. } => ctx.partial_fns.contains(name) || args.iter().any(|a| expr_partial(ctx, a)),
+            Expr::Propose { instruct, data, .. } => {
+                instruct.iter().any(|i| expr_partial(ctx, i)) || data.iter().any(|d| expr_partial(ctx, d))
+            }
+            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => expr_partial(ctx, inner),
+            Expr::Cmp { left, right, .. } => expr_partial(ctx, left) || expr_partial(ctx, right),
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => false,
+        }
+    }
     body.iter().any(|s| match s {
-        Stmt::Return(..) | Stmt::Break(_) => true,
-        Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => may_exit(body),
-        Stmt::If { then, els, .. } => may_exit(then) || may_exit(els),
-        _ => false,
+        Stmt::Return(..) | Stmt::Break(_) | Stmt::Loop { .. } => true,
+        Stmt::Let { value: e, .. } | Stmt::Expr(e) => expr_partial(ctx, e),
+        Stmt::Repeat { body, .. } => may_stop(ctx, body),
+        Stmt::If { cond, then, els, .. } => expr_partial(ctx, cond) || may_stop(ctx, then) || may_stop(ctx, els),
     })
 }
 
@@ -376,6 +514,21 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
     let saved_pc = ctx.pc.clone();
     let mut exit_taint: Vec<Src> = Vec::new();
     for stmt in body {
+        // If this statement contains an action or a call that might not finish, whether
+        // execution gets past it can depend on that operation's arguments. That holds for
+        // model calls later in this statement and everything after it.
+        let stmt_expr = match stmt {
+            Stmt::Let { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => Some(e),
+            Stmt::If { cond, .. } => Some(cond),
+            _ => None,
+        };
+        if let Some(e) = stmt_expr {
+            let pt = partial_taint(ctx, e, &env);
+            if !pt.is_empty() {
+                add_srcs(&mut ctx.pc, pt.clone());
+                add_srcs(&mut exit_taint, pt);
+            }
+        }
         match stmt {
             Stmt::Let { name, ty, value, pos } => {
                 let Some((vty, trusted)) = type_of(ctx, value, &env) else { continue };
@@ -461,11 +614,13 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 let t1 = check_block(ctx, f, ret, then, env.clone(), in_loop);
                 let t2 = check_block(ctx, f, ret, els, env.clone(), in_loop);
                 ctx.pc = here;
-                if may_exit(then) || may_exit(els) {
-                    let mut t = Vec::new();
+                let mut t = Vec::new();
+                add_srcs(&mut t, t1);
+                add_srcs(&mut t, t2);
+                if may_stop(ctx, then) || may_stop(ctx, els) {
                     add_srcs(&mut t, cond_srcs);
-                    add_srcs(&mut t, t1);
-                    add_srcs(&mut t, t2);
+                }
+                if !t.is_empty() {
                     add_srcs(&mut exit_taint, t.clone());
                     add_srcs(&mut ctx.pc, t);
                 }

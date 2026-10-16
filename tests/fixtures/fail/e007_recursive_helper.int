@@ -1,0 +1,15 @@
+// expect: E007
+// Recursion may not finish, and how long it runs depends on its argument.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn spin(e: Text) {
+    if e == "ceo@example.com" {
+        spin(e)
+    }
+}
+
+fn f(order: Order @blind(customer.email)) {
+    spin(order.customer.email)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

@@ -1,0 +1,10 @@
+// expect: E007
+// Attack: an action given the email may fail (bad address). If it fails, the
+// function stops, and the later model call never happens. The model provider
+// learns whether the email was deliverable.
+type Customer { email: Text }
+type Order { customer: Customer }
+fn f(order: Order @blind(customer.email), mail: cap email.send) {
+    mail.send(order.customer.email)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

@@ -1,0 +1,12 @@
+// expect: E007
+// The action's argument is harmless, but whether it runs (and so whether it can
+// fail and stop the function) depends on the email.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email), mail: cap email.send) {
+    if order.customer.email == "ceo@example.com" {
+        mail.send("hello")
+    }
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

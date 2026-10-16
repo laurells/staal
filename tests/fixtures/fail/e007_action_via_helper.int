@@ -1,0 +1,13 @@
+// expect: E007
+// The helper contains an action, so it may fail on the email it is given.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn notify(e: Text, mail: cap email.send) {
+    mail.send(e)
+}
+
+fn f(order: Order @blind(customer.email), mail: cap email.send) {
+    notify(order.customer.email, mail)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}
