@@ -1,0 +1,23 @@
+// Unbounded loops are fine when they make no model calls.
+fn tick(mail: cap email.send) budget(calls: 0) {
+    loop {
+        mail.send("ping")
+    }
+}
+
+// Zero repetitions cost nothing, even around an unlimited call.
+fn never() budget(calls: 0, tokens: 0) {
+    repeat 0 {
+        let x = propose(Text)
+    }
+}
+
+// A function without a budget is not checked against one.
+fn unchecked() {
+    let x = propose(Text)
+}
+
+// Pure recursion with no model calls costs nothing.
+fn spin() budget(calls: 0) {
+    spin()
+}

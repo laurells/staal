@@ -123,8 +123,12 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
     }
     let ret = f.ret.clone().unwrap_or_else(unit);
     check_ty_known(ctx, &ret, f.pos);
+    check_block(ctx, f, &ret, &f.body, env);
+}
 
-    for stmt in &f.body {
+/// Checks a block. `env` is a copy, so names bound inside a loop body do not leak out.
+fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: HashMap<String, Ty>) {
+    for stmt in body {
         match stmt {
             Stmt::Let { name, ty, value, pos } => {
                 let Some(vty) = type_of(ctx, value, &env) else { continue };
@@ -145,10 +149,13 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
             }
             Stmt::Return(e, pos) => {
                 if let Some(vty) = type_of(ctx, e, &env) {
-                    if let Err((code, msg)) = assignable(&vty, &ret) {
+                    if let Err((code, msg)) = assignable(&vty, ret) {
                         ctx.err(code, *pos, format!("in return from '{}': {msg}", f.name));
                     }
                 }
+            }
+            Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => {
+                check_block(ctx, f, ret, body, env.clone());
             }
         }
     }
@@ -165,9 +172,9 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &HashMap<String, Ty>) -> Option<Ty> {
                 None
             }
         },
-        Expr::Propose(t, pos) => {
-            check_ty_known(ctx, t, *pos);
-            Some(Ty::Proposed(Box::new(t.clone())))
+        Expr::Propose { ty, pos, .. } => {
+            check_ty_known(ctx, ty, *pos);
+            Some(Ty::Proposed(Box::new(ty.clone())))
         }
         Expr::Validate(inner, pos) => match type_of(ctx, inner, env)? {
             Ty::Proposed(t) => Some(*t),

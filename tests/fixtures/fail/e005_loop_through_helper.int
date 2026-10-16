@@ -1,0 +1,10 @@
+// expect: E005
+fn ask() {
+    let x = propose(Text, tokens: 100)
+}
+
+fn poll() {
+    loop {
+        ask()
+    }
+}

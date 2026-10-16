@@ -1,0 +1,9 @@
+// expect: E004
+// costly limits calls but not tokens, so its token use is unbounded.
+fn costly() budget(calls: 1) {
+    let x = propose(Text, tokens: 10)
+}
+
+fn top() budget(tokens: 1000) {
+    costly()
+}

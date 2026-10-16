@@ -1,0 +1,9 @@
+// expect: E004
+fn again() {
+    let x = propose(Text, tokens: 10)
+    again()
+}
+
+fn top() budget(calls: 100) {
+    again()
+}

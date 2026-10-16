@@ -1,0 +1,12 @@
+// Mutual recursion with no model calls anywhere costs nothing.
+fn ping() {
+    pong()
+}
+
+fn pong() {
+    ping()
+}
+
+fn top() budget(calls: 0, tokens: 0) {
+    ping()
+}

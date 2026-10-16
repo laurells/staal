@@ -1,0 +1,18 @@
+type Note { body: Text }
+
+// No budget declared: its cost (1 call, 500 tokens) is inferred.
+fn helper() -> Note {
+    return validate propose(Note, tokens: 500)
+}
+
+// Declared budget: callers use the declaration, 2 calls / 1000 tokens.
+fn declared() -> Note budget(calls: 2, tokens: 1000) {
+    let a = helper()
+    return helper()
+}
+
+// 1 (helper) + 2 (declared) = 3 calls; 500 + 1000 = 1500 tokens.
+fn top() budget(calls: 3, tokens: 1500) {
+    let x = helper()
+    let y = declared()
+}

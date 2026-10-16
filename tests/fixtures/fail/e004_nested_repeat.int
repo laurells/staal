@@ -1,0 +1,9 @@
+// expect: E004
+// 4 x 5 = 20 calls, budget allows 19.
+fn draft() budget(calls: 19) {
+    repeat 4 {
+        repeat 5 {
+            let x = propose(Text, tokens: 10)
+        }
+    }
+}

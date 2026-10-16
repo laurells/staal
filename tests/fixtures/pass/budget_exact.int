@@ -1,0 +1,10 @@
+type Note { body: Text }
+
+// 3 attempts x 1 call x 2000 tokens = exactly 3 calls, 6000 tokens.
+fn draft() -> Note budget(calls: 3, tokens: 6000) {
+    let n = validate propose(Note, tokens: 2000)
+    repeat 2 {
+        let retry = propose(Note, tokens: 2000)
+    }
+    return n
+}

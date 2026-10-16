@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod budget;
 pub mod checker;
 pub mod lexer;
 pub mod parser;
@@ -16,7 +17,9 @@ pub fn compile_check(src: &str) -> Vec<Diagnostic> {
         Ok(p) => p,
         Err((pos, msg)) => return vec![Diagnostic { code: "E901", pos, msg }],
     };
-    checker::check(&prog)
+    let mut diags = checker::check(&prog);
+    diags.extend(budget::check(&prog));
+    diags
 }
 
 pub fn format_diag(file: &str, d: &Diagnostic) -> String {

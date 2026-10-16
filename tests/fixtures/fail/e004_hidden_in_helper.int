@@ -1,0 +1,10 @@
+// expect: E004
+// The helper has no budget; its 2 calls are counted against the caller.
+fn helper() {
+    let a = propose(Text, tokens: 10)
+    let b = propose(Text, tokens: 10)
+}
+
+fn top() budget(calls: 1) {
+    helper()
+}

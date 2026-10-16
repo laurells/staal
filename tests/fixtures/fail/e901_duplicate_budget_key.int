@@ -1,0 +1,3 @@
+// expect: E901
+fn f() budget(calls: 1, calls: 2) {
+}

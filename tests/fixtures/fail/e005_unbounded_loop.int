@@ -1,0 +1,6 @@
+// expect: E005
+fn retry_forever() {
+    loop {
+        let x = propose(Text, tokens: 100)
+    }
+}

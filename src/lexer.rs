@@ -13,6 +13,9 @@ pub enum Tok {
     Cap,
     Propose,
     Validate,
+    Budget,
+    Repeat,
+    Loop,
     // symbols
     LParen,
     RParen,
@@ -116,6 +119,9 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
                 "cap" => Tok::Cap,
                 "propose" => Tok::Propose,
                 "validate" => Tok::Validate,
+                "budget" => Tok::Budget,
+                "repeat" => Tok::Repeat,
+                "loop" => Tok::Loop,
                 _ => Tok::Ident(word),
             };
             out.push(Token { tok, pos });

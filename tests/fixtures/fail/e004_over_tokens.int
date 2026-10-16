@@ -1,0 +1,5 @@
+// expect: E004
+fn draft() budget(tokens: 1000) {
+    let a = propose(Text, tokens: 600)
+    let b = propose(Text, tokens: 600)
+}

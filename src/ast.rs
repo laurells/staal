@@ -56,7 +56,16 @@ pub struct FnDecl {
     pub name: String,
     pub params: Vec<Param>,
     pub ret: Option<Ty>,
+    pub budget: Option<Budget>,
     pub body: Vec<Stmt>,
+    pub pos: Pos,
+}
+
+/// `budget(calls: N, tokens: N)` — either part may be omitted.
+#[derive(Debug, Clone)]
+pub struct Budget {
+    pub calls: Option<u64>,
+    pub tokens: Option<u64>,
     pub pos: Pos,
 }
 
@@ -65,6 +74,10 @@ pub enum Stmt {
     Let { name: String, ty: Option<Ty>, value: Expr, pos: Pos },
     Expr(Expr),
     Return(Expr, Pos),
+    /// `repeat N { ... }` — runs the body at most N times
+    Repeat { count: u64, body: Vec<Stmt>, pos: Pos },
+    /// `loop { ... }` — no bound on iterations
+    Loop { body: Vec<Stmt>, pos: Pos },
 }
 
 #[derive(Debug)]
@@ -74,8 +87,9 @@ pub enum Expr {
     Int(u64, Pos),
     /// `name(args)` — a call to a function defined in the program
     Call { name: String, args: Vec<Expr>, pos: Pos },
-    /// `propose(T)` — ask a model for a value of type T
-    Propose(Ty, Pos),
+    /// `propose(T)` or `propose(T, tokens: N)` — ask a model for a value of type T.
+    /// `tokens` is the most this one call may use; None means no declared limit.
+    Propose { ty: Ty, tokens: Option<u64>, pos: Pos },
     /// `validate x` — turn Proposed<T> into T
     Validate(Box<Expr>, Pos),
     /// `receiver.method(args)` — an action performed through a capability
@@ -88,8 +102,8 @@ impl Expr {
             Expr::Var(_, p)
             | Expr::Str(_, p)
             | Expr::Int(_, p)
-            | Expr::Propose(_, p)
             | Expr::Validate(_, p) => *p,
+            Expr::Propose { pos, .. } => *pos,
             Expr::Action { pos, .. } | Expr::Call { pos, .. } => *pos,
         }
     }

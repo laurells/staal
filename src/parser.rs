@@ -3,13 +3,15 @@
 // Grammar (v0.1 subset):
 //   program  := (typedecl | fndecl)*
 //   typedecl := "type" IDENT "{" (IDENT ":" ty ","?)* "}"
-//   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty)? block
+//   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty)? budget? block
+//   budget   := "budget" "(" limit ("," limit)* ")"      limit := ("calls" | "tokens") ":" NUM
 //   param    := IDENT ":" ty
 //   ty       := "cap" IDENT ("." IDENT)* ("(" "max" ":" NUM IDENT? ")")?
 //             | IDENT ("<" ty ">")?
 //   block    := "{" stmt* "}"
-//   stmt     := "let" IDENT (":" ty)? "=" expr | "return" expr | expr
-//   expr     := "propose" "(" ty ")" | "validate" expr
+//   stmt     := "let" IDENT (":" ty)? "=" expr | "return" expr
+//             | "repeat" NUM block | "loop" block | expr
+//   expr     := "propose" "(" ty ("," "tokens" ":" NUM)? ")" | "validate" expr
 //             | IDENT "." IDENT args      (action through a capability)
 //             | IDENT args                (call to a program function)
 //             | IDENT | STRING | NUM
@@ -59,6 +61,45 @@ impl Parser {
             }
             other => Err((self.pos(), format!("expected identifier, found {other:?}"))),
         }
+    }
+
+    fn num(&mut self) -> PResult<u64> {
+        match self.peek().clone() {
+            Tok::Num(n) => {
+                self.bump();
+                Ok(n)
+            }
+            other => Err((self.pos(), format!("expected a number, found {other:?}"))),
+        }
+    }
+
+    fn budget(&mut self) -> PResult<Budget> {
+        let pos = self.pos();
+        self.expect(Tok::Budget, "'budget'")?;
+        self.expect(Tok::LParen, "'('")?;
+        let mut b = Budget { calls: None, tokens: None, pos };
+        loop {
+            let kpos = self.pos();
+            let key = self.ident()?;
+            self.expect(Tok::Colon, "':'")?;
+            let n = self.num()?;
+            let slot = match key.as_str() {
+                "calls" => &mut b.calls,
+                "tokens" => &mut b.tokens,
+                _ => return Err((kpos, format!("unknown budget limit '{key}'; use 'calls' or 'tokens'"))),
+            };
+            if slot.is_some() {
+                return Err((kpos, format!("budget limit '{key}' given twice")));
+            }
+            *slot = Some(n);
+            if *self.peek() == Tok::Comma {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        self.expect(Tok::RParen, "')'")?;
+        Ok(b)
     }
 
     pub fn program(&mut self) -> PResult<Program> {
@@ -123,8 +164,9 @@ impl Parser {
         } else {
             None
         };
+        let budget = if *self.peek() == Tok::Budget { Some(self.budget()?) } else { None };
         let body = self.block()?;
-        Ok(FnDecl { name, params, ret, body, pos })
+        Ok(FnDecl { name, params, ret, budget, body, pos })
     }
 
     fn ty(&mut self) -> PResult<Ty> {
@@ -144,13 +186,7 @@ impl Parser {
                     return Err((kpos, format!("unknown capability limit '{key}'; only 'max' is supported")));
                 }
                 self.expect(Tok::Colon, "':'")?;
-                let amount = match self.peek().clone() {
-                    Tok::Num(n) => {
-                        self.bump();
-                        n
-                    }
-                    other => return Err((self.pos(), format!("expected a number, found {other:?}"))),
-                };
+                let amount = self.num()?;
                 let unit = match self.peek().clone() {
                     Tok::Ident(u) => {
                         self.bump();
@@ -209,6 +245,17 @@ impl Parser {
                 self.bump();
                 Ok(Stmt::Return(self.expr()?, pos))
             }
+            Tok::Repeat => {
+                self.bump();
+                let count = self.num()?;
+                let body = self.block()?;
+                Ok(Stmt::Repeat { count, body, pos })
+            }
+            Tok::Loop => {
+                self.bump();
+                let body = self.block()?;
+                Ok(Stmt::Loop { body, pos })
+            }
             _ => Ok(Stmt::Expr(self.expr()?)),
         }
     }
@@ -219,9 +266,20 @@ impl Parser {
             Tok::Propose => {
                 self.bump();
                 self.expect(Tok::LParen, "'('")?;
-                let t = self.ty()?;
+                let ty = self.ty()?;
+                let mut tokens = None;
+                if *self.peek() == Tok::Comma {
+                    self.bump();
+                    let kpos = self.pos();
+                    let key = self.ident()?;
+                    if key != "tokens" {
+                        return Err((kpos, format!("unknown propose option '{key}'; only 'tokens' is supported")));
+                    }
+                    self.expect(Tok::Colon, "':'")?;
+                    tokens = Some(self.num()?);
+                }
                 self.expect(Tok::RParen, "')'")?;
-                Ok(Expr::Propose(t, pos))
+                Ok(Expr::Propose { ty, tokens, pos })
             }
             Tok::Validate => {
                 self.bump();
