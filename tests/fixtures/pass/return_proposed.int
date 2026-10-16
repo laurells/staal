@@ -1,0 +1,7 @@
+type Note { body: Text }
+
+// Returning a guess is allowed if the signature says so honestly.
+fn suggest() -> Proposed<Note> {
+    let n = propose(Note)
+    return n
+}

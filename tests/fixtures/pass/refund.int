@@ -1,0 +1,12 @@
+type Refund {
+    order_id: Text,
+    amount: Money,
+}
+
+fn handle_refund(pay: cap payments.refund, mail: cap email.send) -> Refund {
+    let draft: Proposed<Refund> = propose(Refund)
+    let refund: Refund = validate draft
+    pay.refund(refund)
+    mail.send("Your refund is on its way")
+    return refund
+}

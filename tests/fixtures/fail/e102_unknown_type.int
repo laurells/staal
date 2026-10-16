@@ -1,0 +1,4 @@
+// expect: E102
+fn bad() {
+    let x = propose(Invoice)
+}

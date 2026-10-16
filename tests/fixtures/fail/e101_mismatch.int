@@ -1,0 +1,6 @@
+// expect: E101
+type Refund { amount: Money }
+
+fn bad() {
+    let r: Refund = propose(Refund)
+}

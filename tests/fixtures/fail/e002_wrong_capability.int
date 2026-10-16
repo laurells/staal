@@ -1,0 +1,4 @@
+// expect: E002
+fn bad(mail: cap email.send) {
+    mail.delete("inbox")
+}
