@@ -1,0 +1,6 @@
+// expect: E006
+type Reply { body: Text }
+
+fn answer(ticket: Text) {
+    let r = propose(Reply, instruct: ticket)
+}

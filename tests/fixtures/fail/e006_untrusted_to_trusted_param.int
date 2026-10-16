@@ -1,0 +1,8 @@
+// expect: E006
+fn ask(style: Text @trusted) {
+    let n = propose(Text, instruct: style)
+}
+
+fn caller(user_text: Text) {
+    ask(user_text)
+}

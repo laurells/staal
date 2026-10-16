@@ -3,18 +3,21 @@
 // Grammar (v0.1 subset):
 //   program  := (typedecl | fndecl)*
 //   typedecl := "type" IDENT "{" (IDENT ":" ty ","?)* "}"
-//   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty)? budget? block
+//   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty trust?)? budget? block
 //   budget   := "budget" "(" limit ("," limit)* ")"      limit := ("calls" | "tokens") ":" NUM
-//   param    := IDENT ":" ty
+//   param    := IDENT ":" ty trust?             trust := "@" "trusted"
 //   ty       := "cap" IDENT ("." IDENT)* ("(" "max" ":" NUM IDENT? ")")?
 //             | IDENT ("<" ty ">")?
 //   block    := "{" stmt* "}"
-//   stmt     := "let" IDENT (":" ty)? "=" expr | "return" expr
-//             | "repeat" NUM block | "loop" block | expr
-//   expr     := "propose" "(" ty ("," "tokens" ":" NUM)? ")" | "validate" expr
+//   stmt     := "let" IDENT (":" ty)? "=" expr | "return" expr?
+//             | "repeat" NUM block | "loop" block | "break"
+//             | "if" expr block ("else" (block | if-stmt))? | expr
+//   expr     := primary (("==" | "!=" | "<" | "<=" | ">" | ">=") primary)?
+//   primary  := "propose" "(" ty ("," popt)* ")" | "validate" primary
 //             | IDENT "." IDENT args      (action through a capability)
 //             | IDENT args                (call to a program function)
-//             | IDENT | STRING | NUM
+//             | IDENT | STRING | NUM | "true" | "false"
+//   popt     := "instruct" ":" expr | "data" ":" "[" (expr ("," expr)*)? "]" | "tokens" ":" NUM
 //   args     := "(" (expr ("," expr)*)? ")"
 
 use crate::ast::*;
@@ -71,6 +74,20 @@ impl Parser {
             }
             other => Err((self.pos(), format!("expected a number, found {other:?}"))),
         }
+    }
+
+    /// Optional `@trusted` after a parameter or return type.
+    fn trust_mark(&mut self) -> PResult<bool> {
+        if *self.peek() != Tok::At {
+            return Ok(false);
+        }
+        self.bump();
+        let pos = self.pos();
+        let label = self.ident()?;
+        if label != "trusted" {
+            return Err((pos, format!("unknown label '@{label}'; only '@trusted' is supported")));
+        }
+        Ok(true)
     }
 
     fn budget(&mut self) -> PResult<Budget> {
@@ -146,7 +163,8 @@ impl Parser {
                 let pname = self.ident()?;
                 self.expect(Tok::Colon, "':'")?;
                 let ty = self.ty()?;
-                params.push(Param { name: pname, ty });
+                let trusted = self.trust_mark()?;
+                params.push(Param { name: pname, ty, trusted });
                 if *self.peek() == Tok::Comma {
                     self.bump();
                     if *self.peek() == Tok::RParen {
@@ -158,15 +176,16 @@ impl Parser {
             }
         }
         self.expect(Tok::RParen, "')'")?;
-        let ret = if *self.peek() == Tok::Arrow {
+        let (ret, ret_trusted) = if *self.peek() == Tok::Arrow {
             self.bump();
-            Some(self.ty()?)
+            let t = self.ty()?;
+            (Some(t), self.trust_mark()?)
         } else {
-            None
+            (None, false)
         };
         let budget = if *self.peek() == Tok::Budget { Some(self.budget()?) } else { None };
         let body = self.block()?;
-        Ok(FnDecl { name, params, ret, budget, body, pos })
+        Ok(FnDecl { name, params, ret, ret_trusted, budget, body, pos })
     }
 
     fn ty(&mut self) -> PResult<Ty> {
@@ -243,7 +262,11 @@ impl Parser {
             }
             Tok::Return => {
                 self.bump();
-                Ok(Stmt::Return(self.expr()?, pos))
+                // A bare `return` ends at the closing brace of its block.
+                if *self.peek() == Tok::RBrace {
+                    return Ok(Stmt::Return(None, pos));
+                }
+                Ok(Stmt::Return(Some(self.expr()?), pos))
             }
             Tok::Repeat => {
                 self.bump();
@@ -256,34 +279,116 @@ impl Parser {
                 let body = self.block()?;
                 Ok(Stmt::Loop { body, pos })
             }
+            Tok::Break => {
+                self.bump();
+                Ok(Stmt::Break(pos))
+            }
+            Tok::If => self.if_stmt(),
             _ => Ok(Stmt::Expr(self.expr()?)),
         }
     }
 
+    fn if_stmt(&mut self) -> PResult<Stmt> {
+        let pos = self.pos();
+        self.expect(Tok::If, "'if'")?;
+        let cond = self.expr()?;
+        let then = self.block()?;
+        let els = if *self.peek() == Tok::Else {
+            self.bump();
+            if *self.peek() == Tok::If {
+                vec![self.if_stmt()?]
+            } else {
+                self.block()?
+            }
+        } else {
+            Vec::new()
+        };
+        Ok(Stmt::If { cond, then, els, pos })
+    }
+
     fn expr(&mut self) -> PResult<Expr> {
+        let left = self.primary()?;
+        let op = match self.peek() {
+            Tok::EqEq => CmpOp::Eq,
+            Tok::NotEq => CmpOp::Ne,
+            Tok::Lt => CmpOp::Lt,
+            Tok::LtEq => CmpOp::Le,
+            Tok::Gt => CmpOp::Gt,
+            Tok::GtEq => CmpOp::Ge,
+            _ => return Ok(left),
+        };
+        let pos = self.pos();
+        self.bump();
+        let right = self.primary()?;
+        if matches!(
+            self.peek(),
+            Tok::EqEq | Tok::NotEq | Tok::Lt | Tok::LtEq | Tok::Gt | Tok::GtEq
+        ) {
+            return Err((self.pos(), "comparisons cannot be chained; compare two values at a time".into()));
+        }
+        Ok(Expr::Cmp { op, left: Box::new(left), right: Box::new(right), pos })
+    }
+
+    fn propose(&mut self) -> PResult<Expr> {
+        let pos = self.pos();
+        self.expect(Tok::Propose, "'propose'")?;
+        self.expect(Tok::LParen, "'('")?;
+        let ty = self.ty()?;
+        let (mut instruct, mut data, mut tokens) = (None, None, None);
+        while *self.peek() == Tok::Comma {
+            self.bump();
+            let kpos = self.pos();
+            let key = self.ident()?;
+            self.expect(Tok::Colon, "':'")?;
+            let dup = match key.as_str() {
+                "instruct" => instruct.replace(Box::new(self.expr()?)).is_some(),
+                "tokens" => tokens.replace(self.num()?).is_some(),
+                "data" => {
+                    self.expect(Tok::LBracket, "'['")?;
+                    let mut items = Vec::new();
+                    if *self.peek() != Tok::RBracket {
+                        loop {
+                            items.push(self.expr()?);
+                            if *self.peek() == Tok::Comma {
+                                self.bump();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    self.expect(Tok::RBracket, "']'")?;
+                    data.replace(items).is_some()
+                }
+                _ => {
+                    return Err((
+                        kpos,
+                        format!("unknown propose option '{key}'; use 'instruct', 'data' or 'tokens'"),
+                    ))
+                }
+            };
+            if dup {
+                return Err((kpos, format!("propose option '{key}' given twice")));
+            }
+        }
+        self.expect(Tok::RParen, "')'")?;
+        Ok(Expr::Propose { ty, instruct, data: data.unwrap_or_default(), tokens, pos })
+    }
+
+    fn primary(&mut self) -> PResult<Expr> {
         let pos = self.pos();
         match self.peek().clone() {
-            Tok::Propose => {
-                self.bump();
-                self.expect(Tok::LParen, "'('")?;
-                let ty = self.ty()?;
-                let mut tokens = None;
-                if *self.peek() == Tok::Comma {
-                    self.bump();
-                    let kpos = self.pos();
-                    let key = self.ident()?;
-                    if key != "tokens" {
-                        return Err((kpos, format!("unknown propose option '{key}'; only 'tokens' is supported")));
-                    }
-                    self.expect(Tok::Colon, "':'")?;
-                    tokens = Some(self.num()?);
-                }
-                self.expect(Tok::RParen, "')'")?;
-                Ok(Expr::Propose { ty, tokens, pos })
-            }
+            Tok::Propose => self.propose(),
             Tok::Validate => {
                 self.bump();
-                Ok(Expr::Validate(Box::new(self.expr()?), pos))
+                Ok(Expr::Validate(Box::new(self.primary()?), pos))
+            }
+            Tok::True => {
+                self.bump();
+                Ok(Expr::Bool(true, pos))
+            }
+            Tok::False => {
+                self.bump();
+                Ok(Expr::Bool(false, pos))
             }
             Tok::Str(s) => {
                 self.bump();

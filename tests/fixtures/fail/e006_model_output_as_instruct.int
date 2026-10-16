@@ -1,0 +1,6 @@
+// expect: E006
+// A model's output, even validated, cannot steer another model's instructions.
+fn chain() {
+    let first = validate propose(Text, instruct: "Write an instruction.")
+    let second = propose(Text, instruct: first)
+}

@@ -1,0 +1,4 @@
+// expect: E901
+fn f() {
+    let n = propose(Text, tokens: 1, tokens: 2)
+}

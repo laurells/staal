@@ -1,0 +1,4 @@
+// expect: E006
+fn policy(input: Text) -> Text @trusted {
+    return input
+}

@@ -1,0 +1,10 @@
+// expect: E006
+// A function's result is untrusted unless its return type is marked @trusted,
+// even when it happens to return a literal: callers trust signatures, not bodies.
+fn summary() -> Text {
+    return "Summarise politely."
+}
+
+fn f() {
+    let n = propose(Text, instruct: summary())
+}

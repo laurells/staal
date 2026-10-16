@@ -13,14 +13,17 @@ It checks them and rejects the ones that break Intent's rules.
 | E003 | A capability is widened: passed, assigned or returned with more authority than it holds |
 | E004 | A function's worst-case model use can exceed its declared `budget(...)` |
 | E005 | A model call (direct or through a called function) is inside an unbounded `loop` |
+| E006 | An untrusted value is used as a model instruction, or flows into an `@trusted` slot |
 | E100 | Undefined name or function |
 | E101 | Type mismatch or wrong number of arguments |
 | E102 | Unknown type |
+| E103 | `break` outside `repeat` or `loop` |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
-E006 to E008 from the spec (untrusted instructions, blind_to leaks, evidence)
-are not implemented yet.
+E007 and E008 from the spec (blind_to leaks, evidence) are not implemented yet.
+The language has no field access (`order.total`), records/struct literals, or
+arithmetic yet.
 
 ## Capability limits
 
@@ -51,13 +54,46 @@ The compiler sums worst-case costs: `repeat N` multiplies by N, nested loops
 multiply together, and calls are counted through other functions. A called
 function with a budget is costed by its declaration; one without is costed by
 walking its body. Recursion that makes model calls is unbounded. `loop { }` is
-unbounded and may not contain model calls (E005); `loop` and `repeat` have no
-exit or condition yet, because the language has no `if` or `break`.
+unbounded and may not contain model calls (E005), even with a `break` inside,
+because the compiler cannot prove the `break` is ever reached. An `if` costs
+its condition plus its more expensive branch.
 
 Budgets count calls and tokens only. Money and time depend on provider prices
 and clocks, so they belong to the runtime budget meter. Token limits are only
 as true as the runtime enforces: the runtime must cap each call at its
 declared `tokens:`.
+
+## Control flow
+
+    if n < 1 { ... } else if n == 1 { ... } else { ... }
+    repeat 3 { ... if ok { break } }
+    return            // bare return, in functions that return nothing
+
+Conditions must be `Bool`. Comparisons are `== != < <= > >=`, cannot be
+chained, and `< <= > >=` need `Int` or `Money`. A model's unvalidated output
+cannot be used as a condition or compared (E001).
+
+## Trust and prompt injection
+
+    let reply = propose(Reply,
+        instruct: "Reply politely to the customer message in the data.",
+        data: [ticket],
+        tokens: 1000)
+
+`instruct:` is the instruction position of a model call. Only trusted values
+may go there; anything may go in `data: [...]`. Literals are trusted.
+Parameters are untrusted unless marked `name: Text @trusted`, and callers must
+pass trusted values to them. Function results are untrusted unless the return
+is marked `-> Text @trusted`, and then every returned value must be trusted.
+Model output stays untrusted even after `validate`, because validation checks
+shape, not intent. Capabilities cannot be sent to a model as data.
+
+What this guarantees: customer text, model output and anything not explicitly
+vouched for can never be placed in an instruction slot. What it does not
+guarantee: that a model ignores instructions hidden inside `data`. Keeping data
+in a separate slot lets the runtime delimit it, but the type system cannot make
+a model obey that boundary. Whoever marks a parameter `@trusted` is responsible
+for that claim.
 
 ## Requirements
 

@@ -1,0 +1,6 @@
+// expect: E001
+fn f() {
+    let n = propose(Int)
+    if n > 3 {
+    }
+}

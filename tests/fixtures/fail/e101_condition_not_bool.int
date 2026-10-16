@@ -1,0 +1,6 @@
+// expect: E101
+fn f(n: Int) {
+    if n {
+        return
+    }
+}

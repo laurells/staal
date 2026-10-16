@@ -1,0 +1,10 @@
+// expect: E004
+// The worst branch costs 2 calls; the budget allows 1.
+fn f(flag: Bool) budget(calls: 1) {
+    if flag {
+        let a = propose(Text, tokens: 10)
+        let b = propose(Text, tokens: 10)
+    } else {
+        let c = propose(Text, tokens: 10)
+    }
+}

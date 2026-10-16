@@ -43,6 +43,12 @@ impl Bound {
     fn is_zero(self) -> bool {
         self == Bound::Fin(0)
     }
+    fn max(self, o: Bound) -> Bound {
+        match (self, o) {
+            (Bound::Fin(a), Bound::Fin(b)) => Bound::Fin(a.max(b)),
+            _ => Bound::Unbounded,
+        }
+    }
 }
 
 impl std::fmt::Display for Bound {
@@ -73,6 +79,10 @@ impl Cost {
     }
     fn is_zero(self) -> bool {
         self.calls.is_zero() && self.tokens.is_zero()
+    }
+    /// Worst case of two alternatives (the two branches of an `if`).
+    fn max(self, o: Cost) -> Cost {
+        Cost { calls: self.calls.max(o.calls), tokens: self.tokens.max(o.tokens) }
     }
 }
 
@@ -171,9 +181,17 @@ impl<'a> Analyzer<'a> {
         for stmt in body {
             let c = match stmt {
                 Stmt::Let { value, .. } => self.expr(value, stack, cycles),
-                Stmt::Expr(e) | Stmt::Return(e, _) => self.expr(e, stack, cycles),
+                Stmt::Expr(e) | Stmt::Return(Some(e), _) => self.expr(e, stack, cycles),
+                Stmt::Return(None, _) => Cost::ZERO,
                 Stmt::Repeat { count, body, .. } => {
                     self.block(body, stack, cycles, diags.as_deref_mut()).times(*count)
+                }
+                Stmt::Break(_) => Cost::ZERO,
+                Stmt::If { cond, then, els, .. } => {
+                    let c = self.expr(cond, stack, cycles);
+                    let t = self.block(then, stack, cycles, diags.as_deref_mut());
+                    let e = self.block(els, stack, cycles, diags.as_deref_mut());
+                    c.add(t.max(e))
                 }
                 Stmt::Loop { body, pos } => {
                     let c = self.block(body, stack, cycles, diags.as_deref_mut());
@@ -197,9 +215,17 @@ impl<'a> Analyzer<'a> {
 
     fn expr(&mut self, e: &Expr, stack: &mut Vec<&'a str>, cycles: &mut HashSet<&'a str>) -> Cost {
         match e {
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) => Cost::ZERO,
-            Expr::Propose { tokens, .. } => {
-                Cost { calls: Bound::Fin(1), tokens: tokens.map_or(Bound::Unbounded, Bound::Fin) }
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => Cost::ZERO,
+            Expr::Cmp { left, right, .. } => self.expr(left, stack, cycles).add(self.expr(right, stack, cycles)),
+            Expr::Propose { tokens, instruct, data, .. } => {
+                let mut c = Cost { calls: Bound::Fin(1), tokens: tokens.map_or(Bound::Unbounded, Bound::Fin) };
+                if let Some(i) = instruct {
+                    c = c.add(self.expr(i, stack, cycles));
+                }
+                for d in data {
+                    c = c.add(self.expr(d, stack, cycles));
+                }
+                c
             }
             Expr::Validate(inner, _) => self.expr(inner, stack, cycles),
             Expr::Action { args, .. } => {

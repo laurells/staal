@@ -1,0 +1,6 @@
+// expect: E001
+fn f() {
+    let ok = propose(Bool)
+    if ok {
+    }
+}

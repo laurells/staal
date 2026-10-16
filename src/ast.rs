@@ -49,6 +49,8 @@ pub struct TypeDecl {
 pub struct Param {
     pub name: String,
     pub ty: Ty,
+    /// `name: T @trusted` — callers may only pass trusted values here.
+    pub trusted: bool,
 }
 
 #[derive(Debug)]
@@ -56,6 +58,8 @@ pub struct FnDecl {
     pub name: String,
     pub params: Vec<Param>,
     pub ret: Option<Ty>,
+    /// `-> T @trusted` — every returned value must be trusted.
+    pub ret_trusted: bool,
     pub budget: Option<Budget>,
     pub body: Vec<Stmt>,
     pub pos: Pos,
@@ -73,11 +77,40 @@ pub struct Budget {
 pub enum Stmt {
     Let { name: String, ty: Option<Ty>, value: Expr, pos: Pos },
     Expr(Expr),
-    Return(Expr, Pos),
+    /// `return value`, or a bare `return` in a function that returns nothing
+    Return(Option<Expr>, Pos),
     /// `repeat N { ... }` — runs the body at most N times
     Repeat { count: u64, body: Vec<Stmt>, pos: Pos },
     /// `loop { ... }` — no bound on iterations
     Loop { body: Vec<Stmt>, pos: Pos },
+    /// `if cond { ... } else { ... }`; `else if` is stored as an else block holding one If.
+    If { cond: Expr, then: Vec<Stmt>, els: Vec<Stmt>, pos: Pos },
+    /// `break` — leave the innermost `repeat` or `loop`
+    Break(Pos),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl std::fmt::Display for CmpOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            CmpOp::Eq => "==",
+            CmpOp::Ne => "!=",
+            CmpOp::Lt => "<",
+            CmpOp::Le => "<=",
+            CmpOp::Gt => ">",
+            CmpOp::Ge => ">=",
+        };
+        write!(f, "{s}")
+    }
 }
 
 #[derive(Debug)]
@@ -85,11 +118,15 @@ pub enum Expr {
     Var(String, Pos),
     Str(String, Pos),
     Int(u64, Pos),
+    Bool(bool, Pos),
+    /// `left op right`, e.g. `count <= 3`
+    Cmp { op: CmpOp, left: Box<Expr>, right: Box<Expr>, pos: Pos },
     /// `name(args)` — a call to a function defined in the program
     Call { name: String, args: Vec<Expr>, pos: Pos },
-    /// `propose(T)` or `propose(T, tokens: N)` — ask a model for a value of type T.
+    /// `propose(T, instruct: E, data: [E, ...], tokens: N)` — ask a model for a T.
+    /// All options are optional. `instruct` must be trusted (E006); `data` may be anything.
     /// `tokens` is the most this one call may use; None means no declared limit.
-    Propose { ty: Ty, tokens: Option<u64>, pos: Pos },
+    Propose { ty: Ty, instruct: Option<Box<Expr>>, data: Vec<Expr>, tokens: Option<u64>, pos: Pos },
     /// `validate x` — turn Proposed<T> into T
     Validate(Box<Expr>, Pos),
     /// `receiver.method(args)` — an action performed through a capability
@@ -102,7 +139,9 @@ impl Expr {
             Expr::Var(_, p)
             | Expr::Str(_, p)
             | Expr::Int(_, p)
+            | Expr::Bool(_, p)
             | Expr::Validate(_, p) => *p,
+            Expr::Cmp { pos, .. } => *pos,
             Expr::Propose { pos, .. } => *pos,
             Expr::Action { pos, .. } | Expr::Call { pos, .. } => *pos,
         }

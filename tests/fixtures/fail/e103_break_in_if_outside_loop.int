@@ -1,0 +1,6 @@
+// expect: E103
+fn f(flag: Bool) {
+    if flag {
+        break
+    }
+}

@@ -1,0 +1,21 @@
+// A realistic program: answer a customer's message, retrying at most 3 times,
+// with the customer's text kept out of the instruction position.
+type Reply { body: Text, ok: Bool }
+
+fn is_acceptable(r: Reply) -> Bool {
+    return true
+}
+
+fn answer(ticket: Text, mail: cap email.send) budget(calls: 3, tokens: 3000) {
+    repeat 3 {
+        let draft = propose(Reply,
+            instruct: "Write a short, polite reply to the customer message in the data.",
+            data: [ticket],
+            tokens: 1000)
+        let reply: Reply = validate draft
+        if is_acceptable(reply) {
+            mail.send(reply)
+            break
+        }
+    }
+}

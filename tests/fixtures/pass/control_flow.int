@@ -1,0 +1,28 @@
+fn pick(n: Int) -> Text {
+    if n < 1 {
+        return "none"
+    } else if n == 1 {
+        return "one"
+    } else {
+        return "many"
+    }
+}
+
+// The costlier branch of an `if` sets the worst case: 2 calls, not 3.
+fn branchy(flag: Bool) budget(calls: 2, tokens: 200) {
+    if flag {
+        let a = propose(Text, tokens: 100)
+        let b = propose(Text, tokens: 100)
+    } else {
+        let c = propose(Text, tokens: 100)
+    }
+}
+
+// `break` inside an `if` inside a loop is allowed.
+fn early(limit: Int) {
+    repeat 10 {
+        if limit >= 5 {
+            break
+        }
+    }
+}

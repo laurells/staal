@@ -1,0 +1,5 @@
+// expect: E101
+fn f(a: Text, b: Text) {
+    if a < b {
+    }
+}

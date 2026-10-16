@@ -1,0 +1,10 @@
+// expect: E005
+// A `break` does not bound a loop: the compiler cannot prove it is ever reached.
+fn f() {
+    loop {
+        let ok = validate propose(Bool, tokens: 10)
+        if ok {
+            break
+        }
+    }
+}

@@ -1,0 +1,4 @@
+// expect: E103
+fn f() {
+    break
+}

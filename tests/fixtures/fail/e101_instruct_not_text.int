@@ -1,0 +1,4 @@
+// expect: E101
+fn f() {
+    let n = propose(Text, instruct: 42)
+}

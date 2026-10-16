@@ -1,0 +1,5 @@
+// expect: E006
+fn answer(ticket: Text) {
+    let laundered: Text = ticket
+    let r = propose(Text, instruct: laundered)
+}

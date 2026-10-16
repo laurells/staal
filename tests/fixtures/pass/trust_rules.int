@@ -1,0 +1,27 @@
+type Note { body: Text }
+
+// A trusted parameter may be used as an instruction.
+fn ask(style: Text @trusted) -> Proposed<Note> {
+    return propose(Note, instruct: style)
+}
+
+// Literals are trusted, so they may be passed to an @trusted parameter.
+fn caller() {
+    let n = ask("Summarise the order history.")
+}
+
+// A trusted value stays trusted through `let`.
+fn relay(policy: Text @trusted) -> Text @trusted {
+    let p = policy
+    return p
+}
+
+// Calling a function with an @trusted result yields a trusted value.
+fn chained(policy: Text @trusted) {
+    let n = propose(Note, instruct: relay(policy))
+}
+
+// Untrusted values may always go in data.
+fn as_data(message: Text) {
+    let n = propose(Note, instruct: "Classify the message.", data: [message])
+}

@@ -16,6 +16,11 @@ pub enum Tok {
     Budget,
     Repeat,
     Loop,
+    If,
+    Else,
+    Break,
+    True,
+    False,
     // symbols
     LParen,
     RParen,
@@ -28,6 +33,13 @@ pub enum Tok {
     Lt,
     Gt,
     Eq,
+    EqEq,
+    NotEq,
+    LtEq,
+    GtEq,
+    At,
+    LBracket,
+    RBracket,
     Eof,
 }
 
@@ -122,13 +134,26 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
                 "budget" => Tok::Budget,
                 "repeat" => Tok::Repeat,
                 "loop" => Tok::Loop,
+                "if" => Tok::If,
+                "else" => Tok::Else,
+                "break" => Tok::Break,
+                "true" => Tok::True,
+                "false" => Tok::False,
                 _ => Tok::Ident(word),
             };
             out.push(Token { tok, pos });
             continue;
         }
-        if c == '-' && chars.get(i + 1) == Some(&'>') {
-            out.push(Token { tok: Tok::Arrow, pos });
+        let two = match (c, chars.get(i + 1)) {
+            ('-', Some('>')) => Some(Tok::Arrow),
+            ('=', Some('=')) => Some(Tok::EqEq),
+            ('!', Some('=')) => Some(Tok::NotEq),
+            ('<', Some('=')) => Some(Tok::LtEq),
+            ('>', Some('=')) => Some(Tok::GtEq),
+            _ => None,
+        };
+        if let Some(tok) = two {
+            out.push(Token { tok, pos });
             i += 2;
             col += 2;
             continue;
@@ -144,6 +169,9 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
             '<' => Tok::Lt,
             '>' => Tok::Gt,
             '=' => Tok::Eq,
+            '@' => Tok::At,
+            '[' => Tok::LBracket,
+            ']' => Tok::RBracket,
             other => return Err((pos, format!("unexpected character '{other}'"))),
         };
         out.push(Token { tok, pos });
