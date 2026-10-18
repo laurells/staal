@@ -10,6 +10,7 @@
 
 pub mod adapter;
 pub mod broker;
+pub mod journal;
 pub mod money;
 pub mod provider;
 pub mod value;
@@ -17,11 +18,13 @@ pub mod value;
 use crate::ast::*;
 use adapter::{Adapter, SimulatedAdapter};
 use broker::Broker;
+use journal::{Journal, Step};
 use money::{Currency, Money};
 use provider::{ModelRequest, Provider, ScriptProvider};
 use serde_json::{json, Map, Value as Json};
 use std::collections::HashMap;
 use std::fmt;
+use std::path::Path;
 use value::{from_json, schema, to_json, Receipt, Types, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +38,10 @@ pub enum FailKind {
     DepthLimit,
     /// A state the compiler should have ruled out: a bug, reported instead of crashing.
     Internal,
+    /// The journal could not be written, or replay diverged from it (RUNTIME.md section 11).
+    Journal,
+    /// An action that is not idempotent may or may not have happened before a crash.
+    InDoubt,
 }
 
 impl FailKind {
@@ -43,13 +50,16 @@ impl FailKind {
     /// Deployment limits are safeguards, not part of a program's meaning: if a program
     /// could catch them it could observe them, and a runaway loop or recursion would
     /// end in a "successful" run. An internal failure is a bug in intentc, which no
-    /// program may hide. All three end the run.
+    /// program may hide. Journal and in-doubt failures mean the run cannot safely
+    /// continue at all. All of these end the run.
     pub fn catchable(self) -> bool {
         match self {
             FailKind::Action | FailKind::Capability | FailKind::Validation | FailKind::Budget | FailKind::Provider => {
                 true
             }
-            FailKind::StepLimit | FailKind::DepthLimit | FailKind::Internal => false,
+            FailKind::StepLimit | FailKind::DepthLimit | FailKind::Internal | FailKind::Journal | FailKind::InDoubt => {
+                false
+            }
         }
     }
 }
@@ -65,6 +75,8 @@ impl fmt::Display for FailKind {
             FailKind::StepLimit => "step_limit",
             FailKind::DepthLimit => "depth_limit",
             FailKind::Internal => "internal",
+            FailKind::Journal => "journal",
+            FailKind::InDoubt => "in_doubt",
         })
     }
 }
@@ -108,31 +120,67 @@ pub struct RunResult {
     pub log: Vec<Json>,
 }
 
+/// Whether a run keeps a journal (RUNTIME.md section 11).
+pub enum Durability<'a> {
+    /// No journal: the run cannot be resumed if it is killed.
+    None,
+    /// A new run with a new journal at this path, which must not exist.
+    Create(&'a Path),
+    /// Continue the run recorded in this journal.
+    Resume(&'a Path),
+}
+
 /// Runs a checked program with the providers and adapters named in its config.
 /// Returns Err for a bad config; nothing runs in that case.
 pub fn run_config(prog: &Program, config: &Json) -> Result<RunResult, String> {
+    run_config_durable(prog, "", config, Durability::None)
+}
+
+/// Like `run_config`, with a journal. `source` is the program's text: a journal is
+/// bound to the exact program and config it was started with.
+pub fn run_config_durable(prog: &Program, source: &str, config: &Json, durability: Durability) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
     let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
     let provider = ScriptProvider::from_config(model)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
-    run_with(prog, config, Box::new(provider), Box::new(adapter))
+    run_durable(prog, source, config, durability, Box::new(provider), Box::new(adapter))
 }
 
-/// Runs a checked program with the given provider and adapter.
+/// Runs a checked program with the given provider and adapter, without a journal.
 pub fn run_with(
     prog: &Program,
     config: &Json,
     provider: Box<dyn Provider + Send>,
     adapter: Box<dyn Adapter + Send>,
 ) -> Result<RunResult, String> {
+    run_durable(prog, "", config, Durability::None, provider, adapter)
+}
+
+/// Runs a checked program with the given provider, adapter and durability.
+pub fn run_durable(
+    prog: &Program,
+    source: &str,
+    config: &Json,
+    durability: Durability,
+    provider: Box<dyn Provider + Send>,
+    adapter: Box<dyn Adapter + Send>,
+) -> Result<RunResult, String> {
+    // Validate everything first: a bad config must not even create a journal.
     let setup = Setup::from_config(prog, config)?;
+    let program_sha = journal::sha256_hex(source.as_bytes());
+    let config_sha = journal::sha256_hex(config.to_string().as_bytes());
+    let journal = match durability {
+        Durability::None => Journal::memory()?,
+        Durability::Create(path) => Journal::create(path, &program_sha, &config_sha)?,
+        Durability::Resume(path) => Journal::resume(path, &program_sha, &config_sha)?,
+    };
     // The interpreter recurses once per nested call, so it runs on a thread with a
     // stack large enough for the depth ceiling, whatever thread called us.
     std::thread::scope(|s| {
         std::thread::Builder::new()
             .stack_size(INTERP_STACK_BYTES)
             .spawn_scoped(s, move || {
-                let mut it = Interp::new(prog, setup.limits, provider, adapter);
+                let mut it = Interp::new(prog, setup.limits, provider, adapter, journal);
                 it.run(&setup)
             })
             .map_err(|e| format!("could not start the interpreter thread: {e}"))?
@@ -364,6 +412,7 @@ struct Interp<'p> {
     adapter: Box<dyn Adapter + Send>,
     broker: Broker,
     meters: Vec<Meter>,
+    journal: Journal,
     log: Vec<Json>,
     steps: u64,
     depth: usize,
@@ -376,6 +425,7 @@ impl<'p> Interp<'p> {
         limits: Limits,
         provider: Box<dyn Provider + Send>,
         adapter: Box<dyn Adapter + Send>,
+        journal: Journal,
     ) -> Self {
         Interp {
             fns: prog.fns.iter().map(|f| (f.name.as_str(), f)).collect(),
@@ -384,6 +434,7 @@ impl<'p> Interp<'p> {
             adapter,
             broker: Broker::default(),
             meters: Vec::new(),
+            journal,
             log: Vec::new(),
             steps: 0,
             depth: 0,
@@ -400,7 +451,8 @@ impl<'p> Interp<'p> {
     }
 
     fn run(&mut self, setup: &Setup) -> RunResult {
-        self.emit("run_start", json!({ "entry": setup.entry }));
+        let resumed = self.journal.is_resuming();
+        self.emit("run_start", json!({ "entry": setup.entry, "run_id": self.journal.run_id(), "resumed": resumed }));
         let mut args = Vec::new();
         for a in &setup.args {
             match a {
@@ -412,7 +464,7 @@ impl<'p> Interp<'p> {
                 }
             }
         }
-        let result = self.call(&setup.entry, args).and_then(|v| {
+        let mut result = self.call(&setup.entry, args).and_then(|v| {
             if let Value::Done(_) = &v {
                 let mut ev = Vec::new();
                 flatten_evidence(&v, &mut ev);
@@ -420,6 +472,18 @@ impl<'p> Interp<'p> {
             }
             to_json(&v, false).or_else(internal)
         });
+        // Record how the run ended, unless it must not count as ended: after a journal
+        // failure nothing more may be written, and a run stopped in doubt must stay
+        // resumable once an operator has resolved it.
+        let ending = match &result {
+            Ok(v) => Some(json!({ "ok": true, "result": v })),
+            Err(f) if matches!(f.kind, FailKind::Journal | FailKind::InDoubt) => None,
+            Err(f) => Some(json!({ "ok": false, "failure": f.kind.to_string(), "message": f.message })),
+        };
+        if let Some(rec) = ending
+            && let Err(e) = self.journal.end(rec) {
+                result = fail(FailKind::Journal, format!("the run finished, but its end could not be recorded: {e}"));
+            }
         match &result {
             Ok(v) => self.emit("run_end", json!({ "ok": true, "result": v })),
             Err(f) => self.emit("run_end", json!({ "ok": false, "failure": f.kind.to_string(), "message": f.message })),
@@ -665,22 +729,90 @@ impl<'p> Interp<'p> {
                 }
             }
         }
-        match self.adapter.perform(&path, method, &args_json) {
-            Ok(id) => {
+        let body = json!({ "capability": path, "method": method, "args": args_json, "amount": amount_text });
+        let idempotent = self.adapter.idempotent(&path, method);
+        let what = format!("action {path}.{method}");
+        let (answer, replayed) = self.external("action", body, idempotent, &what, |it, key| {
+            it.adapter.perform(key, &path, method, &args_json).map(|id| json!({ "receipt": id }))
+        })?;
+        match answer {
+            Ok(v) => {
+                let Some(id) = v["receipt"].as_str().map(str::to_string) else {
+                    return fail(FailKind::Journal, format!("malformed action result in the journal: {v}"));
+                };
                 // The action has happened in the world: record it before any bookkeeping
                 // that could fail, so the log never misses a performed action.
                 self.emit(
                     "action_performed",
-                    json!({ "capability": path, "method": method, "amount": amount_text, "args": args_json, "receipt": id }),
+                    json!({ "capability": path, "method": method, "amount": amount_text, "args": args_json,
+                            "receipt": id, "replayed": replayed }),
                 );
                 self.broker.charge(h, amount).or_else(internal)?;
                 Ok(Value::Receipt(Receipt { id, capability: path, method: method.to_string() }))
             }
             Err(msg) => {
-                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg }));
+                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
                 fail(FailKind::Action, msg)
             }
         }
+    }
+
+    /// Performs one external operation through the journal (RUNTIME.md section 11).
+    ///
+    /// `live` contacts the world and returns its answer. It runs for a new operation,
+    /// and for one left in doubt by a crash only when `retry_in_doubt` holds; an
+    /// operation in doubt that cannot be retried stops the run (`in_doubt`), named by
+    /// `what`. Returns the answer and whether it came from the journal.
+    fn external(
+        &mut self,
+        op: &str,
+        body: Json,
+        retry_in_doubt: bool,
+        what: &str,
+        live: impl FnOnce(&mut Self, &str) -> Result<Json, String>,
+    ) -> Result<(Result<Json, String>, bool), Failure> {
+        let step = match self.journal.begin(op, body) {
+            Ok(step) => step,
+            Err(e) => return fail(FailKind::Journal, e),
+        };
+        let (n, key) = match step {
+            Step::Replay(rec) => {
+                let answer = match (rec.get("ok"), rec.get("err").and_then(Json::as_str)) {
+                    (Some(ok), None) => Ok(ok.clone()),
+                    (None, Some(e)) => Err(e.to_string()),
+                    _ => return fail(FailKind::Journal, format!("malformed result record in the journal: {rec}")),
+                };
+                return Ok((answer, true));
+            }
+            Step::Perform { n, key } => (n, key),
+            Step::InDoubt { n, key } if retry_in_doubt => {
+                self.emit("retrying_in_doubt", json!({ "operation": n, "what": what, "key": key }));
+                (n, key)
+            }
+            Step::InDoubt { n, .. } => {
+                self.emit("in_doubt", json!({ "operation": n, "what": what }));
+                return fail(
+                    FailKind::InDoubt,
+                    format!(
+                        "{what} (operation {n}) may or may not have happened before the run stopped, and it cannot \
+                         be safely retried. Check whether it happened, record the answer with `intentc resolve` \
+                         (--performed <receipt>, --failed <reason>, or --retry if it did not happen), then resume"
+                    ),
+                );
+            }
+        };
+        let answer = live(self, &key);
+        if let Err(e) = self.journal.finish(n, answer.clone()) {
+            // The operation happened but is not durably recorded. Keep it in the log, then
+            // stop: resume will find it in doubt.
+            let shown = match &answer {
+                Ok(v) => json!({ "ok": v }),
+                Err(msg) => json!({ "err": msg }),
+            };
+            self.emit("journal_write_failed", json!({ "operation": n, "op": op, "answer": shown, "error": e }));
+            return fail(FailKind::Journal, e);
+        }
+        Ok((answer, false))
     }
 
     // RUNTIME.md sections 5 and 7
@@ -694,8 +826,16 @@ impl<'p> Interp<'p> {
         }
         let mut req =
             ModelRequest { instruction, data, output_schema: schema(ty, &self.types), max_output_tokens: 0 };
-        let input = match self.provider.count_input_tokens(&req) {
-            Ok(n) => n,
+        // A real provider's count can change between runs (a tokenizer update), and it
+        // decides the token limit, so it is journaled like any other answer from outside.
+        let (counted, _) = self.external("count", req.to_json(), true, "token count", |it, _key| {
+            it.provider.count_input_tokens(&req).map(|n| json!(n))
+        })?;
+        let input = match counted {
+            Ok(v) => match v.as_u64() {
+                Some(n) => n,
+                None => return fail(FailKind::Journal, format!("malformed token count in the journal: {v}")),
+            },
             Err(e) => return fail(FailKind::Provider, format!("could not count input tokens: {e}")),
         };
         let max_output = match tokens {
@@ -729,10 +869,23 @@ impl<'p> Interp<'p> {
             }
         }
         self.emit("model_request", json!({ "request": req.to_json(), "input_tokens_counted": input }));
-        let reply = match self.provider.complete(&req) {
-            Ok(r) => r,
+        let (answer, replayed) = self.external("model", req.to_json(), true, "model call", |it, _key| {
+            it.provider.complete(&req).map(|r| {
+                json!({ "output": r.output, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens })
+            })
+        })?;
+        if replayed {
+            self.provider.skip();
+        }
+        let reply = match answer {
+            Ok(v) => match (v.get("output"), v["input_tokens"].as_u64(), v["output_tokens"].as_u64()) {
+                (Some(output), Some(input_tokens), Some(output_tokens)) => {
+                    provider::ModelReply { output: output.clone(), input_tokens, output_tokens }
+                }
+                _ => return fail(FailKind::Journal, format!("malformed model reply in the journal: {v}")),
+            },
             Err(e) => {
-                self.emit("model_error", json!({ "error": e }));
+                self.emit("model_error", json!({ "error": e, "replayed": replayed }));
                 return fail(FailKind::Provider, e);
             }
         };
@@ -744,7 +897,8 @@ impl<'p> Interp<'p> {
         }
         self.emit(
             "model_reply",
-            json!({ "output": reply.output, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens }),
+            json!({ "output": reply.output, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens,
+                    "replayed": replayed }),
         );
         if reply.output_tokens > max_output || actual > worst {
             return fail(

@@ -42,6 +42,9 @@ pub trait Provider {
     fn count_input_tokens(&mut self, req: &ModelRequest) -> Result<u64, String>;
     /// Sends the request and returns the reply.
     fn complete(&mut self, req: &ModelRequest) -> Result<ModelReply, String>;
+    /// Called instead of `complete` when a resumed run takes a model call's reply from
+    /// its journal. Real providers do nothing; a scripted provider moves to its next reply.
+    fn skip(&mut self) {}
 }
 
 /// A deterministic provider for tests: replies come from a fixed script, in order.
@@ -114,6 +117,10 @@ impl ScriptProvider {
 impl Provider for ScriptProvider {
     fn count_input_tokens(&mut self, req: &ModelRequest) -> Result<u64, String> {
         Ok(Self::count(req))
+    }
+
+    fn skip(&mut self) {
+        self.next += 1;
     }
 
     fn complete(&mut self, req: &ModelRequest) -> Result<ModelReply, String> {

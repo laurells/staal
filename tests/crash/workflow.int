@@ -1,0 +1,34 @@
+// The crash-test scenario: two model calls, a refund, a failing send caught by
+// `try`, then two more sends. 8 external operations, 18 journal records.
+type Customer { name: Text, email: Text }
+type Order { id: Text, total: Money, customer: Customer }
+type Refund { order_id: Text, amount: Money, reason: Text }
+type Note { body: Text }
+
+fn handle(
+    message: Text,
+    order: Order @blind(customer.email),
+    pay: cap payments.refund(max: 500 USD),
+    mail: cap email.send,
+) -> Done budget(calls: 2, tokens: 4000) {
+    let refund: Refund = validate propose(Refund,
+        instruct: "Decide a fair refund for the customer message about this order.",
+        data: [message, order.id, order.total, order.customer.name],
+        tokens: 2000)
+    let note: Note = validate propose(Note,
+        instruct: "Write one line for the support log about this order.",
+        data: [order.id],
+        tokens: 2000)
+    if refund.amount <= order.total {
+        let paid = pay.refund(refund)
+        let bounced = try mail.send("bounce@example.com")
+        let sent = try mail.send(order.customer.email)
+        let logged = mail.send(note)
+        if sent.ok {
+            return done(evidence: [paid, sent, logged])
+        }
+        return done(evidence: [paid, logged])
+    }
+    let flagged = mail.send("support@example.com")
+    return done(evidence: [flagged])
+}

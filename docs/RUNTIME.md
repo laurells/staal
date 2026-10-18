@@ -200,6 +200,7 @@ A failure has a kind and a message:
 | `provider` | the model provider failed or misbehaved |
 | `step_limit`, `depth_limit` | a deployment limit was reached |
 | `internal` | a state the compiler should have ruled out (a bug in intentc), reported instead of crashing |
+| `journal`, `in_doubt` | durability failures (section 11) |
 
 A failure stops the current function and every caller up to the nearest
 enclosing `try`. `try e` evaluates `e`: on success it yields
@@ -207,7 +208,7 @@ enclosing `try`. `try e` evaluates `e`: on success it yields
 `Outcome { ok: false, error: "<kind>: <message>" }`. If no `try` catches it,
 the run ends with that failure.
 
-`step_limit`, `depth_limit` and `internal` are **fatal**: `try` never catches
+`step_limit`, `depth_limit`, `internal`, `journal` and `in_doubt` are **fatal**: `try` never catches
 them, and they always end the run. The deployment limits are safeguards, not
 part of the program's meaning, so a program must not be able to observe them
 (a runaway loop or recursion must not end in a "successful" run). An
@@ -231,3 +232,102 @@ result, each action requested, refused, performed or failed (with amounts),
 each budget refusal, each failure caught by `try`, and the run's result and
 evidence. The log contains the data sent to models and so may contain
 sensitive data; it must never be given to a model as context.
+
+## 11. Durability: the journal, crashes and resume
+
+A run started with a **journal** survives being killed at any moment (power
+loss, out-of-memory kill, `kill -9`). Resuming it finishes the run so that:
+
+- no action is performed twice, and no performed action is lost;
+- no model call whose reply was recorded is sent again;
+- the result, the log and the world end up as if the run had never stopped.
+
+### How
+
+Everything a run does is deterministic except what the outside world tells
+it: token counts, model replies and action results. Each of these is an
+**external operation**, numbered 1, 2, 3, ... in the order the run reaches
+them. For each one the runtime appends, and flushes to disk (`fsync`) before
+continuing:
+
+1. an **intent** record: what is about to be asked of the world;
+2. after the world answers, a **result** record.
+
+Resuming re-executes the program from the start. At each external operation:
+
+- if the journal has its result, that result is used and the world is not
+  contacted;
+- the intent the program produces now must be identical to the recorded one;
+  if not, the program, config or runtime has changed and resume stops
+  (`journal`);
+- once the recorded operations are used up, the run continues live,
+  appending to the same journal.
+
+Resume requires the **identical** program text and run config: the journal's
+first record holds the SHA-256 of each, and any difference is refused before
+anything runs.
+
+### The crash window, and idempotency
+
+A crash after an intent but before its result leaves that operation **in
+doubt**: it may or may not have happened.
+
+- A token count or model call in doubt is simply performed again. This may
+  cost one extra call at the provider; the program never saw the lost reply.
+- An action in doubt must not be guessed. Every action is performed with an
+  **idempotency key**, `<run id>-<operation number>`, unique to this run and
+  this operation. If the adapter declares the action idempotent (the service
+  deduplicates by key, as payment providers do), resume performs it again
+  with the same key and receives the original receipt. Otherwise resume stops
+  with a failure of kind `in_doubt`, naming the action, and does nothing
+  until an operator checks the real world and records the answer with
+  `intentc resolve`:
+  - `--performed <receipt>`: it happened; the program continues with that receipt;
+  - `--failed <reason>`: the program sees it as a failed action;
+  - `--retry`: it did not happen; resume performs it. This authorizes **one**
+    attempt, recorded before it is made: if that attempt is itself interrupted,
+    the action is in doubt again and must be resolved again.
+
+The run id is 128 bits from the operating system's random source, so keys
+never collide with another run's. A predictable or reused key could make a
+service return a *different* run's receipt.
+
+### Failure kinds
+
+| Kind | Cause |
+| --- | --- |
+| `journal` | the journal could not be written, or replay diverged from it |
+| `in_doubt` | an action that is not idempotent may or may not have happened |
+
+Both are fatal, like `step_limit`: `try` never catches them.
+
+### The journal file
+
+JSON lines, append-only. Records:
+
+```
+{"j":"start","version":1,"run_id":"…","program_sha256":"…","config_sha256":"…"}
+{"j":"intent","n":1,"op":"count","key":"…","body":{…}}
+{"j":"result","n":1,"ok":…}            or  {"j":"result","n":1,"err":"…"}
+{"j":"retry","n":3}                    an operator authorized one more attempt at action 3
+{"j":"attempt","n":3}                  that attempt is about to be made
+{"j":"end","ok":true,"result":…}       or  {"j":"end","ok":false,"failure":"…","message":"…"}
+```
+
+`op` is `count`, `model` or `action`. After an intent come only its result, or,
+for an action, `retry`/`attempt` pairs and then its result. A crash can tear only the last line; a
+torn last line is discarded on resume (it was never acknowledged). Any other
+malformed line is corruption, and resume refuses. Resuming a journal that
+already has an `end` record replays it without contacting the world and
+reports the same result. Only one process may use a journal at a time: an
+operating-system lock, released automatically if the process dies, enforces
+this.
+
+The journal holds the data sent to models and to actions, and so may contain
+sensitive data. Like the log, it must never be given to a model as context.
+
+### Contracts for providers and adapters
+
+- An adapter's `amount` must be a pure function of the action's arguments.
+- An adapter that declares an action idempotent must, given a key it has seen,
+  not perform the action again and must return the original receipt.

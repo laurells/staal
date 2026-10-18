@@ -48,11 +48,10 @@ fn check_case(prog_path: &Path, case_path: &Path) -> Result<(), String> {
         (Ok(v), Some(want), None) if v == want => {}
         (Ok(v), Some(want), None) => return Err(format!("result {v} != expected {want}")),
         (Err(f), None, Some(kind)) if f.kind.to_string() == kind => {
-            if let Some(m) = expect.get("message_contains").and_then(Json::as_str) {
-                if !f.message.contains(m) {
+            if let Some(m) = expect.get("message_contains").and_then(Json::as_str)
+                && !f.message.contains(m) {
                     return Err(format!("failure message {:?} does not contain {m:?}", f.message));
                 }
-            }
         }
         (Err(f), None, Some(kind)) => return Err(format!("failed with {}: {} (expected {kind})", f.kind, f.message)),
         (Ok(v), None, Some(kind)) => return Err(format!("expected failure {kind}, got result {v}")),

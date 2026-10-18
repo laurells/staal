@@ -1,8 +1,13 @@
-# intentc — the Intent compiler (v0.1, front end only)
+# intentc — the Intent compiler and reference runtime
 
-This is phase 1 of the Intent build plan: a lexer, parser and type checker,
-written in Rust with no external dependencies. It does not run programs yet.
-It checks them and rejects the ones that break Intent's rules.
+`intentc` checks Intent programs and rejects the ones that break Intent's
+rules (phase 1, complete), and runs checked programs on a reference
+interpreter with durable, crash-safe execution (phase 2, in progress).
+
+Phase 2 status: the interpreter, exact money, the capability broker, budgets,
+`try`, evidence and the crash-safe journal are built and tested. Not built
+yet: real model providers (only a scripted provider exists), real action
+adapters (only a simulated one), and the native-code backend.
 
 ## What it enforces today
 
@@ -260,9 +265,51 @@ Other limits:
   is recognised as unable to affect later code, which removes the most common
   false alarm (send-then-return-either-way inside a retry loop).
 
+## Running programs, and surviving crashes
+
+    intentc run     prog.int --config run.json --journal run.journal [--log run.jsonl]
+    intentc resume  prog.int --config run.json --journal run.journal
+    intentc resolve --journal run.journal (--performed <receipt> | --failed <reason> | --retry)
+
+The reference interpreter runs checked programs against a scripted model and
+simulated adapters (real providers and adapters are not built yet). With
+`--journal`, a run survives being killed at any moment: `resume` finishes it
+without performing any action twice and without losing any action that
+happened. The full protocol is in `docs/RUNTIME.md` section 11.
+
+- Each token count, model call and action is recorded as an intent before it
+  and a result after it, each flushed to disk (`fsync`) before the run goes on.
+  Resume re-executes the program and takes recorded results from the journal
+  instead of contacting the world; if the program, config or runtime changed,
+  it refuses rather than diverge.
+- Actions carry an idempotency key unique to the run and the operation. If an
+  action was in flight when the process died, resume retries it only if the
+  adapter declares the service idempotent. Otherwise it stops (exit 3,
+  `in_doubt`) and does nothing until an operator records what really happened
+  with `intentc resolve`.
+- Only one process may use a journal at a time (an OS lock, freed if the
+  process dies). A torn last line is discarded; any other damage is refused.
+
+Exit codes: 0 success; 1 check errors or the run failed; 2 a usage, file,
+config or journal problem (nothing ran); 3 the run stopped and can be
+continued (resolve, then resume).
+
+How this is tested: `cargo test --features failpoints` kills the process (with
+`abort`) at every journal write and inside every in-doubt window of a
+workflow with two model calls and four actions, resumes, and checks the
+result and the simulated world match an uninterrupted run, with no action
+performed twice, against both an idempotent and a non-deduplicating service.
+The crash hooks are compiled out of normal builds.
+
+What this does not cover: `abort` kills the process but not the operating
+system, so these tests do not exercise power loss; durability against power
+loss relies on `fsync` being honoured by the OS and disk. An adapter that
+declares itself idempotent must really be: the runtime trusts that contract.
+
 ## Requirements
 
-Rust, installed from https://rustup.rs. Developed with cargo 1.97.0.
+Rust 1.89 or newer (for `File::try_lock`), installed from https://rustup.rs.
+Developed with cargo 1.97.0. Dependencies: `serde_json`, `sha2` and `getrandom`.
 
 ## Use
 
