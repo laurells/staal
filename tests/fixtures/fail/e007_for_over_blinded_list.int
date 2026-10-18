@@ -1,0 +1,8 @@
+// expect: E007
+// How many times the body runs reveals the list's length.
+type Patient { name: Text, visits: List<Text, 10> }
+fn f(p: Patient @blind(visits)) {
+    for v in p.visits {
+        let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+    }
+}

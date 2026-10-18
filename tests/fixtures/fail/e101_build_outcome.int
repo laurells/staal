@@ -1,0 +1,5 @@
+// expect: E101
+// Only `try` makes an Outcome.
+fn f() -> Outcome {
+    return Outcome { ok: true, error: "" }
+}

@@ -1,0 +1,3 @@
+// expect: E101
+fn f(cs: List<cap email.send, 3>) {
+}

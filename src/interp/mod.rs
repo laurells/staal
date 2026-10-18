@@ -32,6 +32,9 @@ pub enum FailKind {
     Action,
     Capability,
     Validation,
+    /// A value error: arithmetic overflow, division by zero, money in different
+    /// currencies or below zero, an index out of range, text too long.
+    Value,
     Budget,
     Provider,
     StepLimit,
@@ -54,9 +57,12 @@ impl FailKind {
     /// continue at all. All of these end the run.
     pub fn catchable(self) -> bool {
         match self {
-            FailKind::Action | FailKind::Capability | FailKind::Validation | FailKind::Budget | FailKind::Provider => {
-                true
-            }
+            FailKind::Action
+            | FailKind::Capability
+            | FailKind::Validation
+            | FailKind::Value
+            | FailKind::Budget
+            | FailKind::Provider => true,
             FailKind::StepLimit | FailKind::DepthLimit | FailKind::Internal | FailKind::Journal | FailKind::InDoubt => {
                 false
             }
@@ -70,6 +76,7 @@ impl fmt::Display for FailKind {
             FailKind::Action => "action",
             FailKind::Capability => "capability",
             FailKind::Validation => "validation",
+            FailKind::Value => "value",
             FailKind::Budget => "budget",
             FailKind::Provider => "provider",
             FailKind::StepLimit => "step_limit",
@@ -107,6 +114,10 @@ impl Default for Limits {
         Limits { max_steps: 1_000_000, max_depth: 256, default_max_tokens: 1024 }
     }
 }
+
+/// The longest text a program can build. Without a ceiling, text doubled through
+/// recursion could exhaust memory long before any step limit is reached.
+pub const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
 /// The hard ceiling on `max_depth`: deeper nesting could exhaust the interpreter's stack.
 pub const MAX_DEPTH_CEILING: usize = 2_000;
@@ -341,14 +352,11 @@ fn check_all_limits(prog: &Program) -> Result<(), String> {
     }
     fn block(body: &[Stmt], fname: &str) -> Result<(), String> {
         for s in body {
-            match s {
-                Stmt::Let { ty: Some(t), name, .. } => ty(t, &format!("in '{fname}', let {name}"))?,
-                Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => block(body, fname)?,
-                Stmt::If { then, els, .. } => {
-                    block(then, fname)?;
-                    block(els, fname)?;
-                }
-                _ => {}
+            if let Stmt::Let { ty: Some(t), name, .. } = s {
+                ty(t, &format!("in '{fname}', let {name}"))?;
+            }
+            for b in s.blocks() {
+                block(b, fname)?;
             }
         }
         Ok(())
@@ -605,6 +613,24 @@ impl<'p> Interp<'p> {
                 _ => internal("`if` condition was not a Bool"),
             },
             Stmt::Break(_) => Ok(Flow::Break),
+            Stmt::For { var, list, body, .. } => {
+                let Value::List(items) = self.eval(frame, list)? else {
+                    return internal("`for` over a value that is not a list");
+                };
+                for item in items {
+                    self.tick()?;
+                    frame.scopes.push(HashMap::new());
+                    let bound = frame.set(var, item);
+                    let flow = bound.and_then(|()| self.exec_block(frame, body));
+                    frame.scopes.pop();
+                    match flow? {
+                        Flow::Next => {}
+                        Flow::Break => break,
+                        r @ Flow::Return(_) => return Ok(r),
+                    }
+                }
+                Ok(Flow::Next)
+            }
         }
     }
 
@@ -617,6 +643,75 @@ impl<'p> Interp<'p> {
                 Ok(n) => Ok(Value::Int(n)),
                 Err(_) => internal(format!("integer literal {n} is out of range")),
             },
+            Expr::Arith { op, left, right, .. } => {
+                let l = self.eval(frame, left)?;
+                let r = self.eval(frame, right)?;
+                arith(*op, l, r)
+            }
+            Expr::Neg(inner, _) => match self.eval(frame, inner)? {
+                Value::Int(n) => match n.checked_neg() {
+                    Some(v) => Ok(Value::Int(v)),
+                    None => fail(FailKind::Value, format!("integer overflow: -({n})")),
+                },
+                _ => internal("`-` applied to a value that is not an Int"),
+            },
+            Expr::Logic { op, left, right, .. } => {
+                let Value::Bool(l) = self.eval(frame, left)? else { return internal("`and`/`or` on a non-Bool") };
+                // The right side runs only if it decides the answer.
+                let short = match op {
+                    LogicOp::And => !l,
+                    LogicOp::Or => l,
+                };
+                if short {
+                    return Ok(Value::Bool(l));
+                }
+                match self.eval(frame, right)? {
+                    Value::Bool(r) => Ok(Value::Bool(r)),
+                    _ => internal("`and`/`or` on a non-Bool"),
+                }
+            }
+            Expr::Not(inner, _) => match self.eval(frame, inner)? {
+                Value::Bool(b) => Ok(Value::Bool(!b)),
+                _ => internal("`not` on a non-Bool"),
+            },
+            Expr::Builtin { f, args, .. } => {
+                let mut vals = Vec::with_capacity(args.len());
+                for a in args {
+                    vals.push(self.eval(frame, a)?);
+                }
+                builtin(*f, &vals)
+            }
+            Expr::Record { ty, fields, .. } => {
+                let Some(decl) = self.types.get(ty).cloned() else { return internal(format!("unknown record type {ty}")) };
+                // Evaluate in the order written (left to right), then store in declaration order.
+                let mut given = Vec::with_capacity(fields.len());
+                for (name, e) in fields {
+                    given.push((name.clone(), self.eval(frame, e)?));
+                }
+                let mut out = Vec::with_capacity(decl.len());
+                for (fname, _) in &decl {
+                    match given.iter().position(|(n, _)| n == fname) {
+                        Some(i) => out.push(given.swap_remove(i)),
+                        None => return internal(format!("{ty} literal without field '{fname}'")),
+                    }
+                }
+                Ok(Value::Record { ty: ty.clone(), fields: out })
+            }
+            Expr::List(items, _) => {
+                let mut vals = Vec::with_capacity(items.len());
+                for i in items {
+                    vals.push(self.eval(frame, i)?);
+                }
+                Ok(Value::List(vals))
+            }
+            Expr::Index { base, index, .. } => {
+                let Value::List(items) = self.eval(frame, base)? else { return internal("indexing a non-list") };
+                let Value::Int(i) = self.eval(frame, index)? else { return internal("a non-Int index") };
+                match usize::try_from(i).ok().and_then(|u| items.get(u)) {
+                    Some(v) => Ok(v.clone()),
+                    None => fail(FailKind::Value, format!("index {i} is out of range for a list of {}", items.len())),
+                }
+            }
             Expr::Field { base, field, .. } => match self.eval(frame, base)? {
                 Value::Record { fields, .. } => match fields.into_iter().find(|(f, _)| f == field) {
                     Some((_, v)) => Ok(v),
@@ -910,6 +1005,67 @@ impl<'p> Interp<'p> {
             );
         }
         Ok(Value::Proposed { ty: ty.clone(), raw: reply.output })
+    }
+}
+
+/// Checked arithmetic (RUNTIME.md section 4). Every overflow, division by zero, mix of
+/// currencies or result below zero is a `value` failure, never a wrapped or rounded answer.
+fn arith(op: ArithOp, l: Value, r: Value) -> Result<Value, Failure> {
+    let overflow = |a: &dyn fmt::Display, b: &dyn fmt::Display| fail(FailKind::Value, format!("overflow: {a} {op} {b}"));
+    match (l, r) {
+        (Value::Int(a), Value::Int(b)) => {
+            let v = match op {
+                ArithOp::Add => a.checked_add(b),
+                ArithOp::Sub => a.checked_sub(b),
+                ArithOp::Mul => a.checked_mul(b),
+                ArithOp::Div if b == 0 => return fail(FailKind::Value, format!("division by zero: {a} / 0")),
+                // Rounds toward zero. checked_div fails only for i64::MIN / -1.
+                ArithOp::Div => a.checked_div(b),
+            };
+            match v {
+                Some(v) => Ok(Value::Int(v)),
+                None => overflow(&a, &b),
+            }
+        }
+        (Value::Money(a), Value::Money(b)) if matches!(op, ArithOp::Add | ArithOp::Sub) => {
+            if a.currency != b.currency {
+                return fail(FailKind::Value, format!("cannot combine {a} and {b}: different currencies"));
+            }
+            let v = if op == ArithOp::Add { a.minor.checked_add(b.minor) } else { a.minor.checked_sub(b.minor) };
+            match v {
+                Some(m) if m >= 0 => Ok(Value::Money(Money { minor: m, currency: a.currency })),
+                Some(_) => fail(FailKind::Value, format!("money cannot be negative: {a} - {b}")),
+                None => overflow(&a, &b),
+            }
+        }
+        (Value::Money(m), Value::Int(k)) | (Value::Int(k), Value::Money(m)) if op == ArithOp::Mul => {
+            match m.minor.checked_mul(k) {
+                Some(v) if v >= 0 => Ok(Value::Money(Money { minor: v, currency: m.currency })),
+                Some(_) => fail(FailKind::Value, format!("money cannot be negative: {m} * {k}")),
+                None => overflow(&m, &k),
+            }
+        }
+        (Value::Text(a), Value::Text(b)) if op == ArithOp::Add => {
+            if a.len().saturating_add(b.len()) > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("text would be longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            Ok(Value::Text(a + &b))
+        }
+        _ => internal(format!("`{op}` applied to values the compiler should have rejected")),
+    }
+}
+
+/// The built-in functions. `len` of Text counts Unicode characters, not bytes.
+fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
+    let count = |n: usize| i64::try_from(n).map(Value::Int).or_else(|_| internal("length does not fit in an Int"));
+    match (f, args) {
+        (Builtin::Len, [Value::Text(t)]) => count(t.chars().count()),
+        (Builtin::Len, [Value::List(xs)]) => count(xs.len()),
+        (Builtin::Contains, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.contains(b.as_str()))),
+        (Builtin::Contains, [Value::List(xs), v]) => Ok(Value::Bool(xs.contains(v))),
+        (Builtin::StartsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.starts_with(b.as_str()))),
+        (Builtin::EndsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.ends_with(b.as_str()))),
+        _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
     }
 }
 

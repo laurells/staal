@@ -1,0 +1,5 @@
+// expect: E006
+// Joining trusted and untrusted text yields untrusted text.
+fn f(ticket: Text) {
+    let s = propose(Text, instruct: "Summarise this: " + ticket)
+}

@@ -1,0 +1,6 @@
+// expect: E006
+type Cmd { text: Text }
+fn f(ticket: Text) {
+    let c = Cmd { text: ticket }
+    let s = propose(Text, instruct: c.text)
+}

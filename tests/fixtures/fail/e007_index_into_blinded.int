@@ -1,0 +1,7 @@
+// expect: E007 E007
+// Two leaks: the element itself goes to the model, and because indexing fails on an
+// empty list, whether the call happens at all reveals whether the notes are empty.
+type Patient { name: Text, notes: List<Text, 5> }
+fn f(p: Patient @blind(notes)) {
+    let s = propose(Text, instruct: "Summarise.", data: [p.notes[0]], tokens: 10)
+}

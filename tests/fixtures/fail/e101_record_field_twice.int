@@ -1,0 +1,5 @@
+// expect: E101
+type P { a: Int }
+fn f() -> P {
+    return P { a: 1, a: 2 }
+}

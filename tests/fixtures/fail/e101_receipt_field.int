@@ -1,0 +1,2 @@
+// expect: E101
+type Bag { r: Receipt }

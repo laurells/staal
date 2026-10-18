@@ -6,6 +6,8 @@ use crate::lexer::Pos;
 pub enum Ty {
     Named(String),
     Proposed(Box<Ty>),
+    /// `List<T, N>`: a list of at most N values of type T.
+    List(Box<Ty>, u64),
     /// A capability, e.g. `cap payments.refund(max: 500 USD)`.
     /// `max: None` means the capability has no upper limit.
     Cap { path: Vec<String>, max: Option<Limit> },
@@ -32,6 +34,7 @@ impl std::fmt::Display for Ty {
         match self {
             Ty::Named(n) => write!(f, "{n}"),
             Ty::Proposed(t) => write!(f, "Proposed<{t}>"),
+            Ty::List(t, n) => write!(f, "List<{t}, {n}>"),
             Ty::Cap { path, max: None } => write!(f, "cap {}", path.join(".")),
             Ty::Cap { path, max: Some(m) } => write!(f, "cap {}(max: {m})", path.join(".")),
         }
@@ -89,8 +92,87 @@ pub enum Stmt {
     Loop { body: Vec<Stmt>, pos: Pos },
     /// `if cond { ... } else { ... }`; `else if` is stored as an else block holding one If.
     If { cond: Expr, then: Vec<Stmt>, els: Vec<Stmt>, pos: Pos },
-    /// `break` — leave the innermost `repeat` or `loop`
+    /// `break` — leave the innermost `repeat`, `loop` or `for`
     Break(Pos),
+    /// `for x in xs { ... }` — once per element of a bounded list
+    For { var: String, list: Expr, body: Vec<Stmt>, pos: Pos },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl std::fmt::Display for ArithOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ArithOp::Add => "+",
+            ArithOp::Sub => "-",
+            ArithOp::Mul => "*",
+            ArithOp::Div => "/",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LogicOp {
+    And,
+    Or,
+}
+
+/// Functions built into the language. Their names are reserved.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Builtin {
+    Len,
+    Contains,
+    StartsWith,
+    EndsWith,
+}
+
+impl Builtin {
+    pub fn from_name(n: &str) -> Option<Builtin> {
+        match n {
+            "len" => Some(Builtin::Len),
+            "contains" => Some(Builtin::Contains),
+            "starts_with" => Some(Builtin::StartsWith),
+            "ends_with" => Some(Builtin::EndsWith),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Builtin::Len => "len",
+            Builtin::Contains => "contains",
+            Builtin::StartsWith => "starts_with",
+            Builtin::EndsWith => "ends_with",
+        }
+    }
+}
+
+impl Stmt {
+    /// The expressions this statement evaluates itself (not those in nested blocks).
+    pub fn exprs(&self) -> Vec<&Expr> {
+        match self {
+            Stmt::Let { value, .. } => vec![value],
+            Stmt::Expr(e) | Stmt::Return(Some(e), _) => vec![e],
+            Stmt::If { cond, .. } => vec![cond],
+            Stmt::For { list, .. } => vec![list],
+            Stmt::Return(None, _) | Stmt::Repeat { .. } | Stmt::Loop { .. } | Stmt::Break(_) => Vec::new(),
+        }
+    }
+
+    /// The blocks nested directly in this statement.
+    pub fn blocks(&self) -> Vec<&[Stmt]> {
+        match self {
+            Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } | Stmt::For { body, .. } => vec![body],
+            Stmt::If { then, els, .. } => vec![then, els],
+            Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Return(..) | Stmt::Break(_) => Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -127,6 +209,22 @@ pub enum Expr {
     Field { base: Box<Expr>, field: String, pos: Pos },
     /// `left op right`, e.g. `count <= 3`
     Cmp { op: CmpOp, left: Box<Expr>, right: Box<Expr>, pos: Pos },
+    /// `left + right` and the other arithmetic operators
+    Arith { op: ArithOp, left: Box<Expr>, right: Box<Expr>, pos: Pos },
+    /// `-x`
+    Neg(Box<Expr>, Pos),
+    /// `left and right`, `left or right`; the right side runs only if needed
+    Logic { op: LogicOp, left: Box<Expr>, right: Box<Expr>, pos: Pos },
+    /// `not x`
+    Not(Box<Expr>, Pos),
+    /// `len(x)` and the other built-in functions
+    Builtin { f: Builtin, args: Vec<Expr>, pos: Pos },
+    /// `Type { field: value, ... }`
+    Record { ty: String, fields: Vec<(String, Expr)>, pos: Pos },
+    /// `[a, b, c]`
+    List(Vec<Expr>, Pos),
+    /// `xs[i]`
+    Index { base: Box<Expr>, index: Box<Expr>, pos: Pos },
     /// `name(args)` — a call to a function defined in the program
     Call { name: String, args: Vec<Expr>, pos: Pos },
     /// `propose(T, instruct: E, data: [E, ...], blind_to: [path, ...], tokens: N)` — ask a model for a T.
@@ -152,6 +250,29 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// The expressions directly inside this one, in evaluation order. Exhaustive on
+    /// purpose: a new kind of expression must say here what it contains, so analyses
+    /// that walk expressions through this function can never skip part of one.
+    pub fn children(&self) -> Vec<&Expr> {
+        match self {
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => Vec::new(),
+            Expr::Field { base, .. } => vec![base],
+            Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => vec![inner],
+            Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
+                vec![left, right]
+            }
+            Expr::Index { base, index, .. } => vec![base, index],
+            Expr::Call { args, .. }
+            | Expr::Action { args, .. }
+            | Expr::Builtin { args, .. }
+            | Expr::List(args, _)
+            | Expr::Done { evidence: args, .. } => args.iter().collect(),
+            Expr::Record { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
+            // Only what the model is given is evaluated; `blind_to` names data, it is not evaluated.
+            Expr::Propose { instruct, data, .. } => instruct.iter().map(|b| b.as_ref()).chain(data.iter()).collect(),
+        }
+    }
+
     pub fn pos(&self) -> Pos {
         match self {
             Expr::Var(_, p)
@@ -159,7 +280,15 @@ impl Expr {
             | Expr::Int(_, p)
             | Expr::Bool(_, p)
             | Expr::Validate(_, p)
-            | Expr::Try(_, p) => *p,
+            | Expr::Try(_, p)
+            | Expr::Neg(_, p)
+            | Expr::Not(_, p)
+            | Expr::List(_, p) => *p,
+            Expr::Arith { pos, .. }
+            | Expr::Logic { pos, .. }
+            | Expr::Builtin { pos, .. }
+            | Expr::Record { pos, .. }
+            | Expr::Index { pos, .. } => *pos,
             Expr::Cmp { pos, .. } | Expr::Field { pos, .. } | Expr::Done { pos, .. } => *pos,
             Expr::Propose { pos, .. } => *pos,
             Expr::Action { pos, .. } | Expr::Call { pos, .. } => *pos,

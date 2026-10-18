@@ -1,0 +1,10 @@
+// expect: E007
+// The model call on the right of `and` runs only when the left side is true.
+type Patient { name: Text, age: Int }
+fn ask() -> Bool {
+    let r = validate propose(Bool, instruct: "Yes?", tokens: 10)
+    return r
+}
+fn f(p: Patient @blind(age)) -> Bool {
+    return p.age > 65 and ask()
+}

@@ -23,6 +23,11 @@ pub enum Tok {
     False,
     Try,
     Done,
+    And,
+    Or,
+    Not,
+    For,
+    In,
     // symbols
     LParen,
     RParen,
@@ -42,10 +47,14 @@ pub enum Tok {
     At,
     LBracket,
     RBracket,
+    Plus,
+    Minus,
+    Star,
+    Slash,
     Eof,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pos {
     pub line: usize,
     pub col: usize,
@@ -143,6 +152,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
                 "false" => Tok::False,
                 "try" => Tok::Try,
                 "done" => Tok::Done,
+                "and" => Tok::And,
+                "or" => Tok::Or,
+                "not" => Tok::Not,
+                "for" => Tok::For,
+                "in" => Tok::In,
                 _ => Tok::Ident(word),
             };
             out.push(Token { tok, pos });
@@ -176,6 +190,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
             '@' => Tok::At,
             '[' => Tok::LBracket,
             ']' => Tok::RBracket,
+            '+' => Tok::Plus,
+            '-' => Tok::Minus,
+            '*' => Tok::Star,
+            '/' => Tok::Slash,
             other => return Err((pos, format!("unexpected character '{other}'"))),
         };
         out.push(Token { tok, pos });

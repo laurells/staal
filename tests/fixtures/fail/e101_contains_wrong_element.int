@@ -1,0 +1,4 @@
+// expect: E101
+fn f(xs: List<Text, 3>) -> Bool {
+    return contains(xs, 5)
+}

@@ -1,0 +1,4 @@
+// expect: E101
+fn len(t: Text) -> Int {
+    return 0
+}

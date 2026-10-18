@@ -1,0 +1,1 @@
+{ "entry": "money_sub", "inputs": { "a": {"amount": "5.00", "currency": "USD"}, "b": {"amount": "5.01", "currency": "USD"} }, "model": { "provider": "script", "responses": [] }, "expect": { "failure": "value", "message_contains": "cannot be negative" } }

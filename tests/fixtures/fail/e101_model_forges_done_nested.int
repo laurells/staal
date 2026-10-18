@@ -1,4 +1,4 @@
-// expect: E101
+// expect: E101 E101
 type Inner { d: Done }
 type Outer { inner: Inner }
 

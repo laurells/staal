@@ -1,0 +1,1 @@
+{ "entry": "ship", "inputs": { "lines": [ { "sku": "A7", "qty": 4 } ] }, "grants": { "out": { "cap": "warehouse.dispatch" } }, "model": { "provider": "script", "responses": [] }, "expect": { "result": { "done": [ { "capability": "warehouse.dispatch", "method": "dispatch", "receipt": "sim-1" } ] }, "performed": [["warehouse.dispatch", "dispatch"]] } }

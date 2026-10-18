@@ -1,0 +1,1 @@
+{ "entry": "pick", "inputs": { "xs": ["a"], "i": -1 }, "model": { "provider": "script", "responses": [] }, "expect": { "failure": "value", "message_contains": "out of range" } }

@@ -1,0 +1,4 @@
+// expect: E104
+fn f(xs: List<Text, 3>) -> Int {
+    return xs.length
+}

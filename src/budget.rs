@@ -10,6 +10,7 @@
 
 use crate::ast::*;
 use crate::checker::Diagnostic;
+use crate::lexer::Pos;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -90,10 +91,14 @@ struct Analyzer<'a> {
     fns: HashMap<&'a str, &'a FnDecl>,
     /// Inferred costs of functions without a budget, once fully resolved.
     memo: HashMap<&'a str, Cost>,
+    /// The maximum iteration count of each `for` loop (from its list's type), by position.
+    for_bounds: &'a HashMap<Pos, u64>,
 }
 
-pub fn check(prog: &Program) -> Vec<Diagnostic> {
-    let mut a = Analyzer { fns: HashMap::new(), memo: HashMap::new() };
+/// `for_bounds` comes from the type checker (`checker::check_with_bounds`). A `for`
+/// with no recorded bound (its list did not type-check) is costed as unbounded.
+pub fn check(prog: &Program, for_bounds: &HashMap<Pos, u64>) -> Vec<Diagnostic> {
+    let mut a = Analyzer { fns: HashMap::new(), memo: HashMap::new(), for_bounds };
     for f in &prog.fns {
         a.fns.entry(f.name.as_str()).or_insert(f);
     }
@@ -187,6 +192,15 @@ impl<'a> Analyzer<'a> {
                     self.block(body, stack, cycles, diags.as_deref_mut()).times(*count)
                 }
                 Stmt::Break(_) => Cost::ZERO,
+                Stmt::For { list, body, pos, .. } => {
+                    let l = self.expr(list, stack, cycles);
+                    let b = self.block(body, stack, cycles, diags.as_deref_mut());
+                    let per = match self.for_bounds.get(pos) {
+                        Some(n) => b.times(*n),
+                        None => b.forever(),
+                    };
+                    l.add(per)
+                }
                 Stmt::If { cond, then, els, .. } => {
                     let c = self.expr(cond, stack, cycles);
                     let t = self.block(then, stack, cycles, diags.as_deref_mut());
@@ -213,32 +227,16 @@ impl<'a> Analyzer<'a> {
     }
 
     fn expr(&mut self, e: &Expr, stack: &mut Vec<&'a str>, cycles: &mut HashSet<&'a str>) -> Cost {
-        match e {
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => Cost::ZERO,
-            Expr::Done { evidence, .. } => {
-                evidence.iter().fold(Cost::ZERO, |acc, e| acc.add(self.expr(e, stack, cycles)))
-            }
-            Expr::Cmp { left, right, .. } => self.expr(left, stack, cycles).add(self.expr(right, stack, cycles)),
-            Expr::Propose { tokens, instruct, data, .. } => {
-                let mut c = Cost { calls: Bound::Fin(1), tokens: tokens.map_or(Bound::Unbounded, Bound::Fin) };
-                if let Some(i) = instruct {
-                    c = c.add(self.expr(i, stack, cycles));
-                }
-                for d in data {
-                    c = c.add(self.expr(d, stack, cycles));
-                }
-                c
-            }
-            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } | Expr::Try(inner, _) => {
-                self.expr(inner, stack, cycles)
-            }
-            Expr::Action { args, .. } => {
-                args.iter().fold(Cost::ZERO, |acc, a| acc.add(self.expr(a, stack, cycles)))
-            }
-            Expr::Call { name, args, .. } => {
-                let args_cost = args.iter().fold(Cost::ZERO, |acc, a| acc.add(self.expr(a, stack, cycles)));
-                args_cost.add(self.fn_cost(name, stack, cycles))
-            }
+        // Everything an expression evaluates costs what it costs; a model call adds one
+        // call and its token limit, and a function call adds the callee's cost.
+        let mut c = match e {
+            Expr::Propose { tokens, .. } => Cost { calls: Bound::Fin(1), tokens: tokens.map_or(Bound::Unbounded, Bound::Fin) },
+            Expr::Call { name, .. } => self.fn_cost(name, stack, cycles),
+            _ => Cost::ZERO,
+        };
+        for child in e.children() {
+            c = c.add(self.expr(child, stack, cycles));
         }
+        c
     }
 }

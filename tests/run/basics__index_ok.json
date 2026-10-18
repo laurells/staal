@@ -1,0 +1,1 @@
+{ "entry": "pick", "inputs": { "xs": ["a", "b"], "i": 1 }, "model": { "provider": "script", "responses": [] }, "expect": { "result": "b" } }

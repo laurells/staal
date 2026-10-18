@@ -1,0 +1,4 @@
+// expect: E101
+fn f(n: Int) -> Bool {
+    return n and true
+}

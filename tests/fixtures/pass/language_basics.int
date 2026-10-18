@@ -1,0 +1,64 @@
+// Arithmetic, logic, text, records, bounded lists and loops.
+type Item { sku: Text, qty: Int, price: Money }
+type Line { sku: Text, total: Money }
+type Summary { lines: Int, note: Text }
+
+fn line_total(item: Item) -> Money {
+    return item.price * item.qty
+}
+
+fn mean(total: Int, count: Int) -> Int {
+    if count == 0 {
+        return 0
+    }
+    return total / count
+}
+
+fn classify(n: Int) -> Text {
+    if n < 0 or n > 100 {
+        return "out of range"
+    } else if not (n >= 50) {
+        return "low"
+    }
+    return "high"
+}
+
+fn summarise(items: List<Item, 50>, label: Text) -> Summary {
+    let count = len(items)
+    let first_is_bulk = count > 0 and items[0].qty >= 10
+    let note = "Order " + label + ": " + classify(mean(count * 10, 3))
+    if first_is_bulk {
+        return Summary { lines: count, note: note + " (bulk)" }
+    }
+    return Summary { note: note, lines: count }
+}
+
+fn tagged(tags: List<Text, 5>, want: Text) -> Bool {
+    let defaults: List<Text, 5> = []
+    return contains(tags, want) or contains(["urgent", "vip"], want) or len(defaults) > 0
+}
+
+fn domain_ok(address: Text) -> Bool {
+    return ends_with(address, "@teamozy.org") and not starts_with(address, "noreply")
+}
+
+fn ship(items: List<Item, 50>, out: cap warehouse.dispatch) -> Done {
+    for item in items {
+        if item.qty > 0 {
+            let line = Line { sku: item.sku, total: line_total(item) }
+            let r = out.dispatch(line)
+            if len(items) == 1 {
+                return done(evidence: [r])
+            }
+        }
+    }
+    let r = out.dispatch("manifest")
+    return done(evidence: [r])
+}
+
+// A model call per element is bounded by the list's maximum: 3 elements x 1 call.
+fn draft_each(names: List<Text, 3>) budget(calls: 3, tokens: 300) {
+    for n in names {
+        let d = propose(Text, instruct: "Write a greeting for the name in the data.", data: [n], tokens: 100)
+    }
+}

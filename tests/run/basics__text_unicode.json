@@ -1,0 +1,1 @@
+{ "entry": "text", "inputs": { "name": "Dr Adé Ọlá" }, "model": { "provider": "script", "responses": [] }, "expect": { "result": { "greeting": "Hello, Dr Adé Ọlá!", "length": 10, "formal": true } } }

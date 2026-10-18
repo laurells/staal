@@ -9,16 +9,28 @@
 //   mark     := "@" "trusted" | "@" "blind" ("(" field_path ("," field_path)* ")")?
 //   field_path := IDENT ("." IDENT)*
 //   ty       := "cap" IDENT ("." IDENT)* ("(" "max" ":" NUM IDENT? ")")?
-//             | IDENT ("<" ty ">")?
+//             | "List" "<" ty "," NUM ">" | "Proposed" "<" ty ">" | IDENT
 //   block    := "{" stmt* "}"
 //   stmt     := "let" IDENT (":" ty)? "=" expr | "return" expr?
 //             | "repeat" NUM block | "loop" block | "break"
-//             | "if" expr block ("else" (block | if-stmt))? | expr
-//   expr     := primary (("==" | "!=" | "<" | "<=" | ">" | ">=") primary)?
-//   primary  := atom ("." IDENT)*         (field access, e.g. order.customer.email)
-//   atom     := "propose" "(" ty ("," popt)* ")" | "validate" primary
+//             | "for" IDENT "in" expr* block
+//             | "if" expr* block ("else" (block | if-stmt))? | expr
+//   expr*    := an expr in which a record literal needs parentheses, so that in
+//               `if ready { ... }` the brace opens the block (as in Rust)
+//   expr     := and_expr ("or" and_expr)*
+//   and_expr := not_expr ("and" not_expr)*
+//   not_expr := "not" not_expr | cmp_expr
+//   cmp_expr := add_expr (("==" | "!=" | "<" | "<=" | ">" | ">=") add_expr)?   (not chained)
+//   add_expr := mul_expr (("+" | "-") mul_expr)*
+//   mul_expr := unary (("*" | "/") unary)*
+//   unary    := "-" unary | primary
+//   primary  := atom ("." IDENT | "[" expr "]")*     (field access, indexing)
+//   atom     := "(" expr ")" | "[" (expr ("," expr)*)? "]"
+//             | "propose" "(" ty ("," popt)* ")" | "validate" primary
 //             | "try" primary             (an action or call; failure becomes an Outcome)
 //             | "done" "(" "evidence" ":" list ")"
+//             | IDENT "{" (IDENT ":" expr ","?)* "}"     (record literal)
+//             | BUILTIN args              (len, contains, starts_with, ends_with)
 //             | IDENT "." IDENT args      (action through a capability variable)
 //             | IDENT args                (call to a program function)
 //             | IDENT | STRING | NUM | "true" | "false"
@@ -32,13 +44,15 @@ use crate::lexer::{Pos, Tok, Token};
 pub struct Parser {
     toks: Vec<Token>,
     i: usize,
+    /// Set while parsing an `if` or `for` head, where `{` must open the block.
+    no_record: bool,
 }
 
 type PResult<T> = Result<T, (Pos, String)>;
 
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
-        Parser { toks, i: 0 }
+        Parser { toks, i: 0, no_record: false }
     }
 
     fn peek(&self) -> &Tok {
@@ -264,15 +278,33 @@ impl Parser {
             }
             return Ok(Ty::Cap { path, max });
         }
+        let npos = self.pos();
         let name = self.ident()?;
         if *self.peek() == Tok::Lt {
             self.bump();
             let inner = self.ty()?;
-            self.expect(Tok::Gt, "'>'")?;
-            if name == "Proposed" {
-                return Ok(Ty::Proposed(Box::new(inner)));
-            }
-            return Err((self.pos(), format!("unknown generic type '{name}'")));
+            return match name.as_str() {
+                "Proposed" => {
+                    self.expect(Tok::Gt, "'>'")?;
+                    Ok(Ty::Proposed(Box::new(inner)))
+                }
+                "List" => {
+                    if *self.peek() != Tok::Comma {
+                        return Err((
+                            self.pos(),
+                            "a list type needs a maximum length, e.g. List<Text, 100>: every list in Intent is bounded".into(),
+                        ));
+                    }
+                    self.bump();
+                    let max = self.num()?;
+                    self.expect(Tok::Gt, "'>'")?;
+                    Ok(Ty::List(Box::new(inner), max))
+                }
+                _ => Err((npos, format!("unknown generic type '{name}'"))),
+            };
+        }
+        if name == "List" {
+            return Err((npos, "a list type needs an element type and a maximum length, e.g. List<Text, 100>".into()));
         }
         Ok(Ty::Named(name))
     }
@@ -330,6 +362,14 @@ impl Parser {
                 Ok(Stmt::Break(pos))
             }
             Tok::If => self.if_stmt(),
+            Tok::For => {
+                self.bump();
+                let var = self.ident()?;
+                self.expect(Tok::In, "'in'")?;
+                let list = self.head_expr()?;
+                let body = self.block()?;
+                Ok(Stmt::For { var, list, body, pos })
+            }
             _ => Ok(Stmt::Expr(self.expr()?)),
         }
     }
@@ -337,7 +377,7 @@ impl Parser {
     fn if_stmt(&mut self) -> PResult<Stmt> {
         let pos = self.pos();
         self.expect(Tok::If, "'if'")?;
-        let cond = self.expr()?;
+        let cond = self.head_expr()?;
         let then = self.block()?;
         let els = if *self.peek() == Tok::Else {
             self.bump();
@@ -352,8 +392,92 @@ impl Parser {
         Ok(Stmt::If { cond, then, els, pos })
     }
 
+    /// An expression in an `if` or `for` head: a record literal there needs parentheses.
+    fn head_expr(&mut self) -> PResult<Expr> {
+        self.with_records(false, Self::expr)
+    }
+
+    /// Runs `f` with record literals allowed or not. Inside any brackets, parentheses
+    /// or braces they are allowed again: there the next `{` cannot open a block.
+    fn with_records<T>(&mut self, allowed: bool, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
+        let saved = std::mem::replace(&mut self.no_record, !allowed);
+        let r = f(self);
+        self.no_record = saved;
+        r
+    }
+
     fn expr(&mut self) -> PResult<Expr> {
-        let left = self.primary()?;
+        let mut left = self.and_expr()?;
+        while *self.peek() == Tok::Or {
+            let pos = self.pos();
+            self.bump();
+            let right = self.and_expr()?;
+            left = Expr::Logic { op: LogicOp::Or, left: Box::new(left), right: Box::new(right), pos };
+        }
+        Ok(left)
+    }
+
+    fn and_expr(&mut self) -> PResult<Expr> {
+        let mut left = self.not_expr()?;
+        while *self.peek() == Tok::And {
+            let pos = self.pos();
+            self.bump();
+            let right = self.not_expr()?;
+            left = Expr::Logic { op: LogicOp::And, left: Box::new(left), right: Box::new(right), pos };
+        }
+        Ok(left)
+    }
+
+    fn not_expr(&mut self) -> PResult<Expr> {
+        if *self.peek() == Tok::Not {
+            let pos = self.pos();
+            self.bump();
+            return Ok(Expr::Not(Box::new(self.not_expr()?), pos));
+        }
+        self.cmp_expr()
+    }
+
+    fn add_expr(&mut self) -> PResult<Expr> {
+        let mut left = self.mul_expr()?;
+        loop {
+            let op = match self.peek() {
+                Tok::Plus => ArithOp::Add,
+                Tok::Minus => ArithOp::Sub,
+                _ => return Ok(left),
+            };
+            let pos = self.pos();
+            self.bump();
+            let right = self.mul_expr()?;
+            left = Expr::Arith { op, left: Box::new(left), right: Box::new(right), pos };
+        }
+    }
+
+    fn mul_expr(&mut self) -> PResult<Expr> {
+        let mut left = self.unary()?;
+        loop {
+            let op = match self.peek() {
+                Tok::Star => ArithOp::Mul,
+                Tok::Slash => ArithOp::Div,
+                _ => return Ok(left),
+            };
+            let pos = self.pos();
+            self.bump();
+            let right = self.unary()?;
+            left = Expr::Arith { op, left: Box::new(left), right: Box::new(right), pos };
+        }
+    }
+
+    fn unary(&mut self) -> PResult<Expr> {
+        if *self.peek() == Tok::Minus {
+            let pos = self.pos();
+            self.bump();
+            return Ok(Expr::Neg(Box::new(self.unary()?), pos));
+        }
+        self.primary()
+    }
+
+    fn cmp_expr(&mut self) -> PResult<Expr> {
+        let left = self.add_expr()?;
         let op = match self.peek() {
             Tok::EqEq => CmpOp::Eq,
             Tok::NotEq => CmpOp::Ne,
@@ -365,7 +489,7 @@ impl Parser {
         };
         let pos = self.pos();
         self.bump();
-        let right = self.primary()?;
+        let right = self.add_expr()?;
         if matches!(
             self.peek(),
             Tok::EqEq | Tok::NotEq | Tok::Lt | Tok::LtEq | Tok::Gt | Tok::GtEq
@@ -376,6 +500,10 @@ impl Parser {
     }
 
     fn propose(&mut self) -> PResult<Expr> {
+        self.with_records(true, Self::propose_inner)
+    }
+
+    fn propose_inner(&mut self) -> PResult<Expr> {
         let pos = self.pos();
         self.expect(Tok::Propose, "'propose'")?;
         self.expect(Tok::LParen, "'('")?;
@@ -415,6 +543,10 @@ impl Parser {
 
     /// "[" (expr ("," expr)*)? "]"
     fn list(&mut self) -> PResult<Vec<Expr>> {
+        self.with_records(true, Self::list_inner)
+    }
+
+    fn list_inner(&mut self) -> PResult<Vec<Expr>> {
         self.expect(Tok::LBracket, "'['")?;
         let mut items = Vec::new();
         if *self.peek() != Tok::RBracket {
@@ -431,27 +563,69 @@ impl Parser {
         Ok(items)
     }
 
-    /// An atom followed by any number of `.field` accesses.
+    /// An atom followed by any number of `.field` accesses and `[index]`es.
     fn primary(&mut self) -> PResult<Expr> {
         let mut e = self.atom()?;
-        while *self.peek() == Tok::Dot {
-            self.bump();
-            let pos = self.pos();
-            let field = self.ident()?;
-            if *self.peek() == Tok::LParen {
-                return Err((
-                    pos,
-                    format!("'{field}(...)' is not allowed here: actions must be called directly on a capability variable"),
-                ));
+        loop {
+            match self.peek() {
+                Tok::Dot => {
+                    self.bump();
+                    let pos = self.pos();
+                    let field = self.ident()?;
+                    if *self.peek() == Tok::LParen {
+                        return Err((
+                            pos,
+                            format!(
+                                "'{field}(...)' is not allowed here: actions must be called directly on a capability variable"
+                            ),
+                        ));
+                    }
+                    e = Expr::Field { base: Box::new(e), field, pos };
+                }
+                Tok::LBracket => {
+                    let pos = self.pos();
+                    self.bump();
+                    let index = self.with_records(true, Self::expr)?;
+                    self.expect(Tok::RBracket, "']'")?;
+                    e = Expr::Index { base: Box::new(e), index: Box::new(index), pos };
+                }
+                _ => return Ok(e),
             }
-            e = Expr::Field { base: Box::new(e), field, pos };
         }
-        Ok(e)
+    }
+
+    /// `Type { field: value, ... }`, after the type name has been read.
+    fn record_literal(&mut self, ty: String, pos: Pos) -> PResult<Expr> {
+        self.expect(Tok::LBrace, "'{'")?;
+        let fields = self.with_records(true, |p| {
+            let mut fields = Vec::new();
+            while *p.peek() != Tok::RBrace {
+                let name = p.ident()?;
+                p.expect(Tok::Colon, "':'")?;
+                let value = p.expr()?;
+                fields.push((name, value));
+                if *p.peek() == Tok::Comma {
+                    p.bump();
+                } else {
+                    break;
+                }
+            }
+            Ok(fields)
+        })?;
+        self.expect(Tok::RBrace, "'}'")?;
+        Ok(Expr::Record { ty, fields, pos })
     }
 
     fn atom(&mut self) -> PResult<Expr> {
         let pos = self.pos();
         match self.peek().clone() {
+            Tok::LParen => {
+                self.bump();
+                let e = self.with_records(true, Self::expr)?;
+                self.expect(Tok::RParen, "')'")?;
+                Ok(e)
+            }
+            Tok::LBracket => Ok(Expr::List(self.list()?, pos)),
             Tok::Propose => self.propose(),
             Tok::Validate => {
                 self.bump();
@@ -494,7 +668,13 @@ impl Parser {
                 self.bump();
                 if *self.peek() == Tok::LParen {
                     let args = self.args()?;
+                    if let Some(f) = Builtin::from_name(&name) {
+                        return Ok(Expr::Builtin { f, args, pos });
+                    }
                     return Ok(Expr::Call { name, args, pos });
+                }
+                if *self.peek() == Tok::LBrace && !self.no_record {
+                    return self.record_literal(name, pos);
                 }
                 // `name.method(` is an action; `name.field` is left to `primary`.
                 let is_action = *self.peek() == Tok::Dot
@@ -515,6 +695,10 @@ impl Parser {
 
     /// "(" (expr ("," expr)*)? ")"
     fn args(&mut self) -> PResult<Vec<Expr>> {
+        self.with_records(true, Self::args_inner)
+    }
+
+    fn args_inner(&mut self) -> PResult<Vec<Expr>> {
         self.expect(Tok::LParen, "'('")?;
         let mut args = Vec::new();
         if *self.peek() != Tok::RParen {

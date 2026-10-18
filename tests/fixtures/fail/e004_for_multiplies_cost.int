@@ -1,0 +1,7 @@
+// expect: E004
+// 3 elements x 1 call: the budget allows 2.
+fn f(names: List<Text, 3>) budget(calls: 2) {
+    for n in names {
+        let d = propose(Text, instruct: "Greet.", data: [n], tokens: 10)
+    }
+}

@@ -1,0 +1,1 @@
+{ "entry": "first_big", "inputs": { "xs": [3, 9, 12, 40], "limit": 10 }, "model": { "provider": "script", "responses": [] }, "expect": { "result": 12 } }

@@ -1,0 +1,1 @@
+{ "entry": "shortlist", "model": { "provider": "script", "responses": [ { "output": ["red", "green", "blue"], "output_tokens": 5 } ] }, "expect": { "failure": "validation", "message_contains": "at most 2 items" } }

@@ -1,0 +1,70 @@
+// Runtime behaviour of arithmetic, logic, text, records and lists.
+type Pair { greeting: Text, length: Int, formal: Bool }
+type Line { sku: Text, qty: Int }
+
+fn money_math(a: Money, b: Money, k: Int) -> Money {
+    return (a + b) * k - a
+}
+
+fn money_sub(a: Money, b: Money) -> Money {
+    return a - b
+}
+
+fn int_math(a: Int, b: Int) -> Int {
+    return a * b
+}
+
+fn int_div(a: Int, b: Int) -> Int {
+    return a / b
+}
+
+fn safe_div(a: Int, b: Int) -> Bool {
+    let r = try int_div(a, b)
+    return r.ok
+}
+
+fn explode() -> Bool {
+    return 1 / 0 == 0
+}
+
+fn guarded(n: Int) -> Bool {
+    return n > 0 and explode()
+}
+
+fn text(name: Text) -> Pair {
+    let g = "Hello, " + name + "!"
+    return Pair { formal: starts_with(name, "Dr ") or ends_with(name, " Esq"), length: len(name), greeting: g }
+}
+
+fn first_big(xs: List<Int, 10>, limit: Int) -> Int {
+    for x in xs {
+        if x > limit {
+            return x
+        }
+    }
+    return -1
+}
+
+fn count_until(xs: List<Int, 10>, stop: Int) -> Int {
+    let seen: List<Int, 10> = []
+    for x in xs {
+        if x == stop {
+            break
+        }
+    }
+    return len(seen) + len(xs)
+}
+
+fn pick(xs: List<Text, 5>, i: Int) -> Text {
+    return xs[i]
+}
+
+fn ship(lines: List<Line, 5>, out: cap warehouse.dispatch) -> Done {
+    let r = out.dispatch(Line { qty: lines[0].qty * 2, sku: lines[0].sku + "-X" })
+    return done(evidence: [r])
+}
+
+fn shortlist() -> List<Text, 2> {
+    let xs: List<Text, 2> = validate propose(List<Text, 2>, instruct: "Name two colours.", tokens: 100)
+    return xs
+}

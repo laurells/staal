@@ -1,0 +1,6 @@
+// expect: E001
+type P { a: Int }
+fn f() -> P {
+    let n = propose(Int, instruct: "Pick.")
+    return P { a: n }
+}

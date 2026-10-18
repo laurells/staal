@@ -1,0 +1,5 @@
+// expect: E101
+type P { a: Int, b: Text }
+fn f() -> P {
+    return P { a: 1 }
+}

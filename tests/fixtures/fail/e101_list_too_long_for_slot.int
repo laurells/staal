@@ -1,0 +1,6 @@
+// expect: E101
+fn short(xs: List<Text, 3>) {
+}
+fn f(xs: List<Text, 5>) {
+    short(xs)
+}

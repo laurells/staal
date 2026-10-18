@@ -1,0 +1,7 @@
+// expect: E901
+// In an `if` head, `{` opens the block; a record literal there needs parentheses.
+type P { a: Int }
+fn f() {
+    if P { a: 1 } == P { a: 2 } {
+    }
+}

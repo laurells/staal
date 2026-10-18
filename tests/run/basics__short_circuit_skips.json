@@ -1,0 +1,1 @@
+{ "entry": "guarded", "inputs": { "n": 0 }, "model": { "provider": "script", "responses": [] }, "expect": { "result": false } }

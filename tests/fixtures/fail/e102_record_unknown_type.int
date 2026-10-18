@@ -1,0 +1,4 @@
+// expect: E102
+fn f() {
+    let x = Ghost { a: 1 }
+}

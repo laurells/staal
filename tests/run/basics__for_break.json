@@ -1,0 +1,1 @@
+{ "entry": "count_until", "inputs": { "xs": [1, 2, 3], "stop": 2 }, "model": { "provider": "script", "responses": [] }, "expect": { "result": 3 } }

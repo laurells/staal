@@ -22,6 +22,9 @@ pub enum Value {
     Bool(bool),
     Money(Money),
     Record { ty: String, fields: Vec<(String, Value)> },
+    /// A list; its length never exceeds the maximum in its type (checked where lists
+    /// enter from outside, and fixed for literals).
+    List(Vec<Value>),
     /// Raw model output, not yet checked against `ty`.
     Proposed { ty: Ty, raw: Json },
     Receipt(Receipt),
@@ -52,6 +55,19 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize) -
     match ty {
         Ty::Proposed(inner) => Ok(Value::Proposed { ty: (**inner).clone(), raw: json.clone() }),
         Ty::Cap { .. } => Err(format!("{path}: a capability cannot be supplied as data")),
+        Ty::List(inner, max) => {
+            let items = json.as_array().ok_or_else(|| expected("a list"))?;
+            // Checked before looking at any element: a program's budget is computed
+            // from this maximum, so a longer list must never get in.
+            if items.len() as u64 > *max {
+                return Err(format!("{path}: at most {max} items allowed, found {}", items.len()));
+            }
+            let mut out = Vec::with_capacity(items.len());
+            for (i, item) in items.iter().enumerate() {
+                out.push(from_json_at(inner, item, types, &format!("{path}[{i}]"), depth + 1)?);
+            }
+            Ok(Value::List(out))
+        }
         Ty::Named(n) => match n.as_str() {
             "Text" => json.as_str().map(|s| Value::Text(s.to_string())).ok_or_else(|| expected("a string")),
             "Bool" => json.as_bool().map(Value::Bool).ok_or_else(|| expected("true or false")),
@@ -137,6 +153,7 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
             }
             Json::Object(obj)
         }
+        Value::List(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
         Value::Proposed { raw, .. } => raw.clone(),
         Value::Receipt(r) => json!({ "receipt": r.id, "capability": r.capability, "method": r.method }),
         Value::Outcome { ok, error, .. } => json!({ "ok": ok, "error": error }),
@@ -158,6 +175,7 @@ fn schema_at(ty: &Ty, types: &Types, seen: &mut HashSet<String>) -> Json {
     match ty {
         Ty::Proposed(inner) => schema_at(inner, types, seen),
         Ty::Cap { .. } => json!({}),
+        Ty::List(inner, max) => json!({ "type": "array", "items": schema_at(inner, types, seen), "maxItems": max }),
         Ty::Named(n) => match n.as_str() {
             "Text" => json!({ "type": "string" }),
             "Int" => json!({ "type": "integer" }),
@@ -270,6 +288,18 @@ mod tests {
         assert!(to_json(&Value::Cap(0), true).is_err());
         let rec = Value::Record { ty: "X".into(), fields: vec![("c".into(), Value::Cap(1))] };
         assert!(to_json(&rec, true).is_err());
+    }
+
+    #[test]
+    fn lists_are_bounded_at_the_boundary() {
+        let t = types();
+        let ty = Ty::List(Box::new(Ty::Named("Int".into())), 3);
+        assert_eq!(from_json(&ty, &json!([1, 2, 3]), &t, "xs").unwrap(), Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]));
+        assert_eq!(from_json(&ty, &json!([]), &t, "xs").unwrap(), Value::List(vec![]));
+        assert!(from_json(&ty, &json!([1, 2, 3, 4]), &t, "xs").unwrap_err().contains("at most 3"));
+        assert!(from_json(&ty, &json!([1, "two"]), &t, "xs").unwrap_err().contains("xs[1]"));
+        assert!(from_json(&ty, &json!({ "0": 1 }), &t, "xs").is_err());
+        assert_eq!(schema(&ty, &t)["maxItems"], json!(3));
     }
 
     #[test]

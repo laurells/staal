@@ -1,0 +1,1 @@
+{ "entry": "money_math", "inputs": { "a": {"amount": "10.05", "currency": "USD"}, "b": {"amount": "0.10", "currency": "USD"}, "k": 3 }, "model": { "provider": "script", "responses": [] }, "expect": { "result": {"amount": "20.40", "currency": "USD"} } }

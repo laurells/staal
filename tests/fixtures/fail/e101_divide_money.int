@@ -1,0 +1,4 @@
+// expect: E101
+fn f(m: Money) -> Money {
+    return m / 2
+}

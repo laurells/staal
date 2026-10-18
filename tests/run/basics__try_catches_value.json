@@ -1,0 +1,1 @@
+{ "entry": "safe_div", "inputs": { "a": 1, "b": 0 }, "model": { "provider": "script", "responses": [] }, "expect": { "result": false, "events": ["caught", "run_end"] } }

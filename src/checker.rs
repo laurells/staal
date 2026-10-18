@@ -15,6 +15,9 @@
 //   E103  `break` outside a loop
 //   E104  unknown field, or field access on a value that has no fields
 //   E105  a function with a return type can finish without returning
+//
+// Lists are bounded (`List<T, N>`), so every `for` loop is bounded: its maximum
+// iteration count is recorded for the cost analysis (see `check_with_bounds`).
 //   E008  `done(evidence: [...])` cites something that is not proof of this function's work:
 //         not a Receipt / checked Outcome / Done, an unchecked Outcome, a parameter,
 //         or no evidence at all
@@ -63,6 +66,8 @@ struct Ctx<'a> {
     model_fns: HashSet<String>,
     /// Parameter names of the function being checked.
     params: HashSet<String>,
+    /// The maximum iteration count of each `for` loop, by position, for the cost analysis.
+    for_bounds: HashMap<Pos, u64>,
     /// Functions that may fail: an action, or a call to a failing function, not under `try`.
     fail_fns: HashSet<String>,
     /// Functions that may never finish: `loop` or recursion, directly or through any call.
@@ -122,15 +127,28 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
                 }
             })
             .collect(),
-        Expr::Validate(inner, _) | Expr::Try(inner, _) => inexact(reveals(inner, env)),
-        Expr::Cmp { left, right, .. } => {
+        // An element of a list is part of the list: it reveals what the list does, exactly,
+        // so `xs[i].email` narrows to the email path. Which element was picked reveals `i`.
+        Expr::Index { base, index, .. } => {
+            let mut v = reveals(base, env);
+            v.extend(inexact(reveals(index, env)));
+            v
+        }
+        Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => {
+            inexact(reveals(inner, env))
+        }
+        Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
             let mut v = reveals(left, env);
             v.extend(reveals(right, env));
             inexact(v)
         }
-        Expr::Call { args, .. } | Expr::Action { args, .. } | Expr::Done { evidence: args, .. } => {
-            inexact(args.iter().flat_map(|a| reveals(a, env)).collect())
-        }
+        Expr::Call { args, .. }
+        | Expr::Action { args, .. }
+        | Expr::Done { evidence: args, .. }
+        | Expr::Builtin { args, .. }
+        | Expr::List(args, _) => inexact(args.iter().flat_map(|a| reveals(a, env)).collect()),
+        // Conservative: every field of a record literal counts as revealing all of them.
+        Expr::Record { fields, .. } => inexact(fields.iter().flat_map(|(_, v)| reveals(v, env)).collect()),
         Expr::Propose { instruct, data, .. } => {
             let mut v: Vec<Src> = data.iter().flat_map(|d| reveals(d, env)).collect();
             if let Some(i) = instruct {
@@ -153,6 +171,17 @@ fn expr_text(e: &Expr) -> String {
         Expr::Propose { .. } => "propose(...)".into(),
         Expr::Done { .. } => "done(...)".into(),
         Expr::Cmp { left, op, right, .. } => format!("{} {op} {}", expr_text(left), expr_text(right)),
+        Expr::Arith { left, op, right, .. } => format!("{} {op} {}", expr_text(left), expr_text(right)),
+        Expr::Logic { left, op, right, .. } => {
+            let word = if *op == LogicOp::And { "and" } else { "or" };
+            format!("{} {word} {}", expr_text(left), expr_text(right))
+        }
+        Expr::Neg(inner, _) => format!("-{}", expr_text(inner)),
+        Expr::Not(inner, _) => format!("not {}", expr_text(inner)),
+        Expr::Builtin { f, .. } => format!("{}(...)", f.name()),
+        Expr::Record { ty, .. } => format!("{ty} {{...}}"),
+        Expr::List(..) => "[...]".into(),
+        Expr::Index { base, .. } => format!("{}[...]", expr_text(base)),
         Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => "literal".into(),
     }
 }
@@ -172,6 +201,12 @@ fn named(n: &str) -> Ty {
 }
 
 pub fn check(prog: &Program) -> Vec<Diagnostic> {
+    check_with_bounds(prog).0
+}
+
+/// Checks a program. Also returns the maximum iteration count of every `for` loop,
+/// keyed by the loop's position, which the cost analysis needs.
+pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>) {
     let mut ctx = Ctx {
         known: ["Text", "Int", "Bool", "Money", "Unit", "Receipt"].iter().map(|s| s.to_string()).collect(),
         fields: HashMap::new(),
@@ -183,6 +218,7 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
         fail_fns: HashSet::new(),
         diverge_fns: HashSet::new(),
         params: HashSet::new(),
+        for_bounds: HashMap::new(),
     };
     (ctx.fail_fns, ctx.diverge_fns) = partial_fns(prog);
     // Built-in result of `try`.
@@ -200,21 +236,23 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
             if !seen.insert(fname.as_str()) {
                 ctx.err("E101", t.pos, format!("type '{}' declares field '{fname}' twice", t.name));
             }
-            if let Ty::Cap { .. } = fty {
-                ctx.err(
-                    "E101",
-                    t.pos,
-                    format!(
-                        "field '{}.{fname}' cannot be a capability; pass capabilities as parameters so they \
-                         cannot travel inside data",
-                        t.name
-                    ),
-                );
+            if let Some(bad) = proof_or_authority(fty) {
+                let why = if bad == "capability" {
+                    "pass capabilities as parameters so they cannot travel inside data"
+                } else {
+                    "receipts, outcomes and Done values are proof made by the runtime; they flow directly \
+                     and never travel inside data, where they could be copied or forged"
+                };
+                ctx.err("E101", t.pos, format!("field '{}.{fname}' cannot hold a {bad}: {why}", t.name));
             }
         }
         ctx.fields.insert(t.name.clone(), t.fields.clone());
     }
     for f in &prog.fns {
+        if Builtin::from_name(&f.name).is_some() {
+            ctx.err("E101", f.pos, format!("'{}' is a built-in function and cannot be redefined", f.name));
+            continue;
+        }
         if ctx.sigs.contains_key(f.name.as_str()) {
             ctx.err("E101", f.pos, format!("function '{}' is defined twice", f.name));
             continue;
@@ -236,54 +274,40 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
     for f in &prog.fns {
         check_fn(&mut ctx, f);
     }
-    ctx.diags
+    (ctx.diags, ctx.for_bounds)
+}
+
+/// Calls `f` on every expression in `body`, nested blocks included, outermost first.
+fn walk_block<'a>(body: &'a [Stmt], f: &mut impl FnMut(&'a Expr)) {
+    for s in body {
+        for e in s.exprs() {
+            walk_expr(e, f);
+        }
+        for b in s.blocks() {
+            walk_block(b, f);
+        }
+    }
+}
+
+fn walk_expr<'a>(e: &'a Expr, f: &mut impl FnMut(&'a Expr)) {
+    f(e);
+    for c in e.children() {
+        walk_expr(c, f);
+    }
 }
 
 /// Names of functions that can make a model call, directly or through calls.
 fn model_calling_fns(prog: &Program) -> HashSet<String> {
-    fn scan_expr(e: &Expr, direct: &mut bool, calls: &mut HashSet<String>) {
-        match e {
-            Expr::Propose { instruct, data, .. } => {
-                *direct = true;
-                for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
-                    scan_expr(x, direct, calls);
-                }
-            }
-            Expr::Call { name, args, .. } => {
-                calls.insert(name.clone());
-                args.iter().for_each(|a| scan_expr(a, direct, calls));
-            }
-            Expr::Action { args, .. } | Expr::Done { evidence: args, .. } => {
-                args.iter().for_each(|a| scan_expr(a, direct, calls))
-            }
-            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } | Expr::Try(inner, _) => {
-                scan_expr(inner, direct, calls)
-            }
-            Expr::Cmp { left, right, .. } => {
-                scan_expr(left, direct, calls);
-                scan_expr(right, direct, calls);
-            }
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => {}
-        }
-    }
-    fn scan_block(body: &[Stmt], direct: &mut bool, calls: &mut HashSet<String>) {
-        for s in body {
-            match s {
-                Stmt::Let { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => scan_expr(e, direct, calls),
-                Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => scan_block(body, direct, calls),
-                Stmt::If { cond, then, els, .. } => {
-                    scan_expr(cond, direct, calls);
-                    scan_block(then, direct, calls);
-                    scan_block(els, direct, calls);
-                }
-                Stmt::Return(None, _) | Stmt::Break(_) => {}
-            }
-        }
-    }
     let mut info = Vec::new();
     for f in &prog.fns {
         let (mut direct, mut calls) = (false, HashSet::new());
-        scan_block(&f.body, &mut direct, &mut calls);
+        walk_block(&f.body, &mut |e| match e {
+            Expr::Propose { .. } => direct = true,
+            Expr::Call { name, .. } => {
+                calls.insert(name.clone());
+            }
+            _ => {}
+        });
         info.push((f.name.clone(), direct, calls));
     }
     let mut out: HashSet<String> = info.iter().filter(|(_, d, _)| *d).map(|(n, _, _)| n.clone()).collect();
@@ -300,9 +324,17 @@ fn model_calling_fns(prog: &Program) -> HashSet<String> {
     }
 }
 
-/// Per function: whether it may fail (an action not under `try`, or a call to a failing
-/// function not under `try`) and whether it may never finish (`loop`, recursion, or a
-/// call to such a function; `try` cannot catch that). Returns (may_fail, may_diverge).
+/// Whether evaluating `e` itself can fail, apart from what its children do:
+/// arithmetic (overflow, division by zero, money in different currencies or below
+/// zero) and indexing (out of range). Actions and calls are judged separately.
+fn expr_can_fail_itself(e: &Expr) -> bool {
+    matches!(e, Expr::Arith { .. } | Expr::Neg(..) | Expr::Index { .. })
+}
+
+/// Per function: whether it may fail (an action or a failing call not directly under
+/// `try`, or arithmetic or indexing anywhere) and whether it may never finish (`loop`,
+/// recursion, or a call to such a function; `try` cannot catch that). A `for` always
+/// finishes: its list is bounded. Returns (may_fail, may_diverge).
 fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
     #[derive(Default)]
     struct Info {
@@ -311,52 +343,35 @@ fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
         calls_untried: HashSet<String>,
         calls_tried: HashSet<String>,
     }
+    /// `tried`: `e` sits directly under `try`.
     fn scan_expr(e: &Expr, tried: bool, i: &mut Info) {
         match e {
-            Expr::Action { args, .. } => {
-                if !tried {
-                    i.fails = true;
-                }
-                args.iter().for_each(|a| scan_expr(a, false, i));
-            }
-            Expr::Call { name, args, .. } => {
+            Expr::Action { .. } if !tried => i.fails = true,
+            Expr::Call { name, .. } => {
                 if tried {
                     i.calls_tried.insert(name.clone());
                 } else {
                     i.calls_untried.insert(name.clone());
                 }
-                args.iter().for_each(|a| scan_expr(a, false, i));
             }
-            Expr::Try(inner, _) => scan_expr(inner, true, i),
-            Expr::Done { evidence, .. } => evidence.iter().for_each(|a| scan_expr(a, false, i)),
-            Expr::Propose { instruct, data, .. } => {
-                for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
-                    scan_expr(x, false, i);
-                }
-            }
-            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => scan_expr(inner, false, i),
-            Expr::Cmp { left, right, .. } => {
-                scan_expr(left, false, i);
-                scan_expr(right, false, i);
-            }
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => {}
+            _ if expr_can_fail_itself(e) => i.fails = true,
+            _ => {}
+        }
+        let under_try = matches!(e, Expr::Try(..));
+        for c in e.children() {
+            scan_expr(c, under_try, i);
         }
     }
     fn scan_block(body: &[Stmt], i: &mut Info) {
         for s in body {
-            match s {
-                Stmt::Let { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => scan_expr(e, false, i),
-                Stmt::Loop { body, .. } => {
-                    i.diverges = true; // `loop` may never end
-                    scan_block(body, i);
-                }
-                Stmt::Repeat { body, .. } => scan_block(body, i),
-                Stmt::If { cond, then, els, .. } => {
-                    scan_expr(cond, false, i);
-                    scan_block(then, i);
-                    scan_block(els, i);
-                }
-                Stmt::Return(None, _) | Stmt::Break(_) => {}
+            if let Stmt::Loop { .. } = s {
+                i.diverges = true; // `loop` may never end
+            }
+            for e in s.exprs() {
+                scan_expr(e, false, i);
+            }
+            for b in s.blocks() {
+                scan_block(b, i);
             }
         }
     }
@@ -407,15 +422,22 @@ fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
 fn op_is_partial(ctx: &Ctx, e: &Expr, tried: bool) -> bool {
     match e {
         Expr::Action { .. } => !tried,
-        Expr::Call { name, .. } => {
-            ctx.diverge_fns.contains(name) || (!tried && ctx.fail_fns.contains(name))
-        }
-        _ => false,
+        Expr::Call { name, .. } => ctx.diverge_fns.contains(name) || (!tried && ctx.fail_fns.contains(name)),
+        _ => expr_can_fail_itself(e),
     }
 }
 
-/// Everything the partial operations in `e` take as arguments. Whether execution
-/// continues past them can depend on those arguments.
+/// Whether anything inside `e` (itself included) is partial.
+fn expr_has_partial(ctx: &Ctx, e: &Expr, tried: bool) -> bool {
+    if op_is_partial(ctx, e, tried) {
+        return true;
+    }
+    let under_try = matches!(e, Expr::Try(..));
+    e.children().into_iter().any(|c| expr_has_partial(ctx, c, under_try))
+}
+
+/// Everything the partial operations in `e` depend on. Whether execution continues
+/// past them can depend on those values.
 fn partial_taint(ctx: &Ctx, e: &Expr, env: &Env) -> Vec<Src> {
     let mut out = Vec::new();
     collect_partial(ctx, e, env, false, &mut out);
@@ -423,62 +445,32 @@ fn partial_taint(ctx: &Ctx, e: &Expr, env: &Env) -> Vec<Src> {
 }
 
 fn collect_partial(ctx: &Ctx, e: &Expr, env: &Env, tried: bool, out: &mut Vec<Src>) {
-    match e {
-        Expr::Action { args, .. } | Expr::Call { args, .. } => {
-            let partial = op_is_partial(ctx, e, tried);
-            for a in args {
-                if partial {
-                    add_srcs(out, reveals(a, env));
-                }
-                collect_partial(ctx, a, env, false, out);
-            }
+    if op_is_partial(ctx, e, tried) {
+        // Whether it fails can depend on every value it is given.
+        for c in e.children() {
+            add_srcs(out, reveals(c, env));
         }
-        Expr::Try(inner, _) => collect_partial(ctx, inner, env, true, out),
-        Expr::Done { evidence, .. } => {
-            for a in evidence {
-                collect_partial(ctx, a, env, false, out);
-            }
+    }
+    if let Expr::Logic { left, right, .. } = e {
+        // The right side runs only for some values of the left side: if it can stop
+        // the run, then whether the run continues depends on the left side too.
+        if expr_has_partial(ctx, right, false) {
+            add_srcs(out, reveals(left, env));
         }
-        Expr::Propose { instruct, data, .. } => {
-            for x in instruct.iter().map(|b| b.as_ref()).chain(data.iter()) {
-                collect_partial(ctx, x, env, false, out);
-            }
-        }
-        Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => collect_partial(ctx, inner, env, false, out),
-        Expr::Cmp { left, right, .. } => {
-            collect_partial(ctx, left, env, false, out);
-            collect_partial(ctx, right, env, false, out);
-        }
-        Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => {}
+    }
+    let under_try = matches!(e, Expr::Try(..));
+    for c in e.children() {
+        collect_partial(ctx, c, env, under_try, out);
     }
 }
 
 /// Does this block contain anything that can stop execution early: `return`, `break`,
 /// `loop`, or a partial operation?
 fn may_stop(ctx: &Ctx, body: &[Stmt]) -> bool {
-    fn expr_partial(ctx: &Ctx, e: &Expr, tried: bool) -> bool {
-        if op_is_partial(ctx, e, tried) {
-            return true;
-        }
-        match e {
-            Expr::Action { args, .. } | Expr::Call { args, .. } => args.iter().any(|a| expr_partial(ctx, a, false)),
-            Expr::Try(inner, _) => expr_partial(ctx, inner, true),
-            Expr::Done { evidence, .. } => evidence.iter().any(|a| expr_partial(ctx, a, false)),
-            Expr::Propose { instruct, data, .. } => {
-                instruct.iter().any(|i| expr_partial(ctx, i, false)) || data.iter().any(|d| expr_partial(ctx, d, false))
-            }
-            Expr::Validate(inner, _) | Expr::Field { base: inner, .. } => expr_partial(ctx, inner, false),
-            Expr::Cmp { left, right, .. } => expr_partial(ctx, left, false) || expr_partial(ctx, right, false),
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => false,
-        }
-    }
-    body.iter().any(|s| match s {
-        Stmt::Return(..) | Stmt::Break(_) | Stmt::Loop { .. } => true,
-        Stmt::Let { value: e, .. } | Stmt::Expr(e) => expr_partial(ctx, e, false),
-        Stmt::Repeat { body, .. } => may_stop(ctx, body),
-        Stmt::If { cond, then, els, .. } => {
-            expr_partial(ctx, cond, false) || may_stop(ctx, then) || may_stop(ctx, els)
-        }
+    body.iter().any(|s| {
+        matches!(s, Stmt::Return(..) | Stmt::Break(_) | Stmt::Loop { .. })
+            || s.exprs().into_iter().any(|e| expr_has_partial(ctx, e, false))
+            || s.blocks().into_iter().any(|b| may_stop(ctx, b))
     })
 }
 
@@ -494,8 +486,27 @@ fn add_srcs(into: &mut Vec<Src>, from: Vec<Src>) {
 fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
     match ty {
         Ty::Named(n) if !ctx.known.contains(n) => ctx.err("E102", pos, format!("unknown type '{n}'")),
+        Ty::Named(_) | Ty::Cap { .. } => {}
         Ty::Proposed(inner) => check_ty_known(ctx, inner, pos),
-        _ => {}
+        Ty::List(inner, _) => {
+            if let Some(bad) = proof_or_authority(inner) {
+                ctx.err("E101", pos, format!("a list cannot hold a {bad}"));
+            }
+            check_ty_known(ctx, inner, pos);
+        }
+    }
+}
+
+/// A capability or runtime-made proof (Receipt, Outcome, Done) anywhere in `ty`,
+/// through lists and Proposed. Such values are never stored inside data.
+fn proof_or_authority(ty: &Ty) -> Option<&'static str> {
+    match ty {
+        Ty::Cap { .. } => Some("capability"),
+        Ty::Named(n) if n == "Receipt" => Some("Receipt"),
+        Ty::Named(n) if n == "Outcome" => Some("Outcome"),
+        Ty::Named(n) if n == "Done" => Some("Done"),
+        Ty::Named(_) => None,
+        Ty::Proposed(inner) | Ty::List(inner, _) => proof_or_authority(inner),
     }
 }
 
@@ -503,6 +514,19 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
 /// Returns the error code and message if not.
 fn assignable(from: &Ty, to: &Ty) -> Result<(), (&'static str, String)> {
     match (from, to) {
+        (Ty::List(fe, fmax), Ty::List(te, tmax)) => {
+            assignable(fe, te)?;
+            if fe != te {
+                return Err(("E101", format!("expected {to}, found {from}")));
+            }
+            if fmax > tmax {
+                return Err((
+                    "E101",
+                    format!("a list of up to {fmax} cannot go where at most {tmax} are allowed ({from} into {to})"),
+                ));
+            }
+            Ok(())
+        }
         (Ty::Proposed(_), t) if !matches!(t, Ty::Proposed(_)) => {
             Err(("E001", format!("unvalidated {from} used where {to} is required; use `validate` first")))
         }
@@ -682,6 +706,15 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
         }
         match stmt {
             Stmt::Let { name, ty, value, pos } => {
+                // `[]` has no element type of its own: it takes the declared list type.
+                if let (Expr::List(items, _), Some(decl @ Ty::List(..))) = (value, ty)
+                    && items.is_empty()
+                {
+                    check_ty_known(ctx, decl, *pos);
+                    let b = Binding { ty: decl.clone(), trusted: true, reveals: Vec::new(), proven_ok: false, holds_evidence: false };
+                    env.insert(name.clone(), b);
+                    continue;
+                }
                 let Some((vty, trusted)) = type_of(ctx, value, &env) else { continue };
                 let bound = match ty {
                     Some(decl) => {
@@ -734,27 +767,39 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 }
             }
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => {
-                // A `break` taken in one iteration decides whether later iterations run,
-                // so the body is checked under its own exit taint, repeated until stable.
-                // Diagnostics from the trial passes are discarded.
-                let outer_pc = ctx.pc.clone();
-                let mut taint: Vec<Src> = Vec::new();
-                for _ in 0..8 {
-                    let mark = ctx.diags.len();
-                    ctx.pc = outer_pc.clone();
-                    add_srcs(&mut ctx.pc, taint.clone());
-                    let t = check_block(ctx, f, ret, body, env.clone(), true);
-                    ctx.diags.truncate(mark);
-                    let before = taint.len();
-                    add_srcs(&mut taint, t);
-                    if taint.len() == before {
-                        break;
-                    }
+                let taint = check_loop(ctx, f, ret, body, env.clone(), &[]);
+                ctx.pc = saved_pc.clone();
+                add_srcs(&mut ctx.pc, exit_taint.clone());
+                add_srcs(&mut exit_taint, taint.clone());
+                add_srcs(&mut ctx.pc, taint);
+            }
+            Stmt::For { var, list, body, pos } => {
+                let Some((lty, ltrusted)) = type_of(ctx, list, &env) else { continue };
+                let Ty::List(el, max) = &lty else {
+                    let code = if matches!(lty, Ty::Proposed(_)) { "E001" } else { "E101" };
+                    ctx.err(code, list.pos(), format!("`for` needs a list, found {lty}"));
+                    continue;
+                };
+                ctx.for_bounds.insert(*pos, *max);
+                // Each element is part of the list: it reveals what the list does, exactly.
+                let list_srcs = reveals(list, &env);
+                let mut body_env = env.clone();
+                let b = Binding {
+                    ty: (**el).clone(),
+                    trusted: ltrusted,
+                    reveals: list_srcs.clone(),
+                    proven_ok: false,
+                    holds_evidence: false,
+                };
+                body_env.insert(var.clone(), b);
+                // How many times the body runs reveals the list's length, so everything the
+                // body does depends on the list, like the body of an `if` on its condition.
+                let mut count = Vec::new();
+                add_srcs(&mut count, list_srcs);
+                let mut taint = check_loop(ctx, f, ret, body, body_env, &count);
+                if may_stop(ctx, body) {
+                    add_srcs(&mut taint, count);
                 }
-                ctx.pc = outer_pc;
-                add_srcs(&mut ctx.pc, taint.clone());
-                let t = check_block(ctx, f, ret, body, env.clone(), true);
-                add_srcs(&mut taint, t);
                 ctx.pc = saved_pc.clone();
                 add_srcs(&mut ctx.pc, exit_taint.clone());
                 add_srcs(&mut exit_taint, taint.clone());
@@ -835,6 +880,36 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
     }
     ctx.pc = saved_pc;
     exit_taint
+}
+
+/// Checks a loop body (`repeat`, `loop`, `for`) under `extra` in addition to the
+/// current pc. A `break` taken in one iteration decides whether later iterations run,
+/// so the body is checked again under its own exit taint until that is stable; the
+/// diagnostics of the trial passes are discarded. Exit taint does not depend on the pc
+/// (it is the inputs of partial operations and the conditions of stopping branches),
+/// so this settles after one extra pass; the bound of 8 is a safeguard. Returns the
+/// body's exit taint. Leaves `ctx.pc` for the caller to set.
+fn check_loop(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], env: Env, extra: &[Src]) -> Vec<Src> {
+    let mut base = ctx.pc.clone();
+    add_srcs(&mut base, extra.to_vec());
+    let mut taint: Vec<Src> = Vec::new();
+    for _ in 0..8 {
+        let mark = ctx.diags.len();
+        ctx.pc = base.clone();
+        add_srcs(&mut ctx.pc, taint.clone());
+        let t = check_block(ctx, f, ret, body, env.clone(), true);
+        ctx.diags.truncate(mark);
+        let before = taint.len();
+        add_srcs(&mut taint, t);
+        if taint.len() == before {
+            break;
+        }
+    }
+    ctx.pc = base;
+    add_srcs(&mut ctx.pc, taint.clone());
+    let t = check_block(ctx, f, ret, body, env, true);
+    add_srcs(&mut taint, t);
+    taint
 }
 
 /// E007: no input of a model call may reveal a path the call is blind to, either
@@ -960,7 +1035,7 @@ fn check_call_blind(ctx: &mut Ctx, name: &str, args: &[Expr], params: &[(Ty, boo
 fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<String> {
     match ty {
         Ty::Cap { .. } => Some("capability".into()),
-        Ty::Proposed(inner) => runtime_only_inside(ctx, inner, seen),
+        Ty::Proposed(inner) | Ty::List(inner, _) => runtime_only_inside(ctx, inner, seen),
         Ty::Named(n) if n == "Receipt" || n == "Outcome" || n == "Done" => Some(n.clone()),
         Ty::Named(n) => {
             if !seen.insert(n.clone()) {
@@ -1058,6 +1133,221 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             // The outcome comes from the outside world, so it is untrusted.
             Some((named("Outcome"), false))
         }
+        Expr::Arith { op, left, right, pos } => {
+            let l = type_of(ctx, left, env);
+            let r = type_of(ctx, right, env);
+            let ((lt, ltr), (rt, rtr)) = (l?, r?);
+            for t in [&lt, &rt] {
+                if let Ty::Proposed(_) = t {
+                    ctx.err("E001", *pos, format!("unvalidated {t} used with `{op}`; use `validate` first"));
+                    return None;
+                }
+            }
+            let (int, money, text) = (named("Int"), named("Money"), named("Text"));
+            let result = if lt == int && rt == int {
+                int
+            } else if (lt == money && rt == money && matches!(op, ArithOp::Add | ArithOp::Sub))
+                || (*op == ArithOp::Mul && ((lt == money && rt == int) || (lt == int && rt == money)))
+            {
+                money
+            } else if *op == ArithOp::Div && lt == money && rt == int {
+                ctx.err(
+                    "E101",
+                    *pos,
+                    "money cannot be divided: dividing needs a rounding rule, and choosing one silently loses \
+                     or invents cents; compute in minor units with Int instead"
+                        .into(),
+                );
+                return None;
+            } else if *op == ArithOp::Add && lt == text && rt == text {
+                text
+            } else {
+                ctx.err("E101", *pos, format!("cannot apply `{op}` to {lt} and {rt}"));
+                return None;
+            };
+            Some((result, ltr && rtr))
+        }
+        Expr::Neg(inner, pos) => {
+            let (t, tr) = type_of(ctx, inner, env)?;
+            match &t {
+                Ty::Named(n) if n == "Int" => Some((t, tr)),
+                Ty::Proposed(_) => {
+                    ctx.err("E001", *pos, format!("unvalidated {t} negated; use `validate` first"));
+                    None
+                }
+                Ty::Named(n) if n == "Money" => {
+                    ctx.err("E101", *pos, "money cannot be negative".into());
+                    None
+                }
+                _ => {
+                    ctx.err("E101", *pos, format!("`-` needs an Int, found {t}"));
+                    None
+                }
+            }
+        }
+        Expr::Logic { op, left, right, pos } => {
+            let l = type_of(ctx, left, env);
+            // The right side runs only for some values of the left side, so everything it
+            // does is decided by the left side, as the body of an `if` is by its condition.
+            let here = ctx.pc.clone();
+            add_srcs(&mut ctx.pc, reveals(left, env));
+            let r = type_of(ctx, right, env);
+            ctx.pc = here;
+            let ((lt, ltr), (rt, rtr)) = (l?, r?);
+            let word = if *op == LogicOp::And { "and" } else { "or" };
+            for t in [&lt, &rt] {
+                if let Ty::Proposed(_) = t {
+                    ctx.err("E001", *pos, format!("unvalidated {t} used with `{word}`; use `validate` first"));
+                    return None;
+                }
+                if *t != named("Bool") {
+                    ctx.err("E101", *pos, format!("`{word}` needs Bool on both sides, found {t}"));
+                    return None;
+                }
+            }
+            Some((named("Bool"), ltr && rtr))
+        }
+        Expr::Not(inner, pos) => {
+            let (t, tr) = type_of(ctx, inner, env)?;
+            if let Ty::Proposed(_) = t {
+                ctx.err("E001", *pos, format!("unvalidated {t} used with `not`; use `validate` first"));
+                return None;
+            }
+            if t != named("Bool") {
+                ctx.err("E101", *pos, format!("`not` needs a Bool, found {t}"));
+                return None;
+            }
+            Some((t, tr))
+        }
+        Expr::Builtin { f, args, pos } => {
+            let tys: Vec<Option<(Ty, bool)>> = args.iter().map(|a| type_of(ctx, a, env)).collect();
+            let arity = if *f == Builtin::Len { 1 } else { 2 };
+            if args.len() != arity {
+                ctx.err("E101", *pos, format!("`{}` takes {arity} argument(s) but {} were given", f.name(), args.len()));
+                return None;
+            }
+            let tys: Vec<(Ty, bool)> = tys.into_iter().collect::<Option<Vec<_>>>()?;
+            for (t, _) in &tys {
+                if let Ty::Proposed(_) = t {
+                    ctx.err("E001", *pos, format!("unvalidated {t} given to `{}`; use `validate` first", f.name()));
+                    return None;
+                }
+            }
+            let trusted = tys.iter().all(|(_, tr)| *tr);
+            let text = named("Text");
+            let ok = match f {
+                Builtin::Len => matches!(&tys[0].0, Ty::List(..)) || tys[0].0 == text,
+                Builtin::Contains => match (&tys[0].0, &tys[1].0) {
+                    (a, b) if *a == text && *b == text => true,
+                    (Ty::List(el, _), b) => **el == *b,
+                    _ => false,
+                },
+                Builtin::StartsWith | Builtin::EndsWith => tys[0].0 == text && tys[1].0 == text,
+            };
+            if !ok {
+                let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();
+                let want = match f {
+                    Builtin::Len => "Text or a list",
+                    Builtin::Contains => "(Text, Text) or (a list, a value of its element type)",
+                    Builtin::StartsWith | Builtin::EndsWith => "(Text, Text)",
+                };
+                ctx.err("E101", *pos, format!("`{}` needs {want}, found ({})", f.name(), found.join(", ")));
+                return None;
+            }
+            let result = if *f == Builtin::Len { named("Int") } else { named("Bool") };
+            Some((result, trusted))
+        }
+        Expr::Record { ty, fields, pos } => {
+            // Outcome is a built-in record made only by `try`; other built-ins have no fields.
+            let decl = match ctx.fields.get(ty) {
+                Some(d) if ty != "Outcome" => d.clone(),
+                _ => {
+                    if ctx.known.contains(ty) {
+                        ctx.err("E101", *pos, format!("a {ty} cannot be built in code; only the runtime makes one"));
+                    } else {
+                        ctx.err("E102", *pos, format!("unknown type '{ty}'"));
+                    }
+                    return None;
+                }
+            };
+            let mut trusted = true;
+            let mut seen = HashSet::new();
+            let mut ok = true;
+            for (fname, value) in fields {
+                let vt = type_of(ctx, value, env);
+                if !seen.insert(fname.as_str()) {
+                    ctx.err("E101", value.pos(), format!("field '{fname}' given twice in this {ty}"));
+                    ok = false;
+                    continue;
+                }
+                let Some((_, fty)) = decl.iter().find(|(n, _)| n == fname) else {
+                    ctx.err("E104", value.pos(), format!("type '{ty}' has no field '{fname}'"));
+                    ok = false;
+                    continue;
+                };
+                let Some((vty, vtr)) = vt else {
+                    ok = false;
+                    continue;
+                };
+                trusted &= vtr;
+                if let Err((code, msg)) = assignable(&vty, fty) {
+                    ctx.err(code, value.pos(), format!("in field '{fname}' of {ty}: {msg}"));
+                    ok = false;
+                }
+            }
+            for (fname, _) in &decl {
+                if !fields.iter().any(|(n, _)| n == fname) {
+                    ctx.err("E101", *pos, format!("this {ty} is missing field '{fname}'"));
+                    ok = false;
+                }
+            }
+            if !ok {
+                return None;
+            }
+            Some((named(ty), trusted))
+        }
+        Expr::List(items, pos) => {
+            if items.is_empty() {
+                ctx.err(
+                    "E101",
+                    *pos,
+                    "an empty list has no element type; give it one in a typed let: let xs: List<Text, 10> = []".into(),
+                );
+                return None;
+            }
+            let tys: Vec<Option<(Ty, bool)>> = items.iter().map(|i| type_of(ctx, i, env)).collect();
+            let tys: Vec<(Ty, bool)> = tys.into_iter().collect::<Option<Vec<_>>>()?;
+            let first = tys[0].0.clone();
+            if let Some(bad) = proof_or_authority(&first) {
+                ctx.err("E101", *pos, format!("a list cannot hold a {bad}"));
+                return None;
+            }
+            for (item, (t, _)) in items.iter().zip(&tys).skip(1) {
+                if *t != first {
+                    ctx.err("E101", item.pos(), format!("list elements must all have one type: {first} and {t}"));
+                    return None;
+                }
+            }
+            let trusted = tys.iter().all(|(_, tr)| *tr);
+            Some((Ty::List(Box::new(first), items.len() as u64), trusted))
+        }
+        Expr::Index { base, index, pos } => {
+            let b = type_of(ctx, base, env);
+            let i = type_of(ctx, index, env);
+            let ((bt, btr), (it, _)) = (b?, i?);
+            let Ty::List(el, _) = &bt else {
+                let code = if matches!(bt, Ty::Proposed(_)) { "E001" } else { "E101" };
+                ctx.err(code, *pos, format!("only a list can be indexed, found {bt}"));
+                return None;
+            };
+            if it != named("Int") {
+                ctx.err("E101", index.pos(), format!("a list index must be an Int, found {it}"));
+                return None;
+            }
+            // Choosing among a list's values by any index yields one of those values, so
+            // the element is exactly as trusted as the list.
+            Some(((**el).clone(), btr))
+        }
         Expr::Field { base, field, pos } => {
             let (bty, trusted) = type_of(ctx, base, env)?;
             match &bty {
@@ -1082,6 +1372,10 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 },
                 Ty::Cap { .. } => {
                     ctx.err("E104", *pos, format!("a capability has no fields; cannot read '.{field}'"));
+                    None
+                }
+                Ty::List(..) => {
+                    ctx.err("E104", *pos, format!("a list has no fields; cannot read '.{field}' (use len(xs) or xs[i])"));
                     None
                 }
             }

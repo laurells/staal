@@ -1,0 +1,5 @@
+// expect: E101
+// Only an action makes a Receipt.
+fn f() -> Receipt {
+    return Receipt { id: "forged" }
+}

@@ -1,0 +1,5 @@
+// expect: E001
+fn f() -> Int {
+    let n = propose(Int, instruct: "Pick a number.")
+    return n + 1
+}

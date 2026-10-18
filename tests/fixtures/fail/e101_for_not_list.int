@@ -1,0 +1,5 @@
+// expect: E101
+fn f(n: Int) {
+    for x in n {
+    }
+}

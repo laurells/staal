@@ -13,8 +13,8 @@ use lexer::Pos;
 pub fn check_program(src: &str) -> Result<ast::Program, Vec<Diagnostic>> {
     let toks = lexer::lex(src).map_err(|(pos, msg)| vec![Diagnostic { code: "E900", pos, msg }])?;
     let prog = parser::Parser::new(toks).program().map_err(|(pos, msg)| vec![Diagnostic { code: "E901", pos, msg }])?;
-    let mut diags = checker::check(&prog);
-    diags.extend(budget::check(&prog));
+    let (mut diags, for_bounds) = checker::check_with_bounds(&prog);
+    diags.extend(budget::check(&prog, &for_bounds));
     if diags.is_empty() {
         Ok(prog)
     } else {
@@ -32,8 +32,8 @@ pub fn compile_check(src: &str) -> Vec<Diagnostic> {
         Ok(p) => p,
         Err((pos, msg)) => return vec![Diagnostic { code: "E901", pos, msg }],
     };
-    let mut diags = checker::check(&prog);
-    diags.extend(budget::check(&prog));
+    let (mut diags, for_bounds) = checker::check_with_bounds(&prog);
+    diags.extend(budget::check(&prog, &for_bounds));
     diags
 }
 

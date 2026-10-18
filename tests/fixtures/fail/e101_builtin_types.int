@@ -1,0 +1,4 @@
+// expect: E101
+fn f(n: Int) -> Int {
+    return len(n)
+}

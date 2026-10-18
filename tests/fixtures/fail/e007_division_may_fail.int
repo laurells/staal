@@ -1,0 +1,8 @@
+// expect: E007
+// Dividing by a blinded value fails when it is zero, so the model call after it
+// happens only for some values.
+type Patient { name: Text, age: Int }
+fn f(p: Patient @blind(age)) {
+    let ratio = 100 / p.age
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

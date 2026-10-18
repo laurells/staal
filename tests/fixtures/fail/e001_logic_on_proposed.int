@@ -1,0 +1,5 @@
+// expect: E001
+fn f() -> Bool {
+    let b = propose(Bool, instruct: "Yes or no?")
+    return b or false
+}
