@@ -1,0 +1,30 @@
+// Building access: let visitors in, one model decision per visit.
+// The capability is the policy. Whatever the model decides, only the listed
+// doors can open, at most three times per run, and every decision is logged.
+type Visit { visitor: Text, door: Text, reason: Text }
+type Decision { approve: Bool, note: Text }
+
+fn admit(
+    visits: List<Visit, 10>,
+    lock: cap building.lock.open(uses: 3, only: ["north-door", "loading-bay", "floor-*"]),
+    audit: cap audit.log.write,
+) -> Done budget(calls: 10, tokens: 3000) {
+    for v in visits {
+        let d: Decision = validate propose(Decision,
+            instruct: "Decide whether this visit should be let in, based on its stated reason. Approve only ordinary business visits.",
+            data: [v],
+            tokens: 300)
+        if d.approve {
+            let opened = try lock.open(v.door)
+            if opened.ok {
+                let logged = audit.write("opened " + v.door + " for " + v.visitor)
+            } else {
+                let logged = audit.write("refused " + v.door + " for " + v.visitor + ": " + opened.error)
+            }
+        } else {
+            let logged = audit.write("denied " + v.visitor + ": " + d.note)
+        }
+    }
+    let closed = audit.write("batch complete")
+    return done(evidence: [closed])
+}

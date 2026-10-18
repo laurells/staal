@@ -1,0 +1,44 @@
+{
+  "entry": "review",
+  "inputs": {
+    "doc": {
+      "id": "../payroll",
+      "title": "Supplier NDA",
+      "body": "The parties agree to keep...",
+      "owner_email": "tunde@teamozy.org"
+    }
+  },
+  "grants": {
+    "store": {
+      "cap": "docs.store.write"
+    },
+    "mail": {
+      "cap": "email.send"
+    },
+    "inbox": {
+      "cap": "docs.inbox.reject"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": []
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-1",
+          "capability": "docs.inbox.reject",
+          "method": "reject"
+        }
+      ]
+    },
+    "performed": [
+      [
+        "docs.inbox.reject",
+        "reject"
+      ]
+    ],
+    "model_calls": 0
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "entry": "triage",
+  "inputs": {
+    "ticket": "How do I export my invoices?",
+    "customer": {
+      "name": "Ngozi",
+      "phone": "+2348099998888",
+      "plan": "business"
+    }
+  },
+  "grants": {
+    "helpdesk": {
+      "cap": "helpdesk.reply"
+    },
+    "pager": {
+      "cap": "pager.page"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "category": "billing",
+          "urgency": 2,
+          "reply": "Go to Billing > Export."
+        },
+        "output_tokens": 40
+      }
+    ]
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-1",
+          "capability": "helpdesk.reply",
+          "method": "reply"
+        }
+      ]
+    },
+    "performed": [
+      [
+        "helpdesk.reply",
+        "reply"
+      ]
+    ],
+    "model_never_sees": [
+      "+2348099998888"
+    ]
+  }
+}

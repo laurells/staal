@@ -1,0 +1,78 @@
+{
+  "entry": "book",
+  "inputs": {
+    "request": "Can I come in on Wednesday afternoon?",
+    "patient": {
+      "id": "P-1042",
+      "name": "Chidi",
+      "phone": "+2348031234567",
+      "notes": "follow-up on lab results"
+    },
+    "slots": [
+      {
+        "id": "S-1",
+        "doctor": "Dr. Okafor",
+        "time": "Tue 09:00"
+      },
+      {
+        "id": "S-2",
+        "doctor": "Dr. Bello",
+        "time": "Wed 14:30"
+      }
+    ]
+  },
+  "grants": {
+    "calendar": {
+      "cap": "clinic.calendar.book"
+    },
+    "sms": {
+      "cap": "sms.send"
+    },
+    "staff": {
+      "cap": "clinic.queue.add"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "slot": 1,
+          "message": "You are booked:"
+        },
+        "output_tokens": 40
+      }
+    ]
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-1",
+          "capability": "clinic.calendar.book",
+          "method": "book"
+        },
+        {
+          "ok": true,
+          "error": ""
+        }
+      ]
+    },
+    "performed": [
+      [
+        "clinic.calendar.book",
+        "book"
+      ],
+      [
+        "sms.send",
+        "send"
+      ]
+    ],
+    "evidence": 2,
+    "model_calls": 1,
+    "model_never_sees": [
+      "lab results",
+      "+2348031234567"
+    ]
+  }
+}

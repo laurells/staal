@@ -1,0 +1,38 @@
+// Document handling: classify an uploaded contract, file a summary, alert legal
+// about risky ones, and tell the owner. The owner's address never reaches the
+// model; the store may only write under /contracts/; mail may only go inside
+// the company.
+type Document { id: Text, title: Text, body: Text, owner_email: Text }
+type Review { category: Text, risk: Int, summary: Text }
+type Filed { path: Text, category: Text, risk: Int, summary: Text }
+
+fn review(
+    doc: Document @blind(owner_email),
+    store: cap docs.store.write(only: ["/contracts/*"]),
+    mail: cap email.send(only: ["*@teamozy.org"]),
+    inbox: cap docs.inbox.reject,
+) -> Done budget(calls: 1, tokens: 1500) {
+    // The id becomes a file name. `only` matches text, not resolved paths, so
+    // refuse anything that could name another folder before using it.
+    if len(doc.id) == 0 or contains(doc.id, "/") or contains(doc.id, "..") {
+        let r = inbox.reject(doc.id, "invalid document id")
+        return done(evidence: [r])
+    }
+    let rev: Review = validate propose(Review,
+        instruct: "Classify this contract as nda, sales, employment or other, rate its legal risk from 0 to 10, and summarise it in two sentences.",
+        data: [doc.title, doc.body],
+        tokens: 1500)
+    if not contains(["nda", "sales", "employment", "other"], rev.category) or rev.risk < 0 or rev.risk > 10 {
+        let r = inbox.reject(doc.id, "review was not usable")
+        return done(evidence: [r])
+    }
+    let filed = store.write(Filed { path: "/contracts/" + doc.id + ".json", category: rev.category, risk: rev.risk, summary: rev.summary })
+    let told = try mail.send(doc.owner_email, "Your contract " + doc.title + " was filed.")
+    if rev.risk >= 7 {
+        let alerted = try mail.send("legal@teamozy.org", "High-risk contract: " + doc.title + ". " + rev.summary)
+        if alerted.ok {
+            return done(evidence: [filed, alerted])
+        }
+    }
+    return done(evidence: [filed])
+}

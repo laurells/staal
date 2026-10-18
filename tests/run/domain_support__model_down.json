@@ -1,0 +1,31 @@
+{
+  "entry": "triage",
+  "inputs": {
+    "ticket": "hi",
+    "customer": {
+      "name": "Ngozi",
+      "phone": "+2348099998888",
+      "plan": "business"
+    }
+  },
+  "grants": {
+    "helpdesk": {
+      "cap": "helpdesk.reply"
+    },
+    "pager": {
+      "cap": "pager.page"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "error": "503 service unavailable"
+      }
+    ]
+  },
+  "expect": {
+    "failure": "provider",
+    "performed": []
+  }
+}

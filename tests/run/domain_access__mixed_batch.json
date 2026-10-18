@@ -1,0 +1,153 @@
+{
+  "entry": "admit",
+  "inputs": {
+    "visits": [
+      {
+        "visitor": "Ade",
+        "door": "north-door",
+        "reason": "delivery"
+      },
+      {
+        "visitor": "Bisi",
+        "door": "server-room",
+        "reason": "delivery"
+      },
+      {
+        "visitor": "Chika",
+        "door": "floor-3",
+        "reason": "delivery"
+      },
+      {
+        "visitor": "Dayo",
+        "door": "loading-bay",
+        "reason": "just looking"
+      },
+      {
+        "visitor": "Ese",
+        "door": "north-door",
+        "reason": "delivery"
+      },
+      {
+        "visitor": "Femi",
+        "door": "loading-bay",
+        "reason": "delivery"
+      }
+    ]
+  },
+  "grants": {
+    "lock": {
+      "cap": "building.lock.open"
+    },
+    "audit": {
+      "cap": "audit.log.write"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": false,
+          "note": "no business reason"
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      }
+    ]
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-10",
+          "capability": "audit.log.write",
+          "method": "write"
+        }
+      ]
+    },
+    "performed": [
+      [
+        "building.lock.open",
+        "open"
+      ],
+      [
+        "audit.log.write",
+        "write"
+      ],
+      [
+        "audit.log.write",
+        "write"
+      ],
+      [
+        "building.lock.open",
+        "open"
+      ],
+      [
+        "audit.log.write",
+        "write"
+      ],
+      [
+        "audit.log.write",
+        "write"
+      ],
+      [
+        "building.lock.open",
+        "open"
+      ],
+      [
+        "audit.log.write",
+        "write"
+      ],
+      [
+        "audit.log.write",
+        "write"
+      ],
+      [
+        "audit.log.write",
+        "write"
+      ]
+    ],
+    "model_calls": 6,
+    "events": [
+      "action_refused",
+      "caught",
+      "action_refused",
+      "caught",
+      "evidence"
+    ]
+  }
+}

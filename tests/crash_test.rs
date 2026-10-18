@@ -44,23 +44,49 @@ fn intentc(args: &[&str], failpoint: Option<&str>) -> Out {
     }
 }
 
+/// A program, its run config (relative to the crate root; an "expect" key is ignored),
+/// and how many actions an uninterrupted run performs.
+struct Scenario {
+    program: &'static str,
+    config: &'static str,
+    actions: usize,
+}
+
+/// Refund workflow: two model calls, three actions (one refused path).
+const WORKFLOW: Scenario = Scenario { program: "tests/crash/workflow.int", config: "tests/crash/workflow.json", actions: 3 };
+
+/// Building access: six model calls and ten actions under `uses` and `only` limits,
+/// two of them refused. A resumed run must rebuild the broker's counts exactly, or it
+/// could open a fourth door.
+const ACCESS: Scenario = Scenario {
+    program: "tests/run/domain_access.int",
+    config: "tests/run/domain_access__mixed_batch.json",
+    actions: 10,
+};
+
 /// A fresh directory with the scenario's config pointing at its own world file.
 struct Case {
     dir: PathBuf,
+    program: String,
 }
 
 impl Case {
     fn new(name: &str, idempotent: bool) -> Case {
+        Case::of(&WORKFLOW, name, idempotent)
+    }
+
+    fn of(sc: &Scenario, name: &str, idempotent: bool) -> Case {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("crash").join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut cfg: Json =
-            serde_json::from_str(&std::fs::read_to_string(format!("{ROOT}/tests/crash/workflow.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(format!("{ROOT}/{}", sc.config)).unwrap()).unwrap();
+        cfg.as_object_mut().unwrap().remove("expect");
         let sim = &mut cfg["adapters"]["simulated"];
         sim["world"] = Json::String(dir.join("world.jsonl").to_string_lossy().into());
         sim["idempotent"] = Json::Bool(idempotent);
         std::fs::write(dir.join("cfg.json"), cfg.to_string()).unwrap();
-        Case { dir }
+        Case { dir, program: format!("{ROOT}/{}", sc.program) }
     }
 
     fn path(&self, f: &str) -> String {
@@ -70,7 +96,7 @@ impl Case {
     fn args(&self, cmd: &'static str) -> Vec<String> {
         vec![
             cmd.into(),
-            format!("{ROOT}/tests/crash/workflow.int"),
+            self.program.clone(),
             "--config".into(),
             self.path("cfg.json"),
             "--journal".into(),
@@ -148,13 +174,17 @@ struct Baseline {
 
 /// Tests run in parallel, so each gets its own baseline directory (`tag`).
 fn baseline(tag: &str) -> Baseline {
-    let c = Case::new(&format!("baseline-{tag}"), true);
+    baseline_of(&WORKFLOW, tag)
+}
+
+fn baseline_of(sc: &Scenario, tag: &str) -> Baseline {
+    let c = Case::of(sc, &format!("baseline-{tag}"), true);
     let out = c.run(None);
     assert_eq!(out.code, Some(0), "baseline failed: {}", out.stderr);
     let lines = c.journal_lines();
     let ops = lines.iter().filter(|r| r["j"] == "intent").count();
     assert_eq!(lines.len(), 2 * ops + 2, "start + intent/result per op + end");
-    assert_eq!(c.world().len(), 3, "the scenario performs three actions");
+    assert_eq!(c.world().len(), sc.actions, "actions performed by an uninterrupted run");
     Baseline { result: out.stdout, world: c.world(), writes: lines.len(), ops }
 }
 
@@ -193,9 +223,9 @@ fn check_recovered(c: &Case, b: &Baseline, label: &str) {
     assert_eq!(c.world(), b.world, "{label}: replay of a finished run changed the world");
 }
 
-fn crash_everywhere(idempotent: bool) {
-    let mode = if idempotent { "idempotent" } else { "plain" };
-    let b = baseline(mode);
+fn crash_everywhere(sc: &Scenario, tag: &str, idempotent: bool) {
+    let mode = format!("{tag}-{}", if idempotent { "idempotent" } else { "plain" });
+    let b = baseline_of(sc, &mode);
     let mut points = Vec::new();
     for k in 1..=b.writes {
         points.push(format!("after_write:{k}"));
@@ -205,7 +235,7 @@ fn crash_everywhere(idempotent: bool) {
     }
     for fp in &points {
         let label = format!("{mode} {fp}");
-        let c = Case::new(&format!("{mode}-{}", fp.replace(':', "-")), idempotent);
+        let c = Case::of(sc, &format!("{mode}-{}", fp.replace(':', "-")), idempotent);
         let out = c.run(Some(fp));
         assert_eq!(out.code, None, "{label}: the injected crash did not happen (exit {:?}): {}", out.code, out.stderr);
         check_recovered(&c, &b, &label);
@@ -214,12 +244,18 @@ fn crash_everywhere(idempotent: bool) {
 
 #[test]
 fn every_crash_point_recovers_with_an_idempotent_service() {
-    crash_everywhere(true);
+    crash_everywhere(&WORKFLOW, "workflow", true);
 }
 
 #[test]
 fn every_crash_point_recovers_with_a_service_that_does_not_deduplicate() {
-    crash_everywhere(false);
+    crash_everywhere(&WORKFLOW, "workflow", false);
+}
+
+#[test]
+fn limited_capabilities_recover_exactly_after_any_crash() {
+    crash_everywhere(&ACCESS, "access", true);
+    crash_everywhere(&ACCESS, "access", false);
 }
 
 #[test]

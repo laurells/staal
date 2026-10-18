@@ -1,0 +1,59 @@
+{
+  "entry": "triage",
+  "inputs": {
+    "ticket": "Our whole team is locked out.",
+    "customer": {
+      "name": "Ngozi",
+      "phone": "+2348099998888",
+      "plan": "business"
+    }
+  },
+  "grants": {
+    "helpdesk": {
+      "cap": "helpdesk.reply"
+    },
+    "pager": {
+      "cap": "pager.page"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "category": "technical",
+          "urgency": 5,
+          "reply": "We are on it."
+        },
+        "output_tokens": 40
+      }
+    ]
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-1",
+          "capability": "helpdesk.reply",
+          "method": "reply"
+        },
+        {
+          "receipt": "sim-2",
+          "capability": "pager.page",
+          "method": "page"
+        }
+      ]
+    },
+    "performed": [
+      [
+        "helpdesk.reply",
+        "reply"
+      ],
+      [
+        "pager.page",
+        "page"
+      ]
+    ],
+    "evidence": 2
+  }
+}

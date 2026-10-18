@@ -1,0 +1,36 @@
+{
+  "entry": "admit",
+  "inputs": {
+    "visits": []
+  },
+  "grants": {
+    "lock": {
+      "cap": "building.lock.open"
+    },
+    "audit": {
+      "cap": "audit.log.write"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": []
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-1",
+          "capability": "audit.log.write",
+          "method": "write"
+        }
+      ]
+    },
+    "performed": [
+      [
+        "audit.log.write",
+        "write"
+      ]
+    ],
+    "model_calls": 0
+  }
+}

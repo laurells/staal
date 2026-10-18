@@ -1,0 +1,43 @@
+{
+  "entry": "triage",
+  "inputs": {
+    "ticket": "Down!",
+    "customer": {
+      "name": "Ngozi",
+      "phone": "+2348099998888",
+      "plan": "business"
+    }
+  },
+  "grants": {
+    "helpdesk": {
+      "cap": "helpdesk.reply"
+    },
+    "pager": {
+      "cap": "pager.page",
+      "uses": 0
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "category": "technical",
+          "urgency": 5,
+          "reply": "On it."
+        },
+        "output_tokens": 40
+      }
+    ]
+  },
+  "expect": {
+    "failure": "capability",
+    "message_contains": "all 0",
+    "performed": [
+      [
+        "helpdesk.reply",
+        "reply"
+      ]
+    ]
+  }
+}

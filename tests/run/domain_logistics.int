@@ -1,0 +1,27 @@
+// Logistics: rebook delayed shipments with a carrier inside a spending limit,
+// then brief the operations channel. No single booking may cost more than
+// 500 USD, and all bookings together no more than 2000 USD. A booking the
+// limits refuse is reported, not silently dropped.
+type Shipment { id: Text, destination: Text, weight_kg: Int, rate_per_kg: Money }
+type Booking { shipment_id: Text, cost: Money }
+type Brief { headline: Text, actions: List<Text, 5> }
+
+fn reroute(
+    shipments: List<Shipment, 20>,
+    carrier: cap carrier.book(max: 2000 USD, each: 500 USD),
+    ops: cap chat.post(only: ["#ops-*"]),
+) -> Done budget(calls: 1, tokens: 1000) {
+    for s in shipments {
+        let cost = s.rate_per_kg * s.weight_kg
+        let booked = try carrier.book(Booking { shipment_id: s.id, cost: cost })
+        if not booked.ok {
+            let noted = ops.post("#ops-logistics", "Could not rebook " + s.id + " to " + s.destination + ": " + booked.error)
+        }
+    }
+    let brief: Brief = validate propose(Brief,
+        instruct: "Write a one-line headline and up to five follow-up actions for the operations team about these delayed shipments.",
+        data: [shipments],
+        tokens: 1000)
+    let posted = ops.post("#ops-logistics", brief.headline)
+    return done(evidence: [posted])
+}

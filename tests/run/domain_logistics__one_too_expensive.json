@@ -1,0 +1,85 @@
+{
+  "entry": "reroute",
+  "inputs": {
+    "shipments": [
+      {
+        "id": "SH-1",
+        "destination": "Kano",
+        "weight_kg": 100,
+        "rate_per_kg": {
+          "amount": "2.50",
+          "currency": "USD"
+        }
+      },
+      {
+        "id": "SH-2",
+        "destination": "Kano",
+        "weight_kg": 100,
+        "rate_per_kg": {
+          "amount": "5.01",
+          "currency": "USD"
+        }
+      },
+      {
+        "id": "SH-3",
+        "destination": "Kano",
+        "weight_kg": 100,
+        "rate_per_kg": {
+          "amount": "5.00",
+          "currency": "USD"
+        }
+      }
+    ]
+  },
+  "grants": {
+    "carrier": {
+      "cap": "carrier.book"
+    },
+    "ops": {
+      "cap": "chat.post"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "headline": "Shipments rebooked",
+          "actions": [
+            "Call the Kano depot"
+          ]
+        },
+        "output_tokens": 40
+      }
+    ]
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-4",
+          "capability": "chat.post",
+          "method": "post"
+        }
+      ]
+    },
+    "performed": [
+      [
+        "carrier.book",
+        "book"
+      ],
+      [
+        "chat.post",
+        "post"
+      ],
+      [
+        "carrier.book",
+        "book"
+      ],
+      [
+        "chat.post",
+        "post"
+      ]
+    ]
+  }
+}

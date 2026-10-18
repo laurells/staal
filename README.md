@@ -32,7 +32,7 @@ adapters (only a simulated one), and the native-code backend.
 
 All eight safety checks from the spec (E001-E008) are implemented. Phase 1's
 gate is met: every one is rejected by tests. 24 valid programs compile,
-including the two benchmark workflows (`workflow_*.int`), and 186 invalid ones
+including the two benchmark workflows (`workflow_*.int`), and 191 invalid ones
 are each rejected with the expected code.
 
 Nothing in the compiler or runtime is specific to payments, email or any other
@@ -345,16 +345,46 @@ config or journal problem (nothing ran); 3 the run stopped and can be
 continued (resolve, then resume).
 
 How this is tested: `cargo test --features failpoints` kills the process (with
-`abort`) at every journal write and inside every in-doubt window of a
-workflow with two model calls and four actions, resumes, and checks the
-result and the simulated world match an uninterrupted run, with no action
-performed twice, against both an idempotent and a non-deduplicating service.
+`abort`) at every journal write and inside every in-doubt window of two
+programs, resumes, and checks the result and the simulated world match an
+uninterrupted run, with no action performed twice, against both an idempotent
+and a non-deduplicating service. The programs are a refund workflow, and the
+building-access program below: six model calls and ten actions under `uses`
+and `only` limits, at 68 crash points per service. The second proves a
+resumed run rebuilds its capability counts exactly. A runtime that forgot
+replayed uses would open a fourth door, and this test catches that mistake
+where the first one does not.
 The crash hooks are compiled out of normal builds.
 
 What this does not cover: `abort` kills the process but not the operating
 system, so these tests do not exercise power loss; durability against power
 loss relies on `fsync` being honoured by the OS and disk. An adapter that
 declares itself idempotent must really be: the runtime trusts that contract.
+
+## Programs from different fields
+
+`tests/run/domain_*.int` are complete programs, each run against a scripted
+model and simulated services, with cases for success, for model mistakes, for
+limits refusing, and for bad input:
+
+| Program | Field | What keeps it safe |
+|---|---|---|
+| `domain_clinic` | healthcare scheduling | notes and phone blinded from the model; the slot the model picks is range-checked; one booking per run; SMS only to `+234*` |
+| `domain_access` | building access | a model decision per visitor, but only three listed doors open, at most three times; every decision audited |
+| `domain_documents` | contract review | ids that could escape the folder are refused; writes only under `/contracts/*`; mail only inside the company; owner address blinded |
+| `domain_logistics` | carrier rebooking | `each: 500 USD` and `max: 2000 USD` across a loop; refused bookings reported; the model's action list bounded to 5 |
+| `domain_support` | ticket triage | the ticket is data, never instruction; one reply; the pager reaches only `support-oncall`, once, even if the ticket talks the model into "urgent" |
+
+Each also has a compile-fail twin in `tests/fixtures/fail/` showing a likely
+mistake the compiler rejects: sending the whole patient record (E007),
+handing the lock to a helper that accepts any door (E003), filing an
+unvalidated review (E001), a model call per shipment over budget (E004), and
+the ticket as the instruction (E006).
+
+One thing these programs show: `only` matches the target text exactly as the
+adapter reports it. `"/contracts/../payroll"` starts with `/contracts/`, so
+an adapter for paths must report resolved paths, and the program refuses ids
+containing `/` or `..` before building one.
 
 ## Requirements
 

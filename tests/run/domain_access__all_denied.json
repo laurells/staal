@@ -1,0 +1,69 @@
+{
+  "entry": "admit",
+  "inputs": {
+    "visits": [
+      {
+        "visitor": "Ade",
+        "door": "north-door",
+        "reason": "delivery"
+      },
+      {
+        "visitor": "Bisi",
+        "door": "server-room",
+        "reason": "delivery"
+      }
+    ]
+  },
+  "grants": {
+    "lock": {
+      "cap": "building.lock.open"
+    },
+    "audit": {
+      "cap": "audit.log.write"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "approve": false,
+          "note": "no business reason"
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": false,
+          "note": "no business reason"
+        },
+        "output_tokens": 40
+      }
+    ]
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-3",
+          "capability": "audit.log.write",
+          "method": "write"
+        }
+      ]
+    },
+    "performed": [
+      [
+        "audit.log.write",
+        "write"
+      ],
+      [
+        "audit.log.write",
+        "write"
+      ],
+      [
+        "audit.log.write",
+        "write"
+      ]
+    ]
+  }
+}

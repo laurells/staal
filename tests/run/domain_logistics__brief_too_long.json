@@ -1,0 +1,53 @@
+{
+  "entry": "reroute",
+  "inputs": {
+    "shipments": [
+      {
+        "id": "SH-1",
+        "destination": "Kano",
+        "weight_kg": 10,
+        "rate_per_kg": {
+          "amount": "1.00",
+          "currency": "USD"
+        }
+      }
+    ]
+  },
+  "grants": {
+    "carrier": {
+      "cap": "carrier.book"
+    },
+    "ops": {
+      "cap": "chat.post"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "headline": "Shipments rebooked",
+          "actions": [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+            "f"
+          ]
+        },
+        "output_tokens": 40
+      }
+    ]
+  },
+  "expect": {
+    "failure": "validation",
+    "message_contains": "at most 5",
+    "performed": [
+      [
+        "carrier.book",
+        "book"
+      ]
+    ]
+  }
+}

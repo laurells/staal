@@ -1,0 +1,28 @@
+// Customer support: triage a ticket, reply once, and page on-call if urgent.
+// The ticket is untrusted text: it can only be data to the model, never an
+// instruction, and whatever the model then says, the pager reaches only the
+// support on-call rota, once.
+type Customer { name: Text, phone: Text, plan: Text }
+type Triage { category: Text, urgency: Int, reply: Text }
+
+fn triage(
+    ticket: Text,
+    customer: Customer @blind(phone),
+    helpdesk: cap helpdesk.reply(uses: 1),
+    pager: cap pager.page(uses: 1, only: ["support-oncall"]),
+) -> Done budget(calls: 1, tokens: 1200) {
+    let t: Triage = validate propose(Triage,
+        instruct: "Triage this support ticket: category billing, technical or other; urgency from 1 to 5; and a short, polite reply to the customer.",
+        data: [ticket, customer.name, customer.plan],
+        tokens: 1200)
+    if not contains(["billing", "technical", "other"], t.category) or t.urgency < 1 or t.urgency > 5 {
+        let r = helpdesk.reply("Thanks for contacting us. A member of our team will reply shortly.")
+        return done(evidence: [r])
+    }
+    let replied = helpdesk.reply(t.reply)
+    if t.urgency >= 4 {
+        let paged = pager.page("support-oncall", t.category + " ticket from " + customer.name + " (" + customer.plan + " plan)")
+        return done(evidence: [replied, paged])
+    }
+    return done(evidence: [replied])
+}

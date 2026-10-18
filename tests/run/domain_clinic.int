@@ -1,0 +1,35 @@
+// Healthcare: book an appointment from a patient's request.
+// The model sees the request and the open slots, never the patient's clinical
+// notes or phone number. The calendar may book once per run; confirmations
+// may only go to Nigerian numbers.
+type Patient { id: Text, name: Text, phone: Text, notes: Text }
+type Slot { id: Text, doctor: Text, time: Text }
+type Choice { slot: Int, message: Text }
+type Booking { slot_id: Text, patient_id: Text }
+
+fn book(
+    request: Text,
+    patient: Patient @blind(notes, phone),
+    slots: List<Slot, 20>,
+    calendar: cap clinic.calendar.book(uses: 1),
+    sms: cap sms.send(only: ["+234*"]),
+    staff: cap clinic.queue.add,
+) -> Done budget(calls: 1, tokens: 800) {
+    let choice: Choice = validate propose(Choice,
+        instruct: "Pick the open slot that best fits the patient's request. Give its position in the list, counting from 0, and a short confirmation message.",
+        data: [request, slots],
+        tokens: 800)
+    // The model's answer is checked before it is used: a position outside the
+    // list goes to a person instead.
+    if choice.slot < 0 or choice.slot >= len(slots) {
+        let queued = staff.add(patient.id, request)
+        return done(evidence: [queued])
+    }
+    let slot = slots[choice.slot]
+    let booked = calendar.book(Booking { slot_id: slot.id, patient_id: patient.id })
+    let sent = try sms.send(patient.phone, choice.message + " " + slot.time + " with " + slot.doctor)
+    if sent.ok {
+        return done(evidence: [booked, sent])
+    }
+    return done(evidence: [booked])
+}

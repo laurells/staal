@@ -230,6 +230,12 @@ grant in the run config.
 - **Limits fail closed.** A limit that needs to know something about an action
   refuses the action when the adapter cannot say. A money limit needs the
   amount; `only` needs the target.
+- **Targets are matched as text** (adapter requirement). `only` compares the
+  target exactly as the adapter reports it, with no normalisation:
+  `"/contracts/../payroll"` matches `"/contracts/*"`. An adapter whose
+  targets have several spellings (file paths, URLs, phone numbers with or
+  without spaces) must report one canonical form, and refuse a target it
+  cannot put in that form.
 
 ### Grants, narrowing and checking
 
