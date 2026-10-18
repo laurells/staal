@@ -83,6 +83,9 @@ struct Binding {
     reveals: Vec<Src>,
     /// For an `Outcome`: the code has checked `.ok` is true on this path.
     proven_ok: bool,
+    /// For an `Outcome`: it was made by `try` in this function around an action, or
+    /// around a call that returns a Receipt or a Done, so on success it holds proof.
+    holds_evidence: bool,
 }
 
 /// A source a value can reveal. `path` is rooted at a parameter, e.g. ["order", "customer"].
@@ -551,7 +554,9 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
             ctx.fn_blind.push((path, format!("{text} (blinded by parameter '{}')", p.name)));
         }
         let reveals = vec![Src { path: vec![p.name.clone()], exact: true }];
-        env.insert(p.name.clone(), Binding { ty: p.ty.clone(), trusted: p.trusted, reveals, proven_ok: false });
+        // A parameter's Outcome came from the caller: it is never this function's proof.
+        let b = Binding { ty: p.ty.clone(), trusted: p.trusted, reveals, proven_ok: false, holds_evidence: false };
+        env.insert(p.name.clone(), b);
     }
     let ret = f.ret.clone().unwrap_or_else(|| named("Unit"));
     check_ty_known(ctx, &ret, f.pos);
@@ -563,6 +568,31 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
 
 fn f_params_contains(ctx: &Ctx, name: &str) -> bool {
     ctx.params.contains(name)
+}
+
+/// Whether binding `value` yields an Outcome that holds proof on success: it is
+/// `try` around an action, or around a call to a function returning Receipt or Done,
+/// or an alias of such an Outcome. A Receipt or Done that a callee returns has itself
+/// passed E008, so it is real proof of work done by that call.
+fn outcome_holds_evidence(ctx: &Ctx, value: &Expr, env: &Env) -> bool {
+    match value {
+        Expr::Try(inner, _) => match inner.as_ref() {
+            Expr::Action { .. } => true,
+            Expr::Call { name, .. } => ctx.sigs.get(name.as_str()).is_some_and(|s| is_proof_type(&s.ret)),
+            _ => false,
+        },
+        Expr::Var(v, _) => env.get(v).is_some_and(|b| b.holds_evidence),
+        _ => false,
+    }
+}
+
+fn is_proof_type(t: &Ty) -> bool {
+    matches!(t, Ty::Named(n) if n == "Receipt" || n == "Done")
+}
+
+/// Whether `e` is (an alias of) one of this function's parameters.
+fn is_param_value(ctx: &Ctx, e: &Expr, env: &Env) -> bool {
+    reveals(e, env).iter().any(|s| s.exact && f_params_contains(ctx, &s.path[0]))
 }
 
 /// Does every path through this block end in `return` (or in a `loop` that is never left)?
@@ -667,7 +697,8 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 add_srcs(&mut r, ctx.pc.clone());
                 // `let y = x` keeps what is known about x's outcome.
                 let proven_ok = matches!(value, Expr::Var(v, _) if env.get(v).is_some_and(|b| b.proven_ok));
-                env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r, proven_ok });
+                let holds_evidence = outcome_holds_evidence(ctx, value, &env);
+                env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r, proven_ok, holds_evidence });
             }
             Stmt::Expr(e) => {
                 type_of(ctx, e, &env);
@@ -681,6 +712,18 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 if let Some((vty, trusted)) = type_of(ctx, e, &env) {
                     if let Err((code, msg)) = assignable(&vty, ret) {
                         ctx.err(code, *pos, format!("in return from '{}': {msg}", f.name));
+                    } else if is_proof_type(ret) && is_param_value(ctx, e, &env) {
+                        // A Receipt or Done returned from here is proof for the caller; it must
+                        // come from this function's own work, never be passed straight through.
+                        ctx.err(
+                            "E008",
+                            *pos,
+                            format!(
+                                "'{}' returns a {ret} it was given by its caller; a {ret} returned from \
+                                 a function must prove that function's own work",
+                                f.name
+                            ),
+                        );
                     } else if f.ret_trusted && !trusted {
                         ctx.err(
                             "E006",
@@ -957,8 +1000,23 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 match &ity {
                     Ty::Named(n) if n == "Receipt" || n == "Done" => {}
                     Ty::Named(n) if n == "Outcome" => {
-                        let proven = matches!(item, Expr::Var(v, _) if env.get(v).is_some_and(|b| b.proven_ok));
-                        if !proven {
+                        let binding = match item {
+                            Expr::Var(v, _) => env.get(v),
+                            _ => None,
+                        };
+                        if !binding.is_some_and(|b| b.holds_evidence) {
+                            ctx.err(
+                                "E008",
+                                item.pos(),
+                                format!(
+                                    "'{text}' does not hold proof of work: an Outcome is evidence only when it \
+                                     comes from `try` in this function around an action, or around a call that \
+                                     returns a Receipt or a Done"
+                                ),
+                            );
+                            continue;
+                        }
+                        if !binding.is_some_and(|b| b.proven_ok) {
                             ctx.err(
                                 "E008",
                                 item.pos(),
@@ -980,10 +1038,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     }
                 }
                 // Evidence must come from this function's own work, not from a caller.
-                let from_param = reveals(item, env)
-                    .iter()
-                    .any(|s| s.exact && f_params_contains(ctx, &s.path[0]));
-                if from_param {
+                if is_param_value(ctx, item, env) {
                     ctx.err(
                         "E008",
                         item.pos(),

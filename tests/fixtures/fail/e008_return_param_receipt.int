@@ -1,0 +1,5 @@
+// expect: E008
+fn mine(r: Receipt) -> Receipt {
+    let x = r
+    return x
+}

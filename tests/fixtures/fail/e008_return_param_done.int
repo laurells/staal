@@ -1,0 +1,5 @@
+// expect: E008
+// Returning a caller's Done claims their work as this function's own.
+fn mine(d: Done) -> Done {
+    return d
+}

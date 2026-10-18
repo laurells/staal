@@ -1,0 +1,14 @@
+// expect: E008
+// Only an Outcome made by `try` in this function is known to hold proof.
+fn attempt(mail: cap email.send) -> Outcome {
+    return try mail.send("x")
+}
+
+fn f(mail: cap email.send) -> Done {
+    let o = attempt(mail)
+    if o.ok {
+        return done(evidence: [o])
+    }
+    let x = mail.send("fallback")
+    return done(evidence: [x])
+}

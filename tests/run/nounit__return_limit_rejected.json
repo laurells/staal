@@ -1,0 +1,4 @@
+{ "entry": "main",
+  "grants": { "pay": { "cap": "payments.refund" } },
+  "model": { "provider": "script", "responses": [] },
+  "expect": { "config_error_contains": "return type" } }

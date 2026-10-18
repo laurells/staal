@@ -1,0 +1,13 @@
+// expect: E008
+// A successful call that performed no action proves nothing.
+fn nothing() -> Int {
+    return 1
+}
+
+fn f() -> Done {
+    let r = try nothing()
+    if r.ok {
+        return done(evidence: [r])
+    }
+    return f()
+}

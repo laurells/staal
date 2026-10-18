@@ -1,0 +1,4 @@
+{ "entry": "swallow_depth",
+  "model": { "provider": "script", "responses": [] },
+  "limits": { "max_depth": 20 },
+  "expect": { "failure": "depth_limit" } }

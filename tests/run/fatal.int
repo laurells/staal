@@ -1,0 +1,25 @@
+// Deployment limits end the run. A program cannot observe or recover from them.
+
+fn spin() {
+    loop {
+    }
+}
+
+fn down() {
+    down()
+}
+
+fn swallow_steps() {
+    let r = try spin()
+}
+
+fn swallow_depth() -> Bool {
+    let r = try down()
+    return r.ok
+}
+
+// An ordinary failure is still catchable.
+fn catch_action(mail: cap email.send) -> Bool {
+    let r = try mail.send("bad@example.com")
+    return r.ok
+}

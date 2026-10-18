@@ -1,0 +1,5 @@
+{ "entry": "catch_action",
+  "grants": { "mail": { "cap": "email.send" } },
+  "model": { "provider": "script", "responses": [] },
+  "adapters": { "simulated": { "fail": [{ "cap": "email.send", "when_arg": "bad@example.com" }] } },
+  "expect": { "result": false, "events": ["action_failed", "caught", "run_end"] } }

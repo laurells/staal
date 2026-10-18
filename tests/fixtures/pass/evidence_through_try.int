@@ -1,0 +1,25 @@
+// An Outcome is evidence when `try` wrapped an action, or a call that returns
+// a Receipt or a Done, and the code has checked `.ok`.
+fn send_one(mail: cap email.send) -> Receipt {
+    return mail.send("x")
+}
+
+fn notify(mail: cap email.send) -> Done {
+    let r = mail.send("x")
+    return done(evidence: [r])
+}
+
+fn f(mail: cap email.send) -> Done {
+    let a = try send_one(mail)
+    let b = try notify(mail)
+    let c = try mail.send("y")
+    let alias = c
+    if a.ok {
+        if b.ok {
+            if alias.ok {
+                return done(evidence: [a, b, alias])
+            }
+        }
+    }
+    return notify(mail)
+}

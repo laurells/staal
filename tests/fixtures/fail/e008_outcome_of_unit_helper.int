@@ -1,0 +1,15 @@
+// expect: E008
+// The helper did send, but it threw the receipt away; there is nothing to cite.
+// Return the Receipt (or a Done) from the helper instead.
+fn notify(mail: cap email.send) {
+    mail.send("x")
+}
+
+fn f(mail: cap email.send) -> Done {
+    let r = try notify(mail)
+    if r.ok {
+        return done(evidence: [r])
+    }
+    let s = mail.send("fallback")
+    return done(evidence: [s])
+}

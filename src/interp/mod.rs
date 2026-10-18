@@ -37,6 +37,23 @@ pub enum FailKind {
     Internal,
 }
 
+impl FailKind {
+    /// Whether `try` may turn this failure into an Outcome (RUNTIME.md section 8).
+    ///
+    /// Deployment limits are safeguards, not part of a program's meaning: if a program
+    /// could catch them it could observe them, and a runaway loop or recursion would
+    /// end in a "successful" run. An internal failure is a bug in intentc, which no
+    /// program may hide. All three end the run.
+    pub fn catchable(self) -> bool {
+        match self {
+            FailKind::Action | FailKind::Capability | FailKind::Validation | FailKind::Budget | FailKind::Provider => {
+                true
+            }
+            FailKind::StepLimit | FailKind::DepthLimit | FailKind::Internal => false,
+        }
+    }
+}
+
 impl fmt::Display for FailKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -292,6 +309,9 @@ fn check_all_limits(prog: &Program) -> Result<(), String> {
         for p in &f.params {
             ty(&p.ty, &format!("in '{}', parameter {}", f.name, p.name))?;
         }
+        if let Some(r) = &f.ret {
+            ty(r, &format!("in '{}', return type", f.name))?;
+        }
         block(&f.body, &f.name)?;
     }
     Ok(())
@@ -441,7 +461,12 @@ impl<'p> Interp<'p> {
             self.meters.pop();
         }
         match flow? {
-            Flow::Return(v) => Ok(v),
+            // A capability leaving through a limited return type is narrowed to that
+            // limit, exactly as it would be entering a limited parameter or typed let.
+            Flow::Return(v) => match &f.ret {
+                Some(Ty::Cap { max: Some(l), .. }) => self.narrow(v, l),
+                _ => Ok(v),
+            },
             Flow::Next if f.ret.is_none() => Ok(Value::Unit),
             Flow::Next => internal(format!("'{name}' finished without returning a value")),
             Flow::Break => internal(format!("`break` escaped from '{name}'")),
@@ -593,6 +618,7 @@ impl<'p> Interp<'p> {
             },
             Expr::Try(inner, _) => match self.eval(frame, inner) {
                 Ok(v) => Ok(Value::Outcome { ok: true, error: String::new(), held: Some(Box::new(v)) }),
+                Err(f) if !f.kind.catchable() => Err(f),
                 Err(f) => {
                     let error = format!("{}: {}", f.kind, f.message);
                     self.emit("caught", json!({ "failure": f.kind.to_string(), "message": f.message }));
@@ -602,7 +628,16 @@ impl<'p> Interp<'p> {
             Expr::Done { evidence, .. } => {
                 let mut items = Vec::with_capacity(evidence.len());
                 for it in evidence {
-                    items.push(self.eval(frame, it)?);
+                    let v = self.eval(frame, it)?;
+                    // Re-checked here even though E008 guarantees it: a Done must never
+                    // be made from something that leads to no receipt.
+                    if receipt_count(&v) == 0 {
+                        return internal("an evidence item holds no receipt; E008 should have rejected this program");
+                    }
+                    items.push(v);
+                }
+                if items.is_empty() {
+                    return internal("`done` with no evidence; E008 should have rejected this program");
                 }
                 Ok(Value::Done(items))
             }
@@ -737,6 +772,13 @@ fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, Failure> {
     }
 }
 
+/// How many receipts a value leads to, by the same rules as `flatten_evidence`.
+fn receipt_count(v: &Value) -> usize {
+    let mut out = Vec::new();
+    flatten_evidence(v, &mut out);
+    out.len()
+}
+
 /// Receipts reachable from a Done: directly, through successful outcomes, and
 /// through nested Done values.
 fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
@@ -745,5 +787,36 @@ fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
         Value::Outcome { ok: true, held: Some(h), .. } => flatten_evidence(h, out),
         Value::Done(items) => items.iter().for_each(|i| flatten_evidence(i, out)),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hollow_evidence_holds_no_receipt() {
+        let receipt = Value::Receipt(Receipt { id: "r1".into(), capability: "email.send".into(), method: "send".into() });
+        let ok = |held: Value| Value::Outcome { ok: true, error: String::new(), held: Some(Box::new(held)) };
+        // Real proof: a receipt, directly or through an outcome or a nested Done.
+        assert_eq!(receipt_count(&receipt), 1);
+        assert_eq!(receipt_count(&ok(receipt.clone())), 1);
+        assert_eq!(receipt_count(&Value::Done(vec![ok(receipt.clone()), receipt.clone()])), 2);
+        // Not proof: an outcome of a pure call, a failed outcome, an empty Done.
+        assert_eq!(receipt_count(&ok(Value::Int(1))), 0);
+        assert_eq!(receipt_count(&ok(Value::Unit)), 0);
+        assert_eq!(receipt_count(&Value::Outcome { ok: false, error: "x".into(), held: None }), 0);
+        assert_eq!(receipt_count(&Value::Done(vec![])), 0);
+    }
+
+    #[test]
+    fn only_program_level_failures_are_catchable() {
+        for k in [FailKind::Action, FailKind::Capability, FailKind::Validation, FailKind::Budget, FailKind::Provider] {
+            assert!(k.catchable(), "{k} should be catchable");
+        }
+        // Deployment limits and intentc bugs always end the run.
+        for k in [FailKind::StepLimit, FailKind::DepthLimit, FailKind::Internal] {
+            assert!(!k.catchable(), "{k} must not be catchable");
+        }
     }
 }

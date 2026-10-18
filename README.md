@@ -105,11 +105,16 @@ containing `loop` or recursion can still stall, under `try` or not.
     }
 
 `Done` is built in, and `done(evidence: [...])` is the only way to make one.
-Each item must be proof of work this function did: an action's `Receipt`, a
-`try` outcome on a path where `.ok` is known to be true (inside `if x.ok`, or
-after `if x.ok == false { return ... }`), or another function's `Done`.
+Each item must be proof of work this function did: an action's `Receipt`,
+another function's `Done` or `Receipt`, or a `try` outcome that holds one. An
+outcome counts only if `try` in this function wrapped an action or a call
+returning `Receipt` or `Done`, and only on a path where `.ok` is known to be
+true (inside `if x.ok`, or after `if x.ok == false { return ... }`).
 Rejected as evidence (E008): an empty list, model output, literals, an
-unchecked outcome, and anything passed in by the caller. A function that
+unchecked outcome, an outcome of a call that returns anything else (it holds
+no receipt), and anything passed in by the caller. A function returning
+`Receipt` or `Done` may not return one it was given. At run time, every
+evidence item is checked again to lead to at least one real receipt. A function that
 returns a value must return on every path (E105), so a `Done` function cannot
 fall off the end without proof.
 

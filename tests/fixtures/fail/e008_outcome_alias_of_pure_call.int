@@ -1,0 +1,14 @@
+// expect: E008
+fn nothing() -> Int {
+    return 1
+}
+
+fn f(mail: cap email.send) -> Done {
+    let r = try nothing()
+    let s = r
+    if s.ok {
+        return done(evidence: [s])
+    }
+    let x = mail.send("fallback")
+    return done(evidence: [x])
+}

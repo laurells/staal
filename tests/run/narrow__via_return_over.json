@@ -1,0 +1,5 @@
+{ "entry": "via_return",
+  "inputs": { "r": { "amount": { "amount": "400.00", "currency": "USD" } } },
+  "grants": { "pay": { "cap": "payments.refund", "max": { "amount": "500.00", "currency": "USD" } } },
+  "model": { "provider": "script", "responses": [] },
+  "expect": { "failure": "capability", "message_contains": "50.00 USD", "performed": [] } }

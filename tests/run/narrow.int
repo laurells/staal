@@ -1,0 +1,17 @@
+// A capability's declared limit holds wherever it flows: into a parameter,
+// a typed let, or out of a function through its return type.
+type Refund { amount: Money }
+
+fn shrink(pay: cap payments.refund(max: 500 USD)) -> cap payments.refund(max: 50 USD) {
+    return pay
+}
+
+fn via_return(pay: cap payments.refund(max: 500 USD), r: Refund) -> Receipt {
+    let small = shrink(pay)
+    return small.refund(r)
+}
+
+fn via_let(pay: cap payments.refund(max: 500 USD), r: Refund) -> Receipt {
+    let small: cap payments.refund(max: 50 USD) = pay
+    return small.refund(r)
+}

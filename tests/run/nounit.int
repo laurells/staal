@@ -1,0 +1,8 @@
+// A limit with no currency cannot be enforced against money.
+fn give(pay: cap payments.refund) -> cap payments.refund(max: 5) {
+    return pay
+}
+
+fn main(pay: cap payments.refund) {
+    let c = give(pay)
+}

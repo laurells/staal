@@ -1,0 +1,4 @@
+{ "entry": "swallow_steps",
+  "model": { "provider": "script", "responses": [] },
+  "limits": { "max_steps": 50 },
+  "expect": { "failure": "step_limit", "events": ["run_start", "run_end"] } }

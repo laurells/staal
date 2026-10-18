@@ -207,9 +207,18 @@ enclosing `try`. `try e` evaluates `e`: on success it yields
 `Outcome { ok: false, error: "<kind>: <message>" }`. If no `try` catches it,
 the run ends with that failure.
 
+`step_limit`, `depth_limit` and `internal` are **fatal**: `try` never catches
+them, and they always end the run. The deployment limits are safeguards, not
+part of the program's meaning, so a program must not be able to observe them
+(a runaway loop or recursion must not end in a "successful" run). An
+`internal` failure is a bug in intentc, which no program may hide.
+
 ## 9. Evidence
 
-`done(evidence: [...])` yields a `Done` holding its evidence values. When the
+`done(evidence: [...])` yields a `Done` holding its evidence values. Each item
+must lead to at least one receipt (directly, through a successful outcome, or
+through a nested `Done`); the compiler guarantees this (E008) and the runtime
+checks it again, failing with `internal` if it ever does not hold. When the
 entry function returns a `Done`, its evidence (receipts, and the results held
 by successful outcomes, recursively through nested `Done` values) is written
 to the log as the run's evidence.
