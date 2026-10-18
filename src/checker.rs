@@ -486,7 +486,18 @@ fn add_srcs(into: &mut Vec<Src>, from: Vec<Src>) {
 fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
     match ty {
         Ty::Named(n) if !ctx.known.contains(n) => ctx.err("E102", pos, format!("unknown type '{n}'")),
-        Ty::Named(_) | Ty::Cap { .. } => {}
+        Ty::Named(_) => {}
+        Ty::Cap { limits, .. } => {
+            if let (Some(m), Some(e)) = (&limits.max, &limits.each)
+                && m.unit != e.unit
+            {
+                ctx.err(
+                    "E101",
+                    pos,
+                    format!("`max: {m}` and `each: {e}` use different units, so no action could satisfy both"),
+                );
+            }
+        }
         Ty::Proposed(inner) => check_ty_known(ctx, inner, pos),
         Ty::List(inner, _) => {
             if let Some(bad) = proof_or_authority(inner) {
@@ -530,29 +541,64 @@ fn assignable(from: &Ty, to: &Ty) -> Result<(), (&'static str, String)> {
         (Ty::Proposed(_), t) if !matches!(t, Ty::Proposed(_)) => {
             Err(("E001", format!("unvalidated {from} used where {to} is required; use `validate` first")))
         }
-        (Ty::Cap { path: fp, max: fmax }, Ty::Cap { path: tp, max: tmax }) => {
+        (Ty::Cap { path: fp, limits: fl }, Ty::Cap { path: tp, limits: tl }) => {
             if fp != tp {
                 return Err(("E101", format!("expected {to}, found {from}")));
             }
-            match (fmax, tmax) {
-                (Some(f), None) => Err((
-                    "E003",
-                    format!("capability limited to {f} cannot be widened to unlimited `cap {}`", tp.join(".")),
-                )),
-                (None, _) => Ok(()),
+            // Narrowing may only tighten: every limit the source has, the slot must have
+            // too, at least as strict. A limit the source lacks may be added freely.
+            narrow_money("max", &fl.max, &tl.max, tp)?;
+            narrow_money("each", &fl.each, &tl.each, tp)?;
+            match (fl.uses, tl.uses) {
+                (Some(f), None) => {
+                    return Err(("E003", format!("capability limited to {f} uses cannot be widened to unlimited uses")))
+                }
+                (Some(f), Some(t)) if t > f => {
+                    return Err(("E003", format!("capability limited to {f} uses cannot be widened to {t} uses")))
+                }
+                _ => {}
+            }
+            match (&fl.only, &tl.only) {
+                (Some(f), None) => {
+                    return Err((
+                        "E003",
+                        format!("capability limited to only {f:?} cannot be widened to act on any target"),
+                    ))
+                }
                 (Some(f), Some(t)) => {
-                    if f.unit != t.unit {
-                        Err(("E003", format!("capability limit {f} cannot be converted to {t}; units differ")))
-                    } else if f.amount < t.amount {
-                        Err(("E003", format!("capability limited to {f} cannot be widened to {t}")))
-                    } else {
-                        Ok(())
+                    if let Some(bad) = t.iter().find(|p| !crate::pattern::all_contained(std::slice::from_ref(*p), f)) {
+                        return Err((
+                            "E003",
+                            format!(
+                                "capability limited to only {f:?} cannot be widened to {t:?}: \"{bad}\" allows \
+                                 targets the original does not"
+                            ),
+                        ));
                     }
                 }
+                _ => {}
             }
+            Ok(())
         }
         _ if from == to => Ok(()),
         _ => Err(("E101", format!("expected {to}, found {from}"))),
+    }
+}
+
+/// One money limit (`max` or `each`) under narrowing: it may only shrink.
+fn narrow_money(name: &str, from: &Option<Limit>, to: &Option<Limit>, path: &[String]) -> Result<(), (&'static str, String)> {
+    match (from, to) {
+        (Some(f), None) => Err((
+            "E003",
+            format!("capability `{name}: {f}` cannot be widened to an unlimited `{name}` on `cap {}`", path.join(".")),
+        )),
+        (Some(f), Some(t)) if f.unit != t.unit => {
+            Err(("E003", format!("capability limit `{name}: {f}` cannot be converted to {t}; units differ")))
+        }
+        (Some(f), Some(t)) if f.amount < t.amount => {
+            Err(("E003", format!("capability limited to `{name}: {f}` cannot be widened to {t}")))
+        }
+        _ => Ok(()),
     }
 }
 

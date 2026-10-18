@@ -1,0 +1,1 @@
+{ "entry": "send_twice", "grants": { "sms": { "cap": "twilio.message.send", "only": ["+*1*"] } }, "model": { "provider": "script", "responses": [] }, "expect": { "config_error_contains": "more than one" } }

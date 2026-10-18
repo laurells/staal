@@ -1,0 +1,6 @@
+// expect: E003
+fn big(p: cap payments.refund(each: 100 USD)) {
+}
+fn f(p: cap payments.refund(each: 50 USD)) {
+    big(p)
+}

@@ -1,0 +1,1 @@
+{ "entry": "open_doors", "inputs": { "doors": ["north-door", "loading-bay", "north-door"] }, "grants": { "lock": { "cap": "building.lock.open" } }, "model": { "provider": "script", "responses": [] }, "expect": { "failure": "capability", "message_contains": "all 2", "performed": [["building.lock.open", "open"], ["building.lock.open", "open"]] } }

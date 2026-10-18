@@ -24,30 +24,80 @@ adapters (only a simulated one), and the native-code backend.
 | E100 | Undefined name or function |
 | E101 | Type mismatch or wrong number of arguments |
 | E102 | Unknown type |
-| E103 | `break` outside `repeat` or `loop` |
+| E103 | `break` outside `repeat`, `loop` or `for` |
 | E104 | Unknown field, or a field read on a value that has no fields |
 | E105 | A function with a return type can finish without returning |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
 All eight safety checks from the spec (E001-E008) are implemented. Phase 1's
-gate is met: every one is rejected by tests, and 20 valid programs compile,
-including the two benchmark workflows (`workflow_*.int`).
+gate is met: every one is rejected by tests. 24 valid programs compile,
+including the two benchmark workflows (`workflow_*.int`), and 186 invalid ones
+are each rejected with the expected code.
 
-The language has no record literals (building a value of a declared type in
-code), arithmetic, or parentheses yet.
+Nothing in the compiler or runtime is specific to payments, email or any other
+domain. Capability paths such as `payments.refund`, `building.lock.open` or
+`records.read` are names chosen by whoever deploys the program; the rules
+treat them all alike.
+
+## Language basics
+
+    type Item { sku: Text, qty: Int, price: Money }
+    type Line { sku: Text, total: Money }
+
+    fn line_total(item: Item) -> Money {
+        return item.price * item.qty
+    }
+
+    fn ship(items: List<Item, 50>, out: cap warehouse.dispatch) -> Done {
+        for item in items {
+            if item.qty > 0 and not starts_with(item.sku, "TEST-") {
+                let r = out.dispatch(Line { sku: item.sku, total: line_total(item) })
+                ...
+            }
+        }
+        ...
+    }
+
+- **Arithmetic:** `+ - * /` on Int; `+ -` on Money of one currency; Money `*`
+  Int; `+` joins Text; unary `-`. Overflow, division by zero, mixing
+  currencies, negative money, and an index out of range are failures, never
+  wrong answers.
+- **Logic:** `and`, `or` (the right side runs only when needed), `not`.
+- **Parentheses** group anything: `(validate draft).amount`.
+- **Records:** `Line { sku: s, total: t }` must give every field exactly once.
+- **Lists:** `List<T, N>` always declares its maximum length N, which is
+  enforced on inputs and on model output. List literals `[a, b]`, indexing
+  `xs[0]`, and `for x in xs { }`, which is bounded by N, so the compiler can
+  cost model calls inside it.
+- **Built-ins:** `len`, `contains`, `starts_with`, `ends_with`.
+
+The exact rules are in `docs/RUNTIME.md` section 4.
 
 ## Capability limits
 
-    fn small_refund(pay: cap payments.refund(max: 50 USD), r: Refund) { ... }
+    fn open_doors(doors: List<Text, 5>,
+                  lock: cap building.lock.open(uses: 2, only: ["north-door", "loading-bay"])) { ... }
+    fn notify(number: Text, sms: cap twilio.message.send(only: ["+234*"])) -> Receipt { ... }
+    fn refund(r: Refund, pay: cap payments.refund(max: 500 USD, each: 50 USD)) -> Receipt { ... }
 
-A capability may be narrowed (500 USD -> 50 USD, unlimited -> 50 USD) and never
-widened (50 USD -> 500 USD, 50 USD -> unlimited). Limits in different units are
-never converted. Only `max` is supported, and limits are whole numbers.
+| Limit | Meaning |
+|---|---|
+| `max` | most money spent in total over the run |
+| `each` | most money one action may spend |
+| `uses` | how many actions may be attempted (a failed attempt counts) |
+| `only` | which targets may be acted on: exact text, or one `*` wildcard (`"*@teamozy.org"`, `"/reports/*"`) |
 
-The checker controls how much authority code is handed. It does not yet stop a
-single action from exceeding the limit at runtime (e.g. refunding 600 through a
-500 USD capability); that check belongs to the runtime capability broker.
+A capability may be narrowed (fewer uses, a lower limit, a tighter `only`
+list, adding a limit) and never widened (E003): `uses: 3` cannot become
+`uses: 10` or unlimited, and `only: ["/reports/*"]` cannot become `["/*"]`.
+Money limits are never converted between currencies.
+
+At runtime the broker checks every action against the limits of its
+capability and of every capability it was narrowed from, before the service
+is called. A limit that needs an action's amount or target refuses the action
+when it cannot be determined. Grants in the run config can carry the same
+limits. Details: `docs/RUNTIME.md` section 6.
 
 ## Budgets and loops
 
@@ -141,8 +191,8 @@ Fields are read with `.`, to any depth. Reading a field of an unvalidated
 then `r.amount`). A field is exactly as trusted as the value it came from.
 Type fields cannot be capabilities, so authority cannot travel inside data
 sent to a model. `a.b.c(...)` is a syntax error: actions are called directly
-on a capability variable. Because there are no parentheses yet,
-`(validate draft).amount` cannot be written; bind it with `let` first.
+on a capability variable. `(validate draft).amount` reads a field of a
+validated value directly.
 
 ## Trust and prompt injection
 
@@ -332,4 +382,9 @@ To add a rule, write the failing program first, then make the checker reject it.
     src/parser.rs   tokens -> AST (grammar is in the file header)
     src/ast.rs      AST and types
     src/checker.rs  type and safety rules
+    src/budget.rs   worst-case model cost (E004, E005)
+    src/pattern.rs  `only` patterns: matching and containment
+    src/interp/     reference runtime: interpreter, money, broker, adapters,
+                    model providers, journal
     src/main.rs     command-line interface
+    docs/RUNTIME.md runtime specification

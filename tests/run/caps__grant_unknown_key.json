@@ -1,0 +1,1 @@
+{ "entry": "send_twice", "grants": { "sms": { "cap": "twilio.message.send", "quota": 3 } }, "model": { "provider": "script", "responses": [] }, "expect": { "config_error_contains": "unknown key 'quota'" } }

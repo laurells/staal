@@ -1,0 +1,1 @@
+{ "entry": "open_by_number", "inputs": { "n": 7 }, "grants": { "lock": { "cap": "building.lock.open" } }, "model": { "provider": "script", "responses": [] }, "expect": { "failure": "capability", "message_contains": "could not be determined", "performed": [] } }

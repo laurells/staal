@@ -1,0 +1,24 @@
+// Every limit may be tightened, or added where there was none.
+fn sms_one(sms: cap twilio.message.send(uses: 1, only: ["+2348012345678"])) {
+}
+
+fn sms_ng(sms: cap twilio.message.send(uses: 5, only: ["+234*"])) {
+    sms_one(sms)
+}
+
+fn refund_small(pay: cap payments.refund(max: 100 USD, each: 20 USD)) {
+}
+
+fn reports(fs: cap files.write(only: ["/reports/2026/*", "/reports/summary.txt"])) {
+}
+
+fn top(
+    sms: cap twilio.message.send,
+    pay: cap payments.refund(max: 500 USD, each: 50 USD),
+    fs: cap files.write(only: ["/reports/*"]),
+) {
+    sms_ng(sms)
+    refund_small(pay)
+    reports(fs)
+    let door: cap twilio.message.send(uses: 3) = sms
+}

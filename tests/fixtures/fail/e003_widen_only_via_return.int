@@ -1,0 +1,4 @@
+// expect: E003
+fn leak(d: cap building.lock.open(only: ["north-door"])) -> cap building.lock.open(only: ["*"]) {
+    return d
+}

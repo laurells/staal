@@ -1,0 +1,1 @@
+{ "entry": "retry_send", "grants": { "sms": { "cap": "twilio.message.send" } }, "model": { "provider": "script", "responses": [] }, "adapters": { "simulated": { "fail": [ { "cap": "twilio.message.send", "when_arg": "bounce" } ] } }, "expect": { "result": false, "performed": [], "events": ["action_failed", "action_failed", "action_refused"] } }

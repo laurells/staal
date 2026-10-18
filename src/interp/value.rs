@@ -260,7 +260,7 @@ mod tests {
         for n in ["Receipt", "Outcome", "Done", "Unit"] {
             assert!(from_json(&Ty::Named(n.into()), &json!({ "receipt": "x" }), &t, "in").is_err());
         }
-        assert!(from_json(&Ty::Cap { path: vec!["a".into()], max: None }, &json!({}), &t, "in").is_err());
+        assert!(from_json(&Ty::Cap { path: vec!["a".into()], limits: Default::default() }, &json!({}), &t, "in").is_err());
     }
 
     #[test]

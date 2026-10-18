@@ -8,7 +8,8 @@
 //   param    := IDENT ":" ty mark*
 //   mark     := "@" "trusted" | "@" "blind" ("(" field_path ("," field_path)* ")")?
 //   field_path := IDENT ("." IDENT)*
-//   ty       := "cap" IDENT ("." IDENT)* ("(" "max" ":" NUM IDENT? ")")?
+//   ty       := "cap" IDENT ("." IDENT)* ("(" climit ("," climit)* ")")?
+//   climit   := ("max" | "each") ":" NUM IDENT? | "uses" ":" NUM | "only" ":" "[" (STRING ","?)* "]"
 //             | "List" "<" ty "," NUM ">" | "Proposed" "<" ty ">" | IDENT
 //   block    := "{" stmt* "}"
 //   stmt     := "let" IDENT (":" ty)? "=" expr | "return" expr?
@@ -150,6 +151,41 @@ impl Parser {
         Ok((trusted, blind))
     }
 
+    /// `500 USD` in a capability limit: a whole number and an optional currency.
+    fn money_limit(&mut self) -> PResult<Limit> {
+        let amount = self.num()?;
+        let unit = match self.peek().clone() {
+            Tok::Ident(u) => {
+                self.bump();
+                Some(u)
+            }
+            _ => None,
+        };
+        Ok(Limit { amount, unit })
+    }
+
+    /// `["a", "*@b.org"]`: allow-list patterns for `only`.
+    fn patterns(&mut self) -> PResult<Vec<String>> {
+        self.expect(Tok::LBracket, "'['")?;
+        let mut out = Vec::new();
+        while *self.peek() != Tok::RBracket {
+            let pos = self.pos();
+            let Tok::Str(p) = self.peek().clone() else {
+                return Err((pos, format!("expected a quoted pattern, found {:?}", self.peek())));
+            };
+            self.bump();
+            crate::pattern::validate(&p).map_err(|e| (pos, e))?;
+            out.push(p);
+            if *self.peek() == Tok::Comma {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        self.expect(Tok::RBracket, "']'")?;
+        Ok(out)
+    }
+
     fn budget(&mut self) -> PResult<Budget> {
         let pos = self.pos();
         self.expect(Tok::Budget, "'budget'")?;
@@ -256,27 +292,37 @@ impl Parser {
                 self.bump();
                 path.push(self.ident()?);
             }
-            let mut max = None;
+            let mut limits = CapLimits::default();
             if *self.peek() == Tok::LParen {
                 self.bump();
-                let kpos = self.pos();
-                let key = self.ident()?;
-                if key != "max" {
-                    return Err((kpos, format!("unknown capability limit '{key}'; only 'max' is supported")));
-                }
-                self.expect(Tok::Colon, "':'")?;
-                let amount = self.num()?;
-                let unit = match self.peek().clone() {
-                    Tok::Ident(u) => {
-                        self.bump();
-                        Some(u)
+                loop {
+                    let kpos = self.pos();
+                    let key = self.ident()?;
+                    self.expect(Tok::Colon, "':'")?;
+                    let dup = match key.as_str() {
+                        "max" => limits.max.replace(self.money_limit()?).is_some(),
+                        "each" => limits.each.replace(self.money_limit()?).is_some(),
+                        "uses" => limits.uses.replace(self.num()?).is_some(),
+                        "only" => limits.only.replace(self.patterns()?).is_some(),
+                        _ => {
+                            return Err((
+                                kpos,
+                                format!("unknown capability limit '{key}'; use 'max', 'each', 'uses' or 'only'"),
+                            ))
+                        }
+                    };
+                    if dup {
+                        return Err((kpos, format!("capability limit '{key}' given twice")));
                     }
-                    _ => None,
-                };
+                    if *self.peek() == Tok::Comma {
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
                 self.expect(Tok::RParen, "')'")?;
-                max = Some(Limit { amount, unit });
             }
-            return Ok(Ty::Cap { path, max });
+            return Ok(Ty::Cap { path, limits });
         }
         let npos = self.pos();
         let name = self.ident()?;

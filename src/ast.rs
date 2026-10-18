@@ -8,9 +8,48 @@ pub enum Ty {
     Proposed(Box<Ty>),
     /// `List<T, N>`: a list of at most N values of type T.
     List(Box<Ty>, u64),
-    /// A capability, e.g. `cap payments.refund(max: 500 USD)`.
-    /// `max: None` means the capability has no upper limit.
-    Cap { path: Vec<String>, max: Option<Limit> },
+    /// A capability, e.g. `cap payments.refund(max: 500 USD)`, with its limits.
+    Cap { path: Vec<String>, limits: CapLimits },
+}
+
+/// The limits on a capability. Every limit is optional; a capability with none is
+/// unlimited. All of them hold together, and through every narrowed copy.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CapLimits {
+    /// `max: 500 USD`: the most money that may be spent through it in total.
+    pub max: Option<Limit>,
+    /// `each: 50 USD`: the most money one action may spend.
+    pub each: Option<Limit>,
+    /// `uses: 10`: how many actions may be attempted through it in total.
+    pub uses: Option<u64>,
+    /// `only: ["a", "*@b.org"]`: the targets it may act on (see `pattern`).
+    pub only: Option<Vec<String>>,
+}
+
+impl CapLimits {
+    pub fn is_empty(&self) -> bool {
+        *self == CapLimits::default()
+    }
+}
+
+impl std::fmt::Display for CapLimits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut parts = Vec::new();
+        if let Some(m) = &self.max {
+            parts.push(format!("max: {m}"));
+        }
+        if let Some(e) = &self.each {
+            parts.push(format!("each: {e}"));
+        }
+        if let Some(u) = self.uses {
+            parts.push(format!("uses: {u}"));
+        }
+        if let Some(o) = &self.only {
+            let items: Vec<String> = o.iter().map(|p| format!("{p:?}")).collect();
+            parts.push(format!("only: [{}]", items.join(", ")));
+        }
+        if parts.is_empty() { Ok(()) } else { write!(f, "({})", parts.join(", ")) }
+    }
 }
 
 /// An upper bound on a capability, e.g. `500 USD`. `unit` is None for a bare number.
@@ -35,8 +74,7 @@ impl std::fmt::Display for Ty {
             Ty::Named(n) => write!(f, "{n}"),
             Ty::Proposed(t) => write!(f, "Proposed<{t}>"),
             Ty::List(t, n) => write!(f, "List<{t}, {n}>"),
-            Ty::Cap { path, max: None } => write!(f, "cap {}", path.join(".")),
-            Ty::Cap { path, max: Some(m) } => write!(f, "cap {}(max: {m})", path.join(".")),
+            Ty::Cap { path, limits } => write!(f, "cap {}{limits}", path.join(".")),
         }
     }
 }

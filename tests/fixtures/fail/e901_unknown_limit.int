@@ -1,0 +1,3 @@
+// expect: E901
+fn f(s: cap twilio.message.send(quota: 5)) {
+}

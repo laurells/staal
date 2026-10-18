@@ -4,6 +4,7 @@ pub mod checker;
 pub mod interp;
 pub mod lexer;
 pub mod parser;
+pub mod pattern;
 
 use checker::Diagnostic;
 use lexer::Pos;

@@ -212,16 +212,67 @@ struct Setup {
 
 enum Arg {
     Data(Value),
-    Grant { path: String, limit: Option<Money> },
+    Grant { path: String, limits: broker::Limits },
 }
 
 /// Converts a limit written in source (`max: 500 USD`) to money.
-fn source_limit(l: &Limit) -> Result<Money, String> {
+fn source_limit(name: &str, l: &Limit) -> Result<Money, String> {
     let unit = l.unit.as_deref().ok_or_else(|| {
-        format!("capability limit 'max: {}' has no currency, so it cannot be enforced; write e.g. 'max: {} USD'", l.amount, l.amount)
+        format!(
+            "capability limit '{name}: {}' has no currency, so it cannot be enforced; write e.g. '{name}: {} USD'",
+            l.amount, l.amount
+        )
     })?;
     let currency = Currency::parse(unit)?;
     Money::from_major(l.amount, currency)
+}
+
+/// The broker's form of limits written in source.
+fn runtime_limits(l: &CapLimits) -> Result<broker::Limits, String> {
+    Ok(broker::Limits {
+        max: l.max.as_ref().map(|m| source_limit("max", m)).transpose()?,
+        each: l.each.as_ref().map(|e| source_limit("each", e)).transpose()?,
+        uses: l.uses,
+        only: l.only.clone(),
+    })
+}
+
+/// Reads the limits of a grant in the run config: `{"cap": ..., "max": money,
+/// "each": money, "uses": n, "only": ["pattern", ...]}`.
+fn grant_limits(g: &Map<String, Json>, at: &str, types: &Types) -> Result<broker::Limits, String> {
+    let money = |key: &str| -> Result<Option<Money>, String> {
+        match g.get(key) {
+            None => Ok(None),
+            Some(m) => match from_json(&Ty::Named("Money".into()), m, types, &format!("{at}.{key}"))? {
+                Value::Money(m) => Ok(Some(m)),
+                _ => Err(format!("{at}.{key}: expected money")),
+            },
+        }
+    };
+    let uses = match g.get("uses") {
+        None => None,
+        Some(v) => Some(v.as_u64().ok_or(format!("{at}.uses: expected a whole number"))?),
+    };
+    let only = match g.get("only") {
+        None => None,
+        Some(v) => {
+            let list = v.as_array().ok_or(format!("{at}.only: expected a list of patterns"))?;
+            let mut out = Vec::with_capacity(list.len());
+            for (i, p) in list.iter().enumerate() {
+                let p = p.as_str().ok_or(format!("{at}.only[{i}]: expected a string"))?;
+                crate::pattern::validate(p).map_err(|e| format!("{at}.only[{i}]: {e}"))?;
+                out.push(p.to_string());
+            }
+            Some(out)
+        }
+    };
+    let limits = broker::Limits { max: money("max")?, each: money("each")?, uses, only };
+    if let (Some(m), Some(e)) = (limits.max, limits.each)
+        && m.currency != e.currency
+    {
+        return Err(format!("{at}: max and each are in different currencies, so no action could satisfy both"));
+    }
+    Ok(limits)
 }
 
 impl Setup {
@@ -269,12 +320,12 @@ impl Setup {
         let mut args = Vec::new();
         for p in &f.params {
             match &p.ty {
-                Ty::Cap { path, max } => {
+                Ty::Cap { path, limits: declared } => {
                     let at = format!("grants.{}", p.name);
                     let g = grants.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this capability"))?;
                     let g = g.as_object().ok_or(format!("{at}: expected an object"))?;
                     for k in g.keys() {
-                        if k != "cap" && k != "max" {
+                        if !["cap", "max", "each", "uses", "only"].contains(&k.as_str()) {
                             return Err(format!("{at}: unknown key '{k}'"));
                         }
                     }
@@ -283,23 +334,21 @@ impl Setup {
                     if gpath != want {
                         return Err(format!("{at}.cap: is '{gpath}', but the parameter needs '{want}'"));
                     }
-                    let limit = match g.get("max") {
-                        None => None,
-                        Some(m) => match from_json(&Ty::Named("Money".into()), m, &types, &format!("{at}.max"))? {
-                            Value::Money(m) => Some(m),
-                            _ => return Err(format!("{at}.max: expected money")),
-                        },
-                    };
-                    if let (Some(gl), Some(declared)) = (limit, max) {
-                        let d = source_limit(declared)?;
-                        if gl.currency != d.currency {
+                    let limits = grant_limits(g, &at, &types)?;
+                    // The parameter's own limits narrow the grant when the run starts. Money
+                    // limits in different currencies could never both be met: refuse now.
+                    let d = runtime_limits(declared)?;
+                    for (name, granted, wanted) in [("max", limits.max, d.max), ("each", limits.each, d.each)] {
+                        if let (Some(gl), Some(dl)) = (granted, wanted)
+                            && gl.currency != dl.currency
+                        {
                             return Err(format!(
-                                "{at}.max: granted in {}, but the parameter's limit is in {}",
-                                gl.currency.code, d.currency.code
+                                "{at}.{name}: granted in {}, but the parameter's limit is in {}",
+                                gl.currency.code, dl.currency.code
                             ));
                         }
                     }
-                    args.push(Arg::Grant { path: want, limit });
+                    args.push(Arg::Grant { path: want, limits });
                 }
                 Ty::Proposed(_) => {
                     return Err(format!("inputs.{}: an entry parameter cannot be Proposed; only model calls produce those", p.name))
@@ -345,8 +394,8 @@ fn types_of(prog: &Program) -> Types {
 
 fn check_all_limits(prog: &Program) -> Result<(), String> {
     fn ty(t: &Ty, where_: &str) -> Result<(), String> {
-        if let Ty::Cap { max: Some(l), .. } = t {
-            source_limit(l).map_err(|e| format!("{where_}: {e}"))?;
+        if let Ty::Cap { limits, .. } = t {
+            runtime_limits(limits).map_err(|e| format!("{where_}: {e}"))?;
         }
         Ok(())
     }
@@ -465,9 +514,13 @@ impl<'p> Interp<'p> {
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
-                Arg::Grant { path, limit } => {
-                    let h = self.broker.grant(path, *limit);
-                    self.emit("grant", json!({ "capability": path, "max": limit.map(|m| m.to_string()) }));
+                Arg::Grant { path, limits } => {
+                    let h = self.broker.grant(path, limits.clone());
+                    self.emit(
+                        "grant",
+                        json!({ "capability": path, "max": limits.max.map(|m| m.to_string()),
+                                "each": limits.each.map(|m| m.to_string()), "uses": limits.uses, "only": limits.only }),
+                    );
                     args.push(Value::Cap(h));
                 }
             }
@@ -499,10 +552,15 @@ impl<'p> Interp<'p> {
         RunResult { result, log: std::mem::take(&mut self.log) }
     }
 
-    fn narrow(&mut self, v: Value, limit: &Limit) -> Result<Value, Failure> {
+    /// A capability flowing into a slot with limits gets a child with those limits.
+    /// A slot without limits passes it through unchanged.
+    fn narrow(&mut self, v: Value, limits: &CapLimits) -> Result<Value, Failure> {
         let Value::Cap(h) = v else { return internal("a non-capability flowed into a capability slot") };
-        let m = source_limit(limit).or_else(internal)?;
-        let child = self.broker.narrow(h, m).or_else(internal)?;
+        if limits.is_empty() {
+            return Ok(Value::Cap(h));
+        }
+        let l = runtime_limits(limits).or_else(internal)?;
+        let child = self.broker.narrow(h, l).or_else(internal)?;
         Ok(Value::Cap(child))
     }
 
@@ -517,7 +575,7 @@ impl<'p> Interp<'p> {
         let mut frame = Frame { scopes: vec![HashMap::new()] };
         for (p, v) in f.params.iter().zip(args) {
             let v = match &p.ty {
-                Ty::Cap { max: Some(l), .. } => self.narrow(v, l)?,
+                Ty::Cap { limits, .. } => self.narrow(v, limits)?,
                 _ => v,
             };
             frame.set(&p.name, v)?;
@@ -536,7 +594,7 @@ impl<'p> Interp<'p> {
             // A capability leaving through a limited return type is narrowed to that
             // limit, exactly as it would be entering a limited parameter or typed let.
             Flow::Return(v) => match &f.ret {
-                Some(Ty::Cap { max: Some(l), .. }) => self.narrow(v, l),
+                Some(Ty::Cap { limits, .. }) => self.narrow(v, limits),
                 _ => Ok(v),
             },
             Flow::Next if f.ret.is_none() => Ok(Value::Unit),
@@ -576,8 +634,8 @@ impl<'p> Interp<'p> {
         match s {
             Stmt::Let { name, ty, value, .. } => {
                 let mut v = self.eval(frame, value)?;
-                if let Some(Ty::Cap { max: Some(l), .. }) = ty {
-                    v = self.narrow(v, l)?;
+                if let Some(Ty::Cap { limits, .. }) = ty {
+                    v = self.narrow(v, limits)?;
                 }
                 frame.set(name, v)?;
                 Ok(Flow::Next)
@@ -807,9 +865,13 @@ impl<'p> Interp<'p> {
     fn action(&mut self, h: usize, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
         let path = self.broker.path(h).or_else(internal)?.to_string();
         let amount = self.adapter.amount(&path, method, &args);
+        let target = self.adapter.target(&path, method, &args);
         let amount_text = amount.map(|m| m.to_string());
-        self.emit("action_requested", json!({ "capability": path, "method": method, "amount": amount_text }));
-        if let Err(why) = self.broker.authorize(h, amount) {
+        self.emit(
+            "action_requested",
+            json!({ "capability": path, "method": method, "amount": amount_text, "target": target }),
+        );
+        if let Err(why) = self.broker.authorize(h, amount, target.as_deref()) {
             self.emit("action_refused", json!({ "capability": path, "method": method, "reason": why }));
             return fail(FailKind::Capability, why);
         }
@@ -824,7 +886,11 @@ impl<'p> Interp<'p> {
                 }
             }
         }
-        let body = json!({ "capability": path, "method": method, "args": args_json, "amount": amount_text });
+        // Approved: this attempt counts against every `uses` limit in the chain, whatever
+        // the service then answers.
+        self.broker.count_use(h).or_else(internal)?;
+        let body =
+            json!({ "capability": path, "method": method, "args": args_json, "amount": amount_text, "target": target });
         let idempotent = self.adapter.idempotent(&path, method);
         let what = format!("action {path}.{method}");
         let (answer, replayed) = self.external("action", body, idempotent, &what, |it, key| {

@@ -1,0 +1,41 @@
+// Runtime enforcement of capability limits beyond money.
+
+// A door controller may open two named doors, at most twice in total.
+fn open_doors(doors: List<Text, 5>, lock: cap building.lock.open(uses: 2, only: ["north-door", "loading-bay"])) -> Int {
+    for d in doors {
+        let r = lock.open(d)
+    }
+    return len(doors)
+}
+
+// Messages may only go to Nigerian numbers.
+fn notify(number: Text, sms: cap twilio.message.send(only: ["+234*"])) -> Receipt {
+    return sms.send(number)
+}
+
+// Each refund is capped separately from the running total.
+type Refund { order_id: Text, amount: Money }
+fn refund(r: Refund, pay: cap payments.refund(max: 500 USD, each: 50 USD)) -> Receipt {
+    return pay.refund(r)
+}
+
+// Failed attempts still count as uses.
+fn retry_send(sms: cap twilio.message.send(uses: 2)) -> Bool {
+    let a = try sms.send("bounce")
+    let b = try sms.send("bounce")
+    let c = try sms.send("+2348012345678")
+    return c.ok
+}
+
+// The grant's own limits apply even when the parameter declares none.
+fn send_twice(sms: cap twilio.message.send) -> Bool {
+    let a = sms.send("+2348000000001")
+    let b = try sms.send("+2348000000002")
+    return b.ok
+}
+
+// An `only` limit needs to know the target; an action whose target cannot be
+// determined (here: no text argument at all) is refused, not let through.
+fn open_by_number(n: Int, lock: cap building.lock.open(only: ["north-door"])) -> Receipt {
+    return lock.open(n)
+}

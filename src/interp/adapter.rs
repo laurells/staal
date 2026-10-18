@@ -14,6 +14,10 @@ pub trait Adapter {
     /// of the arguments: a resumed run computes it again and must get the same answer.
     /// For a capability with a limit, an action whose amount cannot be determined is refused.
     fn amount(&self, capability: &str, method: &str, args: &[Value]) -> Option<Money>;
+    /// What an action acts on (a phone number, a door, a file path), checked against
+    /// a capability's `only` limit. Like `amount`, a pure function of the arguments.
+    /// For a capability with `only`, an action whose target cannot be determined is refused.
+    fn target(&self, capability: &str, method: &str, args: &[Value]) -> Option<String>;
     /// Whether the service deduplicates this action by idempotency key. If true, the
     /// adapter promises that performing it again with a key it has already seen does
     /// not perform it again and returns the original receipt. Only then may a resumed
@@ -36,7 +40,8 @@ pub trait Adapter {
 ///    With false, the adapter behaves like a service without deduplication: a repeated
 ///    key performs the action again, which a correct runtime must never cause.
 ///
-/// The amount of an action is the first Money value found in its arguments, depth first.
+/// The amount of an action is the first Money value found in its arguments, depth first;
+/// its target is the first Text value found the same way.
 pub struct SimulatedAdapter {
     fail_rules: Vec<(String, String)>,
     idempotent: bool,
@@ -111,6 +116,16 @@ fn first_money(v: &Value) -> Option<Money> {
     match v {
         Value::Money(m) => Some(*m),
         Value::Record { fields, .. } => fields.iter().find_map(|(_, f)| first_money(f)),
+        Value::List(items) => items.iter().find_map(first_money),
+        _ => None,
+    }
+}
+
+fn first_text(v: &Value) -> Option<String> {
+    match v {
+        Value::Text(t) => Some(t.clone()),
+        Value::Record { fields, .. } => fields.iter().find_map(|(_, f)| first_text(f)),
+        Value::List(items) => items.iter().find_map(first_text),
         _ => None,
     }
 }
@@ -127,6 +142,10 @@ fn contains_text(j: &Json, needle: &str) -> bool {
 impl Adapter for SimulatedAdapter {
     fn amount(&self, _capability: &str, _method: &str, args: &[Value]) -> Option<Money> {
         args.iter().find_map(first_money)
+    }
+
+    fn target(&self, _capability: &str, _method: &str, args: &[Value]) -> Option<String> {
+        args.iter().find_map(first_text)
     }
 
     fn idempotent(&self, _capability: &str, _method: &str) -> bool {

@@ -1,0 +1,1 @@
+{ "entry": "notify", "inputs": { "number": "+15551234567" }, "grants": { "sms": { "cap": "twilio.message.send" } }, "model": { "provider": "script", "responses": [] }, "expect": { "failure": "capability", "message_contains": "+15551234567", "performed": [] } }

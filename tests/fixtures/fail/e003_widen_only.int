@@ -1,0 +1,7 @@
+// expect: E003
+// "/*" reaches every folder, not only /reports.
+fn anywhere(fs: cap files.write(only: ["/*"])) {
+}
+fn f(fs: cap files.write(only: ["/reports/*"])) {
+    anywhere(fs)
+}

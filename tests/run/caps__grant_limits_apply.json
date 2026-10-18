@@ -1,0 +1,1 @@
+{ "entry": "send_twice", "grants": { "sms": { "cap": "twilio.message.send", "uses": 1, "only": ["+234*"] } }, "model": { "provider": "script", "responses": [] }, "expect": { "result": false, "performed": [["twilio.message.send", "send"]] } }

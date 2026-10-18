@@ -1,0 +1,6 @@
+// expect: E003
+fn wing(d: cap building.lock.open(only: ["north-*"])) {
+}
+fn f(d: cap building.lock.open(only: ["north-door"])) {
+    wing(d)
+}

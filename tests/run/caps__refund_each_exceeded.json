@@ -1,0 +1,1 @@
+{ "entry": "refund", "inputs": { "r": { "order_id": "A1", "amount": { "amount": "50.01", "currency": "USD" } } }, "grants": { "pay": { "cap": "payments.refund" } }, "model": { "provider": "script", "responses": [] }, "expect": { "failure": "capability", "message_contains": "per action", "performed": [] } }

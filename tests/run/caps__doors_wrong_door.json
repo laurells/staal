@@ -1,0 +1,1 @@
+{ "entry": "open_doors", "inputs": { "doors": ["server-room"] }, "grants": { "lock": { "cap": "building.lock.open" } }, "model": { "provider": "script", "responses": [] }, "expect": { "failure": "capability", "message_contains": "targets \"server-room\"", "performed": [] } }

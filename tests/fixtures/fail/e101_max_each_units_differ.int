@@ -1,0 +1,3 @@
+// expect: E101
+fn f(p: cap payments.refund(max: 500 USD, each: 50 NGN)) {
+}

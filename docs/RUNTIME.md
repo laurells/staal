@@ -49,6 +49,7 @@ The result is either the entry function's return value or a failure
 | `Bool` | true or false |
 | `Money` | an exact amount in minor units (e.g. cents) and a currency code |
 | declared record type | its fields, in declaration order |
+| `List<T, N>` | at most N values of type T, in order |
 | `Proposed<T>` | raw model output (JSON), not yet checked against T |
 | `Receipt` | proof of one completed action: id, capability, method |
 | `Outcome` | `ok`, `error`, and (hidden) what succeeded |
@@ -91,6 +92,9 @@ declared type by the same strict rules:
   boolean; `Money` the object form above.
 - A record must be a JSON object with **exactly** its declared fields: a
   missing field or an unknown extra field is an error.
+- A `List<T, N>` must be a JSON array of at most N items, each valid as T. A
+  model's JSON schema for it carries `maxItems: N`, but the bound is enforced
+  here whatever the model returns.
 - A field of type `Proposed<T>` keeps the raw JSON without checking it.
 - `Receipt`, `Outcome`, `Done` and capabilities are never accepted from
   outside, at any depth. In particular a model cannot forge a receipt: a
@@ -110,12 +114,49 @@ Evaluation is strictly left to right and statement by statement.
 - `if` evaluates its condition, then exactly one branch.
 - `repeat N { }` runs its body N times unless `break` or `return` leaves it.
 - `loop { }` runs its body until `break` or `return`.
+- `for x in xs { }` runs its body once per element of the list `xs`, in order,
+  with `x` bound to that element. The list is evaluated once, before the first
+  iteration. Because every list has a declared maximum length, a `for` loop is
+  bounded, and the compiler costs it as at most N iterations.
 - `break` leaves the innermost loop. `return` leaves the function.
 - A function call evaluates its arguments left to right, then runs the callee
   with a fresh scope containing only its parameters.
 - Field access reads a field of a record or of an `Outcome` (`ok`, `error`).
 - Comparisons on `Text`, `Int`, `Bool` compare values; `Text` ordering is not
-  allowed by the compiler. Money is described above.
+  allowed by the compiler. Money is described above. `==` on lists and records
+  compares every element or field.
+- `and` and `or` evaluate their right side only when the left side does not
+  decide the answer. `not` negates a Bool.
+- A record literal `T { field: value, ... }` must give every field of T exactly
+  once, in any order (checked by the compiler). Fields are evaluated in the
+  order written.
+- A list literal `[a, b, c]` evaluates its elements left to right. Its maximum
+  is its length, so it fits any `List<T, N>` with N at least that.
+- `xs[i]` is the element at position i, counting from 0.
+- Built-in functions: `len(text)` (characters, not bytes), `len(list)`,
+  `contains(text, part)`, `contains(list, value)`, `starts_with(text, prefix)`,
+  `ends_with(text, suffix)`. Their names are reserved.
+
+### Arithmetic
+
+| Operands | Operators | Result |
+| --- | --- | --- |
+| Int, Int | `+ - * /` | Int; `/` rounds toward zero |
+| Money, Money (same currency) | `+ -` | Money |
+| Money, Int (either order) | `*` | Money |
+| Text, Text | `+` | Text (joined) |
+| Int | unary `-` | Int |
+
+Anything else (Money / Int, Money + Int, ...) is rejected by the compiler.
+Arithmetic never wraps, rounds money, or converts currencies. These are
+failures of kind `value`, which `try` around a call can catch:
+
+- an Int result outside the signed 64-bit range, including `-(minimum Int)`;
+- division by zero;
+- Money in two different currencies added or subtracted;
+- a negative Money result (`5 USD - 10 USD`, or Money times a negative Int);
+- Text longer than 16 MiB;
+- an index that is negative or not less than the list's length.
 
 ### Limits that keep a run finite
 
@@ -158,27 +199,76 @@ the README).
 
 ## 6. Capabilities and actions
 
-The **capability broker** holds every capability. A capability has a path
-(`payments.refund`), an optional limit, an amount spent, and optionally a
-parent.
+The **capability broker** holds every capability. A program only ever holds a
+handle. A capability has a path (`building.lock.open`), a set of limits, what
+has been used of them so far, and optionally a parent.
 
-- **Grants** create root capabilities. If the entry parameter declares a
-  limit, the granted capability is narrowed to it.
-- **Narrowing** happens whenever a capability flows into a slot that declares a
-  smaller limit (a call parameter or a typed `let`): the broker creates a
-  child capability with that limit. A child's spending also counts against
-  every ancestor.
-- **Limits are cumulative.** `max: 500 USD` means at most 500 USD in total
-  through that capability (and its children) over the run, not 500 per action.
-- An action `c.m(args)` asks the adapter for the action's amount. If the
-  capability or any ancestor has a limit, the amount must be a Money value in
-  the limit's currency and must fit within every limit in the chain;
-  otherwise the action is refused (`capability`) and the adapter is never
-  called. If no amount can be determined for a limited capability, the action
-  is refused.
-- The adapter then performs the action. Success yields a `Receipt`; the amount
-  is charged to the chain only on success. Adapter failure is a failure of
-  kind `action`.
+### Limits
+
+Every limit is optional, and all limits declared on a capability apply
+together. They are written on the type, `cap path(key: value, ...)`, or on the
+grant in the run config.
+
+| Limit | Meaning | Example |
+|---|---|---|
+| `max` | the most money spent through the capability in total over the run, charged when an action succeeds | `cap payments.refund(max: 500 USD)` |
+| `each` | the most money one action may spend | `cap payments.refund(each: 50 USD)` |
+| `uses` | how many actions may be attempted in total | `cap building.lock.open(uses: 2)` |
+| `only` | the targets actions may act on, as patterns | `cap twilio.message.send(only: ["+234*"])` |
+
+- **Patterns.** A pattern is either exact text, or text with exactly one `*`,
+  which matches any run of characters, including none. Examples:
+  `"north-door"`, `"*@teamozy.org"`, `"/reports/*"`, `"*"`. An empty pattern,
+  or one with more than one `*`, is an error (E901 in source, a config error
+  in a grant).
+- **Money limits.** `max` and `each` on one capability must be in the same
+  currency (E101).
+- **`uses` counts attempts, not successes.** A use is counted when the broker
+  approves the action, before the service is called. A failed attempt can
+  still cost money or reach someone, so it uses up the allowance like any
+  other.
+- **Limits fail closed.** A limit that needs to know something about an action
+  refuses the action when the adapter cannot say. A money limit needs the
+  amount; `only` needs the target.
+
+### Grants, narrowing and checking
+
+- **Grants** create root capabilities. Grant keys are `cap` plus any of the
+  limits above, for example
+  `{"cap": "twilio.message.send", "uses": 1, "only": ["+234*"]}`.
+  Money is written `{"amount": "10.00", "currency": "USD"}`. An unknown key is
+  a config error. If the entry parameter declares limits, the granted
+  capability is then narrowed to them.
+- **Narrowing** happens whenever a capability flows into a slot that declares
+  limits: a call parameter, a typed `let`, or a function's return. The broker
+  creates a child capability with those limits. Everything the child does also
+  counts against every ancestor, so a child can never do more than its
+  ancestors allow, whatever its own limits say.
+- **The compiler forbids widening (E003).** Flowing a capability into a type
+  with a looser limit is an error. Looser means:
+  - a higher `max`, `each` or `uses`;
+  - dropping a limit;
+  - an `only` list containing a pattern that is not inside some pattern of the
+    original. Pattern `a*b` is inside `c*d` exactly when `c` is a prefix of `a`
+    and `d` is a suffix of `b`. The check is conservative: a pattern covered
+    only by several patterns together is refused.
+
+  The runtime check through the ancestor chain is the second line of defence.
+- **Performing an action.** For an action `c.m(args)`, the adapter reports
+  the action's amount and target. For the simulated adapter these are the
+  first Money and the first Text in the arguments, searched depth first. The
+  broker then checks every limit of the capability and of every ancestor:
+  - the amount must be in the limit's currency;
+  - it must fit within `each`;
+  - it must fit within what is left of `max`;
+  - a use must remain;
+  - the target must match some `only` pattern.
+
+  If any check fails, the action is refused (`capability`) and the adapter is
+  never called.
+- **After approval,** the use is counted and the adapter performs the action.
+  Success yields a `Receipt`, and the amount is charged to `max` through the
+  chain only on success. An adapter failure is a failure of kind `action`.
 
 ## 7. Budgets
 
@@ -194,7 +284,8 @@ A failure has a kind and a message:
 | Kind | Cause |
 | --- | --- |
 | `action` | an adapter reported that an action failed |
-| `capability` | an action was refused by the broker (limit, currency, unknown amount) |
+| `capability` | an action was refused by the broker (a limit, the currency, or an amount or target it cannot determine) |
+| `value` | arithmetic or indexing could not produce a value (section 4) |
 | `validation` | `validate` rejected model output |
 | `budget` | a model call would exceed a token limit or a budget |
 | `provider` | the model provider failed or misbehaved |

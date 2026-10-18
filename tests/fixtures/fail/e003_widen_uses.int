@@ -1,0 +1,6 @@
+// expect: E003
+fn many(s: cap twilio.message.send(uses: 10)) {
+}
+fn f(s: cap twilio.message.send(uses: 3)) {
+    many(s)
+}

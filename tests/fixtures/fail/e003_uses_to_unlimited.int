@@ -1,0 +1,6 @@
+// expect: E003
+fn any(s: cap twilio.message.send) {
+}
+fn f(s: cap twilio.message.send(uses: 3)) {
+    any(s)
+}
