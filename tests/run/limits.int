@@ -1,0 +1,63 @@
+type Refund { order_id: Text, amount: Money }
+type N { x: Int }
+
+// Never ends: must stop at the step limit, not hang.
+fn spin() {
+    loop {
+    }
+}
+
+// Recurses forever: must stop at the depth limit, not crash.
+fn deep(n: Int) {
+    deep(n)
+}
+
+// Cumulative limits: two 60 USD refunds through one 100 USD capability.
+fn twice(a: Refund, b: Refund, pay: cap payments.refund(max: 100 USD)) -> Done {
+    let x = pay.refund(a)
+    let y = try pay.refund(b)
+    if y.ok {
+        return done(evidence: [x, y])
+    }
+    return done(evidence: [x])
+}
+
+// A helper's narrower limit binds, even though the caller holds more.
+fn small(pay: cap payments.refund(max: 50 USD), r: Refund) -> Done {
+    let x = pay.refund(r)
+    return done(evidence: [x])
+}
+
+fn via_helper(a: Refund, pay: cap payments.refund(max: 100 USD)) -> Done {
+    return small(pay, a)
+}
+
+// `try` around a call catches a validation failure inside it.
+fn read_number() -> Int {
+    let n: N = validate propose(N, instruct: "Give a number.", tokens: 500)
+    return n.x
+}
+
+fn guarded() -> Bool {
+    let r = try read_number()
+    return r.ok
+}
+
+// Comparisons, branches and repeat at runtime.
+fn classify(n: Int) -> Text {
+    if n < 0 {
+        return "negative"
+    } else if n == 0 {
+        return "zero"
+    }
+    return "positive"
+}
+
+fn first_big(limit: Int) -> Int {
+    repeat 5 {
+        if limit >= 3 {
+            return 3
+        }
+    }
+    return 0
+}

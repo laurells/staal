@@ -1,0 +1,17 @@
+{
+  "entry": "guarded",
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "x": 7
+        }
+      }
+    ]
+  },
+  "expect": {
+    "result": true,
+    "model_calls": 1
+  }
+}

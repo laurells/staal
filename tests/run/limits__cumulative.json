@@ -1,0 +1,54 @@
+{
+  "entry": "twice",
+  "inputs": {
+    "a": {
+      "order_id": "A1",
+      "amount": {
+        "amount": "60.00",
+        "currency": "USD"
+      }
+    },
+    "b": {
+      "order_id": "A1",
+      "amount": {
+        "amount": "60.00",
+        "currency": "USD"
+      }
+    }
+  },
+  "grants": {
+    "pay": {
+      "cap": "payments.refund",
+      "max": {
+        "amount": "100.00",
+        "currency": "USD"
+      }
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": []
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-1",
+          "capability": "payments.refund",
+          "method": "refund"
+        }
+      ]
+    },
+    "performed": [
+      [
+        "payments.refund",
+        "refund"
+      ]
+    ],
+    "evidence": 1,
+    "events": [
+      "action_refused",
+      "caught"
+    ]
+  }
+}

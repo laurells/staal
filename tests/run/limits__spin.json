@@ -1,0 +1,13 @@
+{
+  "entry": "spin",
+  "limits": {
+    "max_steps": 1000
+  },
+  "model": {
+    "provider": "script",
+    "responses": []
+  },
+  "expect": {
+    "failure": "step_limit"
+  }
+}

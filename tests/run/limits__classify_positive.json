@@ -1,0 +1,13 @@
+{
+  "entry": "classify",
+  "inputs": {
+    "n": 9
+  },
+  "model": {
+    "provider": "script",
+    "responses": []
+  },
+  "expect": {
+    "result": "positive"
+  }
+}

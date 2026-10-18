@@ -1,0 +1,37 @@
+{
+  "entry": "via_helper",
+  "inputs": {
+    "a": {
+      "order_id": "A1",
+      "amount": {
+        "amount": "50.00",
+        "currency": "USD"
+      }
+    }
+  },
+  "grants": {
+    "pay": {
+      "cap": "payments.refund",
+      "max": {
+        "amount": "100.00",
+        "currency": "USD"
+      }
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": []
+  },
+  "expect": {
+    "result": {
+      "done": [
+        {
+          "receipt": "sim-1",
+          "capability": "payments.refund",
+          "method": "refund"
+        }
+      ]
+    },
+    "evidence": 1
+  }
+}

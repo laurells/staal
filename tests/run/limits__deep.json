@@ -1,0 +1,17 @@
+{
+  "entry": "deep",
+  "inputs": {
+    "n": 1
+  },
+  "limits": {
+    "max_depth": 50
+  },
+  "model": {
+    "provider": "script",
+    "responses": []
+  },
+  "expect": {
+    "failure": "depth_limit",
+    "message_contains": "50 deep"
+  }
+}

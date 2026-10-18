@@ -1,0 +1,28 @@
+// The refund workflow, run for real against a scripted model and simulated adapters.
+type Customer { name: Text, email: Text }
+type Order { id: Text, total: Money, customer: Customer }
+type Refund { order_id: Text, amount: Money, reason: Text }
+
+fn handle(
+    message: Text,
+    order: Order @blind(customer.email),
+    pay: cap payments.refund(max: 500 USD),
+    mail: cap email.send,
+) -> Done budget(calls: 1, tokens: 2000) {
+    let refund: Refund = validate propose(Refund,
+        instruct: "Decide a fair refund for the customer message about this order.",
+        data: [message, order.id, order.total, order.customer.name],
+        tokens: 2000)
+    if refund.amount <= order.total {
+        if refund.order_id == order.id {
+            let paid = pay.refund(refund)
+            let sent = try mail.send(order.customer.email)
+            if sent.ok {
+                return done(evidence: [paid, sent])
+            }
+            return done(evidence: [paid])
+        }
+    }
+    let flagged = mail.send("support@example.com")
+    return done(evidence: [flagged])
+}

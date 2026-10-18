@@ -1,0 +1,49 @@
+{
+  "entry": "handle",
+  "inputs": {
+    "message": "I was charged twice for order A1.",
+    "order": {
+      "id": "A1",
+      "total": {
+        "amount": "100.00",
+        "currency": "USD"
+      },
+      "customer": {
+        "name": "Ada",
+        "email": "ada@example.com"
+      }
+    }
+  },
+  "grants": {
+    "pay": {
+      "cap": "payments.refund",
+      "max": {
+        "amount": "500.00",
+        "currency": "USD"
+      }
+    },
+    "mail": {
+      "cap": "email.send"
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "order_id": "A1",
+          "amount": {
+            "amount": "30.00",
+            "currency": "USD"
+          }
+        },
+        "output_tokens": 40
+      }
+    ]
+  },
+  "expect": {
+    "failure": "validation",
+    "message_contains": "model output.reason: missing",
+    "performed": []
+  }
+}
