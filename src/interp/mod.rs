@@ -667,11 +667,13 @@ impl<'p> Interp<'p> {
         }
         match self.adapter.perform(&path, method, &args_json) {
             Ok(id) => {
-                self.broker.charge(h, amount).or_else(internal)?;
+                // The action has happened in the world: record it before any bookkeeping
+                // that could fail, so the log never misses a performed action.
                 self.emit(
                     "action_performed",
                     json!({ "capability": path, "method": method, "amount": amount_text, "args": args_json, "receipt": id }),
                 );
+                self.broker.charge(h, amount).or_else(internal)?;
                 Ok(Value::Receipt(Receipt { id, capability: path, method: method.to_string() }))
             }
             Err(msg) => {
@@ -683,6 +685,13 @@ impl<'p> Interp<'p> {
 
     // RUNTIME.md sections 5 and 7
     fn model_call(&mut self, ty: &Ty, instruction: String, data: Vec<Json>, tokens: Option<u64>) -> Result<Value, Failure> {
+        // Refuse a call with no budget left before anything reaches the provider:
+        // counting tokens means sending the request's contents to it.
+        if self.meters.iter().any(|m| m.calls_left == Some(0)) {
+            let why = "no model calls left in the budget".to_string();
+            self.emit("model_refused", json!({ "reason": why }));
+            return fail(FailKind::Budget, why);
+        }
         let mut req =
             ModelRequest { instruction, data, output_schema: schema(ty, &self.types), max_output_tokens: 0 };
         let input = match self.provider.count_input_tokens(&req) {
@@ -793,6 +802,51 @@ fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Records how many requests reach the provider, for counting and for completion.
+    struct Recording {
+        counted: Arc<AtomicUsize>,
+        sent: Arc<AtomicUsize>,
+    }
+
+    impl Provider for Recording {
+        fn count_input_tokens(&mut self, _req: &ModelRequest) -> Result<u64, String> {
+            self.counted.fetch_add(1, Ordering::SeqCst);
+            Ok(10)
+        }
+        fn complete(&mut self, _req: &ModelRequest) -> Result<provider::ModelReply, String> {
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            Ok(provider::ModelReply { output: json!("hi"), input_tokens: 10, output_tokens: 5 })
+        }
+    }
+
+    /// Parses without the static checks, to exercise the runtime's own defences
+    /// against programs the compiler would reject.
+    fn unchecked(src: &str) -> Program {
+        let toks = crate::lexer::lex(src).expect("lex");
+        crate::parser::Parser::new(toks).program().expect("parse")
+    }
+
+    #[test]
+    fn a_call_with_no_budget_left_is_never_shown_to_the_provider() {
+        // E004 rejects this program; the runtime must still refuse the second call,
+        // and must not send its data to the provider even to count tokens.
+        let prog = unchecked(
+            "fn f() budget(calls: 1) {\n let a = propose(Text, tokens: 100)\n let b = propose(Text, tokens: 100)\n}",
+        );
+        let counted = Arc::new(AtomicUsize::new(0));
+        let sent = Arc::new(AtomicUsize::new(0));
+        let provider = Recording { counted: counted.clone(), sent: sent.clone() };
+        let adapter = SimulatedAdapter::from_config(None).unwrap();
+        let out = run_with(&prog, &json!({ "entry": "f" }), Box::new(provider), Box::new(adapter)).unwrap();
+        let f = out.result.unwrap_err();
+        assert_eq!(f.kind, FailKind::Budget, "{}", f.message);
+        assert_eq!(sent.load(Ordering::SeqCst), 1, "only the first call may be sent");
+        assert_eq!(counted.load(Ordering::SeqCst), 1, "the refused call must not be counted by the provider");
+    }
 
     #[test]
     fn hollow_evidence_holds_no_receipt() {
