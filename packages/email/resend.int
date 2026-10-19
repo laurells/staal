@@ -1,0 +1,42 @@
+// Email through Resend (https://resend.com).
+//
+// Programs ask for `cap email.resend.send(only: ["*@clinic.org"], uses: N)` and call
+// `mail.send(to, subject, text)`. The operator grants the HTTP capability, the API key
+// and the sender address under `needs`. Grant `http` with "idempotency_key": true:
+// Resend deduplicates by Idempotency-Key for 24 hours.
+//
+// `canonical` refuses addresses with capital letters rather than lowercasing them:
+// the part before '@' may be case-sensitive, and two addresses must never be made one
+// for the sake of an `only` check.
+
+type Email { from: Text, to: List<Text, 1>, subject: Text, text: Text }
+type Sent { id: Text }
+
+capability email.resend {
+    needs http: cap net.http.post(only: ["https://api.resend.com/emails"])
+    needs key: Secret
+    needs sender: Text
+
+    canonical(address: Text) -> Text {
+        let a = trim(address)
+        if lower(a) != a {
+            fail("write the address in lower case: " + a)
+        }
+        if not contains(a, "@") {
+            fail("'" + a + "' is not an email address")
+        }
+        return a
+    }
+
+    action send(to: Text @target, subject: Text, text: Text) -> Text {
+        let email = Email { from: sender, to: [trim(to)], subject: subject, text: text }
+        let r = http.post("https://api.resend.com/emails", json(email),
+                          [header("Authorization", fill_secret("Bearer {secret}", key)),
+                           header("Content-Type", "application/json")])
+        if r.status != 200 or not r.complete {
+            fail("Resend answered " + json(r.status) + ": " + r.body)
+        }
+        let sent: Sent = validate parse(Sent, r.body)
+        return sent.id
+    }
+}

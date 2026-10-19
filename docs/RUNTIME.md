@@ -745,5 +745,101 @@ language:
 - The receipt proves that a request was made and that the library accepted the
   answer; whether the service did what was asked is the library's to check.
 
-Read a library before granting it keys. Packages (roadmap phase 4) will pin a
-library to its exact text by hash, so it cannot change after it was reviewed.
+Read a library before granting it keys. A library used as a package (section 14)
+is pinned to its exact text by hash, so it cannot change after it was reviewed.
+
+## 14. Packages
+
+A project is the folder holding the entry file. Without an `intent.json` there, a
+program has no packages and imports only its own files (section 11 and the README).
+
+### Manifests
+
+The project's `intent.json` names its dependencies, each by git location and full
+commit id:
+
+    { "dependencies": {
+        "sms": { "git": "https://github.com/you/intent-sms", "commit": "<40 lowercase hex digits>" } } }
+
+A location is `https://`, `ssh://`, `user@host:path`, `file://` or an absolute path.
+Plain `http://` and `git://` are refused. A branch or tag name is refused: they can
+move, and a dependency must name exactly one tree of files.
+
+A package is a git repository with an `intent.json` at its root:
+
+    { "package": "sms", "version": "0.1.0",
+      "authority": { "net.http.post": ["https://api.ng.termii.com/api/sms/send"] },
+      "dependencies": { ... } }
+
+`package` must be the name the depending project uses. `authority` is required
+(`{}` for none). Each key is a capability path; the value is `"any"`, or a non-empty
+list of `only` patterns, checked like a grant's (canonical, no `*` in a host).
+Package names are lowercase letters, digits and `_`, starting with a letter; `net`
+and `fs` are refused. Unknown keys are refused everywhere.
+
+### Fetching and the lockfile
+
+`intentc fetch [folder]` reads each dependency's commit from git's objects (a bare
+clone, then the commit's tree and blobs; never a checkout, so line-ending settings,
+attributes and filters cannot change a byte). It follows each package's own
+dependencies. Then it refuses, before changing anything:
+
+- a commit the repository does not have;
+- a file that is a link or a submodule, a path with an empty, `.`, `..` or `.git`
+  part, a backslash or a colon, two paths that differ only in letter case, or more
+  than 10,000 files or 64 MiB;
+- a package whose manifest gives another name, or is malformed;
+- two different commits (or locations) of one package anywhere in the graph: one
+  version of each package per project;
+- a package already in `intent.lock` at the same commit whose files differ from
+  the lock (the lock was edited, or the repository's history rewritten).
+
+Only then are packages written to `.intent/packages/<name>/` and `intent.lock`
+replaced. The lock records, per package, its location, commit and the SHA-256 of
+every file. `fetch` prints each package with its authority, marked `new`,
+`unchanged` or `was <old commit>`, for review.
+
+### Loading
+
+Before a program is checked or run, the lock must match `intent.json`: every
+dependency, and every package's own dependencies, at the commit wanted, and nothing
+else. Every package folder must hold exactly the files the lock lists, each with its
+hash, and only plain files (a link, even to identical content, is refused). Files
+are read once, verified, and the verified text is what the compiler reads. Any
+mismatch stops before anything is checked (exit 2), naming the file.
+
+### Imports
+
+In the program, `import sms.termii` means module `termii` of package `sms` when
+`sms` is a dependency; the program must not also have a file or folder named `sms`.
+The program cannot import a package it does not depend on itself, even one another
+package uses. Inside a package, an import whose first name is one of that package's
+dependencies means that package; any other import is the package's own module
+(`import util` in `sms` is `sms/util.int`, never the program's `util`). Qualified
+names carry the package (`sms.termii.send`), so nothing in two packages, or in a
+package and the program, can be confused.
+
+### Authority (E108)
+
+Every capability type written in a package's code (parameters, return types, `let`
+annotations, and a declared capability's `needs`) must name a path the manifest
+lists. If the manifest lists patterns for it, the type must carry an `only` whose
+every pattern is within them. Since a capability passed into a slot with `only` is
+narrowed to it (section 6), the package can never act beyond its manifest, whatever
+the caller grants. A capability a package declares must start with the package's
+name. The program's own code is not limited by a manifest: the operator's grants
+limit it.
+
+### Journals
+
+The program hash a journal records (section 11) covers every package module's text
+and each package's location and commit, so a run cannot resume on different
+package code.
+
+### What is not checked
+
+`intentc check` and `run` trust `intent.lock`: whoever can edit both the lock and
+`.intent/packages/` decides the code, as with any language's lockfile. `intentc
+fetch` compares both with git. Git's commit ids are SHA-1; the SHA-256 file hashes
+in the lock are what a later fetch is compared with. Manifests describe authority;
+they do not prove a package does what its name says.

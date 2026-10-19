@@ -1,0 +1,39 @@
+// Messages to Slack channels (https://api.slack.com/methods/chat.postMessage).
+//
+// Programs ask for `cap chat.slack.post(only: ["C0123456789"], uses: N)` and call
+// `slack.post(channel_id, text)`. The operator grants the HTTP capability and a bot
+// token under `needs`. Slack answers 200 even when it refuses a message, with
+// "ok": false; this library turns that into a failure.
+//
+// Slack does not deduplicate requests, so do not grant `idempotency_key`: a post
+// interrupted mid-request stops the run in doubt instead of risking a second message.
+
+type Message { channel: Text, text: Text }
+type Answer { ok: Bool }
+type Posted { ts: Text }
+type Refused { error: Text }
+
+capability chat.slack {
+    needs http: cap net.http.post(only: ["https://slack.com/api/chat.postMessage"])
+    needs token: Secret
+
+    canonical(channel: Text) -> Text {
+        return trim(channel)
+    }
+
+    action post(channel: Text @target, text: Text) -> Text {
+        let r = http.post("https://slack.com/api/chat.postMessage", json(Message { channel: trim(channel), text: text }),
+                          [header("Authorization", fill_secret("Bearer {secret}", token)),
+                           header("Content-Type", "application/json; charset=utf-8")])
+        if r.status != 200 or not r.complete {
+            fail("Slack answered " + json(r.status) + ": " + r.body)
+        }
+        let answer: Answer = validate parse(Answer, r.body)
+        if not answer.ok {
+            let refused: Refused = validate parse(Refused, r.body)
+            fail("Slack refused the message: " + refused.error)
+        }
+        let posted: Posted = validate parse(Posted, r.body)
+        return posted.ts
+    }
+}

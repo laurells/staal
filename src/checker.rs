@@ -15,7 +15,8 @@
 //   E103  `break` outside a loop
 //   E104  unknown field, or field access on a value that has no fields
 //   E105  a function with a return type can finish without returning
-//   (E106 and E107, import errors, come from `crate::modules`.)
+//   (E106 and E107, import errors, come from `crate::modules`; E108, a package using
+//   authority its manifest does not declare, from `crate::packages`.)
 //
 // Lists are bounded (`List<T, N>`), so every `for` loop is bounded: its maximum
 // iteration count is recorded for the cost analysis (see `check_with_bounds`).

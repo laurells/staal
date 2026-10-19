@@ -1,6 +1,7 @@
 // intentc command line.
 //
 //   intentc check   <file.int>
+//   intentc fetch   [<project folder>]
 //   intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>]
 //   intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>]
 //   intentc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
@@ -20,6 +21,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage:
   intentc check   <file.int>
+  intentc fetch   [<project folder>]
   intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>]
   intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>]
   intentc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
@@ -38,6 +40,10 @@ fn main() -> ExitCode {
         "check" => match parse(rest, &[], &[]) {
             Ok((Some(file), _)) => check(&file),
             Ok((None, _)) => usage_error("check needs a file"),
+            Err(e) => usage_error(&e),
+        },
+        "fetch" => match parse(rest, &[], &[]) {
+            Ok((dir, _)) => fetch(dir.as_deref().unwrap_or(".")),
             Err(e) => usage_error(&e),
         },
         "run" => match parse(rest, &["--config", "--journal", "--log"], &["--config"]) {
@@ -202,6 +208,26 @@ fn run(file: &str, config: &str, durability: Durability, log: Option<&String>) -
         Err(f) => {
             eprintln!("intentc: run failed: {}: {}", f.kind, f.message);
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Fetches the project's packages, writes intent.lock, and shows each package's
+/// authority, so it can be reviewed before any of its code is used.
+fn fetch(dir: &str) -> ExitCode {
+    match intentc::packages::fetch(Path::new(dir)) {
+        Ok(lines) => {
+            if lines.is_empty() {
+                println!("no dependencies");
+            }
+            for l in lines {
+                println!("{l}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("intentc: {e}");
+            ExitCode::from(2)
         }
     }
 }

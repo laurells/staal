@@ -4,6 +4,7 @@ pub mod checker;
 pub mod interp;
 pub mod lexer;
 pub mod modules;
+pub mod packages;
 pub mod parser;
 pub mod pattern;
 pub mod targets;
@@ -37,24 +38,35 @@ pub fn check_files(entry: SourceFile, fetch: impl FnMut(&[String]) -> Result<Sou
 }
 
 /// Checks the program in the file at `path`. Modules are found under the folder that
-/// holds it: `import sms.termii` reads `<folder>/sms/termii.int`.
+/// holds it: `import sms.termii` reads `<folder>/sms/termii.int`, unless `sms` is a
+/// package the folder's `intent.json` depends on (see `packages`). Packages are
+/// verified against `intent.lock` before anything is read, and their code is checked
+/// against the authority their manifests declare (E108).
 pub fn check_path(path: &Path) -> Result<Checked, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let root = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let entry_real = std::fs::canonicalize(path).ok();
+    let root = if root.as_os_str().is_empty() { Path::new(".").to_path_buf() } else { root };
+    let project = packages::Project::open(&root)?.map(std::rc::Rc::new);
     let entry = SourceFile { name: path.display().to_string(), text };
-    Ok(check_files(entry, |module| {
-        let mut file = root.clone();
-        for seg in module {
-            file.push(seg);
+    let loaded = modules::load_from(entry, packages::ProjectSource::new(root, project.clone(), path));
+    let mut fingerprint = loaded.fingerprint();
+    if let Some(p) = &project
+        && !p.packages.is_empty()
+    {
+        fingerprint.push_str("\npackages\n");
+        for (n, pkg) in &p.packages {
+            fingerprint.push_str(&format!("{n} {} {}\n", pkg.dep.git, pkg.dep.commit));
         }
-        file.set_extension("int");
-        if entry_real.is_some() && std::fs::canonicalize(&file).ok() == entry_real {
-            return Err(format!("{} is the program itself", file.display()));
+    }
+    let result = loaded.program.and_then(|prog| {
+        let (mut diags, for_bounds) = checker::check_with_bounds(&prog);
+        diags.extend(budget::check(&prog, &for_bounds));
+        if let Some(p) = &project {
+            diags.extend(packages::check_authority(&prog, &loaded.paths, p));
         }
-        let text = std::fs::read_to_string(&file).map_err(|e| format!("cannot read {}: {e}", file.display()))?;
-        Ok(SourceFile { name: file.display().to_string(), text })
-    }))
+        if diags.is_empty() { Ok(prog) } else { Err(diags) }
+    });
+    Ok(Checked { files: loaded.files, fingerprint, result })
 }
 
 fn no_modules(module: &[String]) -> Result<SourceFile, String> {

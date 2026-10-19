@@ -1,0 +1,7 @@
+{
+  "package": "email",
+  "version": "0.1.0",
+  "authority": {
+    "net.http.post": ["https://api.resend.com/emails"]
+  }
+}

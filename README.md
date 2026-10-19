@@ -11,9 +11,11 @@ Roadmap phase 1 (modules and reassignment) is complete. Phase 2, the general
 HTTPS servers and real files; sending through real services (`examples/`) is the
 step left, since it needs an account and network access. Phase 3, capabilities
 declared by libraries, is built and tested against a local server that answers
-like Termii and Stripe; the same real-service step applies. Not built yet:
-packages (phase 4), and the native-code backend and C interface (phase 5). Real
-model providers are not built either; only a scripted one exists.
+like Termii and Stripe; the same real-service step applies. Phase 4, packages
+fetched from git and locked by hash, is built and tested against git repositories
+made by the tests; fetching from a public host, and a real SMS through a
+package, are left. Not built yet: the native-code backend and C interface
+(phase 5). Real model providers are not built either; only a scripted one exists.
 
 ## What it enforces today
 
@@ -35,6 +37,7 @@ model providers are not built either; only a scripted one exists.
 | E105 | A function with a return type can finish without returning |
 | E106 | An import problem: a missing module, an import cycle, a name that clashes with an import |
 | E107 | A declaration used from another module without being `pub` |
+| E108 | A package uses a capability its `intent.json` does not declare, or reaches beyond the targets it declares |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
@@ -151,7 +154,7 @@ model calls, failures or costs from another are each caught.
 The program's hash, which a journal records, covers each module's path and
 text but not file names, so a run can be resumed from another folder.
 
-What is not built yet: packages from outside the program's folder (phase 4).
+Code from outside the program's folder comes as packages (next section).
 
 Speed. Every build checks the whole program, which keeps the cross-file rules
 simple and exact. Measured on generated programs (`bench/gen_program.py`:
@@ -627,7 +630,71 @@ or `..`.
 What the runtime cannot check is that a library does what its name says: a
 library is code the operator trusts with keys, as in any language. A `canonical`
 that maps two targets to one form would weaken `only`. Read a library before
-granting it keys; packages (phase 4) will pin libraries by hash.
+granting it keys. A library used as a package is pinned by hash, so it cannot
+change after it was read (next section).
+
+## Packages
+
+    // intent.json, next to the program
+    { "dependencies": {
+        "sms": { "git": "https://github.com/you/intent-sms", "commit": "5ea44d1181fef1ccb2f7a96862a392f9f15ac807" } } }
+
+    // main.int
+    import sms.termii
+    fn remind(phone: Text, texts: cap sms.termii.send(uses: 1)) -> Receipt { ... }
+
+    $ intentc fetch
+    sms https://github.com/you/intent-sms at 5ea44d1181fe (new)
+        authority: net.http.post only https://api.ng.termii.com/api/sms/send
+
+A package is a git repository with an `intent.json` naming it and listing its
+`authority`: every capability its code may use, with the targets it may reach.
+`intentc fetch` reads each dependency at its exact commit (a branch or tag is
+refused: they move), writes it to `.intent/packages/`, records the SHA-256 of
+every file in `intent.lock`, and prints each package's authority for review.
+The full rules are in `docs/RUNTIME.md` section 14. In short:
+
+- **Nothing unverified is read as code.** Before checking or running, every
+  package folder is compared with `intent.lock`: a file changed, added, removed,
+  or replaced by a link is refused. `fetch` reads files from git's objects, not a
+  checkout, so no line-ending conversion or filter can change them, and it compares
+  them with the lock every time, so an edited lock is caught too.
+- **A package is held to its manifest (E108).** Its code may only mention
+  capabilities its `authority` lists, and where the manifest gives targets, every
+  such capability in the code must carry an `only` within them, which the runtime
+  enforces when a capability is passed in. A package's own capabilities must be
+  named after it (`sms.*`), so it cannot pose as another.
+- **Imports stay inside the package.** `import util` in package `sms` means
+  `sms`'s own `util`, never the program's; a package's dependencies are reached by
+  their names. The program can import only packages it depends on itself, and one
+  version of each package is used across the whole project.
+- **Journals pin the code.** A run cannot resume after a package changed commit.
+
+`packages/` holds four reference packages: `sms` (Termii), `payments` (Stripe
+refunds), `email` (Resend) and `chat` (Slack). Each pins the exact endpoints it
+calls.
+
+How this is tested: 12 tests build git repositories and fetch from them. They
+check the four reference packages fetch, check, and run against a local server
+standing in for each service (including Slack's "ok": false refusal and an email
+address `canonical` refuses); tampering by a changed, added
+or removed file or a link is refused; an edited lock is caught by the next fetch;
+branches, unknown commits, misnamed packages, plain http and links in a repository
+are refused; imports resolve inside packages and across dependencies; two
+versions of one package are refused; each authority rule; a program runs through a
+fetched package against a local server; and a journal refuses to resume on a new
+commit. Seventeen mutations are each caught: not comparing hashes, ignoring an
+added or missing file, following a link, accepting a link from git, trusting the
+lock without git, accepting a branch name, not prefixing a package's own imports,
+letting the program import a package it does not depend on, allowing a dependency
+and a folder of one name, each of the four authority rules, allowing two versions,
+allowing plain http, and accepting a misnamed package.
+
+What is not covered: fetching from a real host (GitHub was not reachable from the
+machine this was built on; local repositories exercise the same code), and a
+registry. Whoever can edit both `intent.lock` and `.intent/packages/` controls the
+code, as with any lockfile: `intentc check` trusts the lock, and `intentc fetch`
+compares both with git. `git` must be installed to fetch.
 
 ## Requirements
 
@@ -651,6 +718,8 @@ the database, so it is run by hand or in CI, not by `cargo test`.
     cargo test
 
 `intentc check` exits 0 when the program is valid and 1 when it has errors.
+`intentc fetch [folder]` fetches the packages a project's `intent.json` names;
+it exits 2 if anything is wrong, and then changes nothing.
 
 ## Tests
 
@@ -672,10 +741,12 @@ To add a rule, write the failing program first, then make the checker reject it.
     src/budget.rs   worst-case model cost (E004, E005)
     src/pattern.rs  `only` patterns: matching and containment
     src/modules.rs  loading module files, resolving names across them (E106, E107)
+    src/packages.rs manifests, intent.lock, fetching from git, authority (E108)
     src/targets.rs  canonical URLs and paths for `only`
     src/interp/http.rs  the HTTP client, and what is known about each request
     src/interp/fsx.rs   safe file access: no links followed, atomic writes
     examples/capabilities/  Termii and Stripe libraries, and programs using them
+    packages/       reference packages: sms, payments, email, chat
     src/interp/     reference runtime: interpreter, money, broker, adapters,
                     model providers, journal
     src/main.rs     command-line interface

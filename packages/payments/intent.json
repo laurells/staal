@@ -1,0 +1,8 @@
+{
+  "package": "payments",
+  "version": "0.1.0",
+  "authority": {
+    "net.http.get": ["https://api.stripe.com/v1/payment_intents/*"],
+    "net.http.post": ["https://api.stripe.com/v1/refunds"]
+  }
+}

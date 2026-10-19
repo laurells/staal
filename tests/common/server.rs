@@ -17,6 +17,10 @@
 //                  200 {"id": ..., "currency": "usd" (or "eur"), "object": "payment_intent"}
 //   /v1/refunds    200 {"id": "re-<n>", "status": "succeeded", "object": "refund"},
 //                  deduplicating by Idempotency-Key like /send
+//   /emails        200 {"id": "em-<n>"}, like Resend
+//   /api/chat.postMessage
+//                  like Slack: 200 {"ok": true, "ts": "<n>"}, or for channel C_BAD
+//                  200 {"ok": false, "error": "channel_not_found"}
 //   anything else  404
 // Every connection is closed after one answer.
 
@@ -176,6 +180,11 @@ fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mu
                 }
             }
         }
+        "/emails" => (200, format!("{{\"id\": \"em-{n}\"}}").into_bytes()),
+        "/api/chat.postMessage" if body.contains("\"C_BAD\"") => {
+            (200, b"{\"ok\": false, \"error\": \"channel_not_found\"}".to_vec())
+        }
+        "/api/chat.postMessage" => (200, format!("{{\"ok\": true, \"ts\": \"170000000{n}.0001\"}}").into_bytes()),
         "/fixed" => (200, b"fixed".to_vec()),
         "/echo-auth" => (200, headers.get("authorization").cloned().unwrap_or_default().into_bytes()),
         "/redirect" => (302, Vec::new()),

@@ -93,9 +93,32 @@ fn parse(text: &str, file: u32) -> Result<Program, Diagnostic> {
     Parser::new(toks).program().map_err(|(pos, msg)| err("E901", pos, msg))
 }
 
+/// Where modules come from. `locate` says which module an `import` written in the
+/// module at `from` means (the entry file is `[]`); `read` returns that module's file.
+/// The default `locate` takes the written path as it is: a program without packages.
+pub trait Source {
+    fn locate(&mut self, from: &[String], written: &[String]) -> Result<Vec<String>, String> {
+        let _ = from;
+        Ok(written.to_vec())
+    }
+    fn read(&mut self, module: &[String]) -> Result<SourceFile, String>;
+}
+
+impl<F: FnMut(&[String]) -> Result<SourceFile, String>> Source for F {
+    fn read(&mut self, module: &[String]) -> Result<SourceFile, String> {
+        self(module)
+    }
+}
+
 /// Loads the entry file and every module it imports, directly or indirectly.
 /// `fetch` returns the file for a module path, or why it cannot.
-pub fn load(entry: SourceFile, mut fetch: impl FnMut(&[String]) -> Result<SourceFile, String>) -> Loaded {
+pub fn load(entry: SourceFile, fetch: impl FnMut(&[String]) -> Result<SourceFile, String>) -> Loaded {
+    load_from(entry, fetch)
+}
+
+/// Like `load`, with a `Source` that can map an import to a different module path
+/// (packages: `import util` inside package `sms` means the module `sms.util`).
+pub fn load_from(entry: SourceFile, mut source: impl Source) -> Loaded {
     let mut files = vec![entry];
     let mut paths: Vec<Vec<String>> = vec![Vec::new()];
     let prog = match parse(&files[0].text, 0) {
@@ -111,11 +134,22 @@ pub fn load(entry: SourceFile, mut fetch: impl FnMut(&[String]) -> Result<Source
     // Each stack entry is a module and how many of its imports have been followed.
     let mut stack: Vec<(usize, usize)> = vec![(0, 0)];
     while let Some(&(m, next)) = stack.last() {
-        let Some(imp) = modules[m].prog.imports.get(next).cloned() else {
+        let Some(mut imp) = modules[m].prog.imports.get(next).cloned() else {
             stack.pop();
             continue;
         };
         stack.last_mut().expect("non-empty").1 += 1;
+        match source.locate(&modules[m].path, &imp.path) {
+            Ok(canon) => {
+                // Resolution and every message after this use the module's real path.
+                imp.path = canon;
+                modules[m].prog.imports[next].path = imp.path.clone();
+            }
+            Err(why) => {
+                diags.push(err("E106", imp.pos, format!("cannot import '{}': {why}", imp.path.join("."))));
+                continue;
+            }
+        }
         if let Some(&i) = index.get(&imp.path) {
             if let Some(at) = stack.iter().position(|&(s, _)| s == i) {
                 let mut cycle: Vec<String> = stack[at..].iter().map(|&(s, _)| display(&modules[s].path)).collect();
@@ -124,7 +158,7 @@ pub fn load(entry: SourceFile, mut fetch: impl FnMut(&[String]) -> Result<Source
             }
             continue;
         }
-        let file = match fetch(&imp.path) {
+        let file = match source.read(&imp.path) {
             Ok(f) => f,
             Err(why) => {
                 diags.push(err("E106", imp.pos, format!("cannot import '{}': {why}", imp.path.join("."))));
