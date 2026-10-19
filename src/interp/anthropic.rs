@@ -45,12 +45,12 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     /// Parses `{"provider": "anthropic", "model": "...", "api_key": {"env": "NAME"},
     /// "base_url"?, "timeout_ms"?, "connect_timeout_ms"?, "retries"?, "retry_delay_ms"?,
-    /// "proxy"?}`.
+    /// "proxy"?, "extra_root_certificates"?}`.
     pub fn from_config(cfg: &Json) -> Result<AnthropicProvider, String> {
         let obj = cfg.as_object().ok_or("model: expected an object")?;
         let known = [
             "provider", "model", "api_key", "base_url", "timeout_ms", "connect_timeout_ms", "retries", "retry_delay_ms",
-            "proxy",
+            "proxy", "extra_root_certificates",
         ];
         for k in obj.keys() {
             if !known.contains(&k.as_str()) {
@@ -99,7 +99,23 @@ impl AnthropicProvider {
             Some(Some("environment")) => true,
             _ => return Err("model.proxy: expected \"none\" or \"environment\"".into()),
         };
-        let config = ureq::Agent::config_builder()
+        let mut extra = Vec::new();
+        if let Some(v) = obj.get("extra_root_certificates") {
+            let list = v.as_array().ok_or("model.extra_root_certificates: expected a list of PEM file paths")?;
+            for (i, p) in list.iter().enumerate() {
+                let at = format!("model.extra_root_certificates[{i}]");
+                let p = p.as_str().ok_or(format!("{at}: expected a file path"))?;
+                extra.extend(super::http::read_root_certificates(p).map_err(|e| format!("{at}: {e}"))?);
+            }
+        }
+        let mut builder = ureq::Agent::config_builder();
+        if !extra.is_empty() {
+            // Added to Mozilla's roots, never instead of them; verification stays on.
+            use ureq::tls::{RootCerts, TlsConfig};
+            let roots = RootCerts::from(super::http::roots(&extra));
+            builder = builder.tls_config(TlsConfig::builder().root_certs(roots).build());
+        }
+        let config = builder
             .max_redirects(0)
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_millis(timeout)))

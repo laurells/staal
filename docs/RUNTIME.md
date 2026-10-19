@@ -245,6 +245,7 @@ as one per 4 bytes of the request's JSON.
 | `retries` | extra attempts after a rate limit, an overload or a server error (0 to 10) | 2 |
 | `retry_delay_ms` | the first wait between attempts, doubling each time, unless the API sends `retry-after` (at most 60 s) | 1000 |
 | `proxy` | `"none"`, or `"environment"` to use `HTTPS_PROXY` | `"none"` |
+| `extra_root_certificates` | PEM files of root certificates to trust in addition to Mozilla's, for a network whose proxy signs TLS with its own authority | none |
 
 - **Request.** The instruction goes in the system prompt, after a fixed
   preamble telling the model that the user message is data and that

@@ -14,7 +14,9 @@ the language or its file formats.
   failing, and resuming makes the call again.
 - Refusals and output cut off at the token limit are `provider` failures, and
   their tokens are charged.
-- `examples/claude/triage.staal`.
+- `examples/claude/triage.staal`, run against the live API: the injected request
+  for a larger refund stays data, and the token count matched the usage reported.
+- `extra_root_certificates` for the Claude provider, as for `net.http`.
 
 ## 0.22.0 — 2026-10-19
 

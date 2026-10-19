@@ -376,6 +376,7 @@ fn bad_configs_are_refused_before_anything_runs() {
         (json!({ "model": "" }), "name the Claude model"),
         (json!({ "temperature": 0 }), "unknown key 'temperature'"),
         (json!({ "retries": 11 }), "from 0 to 10"),
+        (json!({ "extra_root_certificates": ["/nonexistent/ca.pem"] }), "extra_root_certificates[0]: cannot read"),
     ] {
         let c = Case::new("config", &api, "decide", extra.clone());
         let (code, _, err) = c.staalc("run", None);

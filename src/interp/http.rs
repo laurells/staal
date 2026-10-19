@@ -113,7 +113,7 @@ impl Client {
 }
 
 /// Mozilla's root certificates, then the operator's extra ones: added, never instead.
-fn roots(extra: &[Vec<u8>]) -> Vec<ureq::tls::Certificate<'static>> {
+pub(super) fn roots(extra: &[Vec<u8>]) -> Vec<ureq::tls::Certificate<'static>> {
     use ureq::tls::Certificate;
     webpki_root_certs::TLS_SERVER_ROOT_CERTS
         .iter()
