@@ -65,6 +65,14 @@ The result is either the entry function's return value or a failure
 | `cap ...` | a handle to a capability held by the broker (section 6) |
 | `Unit` | the result of a function that returns nothing |
 
+**Text literals** are written in double quotes on one line. A backslash starts
+an escape: `\"` a quote, `\\` a backslash, `\n` a new line, `\t` a tab, `\r` a
+carriage return, and `\u{...}` the Unicode character with that hexadecimal code
+(1 to 6 digits, e.g. `\u{e9}` for é; surrogates are refused). Any other escape
+is an error (E900), never a backslash kept as text; `\(` is reserved for text
+interpolation. Braces are ordinary characters. `len` counts characters, not
+bytes.
+
 No value can be created out of thin air: `Receipt` only by an action, `Done`
 only by `done(...)`, `Outcome` only by `try`, capabilities only by grants.
 

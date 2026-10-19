@@ -68,6 +68,8 @@ treat them all alike.
   enforced on inputs and on model output. List literals `[a, b]`, indexing
   `xs[0]`, and `for x in xs { }`, which is bounded by N, so the compiler can
   cost model calls inside it.
+- **Text:** `"..."` on one line, with the escapes `\"`, `\\`, `\n`, `\t`, `\r`
+  and `\u{e9}`. An unknown escape is an error. Braces need no escaping.
 - **Built-ins:** `len`, `contains`, `starts_with`, `ends_with`.
 
 The exact rules are in [RUNTIME.md](RUNTIME.md) section 4.

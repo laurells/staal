@@ -36,6 +36,11 @@ fn text(name: Text) -> Pair {
     return Pair { formal: starts_with(name, "Dr ") or ends_with(name, " Esq"), length: len(name), greeting: g }
 }
 
+fn escapes(name: Text) -> Pair {
+    let g = "She said \"hello, " + name + "\"\n\tcaf\u{e9} \\ done"
+    return Pair { formal: contains(g, "\n"), length: len(g), greeting: g }
+}
+
 fn first_big(xs: List<Int, 10>, limit: Int) -> Int {
     for x in xs {
         if x > limit {

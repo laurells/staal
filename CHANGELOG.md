@@ -7,6 +7,8 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Escape sequences in text: `\"`, `\\`, `\n`, `\t`, `\r` and `\u{...}`. An
+  unknown escape is an error (E900).
 - Claude as a model provider (`"provider": "anthropic"`), through Anthropic's
   Messages API with structured outputs. Tokens are counted before each call and
   charged from the usage the API reports; rate limits and overloads are retried.

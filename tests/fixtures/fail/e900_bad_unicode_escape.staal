@@ -1,0 +1,5 @@
+// expect: E900
+// A \u escape must name a Unicode character: surrogates are not characters.
+fn f() -> Text {
+    return "\u{d800}"
+}

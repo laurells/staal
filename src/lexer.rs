@@ -152,6 +152,14 @@ pub fn lex_file(src: &str, file: u32) -> Result<Vec<Token>, (Pos, String)> {
                 if chars[i] == '\n' {
                     return Err((pos, "unterminated string".into()));
                 }
+                if chars[i] == '\\' {
+                    let at = Pos { file, line, col };
+                    let (c, used) = escape(&chars[i + 1..]).map_err(|e| (at, e))?;
+                    s.push(c);
+                    i += 1 + used;
+                    col += 1 + used;
+                    continue;
+                }
                 s.push(chars[i]);
                 i += 1;
                 col += 1;
@@ -266,4 +274,82 @@ pub fn lex_file(src: &str, file: u32) -> Result<Vec<Token>, (Pos, String)> {
     }
     out.push(Token { tok: Tok::Eof, pos: Pos { file, line, col } });
     Ok(out)
+}
+
+/// The character a backslash escape stands for, and how many characters after the
+/// backslash it used. `\(` is reserved for text interpolation.
+fn escape(rest: &[char]) -> Result<(char, usize), String> {
+    match rest.first() {
+        Some('"') => Ok(('"', 1)),
+        Some('\\') => Ok(('\\', 1)),
+        Some('n') => Ok(('\n', 1)),
+        Some('t') => Ok(('\t', 1)),
+        Some('r') => Ok(('\r', 1)),
+        Some('u') => {
+            if rest.get(1) != Some(&'{') {
+                return Err("a \\u escape is written \\u{...} with 1 to 6 hex digits, e.g. \\u{e9}".into());
+            }
+            let digits: String = rest[2..].iter().take_while(|c| **c != '}' && **c != '"' && **c != '\n').collect();
+            if rest.get(2 + digits.chars().count()) != Some(&'}') {
+                return Err("unterminated \\u{...} escape".into());
+            }
+            if digits.is_empty() || digits.len() > 6 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(format!("\\u{{{digits}}} needs 1 to 6 hex digits"));
+            }
+            let n = u32::from_str_radix(&digits, 16).map_err(|e| e.to_string())?;
+            let c = char::from_u32(n).ok_or(format!("\\u{{{digits}}} is not a Unicode character"))?;
+            Ok((c, 3 + digits.chars().count()))
+        }
+        Some('(') => Err("\\( is reserved for text interpolation".into()),
+        Some(c) => Err(format!("unknown escape \\{c}: the escapes are \\\" \\\\ \\n \\t \\r and \\u{{...}}")),
+        None => Err("unterminated string".into()),
+    }
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::*;
+
+    fn text(src: &str) -> Result<String, String> {
+        match lex(src).map_err(|(_, e)| e)?.first().map(|t| t.tok.clone()) {
+            Some(Tok::Str(s)) => Ok(s),
+            other => Err(format!("not a string: {other:?}")),
+        }
+    }
+
+    #[test]
+    fn escapes_give_their_characters() {
+        assert_eq!(text(r#""say \"hi\"""#).unwrap(), "say \"hi\"");
+        assert_eq!(text(r#""a\\b""#).unwrap(), "a\\b");
+        assert_eq!(text(r#""l1\nl2\tx\r""#).unwrap(), "l1\nl2\tx\r");
+        assert_eq!(text(r#""caf\u{e9} \u{1F600}""#).unwrap(), "café 😀");
+        assert_eq!(text(r#""{secret}""#).unwrap(), "{secret}", "braces stay ordinary characters");
+    }
+
+    #[test]
+    fn bad_escapes_are_errors_with_positions() {
+        for (src, want) in [
+            (r#""\q""#, "unknown escape \\q"),
+            (r#""\u{}""#, "1 to 6 hex digits"),
+            (r#""\u{1234567}""#, "1 to 6 hex digits"),
+            (r#""\u{d800}""#, "not a Unicode character"),
+            (r#""\u{110000}""#, "not a Unicode character"),
+            (r#""\u{zz}""#, "1 to 6 hex digits"),
+            (r#""\u41""#, "written \\u{...}"),
+            (r#""\u{41""#, "unterminated"),
+            (r#""\(x)""#, "reserved for text interpolation"),
+            ("\"ends\\", "unterminated string"),
+        ] {
+            let err = text(src).unwrap_err();
+            assert!(err.contains(want), "{src}: {err}");
+        }
+        let (pos, _) = lex("let x = \"ab\\q\"").unwrap_err();
+        assert_eq!((pos.line, pos.col), (1, 12), "the error points at the backslash");
+    }
+
+    #[test]
+    fn positions_after_an_escape_stay_right() {
+        let toks = lex("\"a\\u{e9}b\" x").unwrap();
+        assert_eq!(toks[1].pos.col, 12);
+    }
 }

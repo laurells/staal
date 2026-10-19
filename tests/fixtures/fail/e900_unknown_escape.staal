@@ -1,0 +1,5 @@
+// expect: E900
+// An escape that does not exist is an error, not a backslash kept as text.
+fn f() -> Text {
+    return "C:\\path is fine, \q is not"
+}
