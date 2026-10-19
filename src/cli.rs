@@ -320,6 +320,9 @@ fn build(_: &str, _: &str, _: Option<&str>) -> u8 {
 /// `rustc --print native-static-libs` reports for this target).
 #[cfg(all(feature = "native", target_os = "linux"))]
 const SYSTEM_LIBS: &[&str] = &["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl", "-lc"];
+/// Elsewhere `build_executable` refuses before linking, so no list is needed yet.
+#[cfg(all(feature = "native", not(target_os = "linux")))]
+const SYSTEM_LIBS: &[&str] = &[];
 
 /// Checks the program, compiles its native code into an object file with everything
 /// the executable needs, and links it with the runtime library. Returns how many
