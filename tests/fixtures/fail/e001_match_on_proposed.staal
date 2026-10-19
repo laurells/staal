@@ -1,0 +1,15 @@
+// expect: E001
+// message: cannot match unvalidated Proposed<Payment>; use `validate` first
+// A model's answer is matched only after `validate`.
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+fn f() {
+    let p = propose(Payment, instruct: "Guess.", data: ["x"], tokens: 10)
+    match p {
+        _ => {}
+    }
+}

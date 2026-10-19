@@ -80,6 +80,8 @@ struct Ctx<'a> {
     known: HashSet<String>,
     /// Declared types and their fields, in declaration order.
     fields: HashMap<String, Vec<(String, Ty)>>,
+    /// Declared enums: their variants, each with its fields in declaration order.
+    enums: HashMap<String, Variants>,
     sigs: HashMap<&'a str, Sig>,
     diags: Vec<Diagnostic>,
     /// What reaching the current statement reveals (see `check_block`).
@@ -181,7 +183,9 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
         | Expr::Builtin { args, .. }
         | Expr::List(args, _) => inexact(args.iter().flat_map(|a| reveals(a, env)).collect()),
         // Conservative: every field of a record literal counts as revealing all of them.
-        Expr::Record { fields, .. } => inexact(fields.iter().flat_map(|(_, v)| reveals(v, env)).collect()),
+        Expr::Record { fields, .. } | Expr::Variant { fields, .. } => {
+            inexact(fields.iter().flat_map(|(_, v)| reveals(v, env)).collect())
+        }
         Expr::Propose { instruct, data, .. } => {
             let mut v: Vec<Src> = data.iter().flat_map(|d| reveals(d, env)).collect();
             if let Some(i) = instruct {
@@ -214,6 +218,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Not(inner, _) => format!("not {}", expr_text(inner)),
         Expr::Builtin { f, .. } => format!("{}(...)", f.name()),
         Expr::Record { ty, .. } => format!("{ty} {{...}}"),
+        Expr::Variant { ty, variant, .. } => format!("{ty}.{variant}"),
         Expr::List(..) => "[...]".into(),
         Expr::Index { base, .. } => format!("{}[...]", expr_text(base)),
         Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => "literal".into(),
@@ -244,6 +249,7 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
     let mut ctx = Ctx {
         known: ["Text", "Int", "Bool", "Money", "Unit", "Receipt"].iter().map(|s| s.to_string()).collect(),
         fields: HashMap::new(),
+        enums: HashMap::new(),
         sigs: HashMap::new(),
         diags: Vec::new(),
         pc: Vec::new(),
@@ -303,6 +309,37 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
         }
         ctx.fields.insert(t.name.clone(), t.fields.clone());
     }
+    for e in &prog.enums {
+        if ctx.known.contains(&e.name) {
+            ctx.err("E101", e.pos, format!("type '{}' is already defined", e.name));
+            continue;
+        }
+        ctx.known.insert(e.name.clone());
+        let mut names = HashSet::new();
+        for v in &e.variants {
+            if !names.insert(v.name.as_str()) {
+                ctx.err("E101", v.pos, format!("enum '{}' declares variant '{}' twice", e.name, v.name));
+            }
+            let mut seen = HashSet::new();
+            for (fname, fty) in &v.fields {
+                let at = format!("{}.{}.{fname}", e.name, v.name);
+                if !seen.insert(fname.as_str()) {
+                    ctx.err("E101", v.pos, format!("variant '{}.{}' declares field '{fname}' twice", e.name, v.name));
+                }
+                // In JSON a variant is {"kind": "...", fields...}.
+                if fname == "kind" {
+                    ctx.err("E101", v.pos, format!("field '{at}' cannot be called `kind`: JSON uses it to name the variant"));
+                }
+                if let Some(bad) = proof_or_authority(fty) {
+                    ctx.err("E101", v.pos, format!("field '{at}' cannot hold a {bad}: it would travel inside data"));
+                }
+                if let Some(bad) = secret_inside(&ctx, fty, &mut HashSet::new()) {
+                    ctx.err("E101", v.pos, format!("field '{at}' cannot hold a {bad}: secrets never travel inside data"));
+                }
+            }
+        }
+        ctx.enums.insert(e.name.clone(), e.variants.iter().map(|v| (v.name.clone(), v.fields.clone())).collect());
+    }
     for f in &prog.fns {
         // A library's `len` is `lib.len`: the name a call is written with is the last part.
         let base = f.name.rsplit('.').next().unwrap_or(&f.name);
@@ -326,6 +363,13 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
     for t in &prog.types {
         for (_, fty) in &t.fields {
             check_ty_known(&mut ctx, fty, t.pos);
+        }
+    }
+    for e in &prog.enums {
+        for v in &e.variants {
+            for (_, fty) in &v.fields {
+                check_ty_known(&mut ctx, fty, v.pos);
+            }
         }
     }
     // Constants (`crate::consts`): every use is already replaced by the value, so here
@@ -457,12 +501,21 @@ fn secret_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<&'sta
             if !seen.insert(n.clone()) {
                 return None;
             }
-            let fields = ctx.fields.get(n)?.clone();
-            fields.iter().find_map(|(_, fty)| secret_inside(ctx, fty, seen))
+            inner_types(ctx, n)?.iter().find_map(|fty| secret_inside(ctx, fty, seen))
         }
         Ty::Proposed(inner) | Ty::List(inner, _) => secret_inside(ctx, inner, seen),
         Ty::Cap { .. } => None,
     }
+}
+
+/// The types directly inside named type `n`: a record's fields, or the fields of every
+/// variant of an enum. None for a built-in type.
+fn inner_types(ctx: &Ctx, n: &str) -> Option<Vec<Ty>> {
+    if let Some(fs) = ctx.fields.get(n) {
+        return Some(fs.iter().map(|(_, t)| t.clone()).collect());
+    }
+    let vs = ctx.enums.get(n)?;
+    Some(vs.iter().flat_map(|(_, fs)| fs.iter().map(|(_, t)| t.clone())).collect())
 }
 
 /// Whether a capability appears anywhere inside `ty`.
@@ -472,7 +525,7 @@ fn cap_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> bool {
         Ty::Proposed(inner) | Ty::List(inner, _) => cap_inside(ctx, inner, seen),
         Ty::Named(n) => {
             seen.insert(n.clone())
-                && ctx.fields.get(n).cloned().is_some_and(|fs| fs.iter().any(|(_, t)| cap_inside(ctx, t, seen)))
+                && inner_types(ctx, n).is_some_and(|ts| ts.iter().any(|t| cap_inside(ctx, t, seen)))
         }
     }
 }
@@ -998,6 +1051,7 @@ fn has_break(body: &[Stmt]) -> bool {
     body.iter().any(|s| match s {
         Stmt::Break(_) => true,
         Stmt::If { then, els, .. } => has_break(then) || has_break(els),
+        Stmt::Match { arms, .. } => arms.iter().any(|a| has_break(&a.body)),
         Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => has_break(body),
         _ => false,
     })
@@ -1009,6 +1063,8 @@ fn never_falls_through(body: &[Stmt]) -> bool {
     body.iter().any(|s| match s {
         Stmt::Return(..) | Stmt::Break(_) | Stmt::Continue(_) | Stmt::Fail(..) => true,
         Stmt::If { then, els, .. } => !els.is_empty() && never_falls_through(then) && never_falls_through(els),
+        // The arms cover every variant (E109), so one of them runs.
+        Stmt::Match { arms, .. } => arms.iter().all(|a| never_falls_through(&a.body)),
         Stmt::Loop { body, .. } => !has_break(body),
         _ => false,
     })
@@ -1113,6 +1169,7 @@ fn always_returns(body: &[Stmt]) -> bool {
         // `fail` never falls off the end either: it stops the function.
         Stmt::Return(..) | Stmt::Fail(..) => true,
         Stmt::If { then, els, .. } => always_returns(then) && always_returns(els),
+        Stmt::Match { arms, .. } => arms.iter().all(|a| always_returns(&a.body)),
         Stmt::Loop { body, .. } => !has_break(body),
         _ => false,
     })
@@ -1148,15 +1205,17 @@ fn ok_test(cond: &Expr) -> Option<(String, bool)> {
     None
 }
 
+/// Whether `rel` names a field path inside `ty`. Through an enum, the next name may be
+/// a field of any of its variants.
 fn field_path_exists(ctx: &Ctx, ty: &Ty, rel: &[String]) -> bool {
-    let mut cur = ty.clone();
-    for name in rel {
-        let Ty::Named(t) = &cur else { return false };
-        let Some(fields) = ctx.fields.get(t) else { return false };
-        let Some((_, fty)) = fields.iter().find(|(n, _)| n == name) else { return false };
-        cur = fty.clone();
+    let Some((name, rest)) = rel.split_first() else { return true };
+    let Ty::Named(t) = ty else { return false };
+    if let Some(fields) = ctx.fields.get(t) {
+        return fields.iter().any(|(n, fty)| n == name && field_path_exists(ctx, fty, rest));
     }
-    true
+    ctx.enums
+        .get(t)
+        .is_some_and(|vs| vs.iter().flat_map(|(_, fs)| fs).any(|(n, fty)| n == name && field_path_exists(ctx, fty, rest)))
 }
 
 /// Checks a block. `env` is a copy, so names bound inside a nested block do not leak out.
@@ -1182,6 +1241,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
             | Stmt::Return(Some(e), _)
             | Stmt::Fail(e, _) => Some(e),
             Stmt::If { cond, .. } => Some(cond),
+            Stmt::Match { value, .. } => Some(value),
             _ => None,
         };
         if let Some(e) = stmt_expr {
@@ -1437,6 +1497,99 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     ctx.err("E103", *pos, "`break` is only allowed inside `repeat`, `loop` or `for`".into());
                 }
             }
+            Stmt::Match { value, arms, pos } => {
+                let Some((vty, vtrusted)) = type_of(ctx, value, &env) else { continue };
+                let variants = match &vty {
+                    Ty::Named(n) => ctx.enums.get(n).cloned(),
+                    _ => None,
+                };
+                let Some(variants) = variants else {
+                    if matches!(vty, Ty::Proposed(_)) {
+                        ctx.err("E001", value.pos(), format!("cannot match unvalidated {vty}; use `validate` first"));
+                    } else {
+                        ctx.err("E101", value.pos(), format!("`match` needs an enum value, found {vty}"));
+                    }
+                    continue;
+                };
+                let ename = vty.to_string();
+                match_patterns(ctx, &ename, &variants, arms, *pos);
+                // Which arm runs depends on the value's variant, like an `if` on its
+                // condition: for a path, that is the path's `kind` (no field is called
+                // that), so a blinded field inside does not decide the arm. Each bound
+                // field is exactly that field of the value.
+                let srcs = reveals(value, &env);
+                let decides: Vec<Src> = srcs
+                    .iter()
+                    .map(|s| {
+                        let mut s = s.clone();
+                        if s.exact {
+                            s.path.push("kind".into());
+                        }
+                        s
+                    })
+                    .collect();
+                let here = ctx.pc.clone();
+                add_srcs(&mut ctx.pc, decides.clone());
+                let mut outs = Vec::new();
+                for arm in arms.iter() {
+                    let mut arm_env = env.clone();
+                    if let Pattern::Variant { name, binds, .. } = &arm.pattern
+                        && let Some((_, fields)) = variants.iter().find(|(v, _)| v == name)
+                    {
+                        for (field, to) in binds {
+                            let Some((_, fty)) = fields.iter().find(|(f, _)| f == field) else { continue };
+                            let mut r: Vec<Src> = srcs
+                                .iter()
+                                .map(|s| {
+                                    let mut s = s.clone();
+                                    if s.exact {
+                                        s.path.push(field.clone());
+                                    }
+                                    s
+                                })
+                                .collect();
+                            add_srcs(&mut r, ctx.pc.clone());
+                            hide_shadowed(&mut arm_env, to);
+                            let b = Binding {
+                                ty: fty.clone(),
+                                trusted: vtrusted,
+                                reveals: r,
+                                proven_ok: false,
+                                holds_evidence: false,
+                                decl: None,
+                            };
+                            arm_env.insert(to.clone(), b);
+                        }
+                    }
+                    outs.push(check_block(ctx, f, ret, &arm.body, arm_env, in_loop));
+                }
+                let reach: Vec<&Env> = outs.iter().filter(|o| o.falls).map(|o| &o.end).collect();
+                env = join(&env, &reach);
+                ctx.pc = here;
+                // As for `if`: an arm that always returns cannot influence what follows;
+                // if some arm can stop early, whether code after runs depends on the value.
+                let mut t = Vec::new();
+                let mut all_return = true;
+                let mut any_stops = false;
+                for (arm, o) in arms.iter().zip(outs) {
+                    breaks.extend(o.breaks);
+                    continues.extend(o.continues);
+                    if always_returns(&arm.body) {
+                        any_stops = true;
+                    } else {
+                        all_return = false;
+                        add_srcs(&mut t, o.taint);
+                        any_stops |= may_stop(ctx, &arm.body);
+                    }
+                }
+                if !all_return && any_stops {
+                    add_srcs(&mut t, decides);
+                }
+                if !t.is_empty() {
+                    add_srcs(&mut exit_taint, t.clone());
+                    add_srcs(&mut ctx.pc, t);
+                }
+            }
             Stmt::Continue(pos) => {
                 continues.push(env.clone());
                 if !in_loop {
@@ -1447,6 +1600,64 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
     }
     ctx.pc = saved_pc;
     BlockOut { taint: exit_taint, falls: !never_falls_through(body), end: env, breaks, continues }
+}
+
+/// The patterns of a `match` on enum `ename`: each names a variant once, binds only
+/// its fields (each once, to distinct names), binds them all unless it ends in `..`,
+/// and together they cover every variant (E109). `_` accepts what is left, so it must
+/// come last and must have something left to accept.
+fn match_patterns(ctx: &mut Ctx, ename: &str, variants: &Variants, arms: &[Arm], pos: Pos) {
+    let mut covered: HashSet<&str> = HashSet::new();
+    let mut any = false;
+    for arm in arms {
+        match &arm.pattern {
+            Pattern::Any(p) => {
+                if any || covered.len() == variants.len() {
+                    ctx.err("E101", *p, "this `_` arm can never run: every variant is already matched".into());
+                }
+                any = true;
+            }
+            Pattern::Variant { name, binds, rest, pos: p } => {
+                if any {
+                    ctx.err("E101", *p, format!("the arm for {name} can never run: `_` above already matches it"));
+                }
+                let Some((vname, fields)) = variants.iter().find(|(v, _)| v == name) else {
+                    let all: Vec<&str> = variants.iter().map(|(v, _)| v.as_str()).collect();
+                    ctx.err("E104", *p, format!("enum '{ename}' has no variant '{name}'; it has {}", all.join(", ")));
+                    continue;
+                };
+                if !covered.insert(vname.as_str()) {
+                    ctx.err("E101", *p, format!("variant {name} is matched twice"));
+                }
+                let (mut fseen, mut tseen) = (HashSet::new(), HashSet::new());
+                for (field, to) in binds {
+                    if !fields.iter().any(|(f, _)| f == field) {
+                        ctx.err("E104", *p, format!("variant '{ename}.{name}' has no field '{field}'"));
+                    }
+                    if !fseen.insert(field.as_str()) {
+                        ctx.err("E101", *p, format!("field '{field}' is bound twice"));
+                    }
+                    if !tseen.insert(to.as_str()) {
+                        ctx.err("E101", *p, format!("'{to}' is bound twice in this pattern"));
+                    }
+                }
+                let missing: Vec<&str> = fields.iter().map(|(f, _)| f.as_str()).filter(|f| !fseen.contains(f)).collect();
+                if !rest && !missing.is_empty() {
+                    ctx.err(
+                        "E101",
+                        *p,
+                        format!("the pattern for {name} does not bind {}; bind every field, or end with `..`", missing.join(", ")),
+                    );
+                }
+            }
+        }
+    }
+    if !any {
+        let left: Vec<&str> = variants.iter().map(|(v, _)| v.as_str()).filter(|v| !covered.contains(v)).collect();
+        if !left.is_empty() {
+            ctx.err("E109", pos, format!("this `match` does not handle {}; add an arm for each, or `_ =>`", left.join(", ")));
+        }
+    }
 }
 
 /// Checks a loop body (`repeat`, `loop`, `for`) under `extra` in addition to the
@@ -1623,10 +1834,47 @@ fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option
             if !seen.insert(n.clone()) {
                 return None;
             }
-            let fields = ctx.fields.get(n)?.clone();
-            fields.iter().find_map(|(_, fty)| runtime_only_inside(ctx, fty, seen))
+            inner_types(ctx, n)?.iter().find_map(|fty| runtime_only_inside(ctx, fty, seen))
         }
     }
+}
+
+/// Checks the fields given to a record or variant literal named `ty` against `decl`:
+/// each given once, each declared, each assignable, none missing. Returns whether every
+/// value is trusted, or None after reporting a problem.
+fn record_fields(ctx: &mut Ctx, env: &Env, ty: &str, decl: &[(String, Ty)], fields: &[(String, Expr)], pos: Pos) -> Option<bool> {
+    let mut trusted = true;
+    let mut seen = HashSet::new();
+    let mut ok = true;
+    for (fname, value) in fields {
+        let vt = type_of(ctx, value, env);
+        if !seen.insert(fname.as_str()) {
+            ctx.err("E101", value.pos(), format!("field '{fname}' given twice in this {ty}"));
+            ok = false;
+            continue;
+        }
+        let Some((_, fty)) = decl.iter().find(|(n, _)| n == fname) else {
+            ctx.err("E104", value.pos(), format!("type '{ty}' has no field '{fname}'"));
+            ok = false;
+            continue;
+        };
+        let Some((vty, vtr)) = vt else {
+            ok = false;
+            continue;
+        };
+        trusted &= vtr;
+        if let Err((code, msg)) = assignable(&vty, fty) {
+            ctx.err(code, value.pos(), format!("in field '{fname}' of {ty}: {msg}"));
+            ok = false;
+        }
+    }
+    for (fname, _) in decl {
+        if !fields.iter().any(|(n, _)| n == fname) {
+            ctx.err("E101", pos, format!("this {ty} is missing field '{fname}'"));
+            ok = false;
+        }
+    }
+    ok.then_some(trusted)
 }
 
 /// Returns the expression's type and whether its value is trusted.
@@ -1957,7 +2205,9 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             let decl = match ctx.fields.get(ty) {
                 Some(d) if ty != "Outcome" && ty != "Response" => d.clone(),
                 _ => {
-                    if ctx.known.contains(ty) {
+                    if ctx.enums.contains_key(ty) {
+                        ctx.err("E101", *pos, format!("{ty} is an enum; build one of its variants, as {ty}.Variant {{ ... }}"));
+                    } else if ctx.known.contains(ty) {
                         ctx.err("E101", *pos, format!("a {ty} cannot be built in code; only the runtime makes one"));
                     } else {
                         ctx.err("E102", *pos, format!("unknown type '{ty}'"));
@@ -1965,40 +2215,20 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     return None;
                 }
             };
-            let mut trusted = true;
-            let mut seen = HashSet::new();
-            let mut ok = true;
-            for (fname, value) in fields {
-                let vt = type_of(ctx, value, env);
-                if !seen.insert(fname.as_str()) {
-                    ctx.err("E101", value.pos(), format!("field '{fname}' given twice in this {ty}"));
-                    ok = false;
-                    continue;
-                }
-                let Some((_, fty)) = decl.iter().find(|(n, _)| n == fname) else {
-                    ctx.err("E104", value.pos(), format!("type '{ty}' has no field '{fname}'"));
-                    ok = false;
-                    continue;
-                };
-                let Some((vty, vtr)) = vt else {
-                    ok = false;
-                    continue;
-                };
-                trusted &= vtr;
-                if let Err((code, msg)) = assignable(&vty, fty) {
-                    ctx.err(code, value.pos(), format!("in field '{fname}' of {ty}: {msg}"));
-                    ok = false;
-                }
-            }
-            for (fname, _) in &decl {
-                if !fields.iter().any(|(n, _)| n == fname) {
-                    ctx.err("E101", *pos, format!("this {ty} is missing field '{fname}'"));
-                    ok = false;
-                }
-            }
-            if !ok {
+            let trusted = record_fields(ctx, env, ty, &decl, fields, *pos)?;
+            Some((named(ty), trusted))
+        }
+        Expr::Variant { ty, variant, fields, pos } => {
+            let Some(variants) = ctx.enums.get(ty) else {
+                ctx.err("E102", *pos, format!("unknown type '{ty}'"));
                 return None;
-            }
+            };
+            let Some((_, decl)) = variants.iter().find(|(v, _)| v == variant).cloned() else {
+                let all: Vec<String> = variants.iter().map(|(v, _)| v.clone()).collect();
+                ctx.err("E104", *pos, format!("enum '{ty}' has no variant '{variant}'; it has {}", all.join(", ")));
+                return None;
+            };
+            let trusted = record_fields(ctx, env, &format!("{ty}.{variant}"), &decl, fields, *pos)?;
             Some((named(ty), trusted))
         }
         Expr::List(items, pos) => {
@@ -2051,6 +2281,14 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                         "E001",
                         *pos,
                         format!("cannot read '.{field}' of unvalidated {bty}; use `validate` first"),
+                    );
+                    None
+                }
+                Ty::Named(tname) if ctx.enums.contains_key(tname) => {
+                    ctx.err(
+                        "E104",
+                        *pos,
+                        format!("cannot read '.{field}' of enum {tname}: which fields exist depends on the variant; use `match`"),
                     );
                     None
                 }

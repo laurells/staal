@@ -1,0 +1,19 @@
+// expect: E109
+// message: this `match` does not handle Refunded; add an arm for each, or `_ =>`
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+fn f(p: Payment) -> Int {
+    match p {
+        Pending => {
+            return 0
+        }
+        Paid { .. } => {
+            return 1
+        }
+    }
+    return 2
+}

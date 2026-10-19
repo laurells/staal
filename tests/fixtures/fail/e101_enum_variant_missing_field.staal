@@ -1,0 +1,11 @@
+// expect: E101
+// message: this Payment.Paid is missing field 'reference'
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+fn f() -> Payment {
+    return Payment.Paid { amount: 1.00 NGN }
+}

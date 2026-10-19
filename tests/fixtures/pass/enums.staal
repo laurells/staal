@@ -1,0 +1,35 @@
+// Enums: declared, built, matched, and blinded inside.
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+type Order { payment: Payment, note: Text }
+
+fn label(p: Payment) -> Text {
+    match p {
+        Pending => {
+            return "pending"
+        }
+        Paid { amount, reference: r } => {
+            return "paid \(amount) \(r)"
+        }
+        Refunded { .. } => {
+            return "refunded"
+        }
+    }
+}
+
+// Only the reference is blinded: which variant it is, and the amount, may decide.
+fn ask(order: Order @blind(payment.reference)) {
+    match order.payment {
+        Paid { amount, .. } => {
+            let s = propose(Text, instruct: "Thank the customer for the payment.", data: [amount], tokens: 10)
+        }
+        _ => {}
+    }
+}
+
+fn kinds() -> List<Payment, 2> {
+    return [Payment.Pending, Payment.Refunded { amount: 1.00 NGN, reason: "late" }]
+}

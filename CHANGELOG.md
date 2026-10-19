@@ -7,6 +7,12 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Enums, `enum Payment { Pending, Paid { amount: Money, reference: Text } }`,
+  and `match` with field patterns, `..` and `_`. A `match` must handle every
+  variant (new code E109). Enums are read from and written as JSON objects with
+  a `kind`, so a model's answer is validated into a declared variant. Choosing an
+  arm reveals only the variant (E007), and bound fields keep the value's trust
+  (E006). Enums run on the interpreter; native code declines them for now.
 - Module-level constants, `const NAME: T = value`, computed when the program is
   checked and substituted where used; `pub const` exports one.
 - `continue` in `repeat`, `loop` and `for`, on both engines. Skipping the rest

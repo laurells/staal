@@ -1,0 +1,6 @@
+// expect: E101
+// message: type 'Shape' is already defined
+type Shape { r: Int }
+enum Shape {
+    Circle,
+}

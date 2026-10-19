@@ -3,7 +3,7 @@
 // output alike, goes through `from_json`.
 
 use super::money::{Currency, Money};
-use crate::ast::Ty;
+use crate::ast::{Ty, Variants};
 use serde_json::{json, Map, Value as Json};
 use std::collections::{HashMap, HashSet};
 
@@ -46,6 +46,8 @@ pub enum Value {
     Bool(bool),
     Money(Money),
     Record { ty: String, fields: Vec<(String, Value)> },
+    /// A value of enum `ty`: one variant and its fields, in declaration order.
+    Enum { ty: String, variant: String, fields: Vec<(String, Value)> },
     /// A list; its length never exceeds the maximum in its type (checked where lists
     /// enter from outside, and fixed for literals).
     List(Vec<Value>),
@@ -64,8 +66,37 @@ pub enum Value {
     Header { name: String, value: HeaderValue },
 }
 
-/// Declared record types: name -> fields in declaration order.
-pub type Types = HashMap<String, Vec<(String, Ty)>>;
+/// Declared types: records (name -> fields in declaration order) and enums (name ->
+/// variants, each with its fields in declaration order).
+#[derive(Debug, Clone, Default)]
+pub struct Types {
+    records: HashMap<String, Vec<(String, Ty)>>,
+    enums: HashMap<String, Variants>,
+}
+
+impl Types {
+    pub fn new() -> Types {
+        Types::default()
+    }
+
+    /// A record type's fields.
+    pub fn get(&self, name: &str) -> Option<&Vec<(String, Ty)>> {
+        self.records.get(name)
+    }
+
+    pub fn insert(&mut self, name: String, fields: Vec<(String, Ty)>) {
+        self.records.insert(name, fields);
+    }
+
+    /// An enum's variants.
+    pub fn variants(&self, name: &str) -> Option<&Variants> {
+        self.enums.get(name)
+    }
+
+    pub fn insert_enum(&mut self, name: String, variants: Vec<(String, Vec<(String, Ty)>)>) {
+        self.enums.insert(name, variants);
+    }
+}
 
 /// The deepest nesting accepted from outside, so hostile input cannot exhaust the stack.
 const MAX_JSON_DEPTH: usize = 64;
@@ -121,6 +152,31 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
                 "{path}: a {n} cannot be supplied as data; secrets come from the environment through \"secrets\""
             )),
             "Unit" => Err(format!("{path}: Unit cannot be supplied from outside")),
+            _ if types.variants(n).is_some() => {
+                let variants = types.variants(n).expect("checked");
+                let names: Vec<&str> = variants.iter().map(|(v, _)| v.as_str()).collect();
+                let obj = json.as_object().ok_or_else(|| expected(&format!("a {n} object with a \"kind\"")))?;
+                let kind = obj.get("kind").and_then(Json::as_str).ok_or_else(|| {
+                    format!("{path}.kind: expected the name of a {n} variant: {}", names.join(", "))
+                })?;
+                let (variant, fields) = variants.iter().find(|(v, _)| v == kind).ok_or_else(|| {
+                    format!("{path}.kind: '{kind}' is not a {n} variant; expected one of {}", names.join(", "))
+                })?;
+                if !lenient {
+                    for key in obj.keys() {
+                        if key != "kind" && !fields.iter().any(|(f, _)| f == key) {
+                            return Err(format!("{path}: {n}.{variant} has no field '{key}'"));
+                        }
+                    }
+                }
+                let mut out = Vec::with_capacity(fields.len());
+                for (fname, fty) in fields {
+                    let sub = format!("{path}.{fname}");
+                    let fjson = obj.get(fname).ok_or_else(|| format!("{sub}: missing"))?;
+                    out.push((fname.clone(), from_json_at(fty, fjson, types, &sub, depth + 1, lenient)?));
+                }
+                Ok(Value::Enum { ty: n.clone(), variant: variant.clone(), fields: out })
+            }
             _ => {
                 let fields = types.get(n).ok_or_else(|| format!("{path}: unknown type {n}"))?;
                 let obj = json.as_object().ok_or_else(|| expected(&format!("a {n} object")))?;
@@ -194,6 +250,14 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
             }
             Json::Object(obj)
         }
+        Value::Enum { variant, fields, .. } => {
+            let mut obj = Map::new();
+            obj.insert("kind".into(), json!(variant));
+            for (k, fv) in fields {
+                obj.insert(k.clone(), to_json(fv, for_model)?);
+            }
+            Json::Object(obj)
+        }
         Value::List(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
         Value::Proposed { raw, .. } => raw.clone(),
         Value::Receipt(r) => json!({ "receipt": r.id, "capability": r.capability, "method": r.method }),
@@ -237,6 +301,24 @@ fn schema_at(ty: &Ty, types: &Types, seen: &mut HashSet<String>) -> Json {
                 "required": ["amount", "currency"],
                 "additionalProperties": false
             }),
+            _ if types.variants(n).is_some() => {
+                if !seen.insert(n.clone()) {
+                    return json!({});
+                }
+                let mut options = Vec::new();
+                for (v, fields) in types.variants(n).expect("checked") {
+                    let mut props = Map::new();
+                    props.insert("kind".into(), json!({ "const": v }));
+                    let mut required = vec![json!("kind")];
+                    for (f, fty) in fields {
+                        props.insert(f.clone(), schema_at(fty, types, seen));
+                        required.push(json!(f));
+                    }
+                    options.push(json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false }));
+                }
+                seen.remove(n);
+                json!({ "anyOf": options })
+            }
             _ => {
                 let Some(fields) = types.get(n) else { return json!({}) };
                 if !seen.insert(n.clone()) {

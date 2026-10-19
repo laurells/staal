@@ -120,6 +120,12 @@ fn stmt(s: &mut Stmt, values: &HashMap<String, Expr>) {
                 stmt(s, values);
             }
         }
+        Stmt::Match { value, arms, .. } => {
+            replace(value, &mut with);
+            for s in arms.iter_mut().flat_map(|a| a.body.iter_mut()) {
+                stmt(s, values);
+            }
+        }
         Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => {
             for s in body {
                 stmt(s, values);

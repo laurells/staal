@@ -1,0 +1,10 @@
+// expect: E101
+// message: this Payment.Paid is missing field 'reference'
+// A variant with a problem has no type, so nothing more is reported about it.
+enum Payment {
+    Paid { amount: Money, reference: Text },
+}
+
+fn f() -> Int {
+    return Payment.Paid { amount: 1.00 NGN }
+}

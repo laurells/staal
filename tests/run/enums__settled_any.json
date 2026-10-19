@@ -1,0 +1,1 @@
+{"entry": "settled", "inputs": {"p": {"kind": "Refunded", "amount": {"amount": "5.00", "currency": "NGN"}, "reason": "x"}}, "expect": {"result": true}, "model": {"provider": "script", "responses": []}}

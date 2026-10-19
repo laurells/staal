@@ -1,0 +1,14 @@
+// expect: E104
+// message: enum 'Payment' has no variant 'Lost'; it has Pending, Paid, Refunded
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+fn f(p: Payment) {
+    match p {
+        Lost => {}
+        _ => {}
+    }
+}

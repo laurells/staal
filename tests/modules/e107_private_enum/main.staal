@@ -1,0 +1,7 @@
+// expect: E107 E107
+// An enum without `pub` stays inside its module, as a type and as a value.
+import kinds as k
+
+fn f() -> k.Hidden {
+    return k.Hidden.One
+}

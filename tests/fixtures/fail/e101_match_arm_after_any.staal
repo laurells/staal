@@ -1,0 +1,15 @@
+// expect: E101
+// message: the arm for Paid can never run: `_` above already matches it
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+fn f(p: Payment) {
+    match p {
+        Pending => {}
+        _ => {}
+        Paid { .. } => {}
+    }
+}

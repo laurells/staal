@@ -1,0 +1,1 @@
+{"entry": "triage", "inputs": {"t": {"subject": "s", "body": "b"}}, "model": {"provider": "script", "responses": [{"output": {"kind": "Escalate", "team": "billing", "note": "n"}, "output_tokens": 5}]}, "expect": {"result": "to billing", "model_calls": 1}}

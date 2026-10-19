@@ -1,0 +1,6 @@
+// expect: E101
+// message: enum 'Shape' declares variant 'Circle' twice
+enum Shape {
+    Circle,
+    Circle,
+}

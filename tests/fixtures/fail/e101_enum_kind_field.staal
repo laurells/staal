@@ -1,0 +1,5 @@
+// expect: E101
+// message: cannot be called `kind`
+enum Shape {
+    Circle { kind: Text },
+}

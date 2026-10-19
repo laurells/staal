@@ -1,0 +1,1 @@
+{"entry": "triage", "inputs": {"t": {"subject": "s", "body": "b"}}, "model": {"provider": "script", "responses": [{"output": {"kind": "Delete"}, "output_tokens": 5}]}, "expect": {"failure": "validation", "message_contains": "Triage variant; expected one of Refund, Escalate, Close"}}

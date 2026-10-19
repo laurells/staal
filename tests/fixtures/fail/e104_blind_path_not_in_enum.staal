@@ -1,0 +1,10 @@
+// expect: E104
+// message: has no field path 'payment.kind'
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+type Order { payment: Payment }
+
+fn f(order: Order @blind(payment.kind)) {}

@@ -1,0 +1,1 @@
+{"entry": "triage", "inputs": {"t": {"subject": "s", "body": "b"}}, "model": {"provider": "script", "responses": [{"output": {"kind": "Close"}, "output_tokens": 5}]}, "expect": {"result": "closed"}}

@@ -1,0 +1,1 @@
+{"entry": "first_pending", "inputs": {"ps": [{"kind": "Paid", "amount": {"amount": "1.00", "currency": "NGN"}, "reference": "a"}]}, "model": {"provider": "script", "responses": []}, "expect": {"result": -1}}

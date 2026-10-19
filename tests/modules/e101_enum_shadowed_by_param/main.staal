@@ -1,0 +1,7 @@
+// expect: E101
+// An imported enum's name is taken: a parameter cannot use it.
+import kinds { Status }
+
+fn f(Status: Int) -> Int {
+    return Status
+}

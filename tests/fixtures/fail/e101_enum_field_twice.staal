@@ -1,0 +1,5 @@
+// expect: E101
+// message: variant 'Shape.Circle' declares field 'r' twice
+enum Shape {
+    Circle { r: Int, r: Int },
+}

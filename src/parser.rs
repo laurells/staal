@@ -261,6 +261,7 @@ impl Parser {
             }
             match self.peek() {
                 Tok::Type => p.types.push(self.typedecl(public)?),
+                Tok::Ident(w) if w == "enum" => p.enums.push(self.enumdecl(public)?),
                 Tok::Fn => p.fns.push(self.fndecl(public)?),
                 Tok::Ident(w) if w == "capability" => {
                     let (cap, fns) = self.capdecl()?;
@@ -272,7 +273,7 @@ impl Parser {
                 Tok::Eof if !public => return Ok(p),
                 Tok::Import => return Err((self.pos(), "imports must come before every declaration".into())),
                 other => {
-                    let want = if public { "'type', 'fn' or 'const' after 'pub'" } else { "'type', 'fn' or 'const'" };
+                    let want = if public { "'type', 'enum', 'fn' or 'const' after 'pub'" } else { "'type', 'enum', 'fn' or 'const'" };
                     return Err((self.pos(), format!("expected {want}, found {other:?}")));
                 }
             }
@@ -325,6 +326,91 @@ impl Parser {
         self.expect(Tok::Eq, "'='")?;
         let value = self.expr()?;
         Ok(ConstDecl { public, name, ty, value, pos })
+    }
+
+    /// "enum" IDENT "{" (IDENT ("{" (IDENT ":" ty ","?)* "}")? ","?)* "}"
+    fn enumdecl(&mut self, public: bool) -> PResult<EnumDecl> {
+        let pos = self.pos();
+        self.bump(); // `enum`
+        let name = self.ident()?;
+        self.expect(Tok::LBrace, "'{'")?;
+        let mut variants = Vec::new();
+        while *self.peek() != Tok::RBrace {
+            let vpos = self.pos();
+            let vname = self.ident()?;
+            let mut fields = Vec::new();
+            if *self.peek() == Tok::LBrace {
+                self.bump();
+                while *self.peek() != Tok::RBrace {
+                    let f = self.field_name()?;
+                    self.expect(Tok::Colon, "':'")?;
+                    fields.push((f, self.ty()?));
+                    if *self.peek() == Tok::Comma {
+                        self.bump();
+                    }
+                }
+                self.expect(Tok::RBrace, "'}'")?;
+            }
+            variants.push(Variant { name: vname, fields, pos: vpos });
+            if *self.peek() == Tok::Comma {
+                self.bump();
+            }
+        }
+        self.expect(Tok::RBrace, "'}'")?;
+        if variants.is_empty() {
+            return Err((pos, format!("enum '{name}' needs at least one variant")));
+        }
+        Ok(EnumDecl { public, name, variants, pos })
+    }
+
+    /// "match" expr* "{" (pattern "=>" block)+ "}"
+    fn match_stmt(&mut self) -> PResult<Stmt> {
+        let pos = self.pos();
+        self.bump(); // `match`
+        let value = self.head_expr()?;
+        self.expect(Tok::LBrace, "'{'")?;
+        let mut arms = Vec::new();
+        while *self.peek() != Tok::RBrace {
+            let ppos = self.pos();
+            let name = self.ident()?;
+            let pattern = if name == "_" {
+                Pattern::Any(ppos)
+            } else {
+                let mut binds = Vec::new();
+                let mut rest = false;
+                if *self.peek() == Tok::LBrace {
+                    self.bump();
+                    while *self.peek() != Tok::RBrace {
+                        if *self.peek() == Tok::DotDot {
+                            self.bump();
+                            rest = true;
+                            break;
+                        }
+                        let field = self.field_name()?;
+                        let to = if *self.peek() == Tok::Colon {
+                            self.bump();
+                            self.ident()?
+                        } else {
+                            field.clone()
+                        };
+                        binds.push((field, to));
+                        if *self.peek() == Tok::Comma {
+                            self.bump();
+                        }
+                    }
+                    self.expect(Tok::RBrace, "'}'")?;
+                }
+                Pattern::Variant { name, binds, rest, pos: ppos }
+            };
+            self.expect(Tok::FatArrow, "'=>'")?;
+            let body = self.block()?;
+            arms.push(Arm { pattern, body });
+        }
+        self.expect(Tok::RBrace, "'}'")?;
+        if arms.is_empty() {
+            return Err((pos, "a `match` needs at least one arm".into()));
+        }
+        Ok(Stmt::Match { value, arms, pos })
     }
 
     fn typedecl(&mut self, public: bool) -> PResult<TypeDecl> {
@@ -595,6 +681,14 @@ impl Parser {
                 Ok(Stmt::Continue(pos))
             }
             Tok::If => self.if_stmt(),
+            // `match` is a word only at the start of a statement, followed by a value:
+            // `match.send(x)` (an action through a capability called `match`) is not one.
+            Tok::Ident(w)
+                if w == "match"
+                    && !matches!(self.toks.get(self.i + 1).map(|t| &t.tok), Some(Tok::Dot | Tok::LParen | Tok::Eq)) =>
+            {
+                self.match_stmt()
+            }
             Tok::Ident(w) if w == "fail" && self.toks.get(self.i + 1).map(|t| &t.tok) == Some(&Tok::LParen) => {
                 self.bump();
                 let mut args = self.args()?;
@@ -936,7 +1030,23 @@ impl Parser {
                 if *self.peek() == Tok::LBrace && !self.no_record {
                     return self.record_literal(name, pos);
                 }
-                // `m.T { ... }`: a record of type T from the module imported as `m`.
+                // `m.E.V { ... }`: variant V of enum E from the module imported as `m`.
+                let tok_at = |p: &Self, k: usize| p.toks.get(p.i + k).map(|t| t.tok.clone());
+                let twice_qualified = !self.no_record
+                    && tok_at(self, 0) == Some(Tok::Dot)
+                    && matches!(tok_at(self, 1), Some(Tok::Ident(_)))
+                    && tok_at(self, 2) == Some(Tok::Dot)
+                    && matches!(tok_at(self, 3), Some(Tok::Ident(_)))
+                    && tok_at(self, 4) == Some(Tok::LBrace);
+                if twice_qualified {
+                    self.bump();
+                    let a = self.ident()?;
+                    self.bump();
+                    let b = self.ident()?;
+                    return self.record_literal(format!("{name}.{a}.{b}"), pos);
+                }
+                // `m.T { ... }`: a record of type T from the module imported as `m` (or
+                // variant T of the enum `m`).
                 let qualified_record = !self.no_record
                     && *self.peek() == Tok::Dot
                     && matches!(self.toks.get(self.i + 1).map(|t| &t.tok), Some(Tok::Ident(_)))

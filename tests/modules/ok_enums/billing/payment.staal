@@ -1,0 +1,8 @@
+pub enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+}
+
+pub fn paid(amount: Money) -> Payment {
+    return Payment.Paid { amount: amount, reference: "auto" }
+}

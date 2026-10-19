@@ -46,6 +46,10 @@ pub enum Tok {
     Comma,
     Dot,
     Arrow,
+    /// `=>`, between a `match` pattern and its block.
+    FatArrow,
+    /// `..`, for the fields a pattern leaves out.
+    DotDot,
     Lt,
     Gt,
     Eq,
@@ -232,6 +236,8 @@ fn lex_chars(chars: &[char], file: u32, line: usize, col: usize) -> Result<Vec<T
         }
         let two = match (c, chars.get(i + 1)) {
             ('-', Some('>')) => Some(Tok::Arrow),
+            ('=', Some('>')) => Some(Tok::FatArrow),
+            ('.', Some('.')) => Some(Tok::DotDot),
             ('=', Some('=')) => Some(Tok::EqEq),
             ('!', Some('=')) => Some(Tok::NotEq),
             ('<', Some('=')) => Some(Tok::LtEq),

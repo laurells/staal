@@ -2,6 +2,9 @@
 
 use crate::lexer::Pos;
 
+/// An enum's variants, in declaration order, each with its fields in declaration order.
+pub type Variants = Vec<(String, Vec<(String, Ty)>)>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ty {
     Named(String),
@@ -91,6 +94,39 @@ pub struct ConstDecl {
     pub pos: Pos,
 }
 
+/// `enum Status { Pending, Paid { amount: Money } }`: a value is exactly one of the
+/// variants, each with its own fields (or none).
+#[derive(Debug, Clone)]
+pub struct EnumDecl {
+    pub public: bool,
+    pub name: String,
+    pub variants: Vec<Variant>,
+    pub pos: Pos,
+}
+
+#[derive(Debug, Clone)]
+pub struct Variant {
+    pub name: String,
+    pub fields: Vec<(String, Ty)>,
+    pub pos: Pos,
+}
+
+/// What one arm of a `match` accepts.
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    /// `Paid { amount, fee: f }` or `Paid { amount, .. }`: the variant, and each field
+    /// bound to a name (`amount` binds `amount`). Without `..` every field is bound.
+    Variant { name: String, binds: Vec<(String, String)>, rest: bool, pos: Pos },
+    /// `_`: every variant no earlier arm accepted.
+    Any(Pos),
+}
+
+#[derive(Debug)]
+pub struct Arm {
+    pub pattern: Pattern,
+    pub body: Vec<Stmt>,
+}
+
 #[derive(Debug)]
 pub struct TypeDecl {
     /// `pub type ...`: other modules may use it.
@@ -154,6 +190,9 @@ pub enum Stmt {
     Break(Pos),
     /// `continue`: on to the next iteration of the innermost loop.
     Continue(Pos),
+    /// `match value { Pattern => { ... } ... }`: runs the first arm whose pattern accepts
+    /// the value's variant. The arms cover every variant (E109).
+    Match { value: Expr, arms: Vec<Arm>, pos: Pos },
     /// `for x in xs { ... }` — once per element of a bounded list
     For { var: String, list: Expr, body: Vec<Stmt>, pos: Pos },
     /// `set name = value` — give a variable declared with `let` a new value
@@ -288,6 +327,7 @@ impl Stmt {
             Stmt::Expr(e) | Stmt::Return(Some(e), _) => vec![e],
             Stmt::If { cond, .. } => vec![cond],
             Stmt::For { list, .. } => vec![list],
+            Stmt::Match { value, .. } => vec![value],
             Stmt::Return(None, _) | Stmt::Repeat { .. } | Stmt::Loop { .. } | Stmt::Break(_) | Stmt::Continue(_) => {
                 Vec::new()
             }
@@ -299,6 +339,7 @@ impl Stmt {
         match self {
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } | Stmt::For { body, .. } => vec![body],
             Stmt::If { then, els, .. } => vec![then, els],
+            Stmt::Match { arms, .. } => arms.iter().map(|a| a.body.as_slice()).collect(),
             Stmt::Let { .. }
             | Stmt::Set { .. }
             | Stmt::Fail(..)
@@ -360,6 +401,10 @@ pub enum Expr {
     Record { ty: String, fields: Vec<(String, Expr)>, pos: Pos },
     /// `[a, b, c]`
     List(Vec<Expr>, Pos),
+    /// `Status.Paid { amount: x }` or `Status.Pending`: a value of an enum. The parser
+    /// sees these as a record literal and a field read; module resolution, which knows
+    /// which names are enums, makes them this.
+    Variant { ty: String, variant: String, fields: Vec<(String, Expr)>, pos: Pos },
     /// `xs[i]`
     Index { base: Box<Expr>, index: Box<Expr>, pos: Pos },
     /// `name(args)` — a call to a function defined in the program
@@ -407,7 +452,7 @@ impl Expr {
             | Expr::Builtin { args, .. }
             | Expr::List(args, _)
             | Expr::Done { evidence: args, .. } => args.iter().collect(),
-            Expr::Record { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
+            Expr::Record { fields, .. } | Expr::Variant { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
             // Only what the model is given is evaluated; `blind_to` names data, it is not evaluated.
             Expr::Propose { instruct, data, .. } => instruct.iter().map(|b| b.as_ref()).chain(data.iter()).collect(),
         }
@@ -429,7 +474,7 @@ impl Expr {
             | Expr::Builtin { args, .. }
             | Expr::List(args, _)
             | Expr::Done { evidence: args, .. } => args.iter_mut().collect(),
-            Expr::Record { fields, .. } => fields.iter_mut().map(|(_, v)| v).collect(),
+            Expr::Record { fields, .. } | Expr::Variant { fields, .. } => fields.iter_mut().map(|(_, v)| v).collect(),
             Expr::Propose { instruct, data, blind_to, .. } => {
                 instruct.iter_mut().map(|b| b.as_mut()).chain(data.iter_mut()).chain(blind_to.iter_mut()).collect()
             }
@@ -452,6 +497,7 @@ impl Expr {
             | Expr::Logic { pos, .. }
             | Expr::Builtin { pos, .. }
             | Expr::Record { pos, .. }
+            | Expr::Variant { pos, .. }
             | Expr::Index { pos, .. } => *pos,
             Expr::Cmp { pos, .. } | Expr::Field { pos, .. } | Expr::Done { pos, .. } => *pos,
             Expr::Propose { pos, .. } | Expr::Parse { pos, .. } => *pos,
@@ -517,4 +563,5 @@ pub struct Program {
     pub fns: Vec<FnDecl>,
     pub caps: Vec<CapDecl>,
     pub consts: Vec<ConstDecl>,
+    pub enums: Vec<EnumDecl>,
 }

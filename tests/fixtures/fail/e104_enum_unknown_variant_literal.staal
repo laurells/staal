@@ -1,0 +1,11 @@
+// expect: E104
+// message: enum 'Payment' has no variant 'Lost'
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+fn f() -> Payment {
+    return Payment.Lost
+}

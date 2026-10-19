@@ -207,6 +207,14 @@ impl<'a> Analyzer<'a> {
                     let e = self.block(els, stack, cycles, diags.as_deref_mut());
                     c.add(t.max(e))
                 }
+                // One arm runs: the costliest one bounds it.
+                Stmt::Match { value, arms, .. } => {
+                    let mut worst = Cost::ZERO;
+                    for a in arms {
+                        worst = worst.max(self.block(&a.body, stack, cycles, diags.as_deref_mut()));
+                    }
+                    self.expr(value, stack, cycles).add(worst)
+                }
                 Stmt::Loop { body, pos } => {
                     let c = self.block(body, stack, cycles, diags.as_deref_mut());
                     if !c.calls.is_zero()

@@ -1,0 +1,1 @@
+{"entry": "same", "inputs": {"a": {"kind": "Paid", "amount": {"amount": "1.00", "currency": "NGN"}, "reference": "a"}, "b": {"kind": "Paid", "amount": {"amount": "1.00", "currency": "NGN"}, "reference": "b"}}, "expect": {"result": false}, "model": {"provider": "script", "responses": []}}

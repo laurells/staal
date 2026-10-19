@@ -1,0 +1,17 @@
+// expect: E007
+// A bound field is that field of the value: blinded inside, blinded when bound.
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+type Order { payment: Payment }
+
+fn f(order: Order @blind(payment.reference)) {
+    match order.payment {
+        Paid { reference, .. } => {
+            let s = propose(Text, instruct: "Say hello.", data: [reference], tokens: 10)
+        }
+        _ => {}
+    }
+}

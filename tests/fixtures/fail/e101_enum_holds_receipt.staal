@@ -1,0 +1,5 @@
+// expect: E101
+// message: cannot hold a Receipt
+enum Step {
+    Sent { proof: Receipt },
+}

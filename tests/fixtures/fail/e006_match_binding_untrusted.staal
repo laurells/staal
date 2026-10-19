@@ -1,0 +1,13 @@
+// expect: E006
+// A field bound from untrusted data is untrusted.
+enum Note {
+    Text { body: Text },
+}
+
+fn f(n: Note) {
+    match n {
+        Text { body } => {
+            let s = propose(Text, instruct: "Do this: " + body, tokens: 10)
+        }
+    }
+}

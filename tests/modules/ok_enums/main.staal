@@ -1,0 +1,26 @@
+// expect: ok
+// Enums cross modules like records: qualified, or imported by name.
+import billing.payment as b { Payment }
+
+fn first() -> Payment {
+    return b.Payment.Paid { amount: 5.00 NGN, reference: "q" }
+}
+
+fn second() -> Payment {
+    return Payment.Pending
+}
+
+fn amount(p: b.Payment) -> Money {
+    match p {
+        Paid { amount, .. } => {
+            return amount
+        }
+        Pending => {
+            return 0.00 NGN
+        }
+    }
+}
+
+fn both() -> Money {
+    return amount(b.paid(1.00 NGN)) + amount(first()) + amount(b.Payment.Pending)
+}

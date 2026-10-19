@@ -1,0 +1,1 @@
+{"entry": "describe", "inputs": {"p": {"kind": "Lost"}}, "expect": {"config_error_contains": "'Lost' is not a"}, "model": {"provider": "script", "responses": []}}

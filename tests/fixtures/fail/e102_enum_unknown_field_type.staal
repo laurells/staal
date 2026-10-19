@@ -1,0 +1,4 @@
+// expect: E102
+enum Step {
+    Sent { at: Clock },
+}

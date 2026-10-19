@@ -1,0 +1,1 @@
+{"entry": "describe", "inputs": {"p": {"kind": "Pending", "amount": {"amount": "1.00", "currency": "NGN"}}}, "expect": {"config_error_contains": "Payment.Pending has no field 'amount'"}, "model": {"provider": "script", "responses": []}}

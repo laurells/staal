@@ -1,0 +1,11 @@
+// expect: E104
+// message: which fields exist depends on the variant; use `match`
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+fn f(p: Payment) -> Money {
+    return p.amount
+}

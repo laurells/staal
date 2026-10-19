@@ -213,6 +213,8 @@ struct Scope<'a> {
     /// Import alias -> what that module exports.
     aliases: HashMap<String, &'a Exports>,
     alias_prefix: HashMap<String, String>,
+    /// The qualified names of every enum in the program.
+    enums: &'a HashSet<String>,
 }
 
 fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Result<Program, Vec<Diagnostic>> {
@@ -225,6 +227,10 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             for t in &m.prog.types {
                 e.types.entry(t.name.clone()).or_insert((format!("{p}{}", t.name), t.public));
             }
+            // An enum is a type: it is named, exported and imported like one.
+            for en in &m.prog.enums {
+                e.types.entry(en.name.clone()).or_insert((format!("{p}{}", en.name), en.public));
+            }
             for f in &m.prog.fns {
                 e.fns.entry(f.name.clone()).or_insert((format!("{p}{}", f.name), f.public));
             }
@@ -235,6 +241,8 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
         })
         .collect();
 
+    let enums: HashSet<String> =
+        modules.iter().flat_map(|m| m.prog.enums.iter().map(move |e| format!("{}{}", m.prefix(), e.name))).collect();
     let mut out = Program::default();
     for (mi, m) in modules.iter_mut().enumerate() {
         let mut scope = Scope {
@@ -244,6 +252,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             consts: HashMap::new(),
             aliases: HashMap::new(),
             alias_prefix: HashMap::new(),
+            enums: &enums,
         };
         for (n, (q, _)) in &exports[mi].types {
             scope.types.insert(n.clone(), q.clone());
@@ -265,6 +274,11 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 if BUILTIN_TYPES.contains(&t.name.as_str()) {
                     diags.push(err("E101", t.pos, format!("type '{}' is built in and cannot be declared", t.name)));
                 }
+            }
+        }
+        for en in &m.prog.enums {
+            if BUILTIN_TYPES.contains(&en.name.as_str()) {
+                diags.push(err("E101", en.pos, format!("type '{}' is built in and cannot be declared", en.name)));
             }
         }
         let mut seen_paths = HashSet::new();
@@ -361,6 +375,14 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 r.ty(t, *pos);
             }
         }
+        for en in &mut m.prog.enums {
+            en.name = format!("{}{}", scope.prefix, en.name);
+            for v in &mut en.variants {
+                for (_, fty) in &mut v.fields {
+                    r.ty(fty, v.pos);
+                }
+            }
+        }
         for c in &mut m.prog.consts {
             c.name = format!("{}{}", scope.prefix, c.name);
             if let Some(t) = &mut c.ty {
@@ -377,6 +399,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
         out.fns.extend(m.prog.fns);
         out.caps.extend(m.prog.caps);
         out.consts.extend(m.prog.consts);
+        out.enums.extend(m.prog.enums);
     }
     let diags = crate::consts::expand(&mut out);
     if !diags.is_empty() {
@@ -398,6 +421,10 @@ impl Resolver<'_, '_, '_> {
     /// A local variable, parameter or loop variable may not reuse an import's name:
     /// `termii.send(...)` must always mean one thing.
     fn binder(&mut self, name: &str, pos: Pos) {
+        // `Status.Pending` must always mean the enum's variant, never a field of a variable.
+        if self.scope.types.get(name).is_some_and(|q| self.scope.enums.contains(q)) {
+            self.diags.push(err("E101", pos, format!("'{name}' is an enum here; choose another name")));
+        }
         if self.scope.consts.contains_key(name) {
             self.diags.push(err("E101", pos, format!("'{name}' is a constant here; choose another name")));
         }
@@ -467,11 +494,74 @@ impl Resolver<'_, '_, '_> {
                     self.block(then);
                     self.block(els);
                 }
+                Stmt::Match { value, arms, .. } => {
+                    self.expr(value);
+                    for a in arms {
+                        if let Pattern::Variant { binds, pos, .. } = &a.pattern {
+                            for (_, to) in binds {
+                                self.binder(to, *pos);
+                            }
+                        }
+                        self.block(&mut a.body);
+                    }
+                }
             }
         }
     }
 
+    /// The qualified enum a name written here refers to: `Status` (this file or an
+    /// import by name) or `m.Status` (through an import).
+    fn enum_named(&mut self, written: &[&str], pos: Pos) -> Option<String> {
+        let q = match written {
+            [name] => self.scope.types.get(*name)?.clone(),
+            [alias, name] => {
+                let ex = self.scope.aliases.get(*alias)?;
+                let (q, public) = ex.types.get(*name)?;
+                if self.scope.enums.contains(q) && !public {
+                    self.diags.push(err("E107", pos, format!("enum '{alias}.{name}' is not `pub` in its module")));
+                }
+                q.clone()
+            }
+            _ => return None,
+        };
+        self.scope.enums.contains(&q).then_some(q)
+    }
+
     fn expr(&mut self, e: &mut Expr) {
+        // A record literal or field read whose type part names an enum is a variant:
+        // `Status.Paid { ... }`, `m.Status.Paid { ... }`, `Status.Pending`.
+        let variant = match e {
+            Expr::Record { ty, fields, pos } => {
+                let parts: Vec<&str> = ty.split('.').collect();
+                match parts.split_last() {
+                    Some((v, head)) if !head.is_empty() => {
+                        let (v, pos) = (v.to_string(), *pos);
+                        self.enum_named(head, pos).map(|q| (q, v, std::mem::take(fields), pos))
+                    }
+                    _ => None,
+                }
+            }
+            Expr::Field { base, field, pos } => {
+                let head: Option<Vec<String>> = match base.as_ref() {
+                    Expr::Var(n, _) => Some(vec![n.clone()]),
+                    Expr::Field { base: b2, field: f2, .. } => match b2.as_ref() {
+                        Expr::Var(n, _) => Some(vec![n.clone(), f2.clone()]),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let (field, pos) = (field.clone(), *pos);
+                head.and_then(|h| {
+                    let h: Vec<&str> = h.iter().map(String::as_str).collect();
+                    self.enum_named(&h, pos)
+                })
+                .map(|q| (q, field, Vec::new(), pos))
+            }
+            _ => None,
+        };
+        if let Some((ty, variant, fields, pos)) = variant {
+            *e = Expr::Variant { ty, variant, fields, pos };
+        }
         // `alias.f(args)` parses like an action; through an import it is a call.
         if let Expr::Action { receiver, method, args, pos } = e
             && let (Some(ex), Some(p)) = (self.scope.aliases.get(receiver.as_str()), self.scope.alias_prefix.get(receiver.as_str()))
@@ -540,7 +630,7 @@ impl Resolver<'_, '_, '_> {
                     self.expr(a);
                 }
             }
-            Expr::Record { fields, .. } => {
+            Expr::Record { fields, .. } | Expr::Variant { fields, .. } => {
                 for (_, v) in fields {
                     self.expr(v);
                 }

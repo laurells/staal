@@ -71,6 +71,7 @@ capability need cannot have the name of a constant in scope (E101).
 | `Bool` | true or false |
 | `Money` | an exact amount in minor units (e.g. cents) and a currency code |
 | declared record type | its fields, in declaration order |
+| declared enum type | one of its variants, and that variant's fields in declaration order |
 | `List<T, N>` | at most N values of type T, in order |
 | `Proposed<T>` | raw model output (JSON), not yet checked against T |
 | `Receipt` | proof of one completed action: id, capability, method |
@@ -100,6 +101,19 @@ at the matching `)` on the same line. `"a \(x) b"` is exactly
 `"a " + to_text(x) + " b"`, so the result is trusted only if every part is, and
 blinded data stays blinded (E006, E007). `to_text(x)` is available directly. A
 `Secret` can never be interpolated, and a record or list needs `json(x)`.
+
+**Enums.** `enum Payment { Pending, Paid { amount: Money, reference: Text } }`
+declares a type whose value is exactly one of its variants, each with its own
+fields (possibly none). `Payment.Pending` and `Payment.Paid { amount: a,
+reference: r }` build one; every field must be given once (E101). A field of an
+enum value cannot be read with `.` (E104), since which fields exist depends on
+the variant; `match` (section 4) is the only way in. Two enum values are equal
+when they are the same variant with equal fields. Variant fields follow the rules
+for record fields: no `Secret`, `Header`, `Receipt`, `Outcome`, `Done` or
+capability, and no field called `kind`. `pub enum` exports one; another module
+writes `module.Payment.Paid { ... }`, or imports `Payment` by name. Enums run on
+the interpreter; a function that uses one is not compiled to native code yet
+(section 15).
 
 No value can be created out of thin air: `Receipt` only by an action, `Done`
 only by `done(...)`, `Outcome` only by `try`, capabilities only by grants.
@@ -143,6 +157,11 @@ declared type by the same strict rules:
 - A `List<T, N>` must be a JSON array of at most N items, each valid as T. A
   model's JSON schema for it carries `maxItems: N`, but the bound is enforced
   here whatever the model returns.
+- An enum must be a JSON object whose `kind` is the name of one of its variants,
+  with exactly that variant's fields besides: `{"kind": "Paid", "amount": ...,
+  "reference": "T-1"}`. An unknown variant, a missing field or an extra one is an
+  error. A model's JSON schema for an enum is an `anyOf` with one object per
+  variant, each fixing `kind` with `const`. Results are written in the same form.
 - A field of type `Proposed<T>` keeps the raw JSON without checking it.
 - `Receipt`, `Outcome`, `Done` and capabilities are never accepted from
   outside, at any depth. In particular a model cannot forge a receipt: a
@@ -165,6 +184,15 @@ Evaluation is strictly left to right and statement by statement.
   loop variables, capabilities, `Receipt`, `Outcome` and `Done` values cannot
   be reassigned (compiler, E101). If `e` fails, `x` keeps its old value.
 - `if` evaluates its condition, then exactly one branch.
+- `match v { Paid { amount, reference: r } => { } Pending => { } _ => { } }`
+  evaluates `v`, an enum value, once, then runs the first arm whose pattern names
+  its variant, or `_`. A pattern binds fields by name (`amount`), or to another
+  name (`reference: r`), for that arm's block; it must bind every field of the
+  variant unless it ends in `..`. The bindings cannot be reassigned. The compiler
+  requires the arms to cover every variant, or a `_` (E109), and rejects an arm
+  that can never run, a variant matched twice, and unknown or repeated fields
+  (E101, E104). `break`, `continue` and `return` inside an arm act on the
+  enclosing loop or function.
 - `repeat N { }` runs its body N times unless `break` or `return` leaves it.
 - `loop { }` runs its body until `break` or `return`.
 - `for x in xs { }` runs its body once per element of the list `xs`, in order,
@@ -966,12 +994,12 @@ line, `engine` in the C interface), never in the run config.
 
 A function qualifies when its parameters and result are `Int`, `Bool`, `Text`,
 `Money`, records whose fields are all of these, or lists of these, and its body uses
-only `let`, `set`, `if`, `repeat`, `loop`, `for`, `break`, `return` with a value,
+only `let`, `set`, `if`, `repeat`, `loop`, `for`, `break`, `continue`, `return` with a value,
 `fail`, literals (an integer must fit an Int; a list must not be empty), arithmetic,
 unary `-`, comparisons, `and`, `or`, `not`, field reads, record literals, indexing,
 the built-in functions other than `header` and `fill_secret`, and calls to other
-qualifying functions. A function that calls one that does not qualify does not
-qualify. Native code is entered only from the interpreter, when it calls a compiled
+qualifying functions. Enum values and `match` do not qualify yet. A function that
+calls one that does not qualify does not qualify. Native code is entered only from the interpreter, when it calls a compiled
 function; model calls, actions, `try`, `parse`, `validate`, HTTP, files, budgets and
 the journal therefore never run in native code.
 

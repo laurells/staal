@@ -24,12 +24,13 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E106 | An import problem: a missing module, an import cycle, a name that clashes with an import |
 | E107 | A declaration used from another module without being `pub` |
 | E108 | A package uses a capability its `staal.json` does not declare, or reaches beyond the targets it declares |
+| E109 | A `match` does not handle every variant of its enum, and has no `_` arm |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 30 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 270 invalid ones
+rejecting the programs it should. 34 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 324 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -99,6 +100,36 @@ replaces every use with its value. A constant is therefore trusted like a litera
 and may be a model instruction. A variable or parameter cannot take a
 constant's name. `pub const` exports it: `import shop.policy { POLICY }` or
 `policy.POLICY`.
+
+### Enums and `match`
+
+    enum Decision {
+        Refund { amount: Money },
+        Escalate { team: Text, note: Text },
+        Close,
+    }
+
+    let d: Decision = validate propose(Decision, instruct: POLICY, data: [ticket], tokens: 300)
+    match d {
+        Refund { amount } => { ... }
+        Escalate { team, .. } => { ... }
+        Close => { ... }
+    }
+
+An enum is a value that is exactly one of its variants, each with its own
+fields. Build one with `Decision.Close` or `Decision.Refund { amount: a }`. Its
+fields are reached only through `match`, which must handle every variant or end
+with `_ =>` (E109); `..` leaves the remaining fields unbound. A model is asked for
+an enum as JSON with a `kind`, `{"kind": "Refund", "amount": ...}`, and
+`validate` accepts only a declared variant with exactly its fields, so a model
+cannot invent an outcome the program does not handle.
+
+Matching follows the trust and blinding rules. The fields bound from untrusted
+data are untrusted (E006). Choosing an arm reveals only which variant the value
+is, so with `order: Order @blind(payment.reference)` an arm may still ask a model
+about the amount, but binding `reference` there and passing it on is E007, and
+with the whole `payment` blinded, deciding a model call by the variant is E007
+too.
 
 ### Reassignment
 

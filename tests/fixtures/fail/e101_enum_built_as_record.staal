@@ -1,0 +1,11 @@
+// expect: E101
+// message: Payment is an enum; build one of its variants
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+fn f() -> Payment {
+    return Payment { amount: 1.00 NGN }
+}

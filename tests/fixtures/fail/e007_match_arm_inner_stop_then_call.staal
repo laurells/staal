@@ -1,0 +1,19 @@
+// expect: E007
+// An `if` inside an arm that returns early on blinded data decides the call after the match.
+enum Payment {
+    Pending,
+    Paid { amount: Money },
+}
+type Order { payment: Payment, note: Text }
+
+fn f(order: Order @blind(note)) {
+    match order.payment {
+        Pending => {
+            if order.note == "urgent" {
+                return
+            }
+        }
+        _ => {}
+    }
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

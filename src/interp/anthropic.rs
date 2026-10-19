@@ -277,6 +277,11 @@ fn api_schema(s: &Json) -> Result<Json, String> {
             "items" => {
                 out.insert(k.clone(), api_schema(v)?);
             }
+            // An enum: one object per variant.
+            "anyOf" => {
+                let options = v.as_array().ok_or("unexpected anyOf in the output schema")?;
+                out.insert(k.clone(), Json::Array(options.iter().map(api_schema).collect::<Result<_, _>>()?));
+            }
             "properties" => {
                 let mut props = Map::new();
                 for (name, p) in v.as_object().ok_or("unexpected properties in the output schema")? {
@@ -377,6 +382,23 @@ mod tests {
         let nested = json!({ "type": "object", "properties": { "xs": { "type": "array", "items": {}, "maxItems": 2 } },
                              "required": ["xs"], "additionalProperties": false });
         assert!(api_schema(&nested).unwrap_err().contains("recursive"));
+    }
+
+    #[test]
+    fn enum_variants_are_converted_one_by_one() {
+        let tags = json!({ "type": "array", "items": { "type": "string" }, "maxItems": 2 });
+        let s = json!({ "anyOf": [
+            { "type": "object", "properties": { "kind": { "const": "Close" } }, "required": ["kind"], "additionalProperties": false },
+            { "type": "object", "properties": { "kind": { "const": "Tag" }, "tags": tags }, "required": ["kind", "tags"], "additionalProperties": false },
+        ] });
+        let want = json!({ "anyOf": [
+            { "type": "object", "properties": { "kind": { "const": "Close" } }, "required": ["kind"], "additionalProperties": false },
+            { "type": "object", "properties": { "kind": { "const": "Tag" }, "tags": { "type": "array", "items": { "type": "string" }, "description": "At most 2 items." } },
+              "required": ["kind", "tags"], "additionalProperties": false },
+        ] });
+        assert_eq!(api_schema(&s).unwrap(), want);
+        let recursive = json!({ "anyOf": [{ "type": "object", "properties": { "kind": { "const": "Node" }, "next": {} } }] });
+        assert!(api_schema(&recursive).unwrap_err().contains("recursive"));
     }
 
     #[test]

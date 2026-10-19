@@ -1,0 +1,1 @@
+{"entry": "settled", "inputs": {"p": {"kind": "Pending"}}, "expect": {"result": false}, "model": {"provider": "script", "responses": []}}

@@ -1,0 +1,14 @@
+// expect: E101
+// message: the pattern for Paid does not bind reference; bind every field, or end with `..`
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+fn f(p: Payment) {
+    match p {
+        Paid { amount } => {}
+        _ => {}
+    }
+}

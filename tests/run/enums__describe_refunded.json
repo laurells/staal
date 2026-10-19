@@ -1,0 +1,1 @@
+{"entry": "describe", "inputs": {"p": {"kind": "Refunded", "amount": {"amount": "5.00", "currency": "NGN"}, "reason": "x"}}, "expect": {"result": "refunded 5.00 NGN"}, "model": {"provider": "script", "responses": []}}

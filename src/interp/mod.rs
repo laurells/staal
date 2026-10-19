@@ -734,6 +734,9 @@ fn types_of(prog: &Program) -> Types {
     for d in &prog.types {
         t.insert(d.name.clone(), d.fields.clone());
     }
+    for e in &prog.enums {
+        t.insert_enum(e.name.clone(), e.variants.iter().map(|v| (v.name.clone(), v.fields.clone())).collect());
+    }
     t
 }
 
@@ -1145,6 +1148,34 @@ impl<'p> Interp<'p> {
             },
             Stmt::Break(_) => Ok(Flow::Break),
             Stmt::Continue(_) => Ok(Flow::Continue),
+            Stmt::Match { value, arms, .. } => {
+                let Value::Enum { variant, fields, .. } = self.eval(frame, value)? else {
+                    return internal("`match` on a value that is not an enum");
+                };
+                // The checker made the arms cover every variant.
+                let arm = arms.iter().find(|a| match &a.pattern {
+                    Pattern::Variant { name, .. } => *name == variant,
+                    Pattern::Any(_) => true,
+                });
+                let Some(arm) = arm else { return internal(format!("no `match` arm for variant {variant}")) };
+                frame.scopes.push(HashMap::new());
+                let mut bound = Ok(());
+                if let Pattern::Variant { binds, .. } = &arm.pattern {
+                    for (field, to) in binds {
+                        let Some((_, v)) = fields.iter().find(|(f, _)| f == field) else {
+                            bound = internal(format!("variant {variant} has no field '{field}'"));
+                            break;
+                        };
+                        if let Err(e) = frame.set(to, v.clone()) {
+                            bound = Err(e);
+                            break;
+                        }
+                    }
+                }
+                let flow = bound.and_then(|()| self.exec_block(frame, &arm.body));
+                frame.scopes.pop();
+                flow
+            }
             Stmt::For { var, list, body, .. } => {
                 let Value::List(items) = self.eval(frame, list)? else {
                     return internal("`for` over a value that is not a list");
@@ -1233,6 +1264,23 @@ impl<'p> Interp<'p> {
                     vals.push(self.eval(frame, i)?);
                 }
                 Ok(Value::List(vals))
+            }
+            Expr::Variant { ty, variant, fields, .. } => {
+                let decl = self.types.variants(ty).and_then(|vs| vs.iter().find(|(v, _)| v == variant)).map(|(_, f)| f.clone());
+                let Some(decl) = decl else { return internal(format!("unknown variant {ty}.{variant}")) };
+                // Evaluated in the order written, stored in declaration order, as records are.
+                let mut given = Vec::with_capacity(fields.len());
+                for (name, e) in fields {
+                    given.push((name.clone(), self.eval(frame, e)?));
+                }
+                let mut out = Vec::with_capacity(decl.len());
+                for (fname, _) in &decl {
+                    match given.iter().position(|(n, _)| n == fname) {
+                        Some(i) => out.push(given.swap_remove(i)),
+                        None => return internal(format!("{ty}.{variant} without field '{fname}'")),
+                    }
+                }
+                Ok(Value::Enum { ty: ty.clone(), variant: variant.clone(), fields: out })
             }
             Expr::Index { base, index, .. } => {
                 let Value::List(items) = self.eval(frame, base)? else { return internal("indexing a non-list") };
@@ -2148,6 +2196,22 @@ fn eval_pure(e: &Expr, types: &Types) -> Result<Value, Failure> {
             Ok(Value::Record { ty: ty.clone(), fields: out })
         }
         Expr::List(items, _) => Ok(Value::List(items.iter().map(ev).collect::<Result<Vec<_>, _>>()?)),
+        Expr::Variant { ty, variant, fields, .. } => {
+            let decl = types.variants(ty).and_then(|vs| vs.iter().find(|(v, _)| v == variant)).map(|(_, f)| f.clone());
+            let Some(decl) = decl else { return internal(format!("unknown variant {ty}.{variant}")) };
+            let mut given = Vec::with_capacity(fields.len());
+            for (name, e) in fields {
+                given.push((name.clone(), ev(e)?));
+            }
+            let mut out = Vec::with_capacity(decl.len());
+            for (fname, _) in &decl {
+                match given.iter().position(|(n, _)| n == fname) {
+                    Some(i) => out.push(given.swap_remove(i)),
+                    None => return internal(format!("{ty}.{variant} without field '{fname}'")),
+                }
+            }
+            Ok(Value::Enum { ty: ty.clone(), variant: variant.clone(), fields: out })
+        }
         Expr::Index { base, index, .. } => {
             let Value::List(items) = ev(base)? else { return internal("indexing a non-list") };
             let Value::Int(i) = ev(index)? else { return internal("a non-Int index") };

@@ -1,0 +1,1 @@
+{"entry": "describe", "inputs": {"p": {"amount": {"amount": "1.00", "currency": "NGN"}}}, "expect": {"config_error_contains": "Payment variant: Pending, Paid, Refunded"}, "model": {"provider": "script", "responses": []}}

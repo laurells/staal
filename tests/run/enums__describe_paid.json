@@ -1,0 +1,1 @@
+{"entry": "describe", "inputs": {"p": {"kind": "Paid", "amount": {"amount": "50.00", "currency": "NGN"}, "reference": "T-9"}}, "expect": {"result": "paid 50.00 NGN as T-9"}, "model": {"provider": "script", "responses": []}}

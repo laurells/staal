@@ -1,0 +1,104 @@
+// Enums: construction, match with bindings, `..` and `_`, equality, JSON in and out,
+// and a model's answer validated into an enum.
+type Ticket { subject: Text, body: Text }
+
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refunded { amount: Money, reason: Text },
+}
+
+enum Triage {
+    Refund { amount: Money },
+    Escalate { team: Text, note: Text },
+    Close,
+}
+
+fn describe(p: Payment) -> Text {
+    match p {
+        Pending => {
+            return "waiting"
+        }
+        Paid { amount, reference: r } => {
+            return "paid \(amount) as \(r)"
+        }
+        Refunded { amount, .. } => {
+            return "refunded \(amount)"
+        }
+    }
+}
+
+fn settled(p: Payment) -> Bool {
+    let result = true
+    match p {
+        Pending => {
+            set result = false
+        }
+        _ => {}
+    }
+    return result
+}
+
+fn make(kind: Int) -> Payment {
+    if kind == 0 {
+        return Payment.Pending
+    }
+    if kind == 1 {
+        return Payment.Paid { amount: 50.00 NGN, reference: "T-1" }
+    }
+    return Payment.Refunded { reason: "late", amount: 20.00 NGN }
+}
+
+fn same(a: Payment, b: Payment) -> Bool {
+    return a == b
+}
+
+fn total(ps: List<Payment, 5>) -> Money {
+    let sum = 0.00 NGN
+    for p in ps {
+        match p {
+            Paid { amount, .. } => {
+                set sum = sum + amount
+            }
+            Refunded { amount, .. } => {
+                set sum = sum - amount
+            }
+            Pending => {
+                continue
+            }
+        }
+    }
+    return sum
+}
+
+fn triage(t: Ticket) -> Text budget(calls: 1, tokens: 3000) {
+    let d: Triage = validate propose(Triage, instruct: "Decide what to do with this ticket.", data: [t], tokens: 2000)
+    match d {
+        Refund { amount } => {
+            return "refund \(amount)"
+        }
+        Escalate { team, .. } => {
+            return "to \(team)"
+        }
+        Close => {
+            return "closed"
+        }
+    }
+}
+
+// `break` in an arm leaves the loop around the match.
+fn first_pending(ps: List<Payment, 5>) -> Int {
+    let i = 0
+    let found = 0 - 1
+    for p in ps {
+        match p {
+            Pending => {
+                set found = i
+                break
+            }
+            _ => {}
+        }
+        set i = i + 1
+    }
+    return found
+}

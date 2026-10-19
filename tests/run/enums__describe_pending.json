@@ -1,0 +1,1 @@
+{"entry": "describe", "inputs": {"p": {"kind": "Pending"}}, "expect": {"result": "waiting"}, "model": {"provider": "script", "responses": []}}

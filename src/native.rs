@@ -688,7 +688,8 @@ impl Check<'_, '_> {
                 ok
             }
             Stmt::Break(_) | Stmt::Continue(_) => true,
-            Stmt::Return(None, _) => false,
+            // Enums run on the interpreter for now.
+            Stmt::Return(None, _) | Stmt::Match { .. } => false,
         }
     }
 }
@@ -1459,7 +1460,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 self.scopes.pop();
                 Ok(true)
             }
-            Stmt::Return(None, _) => Err("native code: statement not supported".into()),
+            Stmt::Return(None, _) | Stmt::Match { .. } => Err("native code: statement not supported".into()),
         }
     }
 

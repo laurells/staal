@@ -1,0 +1,1 @@
+{"entry": "make", "inputs": {"kind": 2}, "expect": {"result": {"kind": "Refunded", "amount": {"amount": "20.00", "currency": "NGN"}, "reason": "late"}}, "model": {"provider": "script", "responses": []}}

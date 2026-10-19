@@ -115,7 +115,7 @@ impl SimulatedAdapter {
 fn first_money(v: &Value) -> Option<Money> {
     match v {
         Value::Money(m) => Some(*m),
-        Value::Record { fields, .. } => fields.iter().find_map(|(_, f)| first_money(f)),
+        Value::Record { fields, .. } | Value::Enum { fields, .. } => fields.iter().find_map(|(_, f)| first_money(f)),
         Value::List(items) => items.iter().find_map(first_money),
         _ => None,
     }
@@ -124,7 +124,7 @@ fn first_money(v: &Value) -> Option<Money> {
 fn first_text(v: &Value) -> Option<String> {
     match v {
         Value::Text(t) => Some(t.clone()),
-        Value::Record { fields, .. } => fields.iter().find_map(|(_, f)| first_text(f)),
+        Value::Record { fields, .. } | Value::Enum { fields, .. } => fields.iter().find_map(|(_, f)| first_text(f)),
         Value::List(items) => items.iter().find_map(first_text),
         _ => None,
     }
