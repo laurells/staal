@@ -1,0 +1,2 @@
+// expect: E102
+const P: Point = 1

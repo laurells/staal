@@ -1,0 +1,19 @@
+// expect: ok
+// Constants cross modules like functions and types: qualified, or imported by name.
+import shop.policy as p { LIMIT, GREETING }
+
+fn refund_cap(asked: Money) -> Money {
+    if asked > LIMIT {
+        return LIMIT
+    }
+    return asked
+}
+
+fn note(name: Text) -> Text {
+    return GREETING + ", " + name + ". " + p.SIGNATURE + " (max \(p.LIMIT))"
+}
+
+fn summary(order: Text) -> Text budget(calls: 1, tokens: 400) {
+    // A constant is trusted, like a literal: it may be an instruction.
+    return validate propose(Text, instruct: p.INSTRUCTION, data: [order], tokens: 400)
+}

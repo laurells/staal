@@ -1,0 +1,20 @@
+// Constants: typed or not, built from literals and other constants, and trusted like
+// literals, so one may be a model instruction.
+type Tier { name: Text, max: Money }
+
+const CURRENCY_LIMIT: Money = 200.00 USD
+const HALF = CURRENCY_LIMIT - 100.00 USD
+const TIERS: List<Tier, 3> = [Tier { name: "small", max: 20.00 USD }, Tier { name: "large", max: HALF }]
+const TOP = TIERS[1].max
+const FLAGGED = TOP > 50.00 USD and not (len(TIERS) == 0)
+// Computed as at run time: `and` stops at false, so the division is never made.
+const SAFE = false and 1 / 0 == 0
+const INSTRUCTION = """
+    Decide whether the refund request is reasonable.
+    Never approve more than \(TOP).
+    """
+
+fn decide(request: Text) -> Bool budget(calls: 1, tokens: 500) {
+    let ok: Bool = validate propose(Bool, instruct: INSTRUCTION, data: [request], tokens: 500)
+    return ok and FLAGGED or SAFE
+}

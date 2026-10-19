@@ -1,7 +1,7 @@
 // The phase 1 gate: every rule must hold across module boundaries.
 //
 // Each test program (every pass and fail fixture, and every runtime program) is split
-// mechanically into two files: a module `split_lib` holding every type and every
+// mechanically into two files: a module `split_lib` holding every type, constant and every
 // function that some function calls (with everything those call, so the module never
 // needs the program), all marked `pub`, and the program, which imports them all by
 // name. Calls, types, records, budgets, blinding promises and evidence then cross a
@@ -70,7 +70,7 @@ fn split(src: &str) -> Option<Split> {
     // A capability's action and canonical functions (named with a space) are moved with
     // the capability, never on their own.
     moved.retain(|n| !n.contains(' ') && prog.fns.iter().any(|f| &f.name == n));
-    if moved.is_empty() && prog.types.is_empty() && prog.caps.is_empty() {
+    if moved.is_empty() && prog.types.is_empty() && prog.caps.is_empty() && prog.consts.is_empty() {
         return None;
     }
     // Declarations by starting line; each runs to the line before the next one.
@@ -82,6 +82,8 @@ fn split(src: &str) -> Option<Split> {
         .map(|t| (t.pos.line, t.pos.col, true, t.name.clone()))
         .chain(prog.fns.iter().filter(|f| !f.name.contains(' ')).map(|f| (f.pos.line, f.pos.col, moved.contains(&f.name), f.name.clone())))
         .chain(prog.caps.iter().map(|c| (c.pos.line, c.pos.col, true, format!("capability {}", c.path.join(".")))))
+        // Constants move with the types, and are imported by name like them.
+        .chain(prog.consts.iter().map(|c| (c.pos.line, c.pos.col, true, c.name.clone())))
         .collect();
     decls.sort();
     let lines: Vec<&str> = src.lines().collect();

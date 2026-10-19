@@ -267,10 +267,12 @@ impl Parser {
                     p.caps.push(cap);
                     p.fns.extend(fns);
                 }
+                // `const` is a word only here, so it stays usable as a name elsewhere.
+                Tok::Ident(w) if w == "const" => p.consts.push(self.constdecl(public)?),
                 Tok::Eof if !public => return Ok(p),
                 Tok::Import => return Err((self.pos(), "imports must come before every declaration".into())),
                 other => {
-                    let want = if public { "'type' or 'fn' after 'pub'" } else { "'type' or 'fn'" };
+                    let want = if public { "'type', 'fn' or 'const' after 'pub'" } else { "'type', 'fn' or 'const'" };
                     return Err((self.pos(), format!("expected {want}, found {other:?}")));
                 }
             }
@@ -308,6 +310,21 @@ impl Parser {
             }
         }
         Ok(Import { path, alias, names, pos })
+    }
+
+    fn constdecl(&mut self, public: bool) -> PResult<ConstDecl> {
+        let pos = self.pos();
+        self.bump(); // `const`
+        let name = self.ident()?;
+        let ty = if *self.peek() == Tok::Colon {
+            self.bump();
+            Some(self.ty()?)
+        } else {
+            None
+        };
+        self.expect(Tok::Eq, "'='")?;
+        let value = self.expr()?;
+        Ok(ConstDecl { public, name, ty, value, pos })
     }
 
     fn typedecl(&mut self, public: bool) -> PResult<TypeDecl> {

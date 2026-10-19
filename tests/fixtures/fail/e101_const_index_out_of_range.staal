@@ -1,0 +1,4 @@
+// expect: E101
+// message: index 3 is out of range
+const TIERS = [10, 20, 30]
+const TOP = TIERS[3]

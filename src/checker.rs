@@ -328,10 +328,35 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
             check_ty_known(&mut ctx, fty, t.pos);
         }
     }
+    // Constants (`crate::consts`): every use is already replaced by the value, so here
+    // each is checked once: its type, and that computing it succeeds.
+    for c in &prog.consts {
+        if let Some(t) = &c.ty {
+            let before = ctx.diags.len();
+            check_ty_known(&mut ctx, t, c.pos);
+            if ctx.diags.len() > before {
+                continue;
+            }
+        }
+        let Some((vty, _)) = type_of(&mut ctx, &c.value, &Env::new()) else { continue };
+        if let Some(decl) = &c.ty
+            && let Err((code, msg)) = assignable(&vty, decl)
+        {
+            ctx.err(code, c.pos, format!("in `const {}`: {msg}", c.name));
+            continue;
+        }
+        if let Err(f) = crate::interp::eval_const(&c.value, prog) {
+            ctx.err("E101", c.pos, format!("constant '{}' cannot be computed: {}", c.name, f.message));
+        }
+    }
     check_caps(&mut ctx, prog);
     for f in &prog.fns {
         check_fn(&mut ctx, f, prog);
     }
+    // A constant's value appears wherever it is used, so a problem inside it would be
+    // reported once per use: report each exact diagnostic once, where first found.
+    let mut seen = HashSet::new();
+    ctx.diags.retain(|d| seen.insert((d.code, d.pos, d.msg.clone())));
     (ctx.diags, ctx.for_bounds)
 }
 

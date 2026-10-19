@@ -1,0 +1,1 @@
+{"entry": "share", "inputs": {"total": 250}, "model": {"provider": "script", "responses": []}, "expect": {"result": 25}}

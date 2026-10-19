@@ -1,0 +1,3 @@
+// expect: E101
+// message: expected Money, found Int
+const LIMIT: Money = 50

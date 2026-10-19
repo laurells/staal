@@ -1,0 +1,4 @@
+// expect: E101
+// message: cannot be computed: division by zero
+const PARTS = 0
+const SHARE = 100 / PARTS

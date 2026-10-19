@@ -84,6 +84,22 @@ treat them all alike.
 
 The exact rules are in [RUNTIME.md](RUNTIME.md) section 4.
 
+### Constants
+
+    const REFUND_LIMIT: Money = 50.00 USD
+    pub const POLICY = """
+        Refund only damaged or missing items, never more than \(REFUND_LIMIT).
+        """
+
+A constant is declared at the top of a file, with or without a type, and is
+computed only from literals, other constants and pure operations on them
+(arithmetic, comparisons, records, lists, field reads, indexing, the pure
+built-ins). The compiler computes it, so `const SHARE = 100 / 0` is an error, and
+replaces every use with its value. A constant is therefore trusted like a literal
+and may be a model instruction. A variable or parameter cannot take a
+constant's name. `pub const` exports it: `import shop.policy { POLICY }` or
+`policy.POLICY`.
+
 ### Reassignment
 
     let total = 0

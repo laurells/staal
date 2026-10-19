@@ -1,0 +1,7 @@
+// expect: E107 E107
+// A constant without `pub` stays inside its module, by name or qualified.
+import cfg as c { SECRET_RATE }
+
+fn f() -> Int {
+    return SECRET_RATE + c.SECRET_RATE
+}

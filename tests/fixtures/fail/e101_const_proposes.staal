@@ -1,0 +1,3 @@
+// expect: E101
+// message: a constant cannot ask a model
+const GUESS = propose(Int, instruct: "Pick a number.")

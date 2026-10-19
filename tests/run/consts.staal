@@ -1,0 +1,30 @@
+// Constants of every kind, used in expressions, records, lists and interpolation.
+type Tier { name: Text, max: Money }
+type Quote { tier: Text, refund: Money, note: Text }
+
+const FEE: Money = 2.50 NGN
+const TIERS: List<Tier, 3> = [Tier { name: "basic", max: 1000.00 NGN }, Tier { name: "gold", max: 5000.00 NGN }]
+const GOLD = TIERS[1]
+const RATE_PERCENT = 10
+const NOTE = "refund less \(FEE) fee"
+const NEGATIVE = 0 - 9223372036854775807
+
+fn quote(asked: Money, gold: Bool) -> Quote {
+    let tier = TIERS[0]
+    if gold {
+        set tier = GOLD
+    }
+    let refund = asked
+    if refund > tier.max {
+        set refund = tier.max
+    }
+    return Quote { tier: tier.name, refund: refund - FEE, note: NOTE }
+}
+
+fn share(total: Int) -> Int {
+    return total * RATE_PERCENT / 100
+}
+
+fn smallest() -> Int {
+    return NEGATIVE - 1
+}

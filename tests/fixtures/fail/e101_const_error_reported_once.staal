@@ -1,0 +1,12 @@
+// expect: E101
+// message: money cannot be divided
+// A problem inside a constant is reported once, however many places use it.
+const HALF = 10.00 USD / 2
+
+fn a() -> Money {
+    return HALF
+}
+
+fn b() -> Money {
+    return HALF + HALF
+}

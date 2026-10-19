@@ -3,6 +3,7 @@ pub mod budget;
 pub mod capi;
 pub mod cli;
 pub mod checker;
+pub mod consts;
 pub mod interp;
 pub mod lexer;
 pub mod modules;

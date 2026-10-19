@@ -1,0 +1,8 @@
+// expect: E101
+// message: cannot be computed: overflow
+// Computing a constant happens when the program is checked: an overflow is an error then.
+const BIG = 9223372036854775807 + 1
+
+fn f() -> Int {
+    return BIG
+}

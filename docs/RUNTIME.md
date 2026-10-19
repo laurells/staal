@@ -50,6 +50,20 @@ The result is either the entry function's return value or a failure
 
 ## 2. Values
 
+**Constants.** `const NAME: T = value` declares a constant at the top of a file
+(the type may be left out). Its value may use literals, other constants, and
+arithmetic, comparison, `and`/`or`/`not`, records, lists, field reads, indexing
+and the built-ins other than `header` and `fill_secret`; anything else is E101,
+as is a cycle between constants. The compiler computes every constant with the
+same operations the engines use, and a failure (overflow, division by zero, an
+index out of range) is E101. Before checking, every use of a constant is
+replaced by its value's expression, so at run time a constant is exactly the
+literal it stands for: trusted, revealing nothing, and the same on both engines.
+`pub const` exports it to other modules, which use it as `module.NAME` or import
+it by name (E107 without `pub`). A local variable, parameter, loop variable or
+capability need cannot have the name of a constant in scope (E101).
+
+
 | Type | Runtime value |
 | --- | --- |
 | `Text` | a UTF-8 string |

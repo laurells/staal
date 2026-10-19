@@ -79,6 +79,18 @@ impl std::fmt::Display for Ty {
     }
 }
 
+/// `const NAME: T = value`: a value known when the program is checked. Before the
+/// checker runs, every use is replaced by the value's expression (`crate::consts`), so
+/// a constant behaves exactly like the literal it stands for.
+#[derive(Debug, Clone)]
+pub struct ConstDecl {
+    pub public: bool,
+    pub name: String,
+    pub ty: Option<Ty>,
+    pub value: Expr,
+    pub pos: Pos,
+}
+
 #[derive(Debug)]
 pub struct TypeDecl {
     /// `pub type ...`: other modules may use it.
@@ -322,7 +334,7 @@ impl std::fmt::Display for CmpOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Var(String, Pos),
     Str(String, Pos),
@@ -398,6 +410,29 @@ impl Expr {
             Expr::Record { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
             // Only what the model is given is evaluated; `blind_to` names data, it is not evaluated.
             Expr::Propose { instruct, data, .. } => instruct.iter().map(|b| b.as_ref()).chain(data.iter()).collect(),
+        }
+    }
+
+    /// Every expression directly inside this one, `blind_to` included, to change them.
+    pub fn children_mut(&mut self) -> Vec<&mut Expr> {
+        match self {
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => Vec::new(),
+            Expr::Field { base, .. } => vec![base],
+            Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => vec![inner],
+            Expr::Parse { text, .. } => vec![text],
+            Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
+                vec![left, right]
+            }
+            Expr::Index { base, index, .. } => vec![base, index],
+            Expr::Call { args, .. }
+            | Expr::Action { args, .. }
+            | Expr::Builtin { args, .. }
+            | Expr::List(args, _)
+            | Expr::Done { evidence: args, .. } => args.iter_mut().collect(),
+            Expr::Record { fields, .. } => fields.iter_mut().map(|(_, v)| v).collect(),
+            Expr::Propose { instruct, data, blind_to, .. } => {
+                instruct.iter_mut().map(|b| b.as_mut()).chain(data.iter_mut()).chain(blind_to.iter_mut()).collect()
+            }
         }
     }
 
@@ -481,4 +516,5 @@ pub struct Program {
     pub types: Vec<TypeDecl>,
     pub fns: Vec<FnDecl>,
     pub caps: Vec<CapDecl>,
+    pub consts: Vec<ConstDecl>,
 }

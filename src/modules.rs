@@ -199,6 +199,7 @@ fn display(path: &[String]) -> String {
 struct Exports {
     types: HashMap<String, (String, bool)>,
     fns: HashMap<String, (String, bool)>,
+    consts: HashMap<String, (String, bool)>,
 }
 
 /// The names visible inside one module.
@@ -207,6 +208,8 @@ struct Scope<'a> {
     /// Unqualified type and function names: local declarations and `{ ... }` imports.
     types: HashMap<String, String>,
     fns: HashMap<String, String>,
+    /// Unqualified constant names, like `fns`.
+    consts: HashMap<String, String>,
     /// Import alias -> what that module exports.
     aliases: HashMap<String, &'a Exports>,
     alias_prefix: HashMap<String, String>,
@@ -225,6 +228,9 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             for f in &m.prog.fns {
                 e.fns.entry(f.name.clone()).or_insert((format!("{p}{}", f.name), f.public));
             }
+            for c in &m.prog.consts {
+                e.consts.entry(c.name.clone()).or_insert((format!("{p}{}", c.name), c.public));
+            }
             e
         })
         .collect();
@@ -235,6 +241,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             prefix: m.prefix(),
             types: HashMap::new(),
             fns: HashMap::new(),
+            consts: HashMap::new(),
             aliases: HashMap::new(),
             alias_prefix: HashMap::new(),
         };
@@ -243,6 +250,15 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
         }
         for (n, (q, _)) in &exports[mi].fns {
             scope.fns.insert(n.clone(), q.clone());
+        }
+        for (n, (q, _)) in &exports[mi].consts {
+            scope.consts.insert(n.clone(), q.clone());
+        }
+        let mut seen_consts = HashSet::new();
+        for c in &m.prog.consts {
+            if !seen_consts.insert(c.name.clone()) {
+                diags.push(err("E101", c.pos, format!("constant '{}' is declared twice", c.name)));
+            }
         }
         if !m.path.is_empty() {
             for t in &m.prog.types {
@@ -268,7 +284,10 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 ));
                 continue;
             }
-            if exports[mi].types.contains_key(&imp.alias) || exports[mi].fns.contains_key(&imp.alias) {
+            if exports[mi].types.contains_key(&imp.alias)
+                || exports[mi].fns.contains_key(&imp.alias)
+                || exports[mi].consts.contains_key(&imp.alias)
+            {
                 diags.push(err(
                     "E106",
                     imp.pos,
@@ -281,11 +300,12 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             for (n, npos) in &imp.names {
                 let ty = tex.types.get(n);
                 let f = tex.fns.get(n);
-                if ty.is_none() && f.is_none() {
+                let c = tex.consts.get(n);
+                if ty.is_none() && f.is_none() && c.is_none() {
                     diags.push(err("E100", *npos, format!("module '{}' has no '{n}'", imp.path.join("."))));
                     continue;
                 }
-                if ty.is_some_and(|t| !t.1) || f.is_some_and(|f| !f.1) {
+                if ty.is_some_and(|t| !t.1) || f.is_some_and(|f| !f.1) || c.is_some_and(|c| !c.1) {
                     diags.push(err(
                         "E107",
                         *npos,
@@ -295,7 +315,8 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 }
                 // A name may come from one place only: this file, or one import.
                 let local_clash = (ty.is_some() && exports[mi].types.contains_key(n))
-                    || (f.is_some() && exports[mi].fns.contains_key(n));
+                    || (f.is_some() && exports[mi].fns.contains_key(n))
+                    || (c.is_some() && exports[mi].consts.contains_key(n));
                 if local_clash || !brought_in.insert(n.clone()) {
                     diags.push(err("E106", *npos, format!("'{n}' is already defined in this file")));
                     continue;
@@ -305,6 +326,9 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 }
                 if let Some((q, _)) = f {
                     scope.fns.insert(n.clone(), q.clone());
+                }
+                if let Some((q, _)) = c {
+                    scope.consts.insert(n.clone(), q.clone());
                 }
             }
         }
@@ -331,9 +355,18 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             r.block(&mut f.body);
         }
         for c in &mut m.prog.caps {
-            for (_, t, pos) in &mut c.needs {
+            for (name, t, pos) in &mut c.needs {
+                // A need is a variable inside the capability's actions.
+                r.binder(name, *pos);
                 r.ty(t, *pos);
             }
+        }
+        for c in &mut m.prog.consts {
+            c.name = format!("{}{}", scope.prefix, c.name);
+            if let Some(t) = &mut c.ty {
+                r.ty(t, c.pos);
+            }
+            r.expr(&mut c.value);
         }
     }
     if !diags.is_empty() {
@@ -343,6 +376,11 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
         out.types.extend(m.prog.types);
         out.fns.extend(m.prog.fns);
         out.caps.extend(m.prog.caps);
+        out.consts.extend(m.prog.consts);
+    }
+    let diags = crate::consts::expand(&mut out);
+    if !diags.is_empty() {
+        return Err(diags);
     }
     Ok(out)
 }
@@ -360,6 +398,9 @@ impl Resolver<'_, '_, '_> {
     /// A local variable, parameter or loop variable may not reuse an import's name:
     /// `termii.send(...)` must always mean one thing.
     fn binder(&mut self, name: &str, pos: Pos) {
+        if self.scope.consts.contains_key(name) {
+            self.diags.push(err("E101", pos, format!("'{name}' is a constant here; choose another name")));
+        }
         if self.scope.aliases.contains_key(name) {
             self.diags.push(err(
                 "E106",
@@ -451,7 +492,22 @@ impl Resolver<'_, '_, '_> {
             let args = std::mem::take(args);
             *e = Expr::Call { name, args, pos: *pos };
         }
+        // `alias.NAME` is a constant of an imported module.
+        if let Expr::Field { base, field, pos } = e
+            && let Expr::Var(alias, _) = base.as_ref()
+            && let Some(ex) = self.scope.aliases.get(alias.as_str())
+            && let Some((q, public)) = ex.consts.get(field.as_str())
+        {
+            if !public {
+                self.diags.push(err("E107", *pos, format!("constant '{alias}.{field}' is not `pub` in its module")));
+            }
+            *e = Expr::Var(q.clone(), *pos);
+            return;
+        }
         match e {
+            Expr::Var(name, _) if self.scope.consts.contains_key(name.as_str()) => {
+                *name = self.scope.consts[name.as_str()].clone();
+            }
             Expr::Call { name, .. } if !name.contains('.') => {
                 *name = match self.scope.fns.get(name.as_str()) {
                     Some(q) => q.clone(),

@@ -1,0 +1,4 @@
+// expect: E101
+// message: declared twice
+const A = 1
+const A = 2

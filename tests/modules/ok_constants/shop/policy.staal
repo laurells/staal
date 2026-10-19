@@ -1,0 +1,8 @@
+pub const LIMIT: Money = 50.00 USD
+pub const GREETING = "Hello"
+pub const SIGNATURE = "The \(TEAM) team"
+const TEAM = "support"
+pub const INSTRUCTION = """
+    Summarise the order in one sentence.
+    Refunds above \(LIMIT) need a person.
+    """

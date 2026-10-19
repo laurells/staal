@@ -1,0 +1,1 @@
+{"entry": "smallest", "inputs": {}, "model": {"provider": "script", "responses": []}, "expect": {"result": -9223372036854775808}}

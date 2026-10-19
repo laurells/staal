@@ -1,0 +1,8 @@
+// expect: E101
+// message: a constant cannot call a function
+// A constant is known when the program is checked: it cannot call a function.
+const RATE = base() + 1
+
+fn base() -> Int {
+    return 3
+}

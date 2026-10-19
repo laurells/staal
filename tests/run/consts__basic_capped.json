@@ -1,0 +1,1 @@
+{"entry": "quote", "inputs": {"asked": {"amount": "1500.00", "currency": "NGN"}, "gold": false}, "model": {"provider": "script", "responses": []}, "expect": {"result": {"tier": "basic", "refund": {"amount": "997.50", "currency": "NGN"}, "note": "refund less 2.50 NGN fee"}}}

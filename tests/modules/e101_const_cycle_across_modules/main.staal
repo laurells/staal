@@ -1,0 +1,7 @@
+// expect: E101
+// Constants that depend on each other cannot be computed, even in one module.
+import cfg { A }
+
+fn f() -> Int {
+    return A
+}

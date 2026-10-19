@@ -1,0 +1,7 @@
+// expect: E101
+// An imported constant's name cannot be reused for a parameter.
+import cfg { RATE }
+
+fn f(RATE: Int) -> Int {
+    return RATE
+}

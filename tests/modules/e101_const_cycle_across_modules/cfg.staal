@@ -1,0 +1,2 @@
+pub const A = B + 1
+const B = A * 2

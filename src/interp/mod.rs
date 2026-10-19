@@ -2084,6 +2084,86 @@ fn form_escape(s: &str) -> String {
     out
 }
 
+/// Evaluates a constant's value when the program is checked (`crate::consts`). A
+/// constant holds only the pure forms below, which mean exactly what they mean in
+/// `Interp::eval`: the same helpers compute them, so a constant's value here is the
+/// value the engines compute where it is used.
+pub(crate) fn eval_const(e: &Expr, prog: &Program) -> Result<Value, Failure> {
+    eval_pure(e, &types_of(prog))
+}
+
+fn eval_pure(e: &Expr, types: &Types) -> Result<Value, Failure> {
+    let ev = |x: &Expr| eval_pure(x, types);
+    match e {
+        Expr::Str(s, _) => Ok(Value::Text(s.clone())),
+        Expr::Bool(b, _) => Ok(Value::Bool(*b)),
+        Expr::Money(m, _) => Ok(Value::Money(*m)),
+        Expr::Int(n, _) => match i64::try_from(*n) {
+            Ok(n) => Ok(Value::Int(n)),
+            Err(_) => internal(format!("integer literal {n} is out of range")),
+        },
+        Expr::Arith { op, left, right, .. } => {
+            let l = ev(left)?;
+            arith(*op, l, ev(right)?)
+        }
+        Expr::Neg(inner, _) => match ev(inner)? {
+            Value::Int(n) => neg(n).map(Value::Int),
+            _ => internal("`-` applied to a value that is not an Int"),
+        },
+        Expr::Not(inner, _) => match ev(inner)? {
+            Value::Bool(b) => Ok(Value::Bool(!b)),
+            _ => internal("`not` on a non-Bool"),
+        },
+        Expr::Logic { op, left, right, .. } => {
+            let Value::Bool(l) = ev(left)? else { return internal("`and`/`or` on a non-Bool") };
+            if (*op == LogicOp::And && !l) || (*op == LogicOp::Or && l) {
+                return Ok(Value::Bool(l));
+            }
+            match ev(right)? {
+                Value::Bool(r) => Ok(Value::Bool(r)),
+                _ => internal("`and`/`or` on a non-Bool"),
+            }
+        }
+        Expr::Cmp { op, left, right, .. } => {
+            let l = ev(left)?;
+            compare(*op, &l, &ev(right)?).map(Value::Bool)
+        }
+        Expr::Builtin { f, args, .. } => {
+            let vals = args.iter().map(ev).collect::<Result<Vec<_>, _>>()?;
+            builtin(*f, &vals)
+        }
+        Expr::Record { ty, fields, .. } => {
+            let Some(decl) = types.get(ty) else { return internal(format!("unknown record type {ty}")) };
+            let mut given = Vec::with_capacity(fields.len());
+            for (name, e) in fields {
+                given.push((name.clone(), ev(e)?));
+            }
+            let mut out = Vec::with_capacity(decl.len());
+            for (fname, _) in decl {
+                match given.iter().position(|(n, _)| n == fname) {
+                    Some(i) => out.push(given.swap_remove(i)),
+                    None => return internal(format!("{ty} literal without field '{fname}'")),
+                }
+            }
+            Ok(Value::Record { ty: ty.clone(), fields: out })
+        }
+        Expr::List(items, _) => Ok(Value::List(items.iter().map(ev).collect::<Result<Vec<_>, _>>()?)),
+        Expr::Index { base, index, .. } => {
+            let Value::List(items) = ev(base)? else { return internal("indexing a non-list") };
+            let Value::Int(i) = ev(index)? else { return internal("a non-Int index") };
+            list_index(&items, i)
+        }
+        Expr::Field { base, field, .. } => match ev(base)? {
+            Value::Record { fields, .. } => match fields.into_iter().find(|(f, _)| f == field) {
+                Some((_, v)) => Ok(v),
+                None => internal(format!("no field '{field}'")),
+            },
+            _ => internal(format!("cannot read '.{field}' of this value")),
+        },
+        _ => internal("this is not something a constant can hold"),
+    }
+}
+
 pub(crate) fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, Failure> {
     use std::cmp::Ordering;
     let ord: Option<Ordering> = match (l, r) {

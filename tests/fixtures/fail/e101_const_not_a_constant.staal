@@ -1,0 +1,6 @@
+// expect: E101
+// message: 'qty' is not a constant
+// A constant can use only literals and other constants.
+const TOTAL = PRICE * qty
+
+const PRICE = 3

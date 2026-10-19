@@ -1,0 +1,9 @@
+// expect: E101
+// message: 'LIMIT' is a constant here
+// A local variable cannot take a constant's name: `LIMIT` must always mean one thing.
+const LIMIT = 3
+
+fn f() -> Int {
+    let LIMIT = 4
+    return LIMIT
+}

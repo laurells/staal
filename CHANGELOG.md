@@ -7,6 +7,8 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Module-level constants, `const NAME: T = value`, computed when the program is
+  checked and substituted where used; `pub const` exports one.
 - `continue` in `repeat`, `loop` and `for`, on both engines. Skipping the rest
   of an iteration on a blinded value counts as deciding what follows (E007).
 - Multi-line text between `"""` quotes, with the closing quotes' indentation
