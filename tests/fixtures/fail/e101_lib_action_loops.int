@@ -1,0 +1,13 @@
+// expect: E101
+// message: action a.b.go may never finish (`loop` or recursion)
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        loop {
+            let r = http.post("https://x.example/", t)
+            if r.status == 200 {
+                return r.body
+            }
+        }
+    }
+}

@@ -1,0 +1,18 @@
+type Body { to: Text, text: Text }
+
+capability vendor.sms {
+    needs http: cap net.http.post
+    needs base: Text
+    canonical(phone: Text) -> Text {
+        return clean(phone)
+    }
+    action send(to: Text @target, text: Text) -> Text {
+        let r = http.post(base + "/send", json(Body { to: clean(to), text: text }))
+        return r.body
+    }
+}
+
+// Private to the module, used by its capability.
+fn clean(phone: Text) -> Text {
+    return trim(phone)
+}

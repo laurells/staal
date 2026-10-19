@@ -1,0 +1,14 @@
+// expect: E101
+// message: action a.b.go makes model calls
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let r = http.post("https://x.example/", helper(t))
+        return r.body
+    }
+}
+fn helper(t: Text) -> Text {
+    let p = propose(Text, instruct: "Rewrite this.", data: [t])
+    let v: Text = validate p
+    return v
+}

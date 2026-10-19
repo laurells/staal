@@ -1,0 +1,6 @@
+// expect: E101
+// expect-in: lib.int
+import lib
+fn go(m: cap lib.mail.send) -> Receipt {
+    return m.send("a@example.com")
+}

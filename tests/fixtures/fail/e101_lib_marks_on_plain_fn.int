@@ -1,0 +1,5 @@
+// expect: E101
+// message: 'f': @target and @amount mark parameters of capability actions only
+fn f(to: Text @target) -> Text {
+    return to
+}

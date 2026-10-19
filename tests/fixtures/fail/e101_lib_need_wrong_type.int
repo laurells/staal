@@ -1,0 +1,10 @@
+// expect: E101
+// message: `needs n`: a capability needs runtime capabilities (net.http.*, fs.*), Secrets or Text settings
+capability a.b {
+    needs http: cap net.http.post
+    needs n: Int
+    action go(t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        return r.body
+    }
+}

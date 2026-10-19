@@ -1,0 +1,9 @@
+// expect: E101
+// message: in action a.b.go: @amount 'a' never reaches a request, so the program's money limits would check a value that is not used
+capability a.b {
+    needs http: cap net.http.post
+    action go(a: Money @amount, t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        return r.body
+    }
+}

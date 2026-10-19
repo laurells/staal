@@ -1,13 +1,19 @@
 // Hand-written recursive-descent parser.
 //
 // Grammar:
-//   program  := import* ("pub"? (typedecl | fndecl))*
+//   program  := import* ("pub"? (typedecl | fndecl | capdecl))*
+//   capdecl  := "capability" IDENT ("." IDENT)* "{" need* (canonical | action)* "}"
+//   need     := "needs" IDENT ":" ty
+//   canonical:= "canonical" "(" param ")" "->" ty block
+//   action   := "action" IDENT "(" (param ("," param)*)? ")" "->" ty block
+//               (`needs`, `canonical` and `action` are words only inside a capability)
 //   import   := "import" IDENT ("." IDENT)* ("as" IDENT)? ("{" IDENT ("," IDENT)* ","? "}")?
 //   typedecl := "type" IDENT "{" (IDENT ":" ty ","?)* "}"
 //   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty ("@" "trusted")?)? budget? block
 //   budget   := "budget" "(" limit ("," limit)* ")"      limit := ("calls" | "tokens") ":" NUM
 //   param    := IDENT ":" ty mark*
 //   mark     := "@" "trusted" | "@" "blind" ("(" field_path ("," field_path)* ")")?
+//             | "@" "target" | "@" "amount"     (capability actions only)
 //   field_path := IDENT ("." IDENT)*
 //   ty       := "cap" IDENT ("." IDENT)* ("(" climit ("," climit)* ")")?
 //   climit   := ("max" | "each") ":" NUM IDENT? | "uses" ":" NUM | "only" ":" "[" (STRING ","?)* "]"
@@ -15,6 +21,7 @@
 //               (`m.T` is type T of the module imported as m)
 //   block    := "{" stmt* "}"
 //   stmt     := "let" IDENT (":" ty)? "=" expr | "set" IDENT "=" expr | "return" expr?
+//             | "fail" "(" expr ")"
 //             | "repeat" NUM block | "loop" block | "break"
 //             | "for" IDENT "in" expr* block
 //             | "if" expr* block ("else" (block | if-stmt))? | expr
@@ -46,6 +53,13 @@
 
 use crate::ast::*;
 use crate::lexer::{Pos, Tok, Token};
+
+struct Marks {
+    trusted: bool,
+    blind: Vec<Vec<String>>,
+    target: bool,
+    amount: bool,
+}
 
 pub struct Parser {
     toks: Vec<Token>,
@@ -126,9 +140,11 @@ impl Parser {
         }
     }
 
-    /// Zero or more `@trusted` / `@blind(...)` marks after a parameter type.
-    fn param_marks(&mut self) -> PResult<(bool, Vec<Vec<String>>)> {
+    /// Zero or more `@trusted` / `@blind(...)` / `@target` / `@amount` marks after a
+    /// parameter type.
+    fn param_marks(&mut self) -> PResult<Marks> {
         let (mut trusted, mut blind) = (false, Vec::new());
+        let (mut target, mut amount) = (false, false);
         let mut seen_blind = false;
         while *self.peek() == Tok::At {
             self.bump();
@@ -158,11 +174,15 @@ impl Parser {
                         blind.push(Vec::new()); // the whole value
                     }
                 }
-                "trusted" | "blind" => return Err((pos, format!("'@{label}' given twice"))),
-                _ => return Err((pos, format!("unknown label '@{label}'; use '@trusted' or '@blind'"))),
+                "target" if !target => target = true,
+                "amount" if !amount => amount = true,
+                "trusted" | "blind" | "target" | "amount" => return Err((pos, format!("'@{label}' given twice"))),
+                _ => {
+                    return Err((pos, format!("unknown label '@{label}'; use '@trusted', '@blind', '@target' or '@amount'")))
+                }
             }
         }
-        Ok((trusted, blind))
+        Ok(Marks { trusted, blind, target, amount })
     }
 
     /// `500 USD` in a capability limit: a whole number and an optional currency.
@@ -242,6 +262,11 @@ impl Parser {
             match self.peek() {
                 Tok::Type => p.types.push(self.typedecl(public)?),
                 Tok::Fn => p.fns.push(self.fndecl(public)?),
+                Tok::Ident(w) if w == "capability" => {
+                    let (cap, fns) = self.capdecl()?;
+                    p.caps.push(cap);
+                    p.fns.extend(fns);
+                }
                 Tok::Eof if !public => return Ok(p),
                 Tok::Import => return Err((self.pos(), "imports must come before every declaration".into())),
                 other => {
@@ -308,6 +333,85 @@ impl Parser {
         let pos = self.pos();
         self.expect(Tok::Fn, "'fn'")?;
         let name = self.ident()?;
+        self.fn_rest(public, name, pos)
+    }
+
+    /// `capability a.b { needs ...  canonical(...) -> T { }  action m(...) -> T { } }`.
+    /// Returns the declaration and the functions holding its bodies.
+    fn capdecl(&mut self) -> PResult<(CapDecl, Vec<FnDecl>)> {
+        let pos = self.pos();
+        self.bump(); // `capability`
+        let mut path = vec![self.ident()?];
+        while *self.peek() == Tok::Dot {
+            self.bump();
+            path.push(self.ident()?);
+        }
+        let shown = path.join(".");
+        self.expect(Tok::LBrace, "'{'")?;
+        let mut needs = Vec::new();
+        let mut actions = Vec::new();
+        let mut fns: Vec<FnDecl> = Vec::new();
+        let mut canonical: Option<String> = None;
+        loop {
+            let wpos = self.pos();
+            match self.peek().clone() {
+                Tok::RBrace => {
+                    self.bump();
+                    break;
+                }
+                Tok::Ident(w) if w == "needs" => {
+                    if !actions.is_empty() || canonical.is_some() {
+                        return Err((wpos, "`needs` must come before `canonical` and every `action`".into()));
+                    }
+                    self.bump();
+                    let npos = self.pos();
+                    let name = self.ident()?;
+                    self.expect(Tok::Colon, "':'")?;
+                    let ty = self.ty()?;
+                    needs.push((name, ty, npos));
+                }
+                Tok::Ident(w) if w == "canonical" => {
+                    if canonical.is_some() {
+                        return Err((wpos, format!("capability {shown} has two `canonical` functions")));
+                    }
+                    self.bump();
+                    let name = format!("canonical {shown}");
+                    let f = self.fn_rest(false, name.clone(), wpos)?;
+                    canonical = Some(name);
+                    fns.push(f);
+                }
+                Tok::Ident(w) if w == "action" => {
+                    self.bump();
+                    let aname = self.ident()?;
+                    let fn_name = format!("action {shown}.{aname}");
+                    let mut f = self.fn_rest(false, fn_name.clone(), wpos)?;
+                    let declared = f.params.len();
+                    let target = f.params.iter().position(|p| p.target);
+                    let amount = f.params.iter().position(|p| p.amount);
+                    // The needs follow the declared parameters: the runtime supplies them.
+                    for (n, t, _) in &needs {
+                        f.params.push(Param {
+                            name: n.clone(),
+                            ty: t.clone(),
+                            trusted: false,
+                            target: false,
+                            amount: false,
+                            blind: Vec::new(),
+                        });
+                    }
+                    actions.push(ActionDecl { name: aname, fn_name, declared, target, amount, pos: wpos });
+                    fns.push(f);
+                }
+                other => {
+                    return Err((wpos, format!("expected `needs`, `canonical`, `action` or '}}' in a capability, found {other:?}")))
+                }
+            }
+        }
+        Ok((CapDecl { path, needs, actions, canonical, pos }, fns))
+    }
+
+    /// The rest of a function after its name: parameters, return type, budget, body.
+    fn fn_rest(&mut self, public: bool, name: String, pos: Pos) -> PResult<FnDecl> {
         self.expect(Tok::LParen, "'('")?;
         let mut params = Vec::new();
         if *self.peek() != Tok::RParen {
@@ -315,8 +419,8 @@ impl Parser {
                 let pname = self.ident()?;
                 self.expect(Tok::Colon, "':'")?;
                 let ty = self.ty()?;
-                let (trusted, blind) = self.param_marks()?;
-                params.push(Param { name: pname, ty, trusted, blind });
+                let m = self.param_marks()?;
+                params.push(Param { name: pname, ty, trusted: m.trusted, target: m.target, amount: m.amount, blind: m.blind });
                 if *self.peek() == Tok::Comma {
                     self.bump();
                     if *self.peek() == Tok::RParen {
@@ -470,6 +574,14 @@ impl Parser {
                 Ok(Stmt::Break(pos))
             }
             Tok::If => self.if_stmt(),
+            Tok::Ident(w) if w == "fail" && self.toks.get(self.i + 1).map(|t| &t.tok) == Some(&Tok::LParen) => {
+                self.bump();
+                let mut args = self.args()?;
+                if args.len() != 1 {
+                    return Err((pos, "`fail` takes one message".into()));
+                }
+                Ok(Stmt::Fail(args.remove(0), pos))
+            }
             Tok::Set => {
                 self.bump();
                 let name = self.ident()?;

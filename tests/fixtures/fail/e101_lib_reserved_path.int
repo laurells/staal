@@ -1,0 +1,9 @@
+// expect: E101
+// message: capability net.mine: `net` and `fs` belong to the runtime
+capability net.mine {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        return r.body
+    }
+}

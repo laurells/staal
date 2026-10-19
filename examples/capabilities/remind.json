@@ -1,0 +1,22 @@
+{
+  "entry": "remind",
+  "inputs": {
+    "patients": [
+      { "name": "Ada", "phone": "+234 801 234 5678" }
+    ]
+  },
+  "grants": {
+    "texts": {
+      "cap": "termii.sms.send",
+      "only": ["2348012345678"],
+      "uses": 1,
+      "needs": {
+        "http": { "cap": "net.http.post", "only": ["https://api.ng.termii.com/api/sms/send"] },
+        "key": { "env": "TERMII_API_KEY" },
+        "base": "https://api.ng.termii.com",
+        "sender": "YourSenderID"
+      }
+    }
+  },
+  "model": { "provider": "script", "responses": [] }
+}

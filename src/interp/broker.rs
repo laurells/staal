@@ -76,6 +76,12 @@ impl Broker {
         Ok(self.caps.len() - 1)
     }
 
+    /// The granted capability `h` was narrowed from (itself if it is one).
+    pub fn root(&self, h: usize) -> Result<usize, String> {
+        let chain = self.chain(h)?;
+        chain.last().copied().ok_or_else(|| "unknown capability handle".into())
+    }
+
     pub fn path(&self, h: usize) -> Result<&str, String> {
         self.caps.get(h).map(|c| c.path.as_str()).ok_or_else(|| "unknown capability handle".into())
     }

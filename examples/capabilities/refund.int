@@ -1,0 +1,7 @@
+// Refunds one payment through the Stripe library, within the limits the operator set.
+
+import stripe
+
+fn refund(payment: Text, amount: Money, refunds: cap stripe.refunds.create(max: 200 USD, each: 100 USD)) -> Receipt {
+    return refunds.create(payment, amount)
+}

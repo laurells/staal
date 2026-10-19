@@ -1,0 +1,9 @@
+// expect: E101
+// message: action a.b.go: an action returns the service's id for its receipt, as `-> Text`
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Int {
+        let r = http.post("https://x.example/", t)
+        return r.status
+    }
+}

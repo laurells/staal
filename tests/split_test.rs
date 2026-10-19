@@ -67,16 +67,21 @@ fn split(src: &str) -> Option<Split> {
         }
         moved.extend(more);
     }
-    moved.retain(|n| prog.fns.iter().any(|f| &f.name == n));
-    if moved.is_empty() && prog.types.is_empty() {
+    // A capability's action and canonical functions (named with a space) are moved with
+    // the capability, never on their own.
+    moved.retain(|n| !n.contains(' ') && prog.fns.iter().any(|f| &f.name == n));
+    if moved.is_empty() && prog.types.is_empty() && prog.caps.is_empty() {
         return None;
     }
     // Declarations by starting line; each runs to the line before the next one.
+    // Capabilities always move to the module (declared there, used by the program), and
+    // take no `pub`: a capability is named by its path, not imported.
     let mut decls: Vec<(usize, usize, bool, String)> = prog
         .types
         .iter()
         .map(|t| (t.pos.line, t.pos.col, true, t.name.clone()))
-        .chain(prog.fns.iter().map(|f| (f.pos.line, f.pos.col, moved.contains(&f.name), f.name.clone())))
+        .chain(prog.fns.iter().filter(|f| !f.name.contains(' ')).map(|f| (f.pos.line, f.pos.col, moved.contains(&f.name), f.name.clone())))
+        .chain(prog.caps.iter().map(|c| (c.pos.line, c.pos.col, true, format!("capability {}", c.path.join(".")))))
         .collect();
     decls.sort();
     let lines: Vec<&str> = src.lines().collect();
@@ -85,15 +90,21 @@ fn split(src: &str) -> Option<Split> {
     }
     let first = decls[0].0 - 1;
     let mut main = lines[..first].join("\n");
-    let names: BTreeSet<String> = decls.iter().filter(|d| d.2).map(|d| d.3.clone()).collect();
-    main.push_str(&format!("\nimport {LIB} {{ {} }}\n", names.into_iter().collect::<Vec<_>>().join(", ")));
+    let names: BTreeSet<String> = decls.iter().filter(|d| d.2 && !d.3.contains(' ')).map(|d| d.3.clone()).collect();
+    if names.is_empty() {
+        main.push_str(&format!("\nimport {LIB}\n"));
+    } else {
+        main.push_str(&format!("\nimport {LIB} {{ {} }}\n", names.into_iter().collect::<Vec<_>>().join(", ")));
+    }
     let mut lib = String::new();
     for (i, (line, col, to_lib, _)) in decls.iter().enumerate() {
         let end = decls.get(i + 1).map_or(lines.len(), |d| d.0 - 1);
         let mut seg: Vec<String> = lines[line - 1..end].iter().map(|s| s.to_string()).collect();
         if *to_lib {
-            let (a, b) = seg[0].split_at(col - 1);
-            seg[0] = format!("{a}pub {b}");
+            if !decls[i].3.starts_with("capability ") {
+                let (a, b) = seg[0].split_at(col - 1);
+                seg[0] = format!("{a}pub {b}");
+            }
             lib.push_str(&seg.join("\n"));
             lib.push('\n');
         } else {

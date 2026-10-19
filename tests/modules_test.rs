@@ -80,3 +80,29 @@ fn resume_refuses_a_changed_module() {
     };
     assert!(err.contains("different program"), "{err}");
 }
+
+/// The fingerprint is the program, not where its files are: a moved folder, or a path
+/// written differently, is the same program. Which module a text is matters.
+#[test]
+fn the_fingerprint_follows_modules_not_file_locations() {
+    let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("module-fingerprint");
+    let _ = fs::remove_dir_all(&base);
+    let main = "import lib.a\nimport lib.b\nfn go() -> Int {\n    return a.one() + b.two()\n}\n";
+    let a = "pub fn one() -> Int {\n    return 1\n}\n";
+    let b = "pub fn two() -> Int {\n    return 2\n}\n";
+    let write = |dir: &Path, a: &str, b: &str| {
+        fs::create_dir_all(dir.join("lib")).unwrap();
+        fs::write(dir.join("main.int"), main).unwrap();
+        fs::write(dir.join("lib/a.int"), a).unwrap();
+        fs::write(dir.join("lib/b.int"), b).unwrap();
+    };
+    write(&base.join("one"), a, b);
+    write(&base.join("two/deeper"), a, b);
+    let fp = |p: std::path::PathBuf| intentc::check_path(&p).unwrap().fingerprint;
+    let first = fp(base.join("one/main.int"));
+    assert_eq!(first, fp(base.join("two/deeper/main.int")), "moved");
+    assert_eq!(first, fp(base.join("one/../one/main.int")), "the same path written differently");
+    // Swapping the two modules' texts changes the program.
+    write(&base.join("swapped"), &a.replace("one", "two").replace("1", "2"), &b.replace("two", "one").replace("2", "1"));
+    assert_ne!(first, fp(base.join("swapped/main.int")), "swapped modules");
+}

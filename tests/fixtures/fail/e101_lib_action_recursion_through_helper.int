@@ -1,0 +1,15 @@
+// expect: E101
+// message: action a.b.go may never finish
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let r = http.post("https://x.example/", spin(t, 3))
+        return r.body
+    }
+}
+fn spin(t: Text, n: Int) -> Text {
+    if n == 0 {
+        return t
+    }
+    return spin(t, n - 1)
+}

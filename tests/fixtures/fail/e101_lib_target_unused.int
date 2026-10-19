@@ -1,0 +1,12 @@
+// expect: E101
+// message: in action a.b.go: @target 'to' never reaches a request, so the program's `only` would check a value that is not used
+capability a.b {
+    needs http: cap net.http.post
+    canonical(x: Text) -> Text {
+        return x
+    }
+    action go(to: Text @target, t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        return r.body
+    }
+}

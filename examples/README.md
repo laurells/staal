@@ -1,9 +1,11 @@
 # Examples that reach real services
 
-Two complete programs that send a real message through a real API. They were
-checked and run against a local test server, but not against the real services:
-the machine they were built on cannot reach the internet. Running them is the
-remaining step of roadmap phase 2, and needs your own account and key.
+Complete programs that act through real APIs: an SMS and an email sent directly
+over `net.http`, and an SMS and a Stripe refund sent through libraries that
+declare their own capabilities. They were checked and run against a local test
+server, but not against the real services: the machine they were built on cannot
+reach the internet. Running them is the remaining step of roadmap phases 2 and 3,
+and needs your own accounts and keys.
 
 Build intentc first:
 
@@ -59,6 +61,30 @@ Resend deduplicates by `Idempotency-Key`, so `run.json` sets
 connection breaks, resuming sends the request again with the same key, and Resend
 returns the first answer instead of sending a second email. Resend keeps keys for
 24 hours: resume within that time.
+
+## Through a library: `capabilities/`
+
+`capabilities/termii.int` and `capabilities/stripe.int` are libraries that declare
+capabilities (`termii.sms.send`, `stripe.refunds.create`); `remind.int` and
+`refund.int` are programs that use them and never see a key or URL. They are
+tested against a local server (`tests/library_test.rs`), not the real services.
+`remind.json` and `refund.json` are run configs whose grants supply the
+libraries' `needs` (`docs/RUNTIME.md` section 13). Edit the phone number, sender
+ID, payment intent id and amount, then:
+
+    export TERMII_API_KEY=your-key
+    ./target/release/intentc run examples/capabilities/remind.int \
+        --config examples/capabilities/remind.json --journal remind.journal
+
+    export STRIPE_SECRET_KEY=sk_test_your_key
+    ./target/release/intentc run examples/capabilities/refund.int \
+        --config examples/capabilities/refund.json --journal refund.journal
+
+The phone number must match `only` in canonical form (international, no `+` or
+spaces). For Stripe, use a test-mode key and a test payment first. `refund.json`
+grants `post` with `"idempotency_key": true`, since Stripe deduplicates by
+Idempotency-Key, and limits the run to 5.00 USD. The checks listed below apply
+to these runs too.
 
 ## What to check
 

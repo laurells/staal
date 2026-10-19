@@ -1,6 +1,8 @@
 // Every file in tests/fixtures/pass must compile with no errors.
 // Every file in tests/fixtures/fail must start with `// expect: CODE`
 // and the compiler must report exactly those codes, in order (e.g. `// expect: E007 E007`).
+// A second line `// message: TEXT` also requires the first diagnostic's message to
+// contain TEXT, for codes such as E101 that many different rules report.
 
 use std::fs;
 use std::path::Path;
@@ -36,7 +38,11 @@ fn invalid_programs_are_rejected_with_the_right_code() {
             .unwrap_or_else(|| panic!("{} lacks `// expect: CODE`", f.display()))
             .split_whitespace()
             .collect();
-        let codes: Vec<&str> = intentc::compile_check(&src).iter().map(|d| d.code).collect();
+        let diags = intentc::compile_check(&src);
+        let codes: Vec<&str> = diags.iter().map(|d| d.code).collect();
         assert_eq!(codes, expected, "{}", f.display());
+        if let Some(want) = src.lines().nth(1).and_then(|l| l.strip_prefix("// message: ")) {
+            assert!(diags[0].msg.contains(want), "{}: expected a message containing {want:?}, got {:?}", f.display(), diags[0].msg);
+        }
     }
 }

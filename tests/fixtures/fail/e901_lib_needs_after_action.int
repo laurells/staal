@@ -1,0 +1,9 @@
+// expect: E901
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        return r.body
+    }
+    needs key: Secret
+}

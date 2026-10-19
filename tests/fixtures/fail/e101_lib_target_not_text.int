@@ -1,0 +1,12 @@
+// expect: E101
+// message: @target 'n' must be Text
+capability a.b {
+    needs http: cap net.http.post
+    canonical(x: Text) -> Text {
+        return x
+    }
+    action go(n: Int @target) -> Text {
+        let r = http.post("https://x.example/", json(n))
+        return r.body
+    }
+}

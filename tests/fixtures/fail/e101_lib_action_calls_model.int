@@ -1,0 +1,11 @@
+// expect: E101
+// message: action a.b.go makes model calls; a capability action only talks to its service
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let p = propose(Text, instruct: "Rewrite this.", data: [t])
+        let v: Text = validate p
+        let r = http.post("https://x.example/", v)
+        return r.body
+    }
+}

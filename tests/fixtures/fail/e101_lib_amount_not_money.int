@@ -1,0 +1,9 @@
+// expect: E101
+// message: @amount 'n' must be Money
+capability a.b {
+    needs http: cap net.http.post
+    action go(n: Int @amount) -> Text {
+        let r = http.post("https://x.example/", json(n))
+        return r.body
+    }
+}

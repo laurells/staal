@@ -12,6 +12,11 @@
 //   /hang          reads the request, then never answers (for timeouts)
 //   /garbage       over TLS: reads the request, then sends bytes that are not TLS, so
 //                  the client fails with a TLS error after its request was sent
+//   /api/sms/send  200 {"message_id": "t-<n>", "code": "ok", "balance": 9}, like Termii
+//   /v1/payment_intents/pi_usd (and pi_eur)
+//                  200 {"id": ..., "currency": "usd" (or "eur"), "object": "payment_intent"}
+//   /v1/refunds    200 {"id": "re-<n>", "status": "succeeded", "object": "refund"},
+//                  deduplicating by Idempotency-Key like /send
 //   anything else  404
 // Every connection is closed after one answer.
 
@@ -141,6 +146,29 @@ fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mu
                 }
                 None => {
                     let r = "{\"message_id\": \"sent\"}".to_string();
+                    if let Some(k) = key {
+                        seen.insert(k, r.clone());
+                    }
+                    (200, r.into_bytes())
+                }
+            }
+        }
+        "/api/sms/send" => (200, format!("{{\"message_id\": \"t-{n}\", \"code\": \"ok\", \"balance\": 9}}").into_bytes()),
+        "/v1/payment_intents/pi_usd" | "/v1/payment_intents/pi_eur" => {
+            let id = &path["/v1/payment_intents/".len()..];
+            let cur = &id[3..];
+            (200, format!("{{\"id\": \"{id}\", \"currency\": \"{cur}\", \"object\": \"payment_intent\"}}").into_bytes())
+        }
+        "/v1/refunds" => {
+            let key = headers.get("idempotency-key").cloned();
+            let mut seen = seen.lock().unwrap();
+            match key.as_ref().and_then(|k| seen.get(k).cloned()) {
+                Some(first) => {
+                    effect = false;
+                    (200, first.into_bytes())
+                }
+                None => {
+                    let r = format!("{{\"id\": \"re-{n}\", \"status\": \"succeeded\", \"object\": \"refund\"}}");
                     if let Some(k) = key {
                         seen.insert(k, r.clone());
                     }

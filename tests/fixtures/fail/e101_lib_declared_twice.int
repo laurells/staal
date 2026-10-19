@@ -1,0 +1,16 @@
+// expect: E101
+// message: capability a.b is declared twice
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        return r.body
+    }
+}
+capability a.b {
+    needs http: cap net.http.post
+    action go2(t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        return r.body
+    }
+}

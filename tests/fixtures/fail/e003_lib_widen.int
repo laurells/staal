@@ -1,0 +1,14 @@
+// expect: E003
+capability a.b {
+    needs http: cap net.http.post
+    action pay(amount: Money @amount) -> Text {
+        let r = http.post("https://x.example/", json(minor_units(amount)))
+        return r.body
+    }
+}
+fn big(p: cap a.b.pay(max: 500 USD)) -> Receipt {
+    return p.pay(400.00 USD)
+}
+fn f(p: cap a.b.pay(max: 50 USD)) -> Receipt {
+    return big(p)
+}

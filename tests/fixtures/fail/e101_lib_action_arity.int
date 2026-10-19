@@ -1,0 +1,12 @@
+// expect: E101
+// message: 'a.b.go' takes 1 argument(s) but 2 were given
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        return r.body
+    }
+}
+fn f(c: cap a.b.go) -> Receipt {
+    return c.go("x", "y")
+}

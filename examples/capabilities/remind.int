@@ -1,0 +1,18 @@
+// Sends appointment reminders through the Termii library. The program holds a
+// capability that can text the listed numbers, a limited number of times; it has no
+// key, URL or HTTP access of its own.
+
+import termii
+
+type Patient { name: Text, phone: Text }
+
+fn remind(patients: List<Patient, 50>, texts: cap termii.sms.send(uses: 50)) -> Int {
+    let sent = 0
+    for p in patients {
+        let r = try texts.send(p.phone, "Hello " + p.name + ", this is a reminder of your appointment tomorrow.")
+        if r.ok {
+            set sent = sent + 1
+        }
+    }
+    return sent
+}

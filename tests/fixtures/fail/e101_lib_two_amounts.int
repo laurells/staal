@@ -1,0 +1,9 @@
+// expect: E101
+// message: action a.b.go marks 2 parameters @amount; at most one
+capability a.b {
+    needs http: cap net.http.post
+    action go(a: Money @amount, b: Money @amount) -> Text {
+        let r = http.post("https://x.example/", json(minor_units(a) + minor_units(b)))
+        return r.body
+    }
+}

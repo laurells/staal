@@ -223,7 +223,150 @@ struct RuntimeSettings {
 
 enum Arg {
     Data(Value),
-    Grant { path: String, limits: broker::Limits, idempotency_key: bool },
+    Grant { path: String, limits: broker::Limits, idempotency_key: bool, needs: Vec<NeedArg> },
+}
+
+/// What a library capability's grant supplies for one of its `needs`.
+enum NeedArg {
+    /// A runtime capability, granted by the operator and then narrowed to the limits
+    /// the library declared for it.
+    Cap { path: String, limits: broker::Limits, idempotency_key: bool, declared: CapLimits },
+    /// A secret or a text setting.
+    Data(Value),
+}
+
+struct ParsedGrant {
+    limits: broker::Limits,
+    idempotency_key: bool,
+    needs: Vec<NeedArg>,
+}
+
+/// How a net.http failure that certainly sent nothing begins, in results and journals.
+const NOT_SENT: &str = "not sent: ";
+
+/// Reads `{"env": "VARIABLE"}`: a secret from the environment (RUNTIME.md section 12).
+fn load_secret(spec: &Json, at: &str) -> Result<Secret, String> {
+    let spec = spec.as_object().ok_or(format!("{at}: expected {{\"env\": \"VARIABLE_NAME\"}}"))?;
+    for k in spec.keys() {
+        if k != "env" {
+            return Err(format!("{at}: unknown key '{k}'; secrets come only from the environment"));
+        }
+    }
+    let var = spec.get("env").and_then(Json::as_str).ok_or(format!("{at}.env: expected a variable name"))?;
+    let value = std::env::var(var).map_err(|_| format!("{at}: environment variable {var} is not set"))?;
+    if value.len() < MIN_SECRET_BYTES {
+        return Err(format!("{at}: {var} is shorter than {MIN_SECRET_BYTES} characters, too short to keep out of logs reliably"));
+    }
+    // Printable ASCII without quotes, backslashes or spaces: then filling it into a JSON
+    // string or a header can never change their structure.
+    if !value.bytes().all(|b| (0x21..=0x7e).contains(&b) && b != b'"' && b != b'\\') {
+        return Err(format!(
+            "{at}: {var} contains a space, quote, backslash or non-ASCII character; secrets must be printable ASCII without those"
+        ));
+    }
+    Ok(Secret { name: var.to_string(), value, shown: "{secret}".to_string() })
+}
+
+/// Reads one grant: `{"cap": path, limits..., "idempotency_key"?, "needs"?}`, for a
+/// capability slot of type `cap <want>(declared)`. A library capability's grant must
+/// supply each of its `needs` (RUNTIME.md section 13); secret values are added to
+/// `secrets` so they can be kept out of everything recorded.
+fn parse_grant(
+    g: &Json,
+    at: &str,
+    want: &str,
+    declared: &CapLimits,
+    types: &Types,
+    prog: &Program,
+    secrets: &mut Vec<String>,
+) -> Result<ParsedGrant, String> {
+    let g = g.as_object().ok_or(format!("{at}: expected an object"))?;
+    for k in g.keys() {
+        if !["cap", "max", "each", "uses", "only", "idempotency_key", "needs"].contains(&k.as_str()) {
+            return Err(format!("{at}: unknown key '{k}'"));
+        }
+    }
+    let gpath = g.get("cap").and_then(Json::as_str).ok_or(format!("{at}.cap: expected a string"))?;
+    if gpath != want {
+        return Err(format!("{at}.cap: is '{gpath}', but the slot needs '{want}'"));
+    }
+    let limits = grant_limits(g, at, types)?;
+    let idempotency_key = match g.get("idempotency_key") {
+        None => false,
+        Some(Json::Bool(b)) => *b,
+        Some(_) => return Err(format!("{at}.idempotency_key: expected true or false")),
+    };
+    if is_runtime_cap(want) {
+        if limits.max.is_some() || limits.each.is_some() {
+            return Err(format!("{at}: `{want}` spends no money the runtime can measure; max and each do not apply"));
+        }
+        let http = want.starts_with("net.http.");
+        for (i, pat) in limits.only.iter().flatten().enumerate() {
+            let checked = if http { crate::targets::check_url_pattern(pat) } else { crate::targets::check_path_pattern(pat) };
+            checked.map_err(|e| format!("{at}.only[{i}]: {e}"))?;
+        }
+        if idempotency_key && (!http || want == "net.http.get") {
+            return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete"));
+        }
+    } else if idempotency_key {
+        return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete"));
+    }
+    // The slot's own limits narrow the grant when the run starts. Money limits in
+    // different currencies could never both be met: refuse now.
+    let d = runtime_limits(declared)?;
+    for (name, granted, wanted) in [("max", limits.max, d.max), ("each", limits.each, d.each)] {
+        if let (Some(gl), Some(dl)) = (granted, wanted)
+            && gl.currency != dl.currency
+        {
+            return Err(format!("{at}.{name}: granted in {}, but the slot's limit is in {}", gl.currency.code, dl.currency.code));
+        }
+    }
+    let lib = prog.caps.iter().find(|c| c.actions.iter().any(|a| c.action_path(&a.name) == want));
+    let mut needs = Vec::new();
+    match (lib, g.get("needs")) {
+        (None, None) => {}
+        (None, Some(_)) => return Err(format!("{at}.needs: `{want}` is not a library capability, so it needs nothing")),
+        (Some(c), None) if c.needs.is_empty() => {}
+        (Some(c), None) => {
+            let names: Vec<&str> = c.needs.iter().map(|(n, _, _)| n.as_str()).collect();
+            return Err(format!("{at}.needs: missing; `{want}` needs {}", names.join(", ")));
+        }
+        (Some(c), Some(spec)) => {
+            let spec = spec.as_object().ok_or(format!("{at}.needs: expected an object"))?;
+            for k in spec.keys() {
+                if !c.needs.iter().any(|(n, _, _)| n == k) {
+                    return Err(format!("{at}.needs: `{want}` needs no '{k}'"));
+                }
+            }
+            for (n, t, _) in &c.needs {
+                let nat = format!("{at}.needs.{n}");
+                let v = spec.get(n).ok_or(format!("{nat}: missing"))?;
+                match t {
+                    Ty::Cap { path, limits: nd } => {
+                        let np = path.join(".");
+                        let inner = parse_grant(v, &nat, &np, nd, types, prog, secrets)?;
+                        needs.push(NeedArg::Cap {
+                            path: np,
+                            limits: inner.limits,
+                            idempotency_key: inner.idempotency_key,
+                            declared: nd.clone(),
+                        });
+                    }
+                    Ty::Named(x) if x == "Secret" => {
+                        let secret = load_secret(v, &nat)?;
+                        secrets.push(secret.value.clone());
+                        needs.push(NeedArg::Data(Value::Secret(secret)));
+                    }
+                    Ty::Named(x) if x == "Text" => {
+                        let text = v.as_str().ok_or(format!("{nat}: expected a string"))?;
+                        needs.push(NeedArg::Data(Value::Text(text.to_string())));
+                    }
+                    other => return Err(format!("{nat}: a {other} cannot be supplied; the compiler should have refused it")),
+                }
+            }
+        }
+    }
+    Ok(ParsedGrant { limits, idempotency_key, needs })
 }
 
 /// The shortest secret accepted: a shorter one would be found by accident in ordinary
@@ -390,6 +533,9 @@ impl Setup {
         check_all_limits(prog)?;
 
         let entry = cfg.get("entry").and_then(Json::as_str).ok_or("run config: \"entry\" must name a function")?;
+        if entry.contains(' ') {
+            return Err(format!("run config: '{entry}' is part of a capability, not a function a run can start"));
+        }
         let f = prog.fns.iter().find(|f| f.name == entry).ok_or(format!("run config: no function named '{entry}'"))?;
         let types = types_of(prog);
         let empty = Map::new();
@@ -445,82 +591,19 @@ impl Setup {
                 Ty::Cap { path, limits: declared } => {
                     let at = format!("grants.{}", p.name);
                     let g = grants.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this capability"))?;
-                    let g = g.as_object().ok_or(format!("{at}: expected an object"))?;
-                    for k in g.keys() {
-                        if !["cap", "max", "each", "uses", "only", "idempotency_key"].contains(&k.as_str()) {
-                            return Err(format!("{at}: unknown key '{k}'"));
-                        }
-                    }
-                    let gpath = g.get("cap").and_then(Json::as_str).ok_or(format!("{at}.cap: expected a string"))?;
                     let want = path.join(".");
-                    if gpath != want {
-                        return Err(format!("{at}.cap: is '{gpath}', but the parameter needs '{want}'"));
-                    }
-                    let limits = grant_limits(g, &at, &types)?;
-                    let idempotency_key = match g.get("idempotency_key") {
-                        None => false,
-                        Some(Json::Bool(b)) => *b,
-                        Some(_) => return Err(format!("{at}.idempotency_key: expected true or false")),
-                    };
-                    if is_runtime_cap(&want) {
-                        if limits.max.is_some() || limits.each.is_some() {
-                            return Err(format!("{at}: `{want}` spends no money the runtime can measure; max and each do not apply"));
-                        }
-                        let http = want.starts_with("net.http.");
-                        for (i, pat) in limits.only.iter().flatten().enumerate() {
-                            let checked = if http { crate::targets::check_url_pattern(pat) } else { crate::targets::check_path_pattern(pat) };
-                            checked.map_err(|e| format!("{at}.only[{i}]: {e}"))?;
-                        }
-                        if idempotency_key && (!http || want == "net.http.get") {
-                            return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete"));
-                        }
-                    } else if idempotency_key {
-                        return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete"));
-                    }
-                    // The parameter's own limits narrow the grant when the run starts. Money
-                    // limits in different currencies could never both be met: refuse now.
-                    let d = runtime_limits(declared)?;
-                    for (name, granted, wanted) in [("max", limits.max, d.max), ("each", limits.each, d.each)] {
-                        if let (Some(gl), Some(dl)) = (granted, wanted)
-                            && gl.currency != dl.currency
-                        {
-                            return Err(format!(
-                                "{at}.{name}: granted in {}, but the parameter's limit is in {}",
-                                gl.currency.code, dl.currency.code
-                            ));
-                        }
-                    }
-                    args.push(Arg::Grant { path: want, limits, idempotency_key });
+                    let pg = parse_grant(g, &at, &want, declared, &types, prog, &mut runtime.secrets)?;
+                    args.push(Arg::Grant { path: want, limits: pg.limits, idempotency_key: pg.idempotency_key, needs: pg.needs });
                 }
                 Ty::Proposed(_) => {
                     return Err(format!("inputs.{}: an entry parameter cannot be Proposed; only model calls produce those", p.name))
                 }
-                ty if is_secret(p) => {
-                    let _ = ty;
+                _ if is_secret(p) => {
                     let at = format!("secrets.{}", p.name);
                     let spec = secrets.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this secret"))?;
-                    let spec = spec.as_object().ok_or(format!("{at}: expected {{\"env\": \"VARIABLE_NAME\"}}"))?;
-                    for k in spec.keys() {
-                        if k != "env" {
-                            return Err(format!("{at}: unknown key '{k}'; secrets come only from the environment"));
-                        }
-                    }
-                    let var = spec.get("env").and_then(Json::as_str).ok_or(format!("{at}.env: expected a variable name"))?;
-                    let value = std::env::var(var).map_err(|_| format!("{at}: environment variable {var} is not set"))?;
-                    if value.len() < MIN_SECRET_BYTES {
-                        return Err(format!("{at}: {var} is shorter than {MIN_SECRET_BYTES} characters, too short to keep out of logs reliably"));
-                    }
-                    // Printable ASCII without quotes, backslashes or spaces: then filling it
-                    // into a JSON string or a header can never change their structure.
-                    if !value.bytes().all(|b| (0x21..=0x7e).contains(&b) && b != b'"' && b != b'\\') {
-                        return Err(format!(
-                            "{at}: {var} contains a space, quote, backslash or non-ASCII character; \
-                             secrets must be printable ASCII without those"
-                        ));
-                    }
-                    runtime.secrets.push(value.clone());
-                    let shown = "{secret}".to_string();
-                    args.push(Arg::Data(Value::Secret(Secret { name: var.to_string(), value, shown })));
+                    let secret = load_secret(spec, &at)?;
+                    runtime.secrets.push(secret.value.clone());
+                    args.push(Arg::Data(Value::Secret(secret)));
                 }
                 ty => {
                     let at = format!("inputs.{}", p.name);
@@ -665,6 +748,25 @@ struct Interp<'p> {
     http: http::Client,
     fs_max_read_bytes: usize,
     secrets: Vec<String>,
+    /// Library capabilities' actions, by the path programs use (`termii.sms.send`).
+    lib: HashMap<String, LibAction>,
+    /// What each granted library capability was given for its needs.
+    needs: HashMap<usize, Vec<Value>>,
+    /// Actions that reached the world (performed, or answered), counted so a library
+    /// action can be required to have made at least one request.
+    performed: u64,
+    /// Attempts at actions that may have changed something (all but net.http.get and
+    /// fs.read, and not a request certainly never sent). When a library action fails
+    /// after one, its amount may have been spent, and the budget counts it.
+    effects: u64,
+}
+
+#[derive(Clone)]
+struct LibAction {
+    fn_name: String,
+    canonical: Option<String>,
+    target: Option<usize>,
+    amount: Option<usize>,
 }
 
 /// What `live` in `Interp::external` learned from the world.
@@ -700,6 +802,24 @@ impl<'p> Interp<'p> {
             http: http::Client::new(&runtime.net),
             fs_max_read_bytes: runtime.fs_max_read_bytes,
             secrets: runtime.secrets.clone(),
+            lib: prog
+                .caps
+                .iter()
+                .flat_map(|c| {
+                    c.actions.iter().map(move |a| {
+                        let la = LibAction {
+                            fn_name: a.fn_name.clone(),
+                            canonical: c.canonical.clone(),
+                            target: a.target,
+                            amount: a.amount,
+                        };
+                        (c.action_path(&a.name), la)
+                    })
+                })
+                .collect(),
+            needs: HashMap::new(),
+            performed: 0,
+            effects: 0,
         }
     }
 
@@ -720,10 +840,34 @@ impl<'p> Interp<'p> {
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
-                Arg::Grant { path, limits, idempotency_key } => {
+                Arg::Grant { path, limits, idempotency_key, needs } => {
                     let h = self.broker.grant(path, limits.clone());
                     if *idempotency_key {
                         self.broker.set_idempotency_key(h).unwrap_or_default();
+                    }
+                    let mut given = Vec::with_capacity(needs.len());
+                    for n in needs {
+                        match n {
+                            NeedArg::Data(v) => given.push(v.clone()),
+                            NeedArg::Cap { path: ip, limits: il, idempotency_key: ik, declared } => {
+                                let ih = self.broker.grant(ip, il.clone());
+                                if *ik {
+                                    self.broker.set_idempotency_key(ih).unwrap_or_default();
+                                }
+                                self.emit(
+                                    "grant",
+                                    json!({ "capability": ip, "for": path, "uses": il.uses, "only": il.only }),
+                                );
+                                // The library's declared limits narrow what the operator granted.
+                                match self.narrow(Value::Cap(ih), declared) {
+                                    Ok(v) => given.push(v),
+                                    Err(f) => return self.finish_early(f),
+                                }
+                            }
+                        }
+                    }
+                    if !given.is_empty() {
+                        self.needs.insert(h, given);
                     }
                     self.emit(
                         "grant",
@@ -759,6 +903,12 @@ impl<'p> Interp<'p> {
             Err(f) => self.emit("run_end", json!({ "ok": false, "failure": f.kind.to_string(), "message": f.message })),
         }
         RunResult { result, log: std::mem::take(&mut self.log) }
+    }
+
+    /// Ends a run that failed before its entry function started.
+    fn finish_early(&mut self, f: Failure) -> RunResult {
+        self.emit("run_end", json!({ "ok": false, "failure": f.kind.to_string(), "message": f.message }));
+        RunResult { result: Err(f), log: std::mem::take(&mut self.log) }
     }
 
     /// A capability flowing into a slot with limits gets a child with those limits.
@@ -854,6 +1004,10 @@ impl<'p> Interp<'p> {
                 frame.assign(name, v)?;
                 Ok(Flow::Next)
             }
+            Stmt::Fail(msg, _) => match self.eval(frame, msg)? {
+                Value::Text(m) => fail(FailKind::Action, m),
+                _ => internal("`fail` with a message that is not Text"),
+            },
             Stmt::Expr(e) => {
                 self.eval(frame, e)?;
                 Ok(Flow::Next)
@@ -1097,6 +1251,9 @@ impl<'p> Interp<'p> {
         if path.starts_with("fs.") {
             return self.fs_action(h, &path, method, args);
         }
+        if let Some(la) = self.lib.get(&path).cloned() {
+            return self.library_action(h, &path, method, args, la);
+        }
         if is_runtime_cap(&path) {
             return internal(format!("'{path}' is not a runtime capability; the compiler should have refused it"));
         }
@@ -1142,6 +1299,8 @@ impl<'p> Interp<'p> {
                 };
                 // The action has happened in the world: record it before any bookkeeping
                 // that could fail, so the log never misses a performed action.
+                self.performed += 1;
+                self.effects += 1;
                 self.emit(
                     "action_performed",
                     json!({ "capability": path, "method": method, "amount": amount_text, "args": args_json,
@@ -1151,8 +1310,87 @@ impl<'p> Interp<'p> {
                 Ok(Value::Receipt(Receipt { id, capability: path, method: method.to_string() }))
             }
             Err(msg) => {
+                // An adapter's failure does not say whether anything happened.
+                self.effects += 1;
                 self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
                 fail(FailKind::Action, msg)
+            }
+        }
+    }
+
+    // RUNTIME.md section 13
+    fn library_action(&mut self, h: usize, path: &str, method: &str, args: Vec<Value>, la: LibAction) -> Result<Value, Failure> {
+        // The target, in the one form the library defines, is what `only` is checked against.
+        let target = match la.target {
+            None => None,
+            Some(i) => {
+                let Some(Value::Text(raw)) = args.get(i) else { return internal("a @target that is not Text") };
+                let Some(canon) = la.canonical.clone() else { return internal("a @target without `canonical`") };
+                match self.call(&canon, vec![Value::Text(raw.clone())]) {
+                    Ok(Value::Text(c)) => Some(c),
+                    Ok(_) => return internal("`canonical` returned something that is not Text"),
+                    Err(f) if f.kind.catchable() => {
+                        let why = format!("the target cannot be put in canonical form: {}", f.message);
+                        return self.refuse(path, method, FailKind::Capability, why);
+                    }
+                    Err(f) => return Err(f),
+                }
+            }
+        };
+        let amount = match la.amount {
+            None => None,
+            Some(i) => match args.get(i) {
+                Some(Value::Money(m)) => Some(*m),
+                _ => return internal("an @amount that is not Money"),
+            },
+        };
+        let amount_text = amount.map(|m| m.to_string());
+        self.emit(
+            "action_requested",
+            json!({ "capability": path, "method": method, "amount": amount_text, "target": target }),
+        );
+        if let Err(why) = self.broker.authorize(h, amount, target.as_deref()) {
+            return self.refuse(path, method, FailKind::Capability, why);
+        }
+        self.broker.count_use(h).or_else(internal)?;
+        let root = self.broker.root(h).or_else(internal)?;
+        let mut call_args = args;
+        call_args.extend(self.needs.get(&root).cloned().unwrap_or_default());
+        let (before, effects_before) = (self.performed, self.effects);
+        match self.call(&la.fn_name, call_args) {
+            Ok(Value::Text(id)) => {
+                // A receipt must prove something happened: the action made a request.
+                if self.performed == before {
+                    let why = format!("{path} returned without making any request, so there is nothing to give a receipt for");
+                    self.emit("action_failed", json!({ "capability": path, "method": method, "error": why }));
+                    return fail(FailKind::Action, why);
+                }
+                self.performed += 1;
+                self.effects += 1;
+                self.emit(
+                    "action_performed",
+                    json!({ "capability": path, "method": method, "amount": amount_text, "target": target, "receipt": id }),
+                );
+                self.broker.charge(h, amount).or_else(internal)?;
+                Ok(Value::Receipt(Receipt { id, capability: path.to_string(), method: method.to_string() }))
+            }
+            Ok(_) => internal("a capability action returned something that is not Text"),
+            Err(f) => {
+                // A request that may have changed something was attempted before the failure,
+                // so the money may have been spent: the budget counts it, and a failure can
+                // never be used to spend past a limit.
+                let may_have_spent = self.effects != effects_before;
+                if may_have_spent {
+                    self.effects += 1;
+                }
+                self.emit(
+                    "action_failed",
+                    json!({ "capability": path, "method": method, "error": f.message, "may_have_spent": may_have_spent }),
+                );
+                if may_have_spent {
+                    self.broker.charge(h, amount).or_else(internal)?;
+                }
+                Err(f)
             }
         }
     }
@@ -1239,7 +1477,7 @@ impl<'p> Interp<'p> {
                 http::Outcome::Response { status, body, complete } => Answer::Done(Ok(
                     json!({ "status": status, "body": scrub_text(&it.secrets, &body), "complete": complete }),
                 )),
-                http::Outcome::NotSent(e) => Answer::Done(Err(format!("not sent: {e}"))),
+                http::Outcome::NotSent(e) => Answer::Done(Err(format!("{NOT_SENT}{e}"))),
                 // Safe to report as a failure: repeating it cannot do anything twice.
                 http::Outcome::Unknown(e) if retryable => Answer::Done(Err(format!("no answer: {e}"))),
                 http::Outcome::Unknown(e) => Answer::Unknown(e),
@@ -1252,6 +1490,10 @@ impl<'p> Interp<'p> {
                 else {
                     return fail(FailKind::Journal, format!("malformed HTTP result in the journal: {v}"));
                 };
+                self.performed += 1;
+                if method != "get" {
+                    self.effects += 1;
+                }
                 self.emit(
                     "action_performed",
                     json!({ "capability": path, "method": method, "target": url, "status": status, "replayed": replayed }),
@@ -1266,6 +1508,10 @@ impl<'p> Interp<'p> {
                 })
             }
             Err(msg) => {
+                // Unless it was certainly never sent, a request may have been acted on.
+                if method != "get" && !msg.starts_with(NOT_SENT) {
+                    self.effects += 1;
+                }
                 self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
                 fail(FailKind::Action, msg)
             }
@@ -1308,8 +1554,13 @@ impl<'p> Interp<'p> {
             }
             other => return internal(format!("fs has no method '{other}'")),
         };
+        if method == "write" {
+            // A failed write leaves the old file or the new one; count it either way.
+            self.effects += 1;
+        }
         match answer {
             Ok(v) => {
+                self.performed += 1;
                 self.emit("action_performed", json!({ "capability": path, "method": method, "target": file, "replayed": replayed }));
                 match (method, v["text"].as_str(), v["receipt"].as_str()) {
                     ("read", Some(t), _) => Ok(Value::Text(t.to_string())),
@@ -1593,6 +1844,55 @@ fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
                 shown: template.replace("{secret}", &key.shown.replace("{secret}", &placeholder)),
             }))
         }
+        (Builtin::Replace, [Value::Text(t), Value::Text(from), Value::Text(to)]) => {
+            if from.is_empty() {
+                return fail(FailKind::Value, "`replace` needs something to replace");
+            }
+            // The result can only grow when `to` is longer: bound it before building it.
+            let worst = (t.len() / from.len()).saturating_mul(to.len().saturating_sub(from.len())).saturating_add(t.len());
+            if worst > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("text would be longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            Ok(Value::Text(t.replace(from.as_str(), to)))
+        }
+        // Lowercasing can lengthen a text (some letters become two), so it is checked.
+        (Builtin::Lower, [Value::Text(t)]) => {
+            let lower = t.to_lowercase();
+            if lower.len() > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("lower would give a text longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            Ok(Value::Text(lower))
+        }
+        (Builtin::UrlSegment, [Value::Text(t)]) => {
+            if t.is_empty() || t == "." || t == ".." {
+                return fail(FailKind::Value, format!("{t:?} cannot be a URL path segment"));
+            }
+            let seg = form_escape(t);
+            if seg.len() > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("url_segment would give a text longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            Ok(Value::Text(seg))
+        }
+        (Builtin::Trim, [Value::Text(t)]) => Ok(Value::Text(t.trim().to_string())),
+        (Builtin::Form, [Value::Record { fields, .. }]) => {
+            let mut parts = Vec::with_capacity(fields.len());
+            for (k, v) in fields {
+                let text = match v {
+                    Value::Text(t) => t.clone(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    _ => return internal("`form` field that is not Text, Int or Bool"),
+                };
+                parts.push(format!("{}={}", form_escape(k), form_escape(&text)));
+            }
+            let out = parts.join("&");
+            if out.len() > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("form would be longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            Ok(Value::Text(out))
+        }
+        (Builtin::MinorUnits, [Value::Money(m)]) => Ok(Value::Int(m.minor)),
+        (Builtin::Currency, [Value::Money(m)]) => Ok(Value::Text(m.currency.code.to_string())),
         (Builtin::Json, [v]) => {
             let text = to_json(v, true).map_err(|e| Failure { kind: FailKind::Internal, message: e })?.to_string();
             if text.len() > MAX_TEXT_BYTES {
@@ -1602,6 +1902,20 @@ fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         }
         _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
     }
+}
+
+/// Percent-encodes for application/x-www-form-urlencoded: only unreserved characters
+/// (letters, digits, `-._~`) stay as they are; every other byte becomes `%XX`.
+fn form_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, Failure> {

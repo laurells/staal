@@ -63,6 +63,18 @@ struct Sig {
     ret_trusted: bool,
 }
 
+/// While checking a capability action's body: the `@target` and `@amount` parameters
+/// must reach a request made through one of its needed capabilities, or the program's
+/// limits would be checked against a value that is never used.
+struct ActionFlow {
+    needs: HashSet<String>,
+    target: Option<String>,
+    amount: Option<String>,
+    request: bool,
+    target_used: bool,
+    amount_used: bool,
+}
+
 struct Ctx<'a> {
     known: HashSet<String>,
     /// Declared types and their fields, in declaration order.
@@ -79,6 +91,11 @@ struct Ctx<'a> {
     params: HashSet<String>,
     /// The maximum iteration count of each `for` loop, by position, for the cost analysis.
     for_bounds: HashMap<Pos, u64>,
+    /// Actions of library capabilities, by the path programs use (`termii.sms.send`):
+    /// the types of the parameters a program passes.
+    lib_actions: HashMap<String, Vec<Ty>>,
+    /// The body of a capability action being checked: what must reach a request.
+    flow: Option<ActionFlow>,
     /// Functions that may fail: an action, or a call to a failing function, not under `try`.
     fail_fns: HashSet<String>,
     /// Functions that may never finish: `loop` or recursion, directly or through any call.
@@ -235,6 +252,8 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
         diverge_fns: HashSet::new(),
         params: HashSet::new(),
         for_bounds: HashMap::new(),
+        lib_actions: HashMap::new(),
+        flow: None,
     };
     (ctx.fail_fns, ctx.diverge_fns) = partial_fns(prog);
     // Built-in result of `try`.
@@ -308,8 +327,9 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
             check_ty_known(&mut ctx, fty, t.pos);
         }
     }
+    check_caps(&mut ctx, prog);
     for f in &prog.fns {
-        check_fn(&mut ctx, f);
+        check_fn(&mut ctx, f, prog);
     }
     (ctx.diags, ctx.for_bounds)
 }
@@ -373,7 +393,10 @@ fn expr_can_fail_itself(e: &Expr) -> bool {
             | Expr::Neg(..)
             | Expr::Index { .. }
             | Expr::Parse { .. }
-            | Expr::Builtin { f: Builtin::Json | Builtin::Header | Builtin::FillSecret, .. }
+            | Expr::Builtin {
+                f: Builtin::Json | Builtin::Header | Builtin::FillSecret | Builtin::Replace | Builtin::Form | Builtin::Lower | Builtin::UrlSegment,
+                ..
+            }
     )
 }
 
@@ -463,6 +486,9 @@ fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
         for s in body {
             if let Stmt::Loop { .. } = s {
                 i.diverges = true; // `loop` may never end
+            }
+            if let Stmt::Fail(..) = s {
+                i.fails = true;
             }
             for e in s.exprs() {
                 scan_expr(e, false, i);
@@ -565,7 +591,7 @@ fn collect_partial(ctx: &Ctx, e: &Expr, env: &Env, tried: bool, out: &mut Vec<Sr
 /// `loop`, or a partial operation?
 fn may_stop(ctx: &Ctx, body: &[Stmt]) -> bool {
     body.iter().any(|s| {
-        matches!(s, Stmt::Return(..) | Stmt::Break(_) | Stmt::Loop { .. })
+        matches!(s, Stmt::Return(..) | Stmt::Break(_) | Stmt::Loop { .. } | Stmt::Fail(..))
             || s.exprs().into_iter().any(|e| expr_has_partial(ctx, e, false))
             || s.blocks().into_iter().any(|b| may_stop(ctx, b))
     })
@@ -732,7 +758,120 @@ fn narrow_money(name: &str, from: &Option<Limit>, to: &Option<Limit>, path: &[St
     }
 }
 
-fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
+/// The rules for capabilities a library declares (RUNTIME.md section 13).
+fn check_caps(ctx: &mut Ctx, prog: &Program) {
+    let mut seen_paths = HashSet::new();
+    for cap in &prog.caps {
+        let p = cap.path.join(".");
+        if matches!(cap.path.first().map(String::as_str), Some("net") | Some("fs")) {
+            ctx.err("E101", cap.pos, format!("capability {p}: `net` and `fs` belong to the runtime"));
+        }
+        if !seen_paths.insert(p.clone()) {
+            ctx.err("E101", cap.pos, format!("capability {p} is declared twice"));
+        }
+        for (n, t, pos) in &cap.needs {
+            check_ty_known(ctx, t, *pos);
+            let ok = match t {
+                Ty::Cap { path, .. } => runtime_cap(path).is_some(),
+                Ty::Named(x) => x == "Secret" || x == "Text",
+                _ => false,
+            };
+            if !ok {
+                ctx.err(
+                    "E101",
+                    *pos,
+                    format!("`needs {n}`: a capability needs runtime capabilities (net.http.*, fs.*), Secrets or Text settings"),
+                );
+            }
+        }
+        let fn_of = |name: &str| prog.fns.iter().find(|f| f.name == name);
+        if cap.actions.iter().any(|a| a.target.is_some()) && cap.canonical.is_none() {
+            ctx.err(
+                "E101",
+                cap.pos,
+                format!("capability {p} has a @target, so it must give `canonical(t: Text) -> Text` to put targets in one form"),
+            );
+        }
+        if let Some(f) = cap.canonical.as_deref().and_then(fn_of) {
+            let one_text = f.params.len() == 1 && f.params[0].ty == named("Text") && f.ret == Some(named("Text"));
+            if !one_text {
+                ctx.err("E101", f.pos, format!("capability {p}: `canonical` takes one Text and returns Text"));
+            }
+            if ctx.model_fns.contains(&f.name) || ctx.diverge_fns.contains(&f.name) {
+                ctx.err("E101", f.pos, format!("capability {p}: `canonical` must be pure: no model calls, `loop` or recursion"));
+            }
+        }
+        let mut names = HashSet::new();
+        for a in &cap.actions {
+            if !names.insert(a.name.as_str()) {
+                ctx.err("E101", a.pos, format!("capability {p} declares action '{}' twice", a.name));
+            }
+            let Some(f) = fn_of(&a.fn_name) else { continue };
+            if f.ret != Some(named("Text")) {
+                ctx.err(
+                    "E101",
+                    a.pos,
+                    format!("action {}: an action returns the service's id for its receipt, as `-> Text`", cap.action_path(&a.name)),
+                );
+            }
+            for (i, prm) in f.params[..a.declared].iter().enumerate() {
+                let bad = matches!(prm.ty, Ty::Cap { .. }) || secret_inside(ctx, &prm.ty, &mut HashSet::new()).is_some();
+                if bad {
+                    ctx.err(
+                        "E101",
+                        a.pos,
+                        format!(
+                            "action {}: parameter '{}' must be data; capabilities and secrets come through `needs`",
+                            cap.action_path(&a.name),
+                            prm.name
+                        ),
+                    );
+                }
+                if a.target == Some(i) && prm.ty != named("Text") {
+                    ctx.err("E101", a.pos, format!("@target '{}' must be Text", prm.name));
+                }
+                if a.amount == Some(i) && prm.ty != named("Money") {
+                    ctx.err("E101", a.pos, format!("@amount '{}' must be Money", prm.name));
+                }
+            }
+            let counts = [
+                ("@target", f.params.iter().filter(|q| q.target).count()),
+                ("@amount", f.params.iter().filter(|q| q.amount).count()),
+            ];
+            for (mark, count) in counts {
+                if count > 1 {
+                    ctx.err("E101", a.pos, format!("action {} marks {count} parameters {mark}; at most one", cap.action_path(&a.name)));
+                }
+            }
+            if ctx.model_fns.contains(&f.name) {
+                ctx.err(
+                    "E101",
+                    a.pos,
+                    format!("action {} makes model calls; a capability action only talks to its service", cap.action_path(&a.name)),
+                );
+            }
+            if ctx.diverge_fns.contains(&f.name) {
+                ctx.err("E101", a.pos, format!("action {} may never finish (`loop` or recursion)", cap.action_path(&a.name)));
+            }
+            let declared: Vec<Ty> = f.params[..a.declared].iter().map(|q| q.ty.clone()).collect();
+            ctx.lib_actions.insert(cap.action_path(&a.name), declared);
+        }
+    }
+}
+
+fn check_fn(ctx: &mut Ctx, f: &FnDecl, prog: &Program) {
+    let action = prog.caps.iter().find_map(|c| c.actions.iter().find(|a| a.fn_name == f.name).map(|a| (c, a)));
+    if action.is_none() && f.params.iter().any(|p| p.target || p.amount) {
+        ctx.err("E101", f.pos, format!("'{}': @target and @amount mark parameters of capability actions only", f.name));
+    }
+    ctx.flow = action.map(|(c, a)| ActionFlow {
+        needs: c.needs.iter().filter(|(_, t, _)| matches!(t, Ty::Cap { .. })).map(|(n, _, _)| n.clone()).collect(),
+        target: a.target.map(|i| f.params[i].name.clone()),
+        amount: a.amount.map(|i| f.params[i].name.clone()),
+        request: false,
+        target_used: false,
+        amount_used: false,
+    });
     let mut env = Env::new();
     ctx.fn_blind.clear();
     ctx.pc.clear();
@@ -763,6 +902,32 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
     check_block(ctx, f, &ret, &f.body, env, false);
     if ret != named("Unit") && !always_returns(&f.body) {
         ctx.err("E105", f.pos, format!("'{}' can finish without returning a value of type {ret}", f.name));
+    }
+    if let Some(fl) = ctx.flow.take() {
+        if !fl.request {
+            ctx.err(
+                "E101",
+                f.pos,
+                format!("{} makes no request through what it needs, so it could not prove anything happened", f.name),
+            );
+        }
+        if let Some(t) = fl.target.filter(|_| !fl.target_used) {
+            ctx.err(
+                "E101",
+                f.pos,
+                format!("in {}: @target '{t}' never reaches a request, so the program's `only` would check a value that is not used", f.name),
+            );
+        }
+        if let Some(t) = fl.amount.filter(|_| !fl.amount_used) {
+            ctx.err(
+                "E101",
+                f.pos,
+                format!(
+                    "in {}: @amount '{t}' never reaches a request, so the program's money limits would check a value that is not used",
+                    f.name
+                ),
+            );
+        }
     }
 }
 
@@ -816,7 +981,7 @@ fn has_break(body: &[Stmt]) -> bool {
 /// first. When unsure, says it can: assuming more paths only adds taint.
 fn never_falls_through(body: &[Stmt]) -> bool {
     body.iter().any(|s| match s {
-        Stmt::Return(..) | Stmt::Break(_) => true,
+        Stmt::Return(..) | Stmt::Break(_) | Stmt::Fail(..) => true,
         Stmt::If { then, els, .. } => !els.is_empty() && never_falls_through(then) && never_falls_through(els),
         Stmt::Loop { body, .. } => !has_break(body),
         _ => false,
@@ -916,7 +1081,8 @@ fn same_vars(a: &Env, b: &Env) -> bool {
 /// Does every path through this block end in `return` (or in a `loop` that is never left)?
 fn always_returns(body: &[Stmt]) -> bool {
     body.iter().any(|s| match s {
-        Stmt::Return(..) => true,
+        // `fail` never falls off the end either: it stops the function.
+        Stmt::Return(..) | Stmt::Fail(..) => true,
         Stmt::If { then, els, .. } => always_returns(then) && always_returns(els),
         Stmt::Loop { body, .. } => !has_break(body),
         _ => false,
@@ -980,7 +1146,11 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
         // execution gets past it can depend on that operation's arguments. That holds for
         // model calls later in this statement and everything after it.
         let stmt_expr = match stmt {
-            Stmt::Let { value: e, .. } | Stmt::Set { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => Some(e),
+            Stmt::Let { value: e, .. }
+            | Stmt::Set { value: e, .. }
+            | Stmt::Expr(e)
+            | Stmt::Return(Some(e), _)
+            | Stmt::Fail(e, _) => Some(e),
             Stmt::If { cond, .. } => Some(cond),
             _ => None,
         };
@@ -1220,6 +1390,13 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 if !t.is_empty() {
                     add_srcs(&mut exit_taint, t.clone());
                     add_srcs(&mut ctx.pc, t);
+                }
+            }
+            Stmt::Fail(msg, pos) => {
+                if let Some((t, _)) = type_of(ctx, msg, &env)
+                    && t != named("Text")
+                {
+                    ctx.err("E101", *pos, format!("`fail` needs a Text message, found {t}"));
                 }
             }
             Stmt::Break(pos) => {
@@ -1609,6 +1786,36 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     }
                     return Some((named("Header"), trusted));
                 }
+                Builtin::Replace | Builtin::Lower | Builtin::Trim | Builtin::UrlSegment => {
+                    if tys.iter().any(|(t, _)| *t != text) {
+                        let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();
+                        ctx.err("E101", *pos, format!("`{}` needs Text, found ({})", f.name(), found.join(", ")));
+                        return None;
+                    }
+                    return Some((text, trusted));
+                }
+                Builtin::MinorUnits | Builtin::Currency => {
+                    if tys[0].0 != named("Money") {
+                        ctx.err("E101", *pos, format!("`{}` needs Money, found {}", f.name(), tys[0].0));
+                        return None;
+                    }
+                    let result = if *f == Builtin::MinorUnits { named("Int") } else { text };
+                    return Some((result, trusted));
+                }
+                Builtin::Form => {
+                    let fields = match &tys[0].0 {
+                        Ty::Named(n) if n != "Outcome" && n != "Response" => ctx.fields.get(n).cloned(),
+                        _ => None,
+                    };
+                    let simple = |t: &Ty| *t == text || *t == named("Int") || *t == named("Bool");
+                    match fields {
+                        Some(fs) if fs.iter().all(|(_, t)| simple(t)) => return Some((text, trusted)),
+                        _ => {
+                            ctx.err("E101", *pos, format!("`form` needs a record of Text, Int and Bool fields, found {}", tys[0].0));
+                            return None;
+                        }
+                    }
+                }
                 Builtin::FillSecret => {
                     if tys[0].0 != text || tys[1].0 != named("Secret") {
                         ctx.err(
@@ -1645,7 +1852,16 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     _ => false,
                 },
                 Builtin::StartsWith | Builtin::EndsWith => tys[0].0 == text && tys[1].0 == text,
-                Builtin::Header | Builtin::Json | Builtin::FillSecret => true,
+                Builtin::Header
+                | Builtin::Json
+                | Builtin::FillSecret
+                | Builtin::Replace
+                | Builtin::Lower
+                | Builtin::Trim
+                | Builtin::Form
+                | Builtin::MinorUnits
+                | Builtin::Currency
+                | Builtin::UrlSegment => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();
@@ -1653,7 +1869,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     Builtin::Len => "Text or a list",
                     Builtin::Contains => "(Text, Text) or (a list, a value of its element type)",
                     Builtin::StartsWith | Builtin::EndsWith => "(Text, Text)",
-                    Builtin::Header | Builtin::Json | Builtin::FillSecret => "",
+                    _ => "",
                 };
                 ctx.err("E101", *pos, format!("`{}` needs {want}, found ({})", f.name(), found.join(", ")));
                 return None;
@@ -1911,6 +2127,19 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             Some((ret, ret_trusted))
         }
         Expr::Action { receiver, method, args, pos } => {
+            // Inside a capability action: note requests, and whether the @target and
+            // @amount parameters reach one.
+            if let Some(fl) = ctx.flow.as_mut()
+                && fl.needs.contains(receiver)
+            {
+                fl.request = true;
+                for a in args {
+                    let r = reveals(a, env);
+                    let uses = |name: &Option<String>| name.as_ref().is_some_and(|n| r.iter().any(|s| s.path.first() == Some(n)));
+                    fl.target_used |= uses(&fl.target);
+                    fl.amount_used |= uses(&fl.amount);
+                }
+            }
             let cap_path = match env.get(receiver).map(|b| &b.ty) {
                 Some(Ty::Cap { path, .. }) => Some(path.clone()),
                 _ => None,
@@ -1936,6 +2165,22 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                         format!("unvalidated Proposed<{inner}> passed to action '{receiver}.{method}'; use `validate` first"),
                     );
                 }
+            }
+            // An action of a library's capability: typed by its declaration.
+            if let Some(params) = cap_path.as_ref().and_then(|p| ctx.lib_actions.get(&p.join("."))).cloned() {
+                let p = cap_path.as_ref().map(|p| p.join(".")).unwrap_or_default();
+                if params.len() != args.len() {
+                    ctx.err("E101", *pos, format!("'{p}' takes {} argument(s) but {} were given", params.len(), args.len()));
+                } else {
+                    for ((a, t), want) in args.iter().zip(&arg_tys).zip(&params) {
+                        if let Some((t, _)) = t
+                            && let Err((code, msg)) = assignable(t, want)
+                        {
+                            ctx.err(code, a.pos(), format!("in action '{p}': {msg}"));
+                        }
+                    }
+                }
+                return Some((named("Receipt"), false));
             }
             let kind = cap_path.as_deref().and_then(runtime_cap);
             let Some(kind) = kind else {

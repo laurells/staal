@@ -42,6 +42,8 @@ pub struct SourceFile {
 pub struct Loaded {
     /// Every file, indexed by `Pos::file` (0 is the entry file).
     pub files: Vec<SourceFile>,
+    /// The module path of each file (empty for the entry file).
+    pub paths: Vec<Vec<String>>,
     /// The resolved program, or the errors that prevent resolving it.
     pub program: Result<Program, Vec<Diagnostic>>,
 }
@@ -54,9 +56,12 @@ impl Loaded {
         if self.files.len() == 1 {
             return self.files[0].text.clone();
         }
-        let mut s = String::from("intent-modules-v1\n");
-        for f in &self.files {
-            s.push_str(&format!("{}\n{}\n{}\n", f.name, f.text.len(), f.text));
+        // Module paths, not file names: the same program resumed from another folder,
+        // or after the folder was moved, is still the same program.
+        let mut s = String::from("intent-modules-v2\n");
+        for (f, path) in self.files.iter().zip(&self.paths) {
+            let name = path.join(".");
+            s.push_str(&format!("{}\n{name}\n{}\n{}\n", name.len(), f.text.len(), f.text));
         }
         s
     }
@@ -92,9 +97,10 @@ fn parse(text: &str, file: u32) -> Result<Program, Diagnostic> {
 /// `fetch` returns the file for a module path, or why it cannot.
 pub fn load(entry: SourceFile, mut fetch: impl FnMut(&[String]) -> Result<SourceFile, String>) -> Loaded {
     let mut files = vec![entry];
+    let mut paths: Vec<Vec<String>> = vec![Vec::new()];
     let prog = match parse(&files[0].text, 0) {
         Ok(p) => p,
-        Err(d) => return Loaded { files, program: Err(vec![d]) },
+        Err(d) => return Loaded { files, paths, program: Err(vec![d]) },
     };
     let mut modules = vec![Module { path: Vec::new(), prog }];
     let mut index: HashMap<Vec<String>, usize> = HashMap::new();
@@ -127,6 +133,7 @@ pub fn load(entry: SourceFile, mut fetch: impl FnMut(&[String]) -> Result<Source
         };
         let id = files.len() as u32;
         files.push(file);
+        paths.push(imp.path.clone());
         match parse(&files[id as usize].text, id) {
             Ok(prog) => {
                 index.insert(imp.path.clone(), modules.len());
@@ -134,14 +141,14 @@ pub fn load(entry: SourceFile, mut fetch: impl FnMut(&[String]) -> Result<Source
                 stack.push((modules.len() - 1, 0));
             }
             // A file that does not parse cannot be resolved; nothing more is checked.
-            Err(d) => return Loaded { files, program: Err(vec![d]) },
+            Err(d) => return Loaded { files, paths, program: Err(vec![d]) },
         }
     }
     if !diags.is_empty() {
-        return Loaded { files, program: Err(diags) };
+        return Loaded { files, paths, program: Err(diags) };
     }
     let program = resolve(modules, &index);
-    Loaded { files, program }
+    Loaded { files, paths, program }
 }
 
 /// How a module path is shown: the entry file is "the program".
@@ -275,7 +282,11 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             }
         }
         for f in &mut m.prog.fns {
-            f.name = format!("{}{}", scope.prefix, f.name);
+            // Capability actions keep their names (`action termii.sms.send`): capability
+            // paths are global, and the names cannot be written in a program anyway.
+            if !f.name.contains(' ') {
+                f.name = format!("{}{}", scope.prefix, f.name);
+            }
             for p in &mut f.params {
                 r.binder(&p.name, f.pos);
                 r.ty(&mut p.ty, f.pos);
@@ -285,6 +296,11 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             }
             r.block(&mut f.body);
         }
+        for c in &mut m.prog.caps {
+            for (_, t, pos) in &mut c.needs {
+                r.ty(t, *pos);
+            }
+        }
     }
     if !diags.is_empty() {
         return Err(diags);
@@ -292,6 +308,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
     for m in modules {
         out.types.extend(m.prog.types);
         out.fns.extend(m.prog.fns);
+        out.caps.extend(m.prog.caps);
     }
     Ok(out)
 }
@@ -360,7 +377,9 @@ impl Resolver<'_, '_, '_> {
                     }
                     self.expr(value);
                 }
-                Stmt::Set { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value), _) => self.expr(value),
+                Stmt::Set { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value), _) | Stmt::Fail(value, _) => {
+                    self.expr(value)
+                }
                 Stmt::Return(None, _) | Stmt::Break(_) => {}
                 Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => self.block(body),
                 Stmt::For { var, list, body, pos } => {

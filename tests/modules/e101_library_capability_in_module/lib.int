@@ -1,0 +1,6 @@
+capability lib.mail {
+    needs base: Text
+    action send(to: Text) -> Text {
+        return base + to
+    }
+}

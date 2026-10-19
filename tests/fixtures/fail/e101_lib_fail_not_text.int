@@ -1,0 +1,12 @@
+// expect: E101
+// message: `fail` needs a Text message, found Int
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        if r.status != 200 {
+            fail(r.status)
+        }
+        return r.body
+    }
+}

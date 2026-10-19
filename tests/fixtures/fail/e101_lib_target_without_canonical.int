@@ -1,0 +1,9 @@
+// expect: E101
+// message: capability a.b has a @target, so it must give `canonical(t: Text) -> Text` to put targets in one form
+capability a.b {
+    needs http: cap net.http.post
+    action go(to: Text @target) -> Text {
+        let r = http.post("https://x.example/", to)
+        return r.body
+    }
+}

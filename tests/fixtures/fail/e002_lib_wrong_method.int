@@ -1,0 +1,15 @@
+// expect: E002
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let r = http.post("https://x.example/", t)
+        return r.body
+    }
+    action stop(t: Text) -> Text {
+        let r = http.post("https://x.example/stop", t)
+        return r.body
+    }
+}
+fn f(c: cap a.b.go) -> Receipt {
+    return c.stop("x")
+}

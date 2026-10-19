@@ -1,0 +1,8 @@
+// expect: E101
+// message: action a.b.go makes no request through what it needs, so it could not prove anything happened
+capability a.b {
+    needs base: Text
+    action go(t: Text) -> Text {
+        return base + t
+    }
+}

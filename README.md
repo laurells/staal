@@ -9,10 +9,11 @@ budgets, `try`, evidence and the crash-safe journal are built and tested.
 Roadmap phase 1 (modules and reassignment) is complete. Phase 2, the general
 `net.http` and `fs` capabilities, is built and tested against local HTTP and
 HTTPS servers and real files; sending through real services (`examples/`) is the
-step left, since it needs an account and network access. Not built yet:
-library-declared capabilities (phase 3), packages (phase 4), and the
-native-code backend and C interface (phase 5). Real model providers are not
-built either; only a scripted one exists.
+step left, since it needs an account and network access. Phase 3, capabilities
+declared by libraries, is built and tested against a local server that answers
+like Termii and Stripe; the same real-service step applies. Not built yet:
+packages (phase 4), and the native-code backend and C interface (phase 5). Real
+model providers are not built either; only a scripted one exists.
 
 ## What it enforces today
 
@@ -38,9 +39,10 @@ built either; only a scripted one exists.
 | E901 | Syntax error |
 
 All eight safety checks from the spec (E001-E008) are implemented. Phase 1's
-gate is met: every one is rejected by tests. 29 valid programs compile,
-including the two benchmark workflows (`workflow_*.int`), and 244 invalid ones
-are each rejected with the expected code.
+gate is met: every one is rejected by tests. 30 valid programs compile,
+including the two benchmark workflows (`workflow_*.int`), and 270 invalid ones
+are each rejected with the expected code (and, where one code covers many
+rules, the expected message).
 
 Nothing in the compiler or runtime is specific to payments, email or any other
 domain. Capability paths such as `payments.refund`, `building.lock.open` or
@@ -142,9 +144,12 @@ in which each name is qualified by its module (`send` in `sms/termii.int` is
 promises, budgets, trust, evidence and partial operations therefore hold
 across modules with no separate cross-module analysis. This is tested by
 splitting every test program in two (`tests/split_test.rs`): types and called
-functions move to a module, and every one of 135 splittable fixtures and 132
-runtime cases must give identical results. Mutations that hide one module's
+functions move to a module (capability declarations too), and every one of 160
+splittable fixtures and 132 runtime cases must give identical results. Mutations that hide one module's
 model calls, failures or costs from another are each caught.
+
+The program's hash, which a journal records, covers each module's path and
+text but not file names, so a run can be resumed from another folder.
 
 What is not built yet: packages from outside the program's folder (phase 4).
 
@@ -553,6 +558,77 @@ are not TLS) stays in doubt. An organisation's own authority can be added with
 What these tests do not cover: real services. `examples/` holds Termii SMS and
 Resend email programs with instructions to run them with your own keys.
 
+## Capabilities from libraries
+
+    // termii.int: a library
+    capability termii.sms {
+        needs http: cap net.http.post
+        needs key: Secret
+        needs base: Text
+        needs sender: Text
+
+        canonical(phone: Text) -> Text {
+            return number(phone)
+        }
+
+        action send(to: Text @target, text: Text) -> Text {
+            ...                                   // a request through `http`
+            return reply.message_id
+        }
+    }
+
+    // remind.int: a program
+    import termii
+    fn remind(patients: List<Patient, 50>, texts: cap termii.sms.send(uses: 50)) -> Int { ... }
+
+A library declares a capability; a program asks for it and calls it like any
+other, getting a `Receipt`. The program never holds the key, the URL or the HTTP
+capability: the operator grants those to the library, under `needs` in the run
+config. The full rules are in `docs/RUNTIME.md` section 13. In short:
+
+- **The program's limits apply to the library's action.** `only` is checked
+  against the target in the form the library's `canonical` gives (so `+234 801
+  234 5678` matches `"2348012345678"`), and `max` and `each` against the
+  `@amount`, before any of the library's code runs. `uses` counts actions.
+- **The operator's limits apply to the library's requests.** Each need that is a
+  capability is granted with its own `only` and `uses`, and narrowed further by
+  what the library declared.
+- **The compiler checks the library.** An action must make a request through its
+  needs, the `@target` and `@amount` must reach a request, and actions cannot call
+  models or run without end. Secrets stay secrets inside libraries too.
+- **A receipt stands for a request.** An action that returns without having made
+  one fails. An action that fails after a request that may have spent money is
+  charged anyway, so failures cannot be used to spend past `max`.
+- **Crashes** replay the library's requests from the journal, in order; a request
+  in doubt stops the run as usual.
+
+`examples/capabilities/` holds a Termii SMS library and a Stripe refunds library
+(which checks the payment's currency, sends minor units form-encoded, and keeps
+the payment id one URL segment with `url_segment`), with a program for each.
+
+How this is tested: 13 runtime tests run the two libraries against a local server
+and check what it received: the canonical number and the key in the body (never in
+the log), refusal by `only` before any request, `uses`, `each` and `max` on the
+library's amount, the operator's `only` on the library's requests, a library's
+declared limits narrowing the grant, a receipt refused when no request was made,
+a failed action charged after a POST but not after a GET, data kept to one URL
+segment, and config errors in `needs`. `tests/library_crash_test.rs` kills a run
+that refunds through Stripe and texts through Termii at all 11 points, resolves the
+SMS from what the server received when it is in doubt, and checks the refund took
+effect once (same Idempotency-Key on every attempt) and the SMS reached the server
+once. Sixteen mutations are each caught: skipping `canonical`, skipping the
+broker's check, not counting a use, not narrowing a need, giving a receipt without
+a request, not charging on success, not charging after a failed POST, charging
+after a failed GET, accepting `needs` on a plain capability, starting a run inside
+a capability, turning off the compiler's target, amount and request checks,
+hashing file names instead of module paths, and letting `url_segment` pass a `/`
+or `..`.
+
+What the runtime cannot check is that a library does what its name says: a
+library is code the operator trusts with keys, as in any language. A `canonical`
+that maps two targets to one form would weaken `only`. Read a library before
+granting it keys; packages (phase 4) will pin libraries by hash.
+
 ## Requirements
 
 Rust 1.89 or newer (for `File::try_lock`), installed from https://rustup.rs.
@@ -599,6 +675,7 @@ To add a rule, write the failing program first, then make the checker reject it.
     src/targets.rs  canonical URLs and paths for `only`
     src/interp/http.rs  the HTTP client, and what is known about each request
     src/interp/fsx.rs   safe file access: no links followed, atomic writes
+    examples/capabilities/  Termii and Stripe libraries, and programs using them
     src/interp/     reference runtime: interpreter, money, broker, adapters,
                     model providers, journal
     src/main.rs     command-line interface

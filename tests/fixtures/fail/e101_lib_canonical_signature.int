@@ -1,0 +1,12 @@
+// expect: E101
+// message: capability a.b: `canonical` takes one Text and returns Text
+capability a.b {
+    needs http: cap net.http.post
+    canonical(x: Int) -> Text {
+        return "a"
+    }
+    action go(to: Text @target) -> Text {
+        let r = http.post("https://x.example/", to)
+        return r.body
+    }
+}

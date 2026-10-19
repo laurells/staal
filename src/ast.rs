@@ -94,6 +94,10 @@ pub struct Param {
     pub ty: Ty,
     /// `name: T @trusted` — callers may only pass trusted values here.
     pub trusted: bool,
+    /// `@target` / `@amount`, on a parameter of a capability action only: the value the
+    /// program's `only` and money limits are checked against (RUNTIME.md section 13).
+    pub target: bool,
+    pub amount: bool,
     /// `@blind` (whole value, stored as one empty path) or `@blind(customer.email, ...)`:
     /// paths inside this parameter that must never reach a model, here or in anything
     /// this function passes them to.
@@ -140,6 +144,8 @@ pub enum Stmt {
     For { var: String, list: Expr, body: Vec<Stmt>, pos: Pos },
     /// `set name = value` — give a variable declared with `let` a new value
     Set { name: String, value: Expr, pos: Pos },
+    /// `fail(message)` — stop with a failure of kind `action` that callers may catch
+    Fail(Expr, Pos),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -181,6 +187,20 @@ pub enum Builtin {
     /// `fill_secret(template, key)`: the template with `{secret}` replaced by the key,
     /// as a new Secret (for a request body or header that embeds the key).
     FillSecret,
+    /// `replace(text, from, to)`, `lower(text)`, `trim(text)`
+    Replace,
+    Lower,
+    Trim,
+    /// `form(record)`: a record of Text, Int and Bool fields, form-encoded
+    /// (application/x-www-form-urlencoded), for APIs that take forms.
+    Form,
+    /// `minor_units(money)`: the amount in minor units (cents); `currency(money)`: its code.
+    MinorUnits,
+    Currency,
+    /// `url_segment(text)`: the text percent-encoded to be one path segment of a URL,
+    /// so data placed in a URL can never add a segment, a query or a fragment. Fails for
+    /// "", "." and "..", which a URL would treat as no segment or as moving up a level.
+    UrlSegment,
 }
 
 impl Builtin {
@@ -193,6 +213,13 @@ impl Builtin {
             "header" => Some(Builtin::Header),
             "json" => Some(Builtin::Json),
             "fill_secret" => Some(Builtin::FillSecret),
+            "replace" => Some(Builtin::Replace),
+            "lower" => Some(Builtin::Lower),
+            "trim" => Some(Builtin::Trim),
+            "form" => Some(Builtin::Form),
+            "minor_units" => Some(Builtin::MinorUnits),
+            "currency" => Some(Builtin::Currency),
+            "url_segment" => Some(Builtin::UrlSegment),
             _ => None,
         }
     }
@@ -206,14 +233,29 @@ impl Builtin {
             Builtin::Header => "header",
             Builtin::Json => "json",
             Builtin::FillSecret => "fill_secret",
+            Builtin::Replace => "replace",
+            Builtin::Lower => "lower",
+            Builtin::Trim => "trim",
+            Builtin::Form => "form",
+            Builtin::MinorUnits => "minor_units",
+            Builtin::Currency => "currency",
+            Builtin::UrlSegment => "url_segment",
         }
     }
 
     /// The number of arguments it takes.
     pub fn arity(self) -> usize {
         match self {
-            Builtin::Len | Builtin::Json => 1,
+            Builtin::Len
+            | Builtin::Json
+            | Builtin::Lower
+            | Builtin::Trim
+            | Builtin::Form
+            | Builtin::MinorUnits
+            | Builtin::Currency
+            | Builtin::UrlSegment => 1,
             Builtin::Contains | Builtin::StartsWith | Builtin::EndsWith | Builtin::Header | Builtin::FillSecret => 2,
+            Builtin::Replace => 3,
         }
     }
 }
@@ -222,7 +264,7 @@ impl Stmt {
     /// The expressions this statement evaluates itself (not those in nested blocks).
     pub fn exprs(&self) -> Vec<&Expr> {
         match self {
-            Stmt::Let { value, .. } | Stmt::Set { value, .. } => vec![value],
+            Stmt::Let { value, .. } | Stmt::Set { value, .. } | Stmt::Fail(value, _) => vec![value],
             Stmt::Expr(e) | Stmt::Return(Some(e), _) => vec![e],
             Stmt::If { cond, .. } => vec![cond],
             Stmt::For { list, .. } => vec![list],
@@ -235,7 +277,9 @@ impl Stmt {
         match self {
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } | Stmt::For { body, .. } => vec![body],
             Stmt::If { then, els, .. } => vec![then, els],
-            Stmt::Let { .. } | Stmt::Set { .. } | Stmt::Expr(_) | Stmt::Return(..) | Stmt::Break(_) => Vec::new(),
+            Stmt::Let { .. } | Stmt::Set { .. } | Stmt::Fail(..) | Stmt::Expr(_) | Stmt::Return(..) | Stmt::Break(_) => {
+                Vec::new()
+            }
         }
     }
 }
@@ -380,6 +424,41 @@ pub struct Import {
     pub pos: Pos,
 }
 
+/// `capability termii.sms { needs ...  canonical(...) { }  action send(...) { } }`:
+/// a capability a library defines (RUNTIME.md section 13). Its actions and its
+/// `canonical` function are stored as functions in `Program::fns`, under names with a
+/// space in them (`action termii.sms.send`, `canonical termii.sms`) that no program
+/// can write, so every analysis covers them and nothing can call them directly.
+#[derive(Debug, Clone)]
+pub struct CapDecl {
+    pub path: Vec<String>,
+    /// What the operator must supply: runtime capabilities, secrets, text settings.
+    pub needs: Vec<(String, Ty, Pos)>,
+    pub actions: Vec<ActionDecl>,
+    /// The function that puts a `@target` into canonical form.
+    pub canonical: Option<String>,
+    pub pos: Pos,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActionDecl {
+    pub name: String,
+    /// The function holding its body; its parameters are the declared ones, then the needs.
+    pub fn_name: String,
+    /// How many parameters the program passes (the rest are the needs).
+    pub declared: usize,
+    pub target: Option<usize>,
+    pub amount: Option<usize>,
+    pub pos: Pos,
+}
+
+impl CapDecl {
+    /// The capability path of one action, as programs write it: `termii.sms.send`.
+    pub fn action_path(&self, action: &str) -> String {
+        format!("{}.{action}", self.path.join("."))
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Program {
     /// The imports of a single parsed file. Empty after modules are resolved into one
@@ -387,4 +466,5 @@ pub struct Program {
     pub imports: Vec<Import>,
     pub types: Vec<TypeDecl>,
     pub fns: Vec<FnDecl>,
+    pub caps: Vec<CapDecl>,
 }

@@ -1,0 +1,14 @@
+// expect: E101
+// message: capability a.b: `canonical` must be pure: no model calls, `loop` or recursion
+capability a.b {
+    needs http: cap net.http.post
+    canonical(x: Text) -> Text {
+        let p = propose(Text, instruct: "Normalise this.", data: [x])
+        let v: Text = validate p
+        return v
+    }
+    action go(to: Text @target) -> Text {
+        let r = http.post("https://x.example/", to)
+        return r.body
+    }
+}

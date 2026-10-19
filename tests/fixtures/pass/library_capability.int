@@ -1,0 +1,42 @@
+// A library capability and a program that uses it: the program holds only
+// `cap clinic.sms.send`, never the HTTP capability, the key or the base URL.
+type Out { to: Text, text: Text, key: Text }
+
+capability clinic.sms {
+    needs http: cap net.http.post(uses: 100)
+    needs key: Secret
+    needs base: Text
+
+    canonical(phone: Text) -> Text {
+        return replace(trim(phone), " ", "")
+    }
+
+    action send(to: Text @target, text: Text) -> Text {
+        let body = fill_secret(json(Out { to: replace(trim(to), " ", ""), text: text, key: "{secret}" }), key)
+        let r = http.post(base + "/send", body, [header("Content-Type", "application/json")])
+        if r.status != 200 {
+            fail("the service answered " + json(r.status))
+        }
+        return r.body
+    }
+
+    action refund(order: Text, amount: Money @amount) -> Text {
+        let r = http.post(base + "/refund", form(Refund { order: order, cents: minor_units(amount), currency: lower(currency(amount)) }))
+        return r.body
+    }
+}
+
+type Refund { order: Text, cents: Int, currency: Text }
+
+fn notify(phone: Text, sms: cap clinic.sms.send(uses: 1)) -> Receipt {
+    return sms.send(phone, "Your results are ready.")
+}
+
+fn give_back(order: Text, r: cap clinic.sms.refund(max: 50 USD)) -> Bool {
+    let a = try r.refund(order, 10.00 USD)
+    if a.ok {
+        return true
+    }
+    let b = try r.refund(order, 5.00 USD)
+    return b.ok
+}

@@ -1,0 +1,20 @@
+{
+  "entry": "refund",
+  "inputs": {
+    "payment": "pi_your_test_payment_intent",
+    "amount": { "amount": "1.00", "currency": "USD" }
+  },
+  "grants": {
+    "refunds": {
+      "cap": "stripe.refunds.create",
+      "max": { "amount": "5.00", "currency": "USD" },
+      "needs": {
+        "get": { "cap": "net.http.get", "only": ["https://api.stripe.com/v1/payment_intents/*"] },
+        "post": { "cap": "net.http.post", "only": ["https://api.stripe.com/v1/refunds"], "idempotency_key": true },
+        "key": { "env": "STRIPE_SECRET_KEY" },
+        "base": "https://api.stripe.com"
+      }
+    }
+  },
+  "model": { "provider": "script", "responses": [] }
+}

@@ -1,0 +1,59 @@
+// A library capability: refunds through Stripe (https://stripe.com).
+//
+// A program asks for `cap stripe.refunds.create(max: 200 USD, only: [...])` and calls
+// `refunds.create(payment_intent_id, 25.00 USD)`. The runtime checks the amount
+// against `max` and `each` and the payment intent against `only` before this code
+// runs, and counts the amount as spent once a request was made.
+//
+// Amounts are sent in the currency's minor unit as ISO 4217 defines it (cents for
+// USD). Stripe's own rules differ from ISO for a few currencies: check Stripe's
+// currency list before refunding in a currency other than the common two-decimal ones.
+
+type Intent { id: Text, currency: Text }
+type Refund { payment_intent: Text, amount: Int }
+type Refunded { id: Text, status: Text }
+
+capability stripe.refunds {
+    needs get: cap net.http.get
+    // Grant it with "idempotency_key": true: Stripe deduplicates by Idempotency-Key, so a
+    // refund interrupted while sending can be resumed without refunding twice.
+    needs post: cap net.http.post
+    needs key: Secret
+    // https://api.stripe.com
+    needs base: Text
+
+    canonical(id: Text) -> Text {
+        return trim(id)
+    }
+
+    action create(payment_intent: Text @target, amount: Money @amount) -> Text {
+        let id = trim(payment_intent)
+        if not starts_with(id, "pi_") {
+            fail("'" + id + "' is not a payment intent id")
+        }
+        let auth = [header("Authorization", fill_secret("Bearer {secret}", key))]
+        // The refund must be in the payment's currency: Stripe would otherwise read the
+        // number of minor units as a refund in a different currency. `url_segment` keeps
+        // the id one segment of the URL, whatever characters it holds.
+        let r = get.get(base + "/v1/payment_intents/" + url_segment(id), auth)
+        if r.status != 200 or not r.complete {
+            fail("Stripe answered " + json(r.status) + " for the payment intent: " + r.body)
+        }
+        let intent: Intent = validate parse(Intent, r.body)
+        if intent.id != id {
+            fail("Stripe returned payment intent " + intent.id + " for " + id)
+        }
+        if intent.currency != lower(currency(amount)) {
+            fail("the payment is in " + intent.currency + ", the refund in " + currency(amount))
+        }
+        let body = form(Refund { payment_intent: id, amount: minor_units(amount) })
+        let p = post.post(base + "/v1/refunds", body,
+                          [header("Authorization", fill_secret("Bearer {secret}", key)),
+                           header("Content-Type", "application/x-www-form-urlencoded")])
+        if p.status != 200 or not p.complete {
+            fail("Stripe answered " + json(p.status) + ": " + p.body)
+        }
+        let refunded: Refunded = validate parse(Refunded, p.body)
+        return refunded.id
+    }
+}

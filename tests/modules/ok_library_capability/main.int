@@ -1,0 +1,8 @@
+// expect: ok
+// A capability declared in a module: its actions use the module's private types and
+// functions, and the program names the capability by its declared path.
+import vendor.sms as vs
+
+fn go(phone: Text, texts: cap vendor.sms.send(uses: 1)) -> Receipt {
+    return texts.send(phone, "hello")
+}

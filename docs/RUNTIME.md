@@ -378,8 +378,12 @@ Resuming re-executes the program from the start. At each external operation:
 Resume requires the **identical** program text and run config: the journal's
 first record holds the SHA-256 of each, and any difference is refused before
 anything runs. For a program with modules, the program hash covers every file
-it loads (each file's name, length and text), so a change to any imported
-module is refused too. A single-file program's hash is the hash of its text.
+it loads (each file's module path, length and text), so a change to any imported
+module is refused too. File names are not part of it: the same program resumed
+from another folder, or after its folder was moved, is the same program. A
+single-file program's hash is the hash of its text. (Journals of multi-file
+programs written before v0.17 recorded file names, and cannot be resumed by
+v0.17.)
 
 ### The crash window, and idempotency
 
@@ -606,3 +610,140 @@ resumed run must reproduce.
 
 Journal files are created readable and writable by their owner only (0600), since
 they hold what the run sent and received.
+
+## 13. Capabilities declared by libraries
+
+A library can declare a capability of its own, built on the runtime's: an SMS
+service, a payment provider, a ticketing system. A program then holds a capability
+for what it wants done (`cap termii.sms.send(only: [...], uses: 10)`), and never the
+HTTP capability, the API key or the URL behind it.
+
+    capability stripe.refunds {
+        needs get: cap net.http.get
+        needs post: cap net.http.post
+        needs key: Secret
+        needs base: Text
+
+        canonical(id: Text) -> Text {
+            return trim(id)
+        }
+
+        action create(payment_intent: Text @target, amount: Money @amount) -> Text {
+            ...                       // requests through `get` and `post`
+            return refunded.id        // the service's id, for the receipt
+        }
+    }
+
+    fn refund(p: Text, a: Money, refunds: cap stripe.refunds.create(max: 200 USD)) -> Receipt {
+        return refunds.create(p, a)
+    }
+
+### Declaring
+
+`capability PATH { ... }` is a top-level declaration, in any file of the program.
+Its body holds, in this order:
+
+- `needs NAME: TYPE`, any number: what the operator must supply when granting it.
+  A need is a runtime capability (`cap net.http.*`, `cap fs.*`, with limits if the
+  library wants to declare them), a `Secret`, or a `Text` setting. Inside the
+  capability, each need is a variable of that name.
+- `canonical(t: Text) -> Text`, required when an action has a `@target`: puts a
+  target into the one form `only` patterns are written in (a phone number without
+  `+` or spaces, an id without surrounding space). It may not call models, `loop`
+  or recurse. If it fails, the action is refused (`capability`).
+- `action NAME(params) -> Text { ... }`, one or more. A program calls it as
+  `c.NAME(args)` on a `cap PATH.NAME`, and gets a `Receipt`. The action returns the
+  service's own id for it, which becomes the receipt's id.
+
+Paths are global, not qualified by module: two declarations of one path are an
+error, and paths under `net` and `fs` belong to the runtime (E101).
+
+An action's own parameters are data only (no capabilities or secrets: those come
+through `needs`). At most one is marked `@target` (Text) and at most one `@amount`
+(Money). The compiler requires, for each action (E101):
+
+- it makes at least one request through a capability it needs;
+- the `@target` value, and the `@amount` value, reach some request (its URL,
+  body or headers), so a program's `only` and money limits are checked against
+  values the action really uses;
+- it calls no model, and has no `loop` or recursion, so it finishes.
+
+`fail(message)` ends an action (or any function) with an `action` failure carrying
+the message, which a caller's `try` can catch. Library code also has `replace(t,
+from, to)`, `lower(t)`, `trim(t)`, `form(record)` (a record of Text, Int and Bool
+fields, form-encoded), `minor_units(money)` (an Int, cents for USD), `currency(money)`
+(the code, `"USD"`) and `url_segment(t)` (the text percent-encoded as one URL path
+segment; fails for `""`, `"."` and `".."`, which a URL treats as no segment or as
+moving up a level).
+
+### Granting
+
+The grant names the capability as usual and supplies each need under `needs`:
+
+    "refunds": { "cap": "stripe.refunds.create", "max": { "amount": "200.00", "currency": "USD" },
+                 "needs": {
+                     "get":  { "cap": "net.http.get",  "only": ["https://api.stripe.com/v1/payment_intents/*"] },
+                     "post": { "cap": "net.http.post", "only": ["https://api.stripe.com/v1/refunds"],
+                               "idempotency_key": true },
+                     "key":  { "env": "STRIPE_SECRET_KEY" },
+                     "base": "https://api.stripe.com" } }
+
+A need that is a capability is a grant like any other (same keys and checks), and
+the library's declared limits narrow it when the run starts. A `Secret` need is
+`{"env": VARIABLE}`, with the rules of section 12. A `Text` need is a string. A
+missing need, an unknown one, a value of the wrong kind, and `needs` on a capability
+that is not a library's are config errors. Each granted inner capability is logged
+(`grant`, with `"for"` naming the library capability).
+
+A run cannot start inside a capability: an `entry` naming an action or `canonical`
+is refused.
+
+### Performing
+
+`c.create(p, a)` on a library capability, in this order:
+
+1. The `@target` argument is put in canonical form by the library's `canonical`.
+2. The broker checks the amount against `max` and `each` and the canonical target
+   against `only`, through the whole chain of narrowed capabilities, and counts a
+   use. If any check fails the action is refused and the library's code never runs.
+3. The action runs with its arguments and the needs. Its requests are checked,
+   journaled, and may be in doubt, exactly as if the program had made them.
+4. If it returns, it must have made at least one request that reached the world
+   (was answered, or performed). Otherwise it fails with `action`: a receipt must
+   stand for something that happened.
+5. The amount is charged and the program gets `Receipt { id, capability, method }`.
+
+If the action fails after a request that may have changed something (any request
+but `net.http.get` or `fs.read`, unless it was certainly never sent), the amount
+may have been spent, so it is charged anyway and the log's `action_failed` says
+`"may_have_spent": true`. A failure can therefore never be used to spend past a
+limit; the cost is that a refund refused by the service still counts against `max`.
+
+`uses` on the library capability counts its actions; each inner capability has its
+own `uses` and `only`, set by the operator and narrowed by the library.
+
+### Crashes
+
+The library action is not itself a journal entry; its requests are. A resumed run
+runs the action's code again, and its requests replay from the journal in order, so
+the action ends exactly as it first did. This depends on the action computing the
+same requests from the same inputs and answers, which holds because library code has
+no clock, randomness or model calls. A request that is in doubt stops the run as in
+section 11, and is resolved the same way.
+
+### What the runtime does not check
+
+The runtime checks the limits it is given, against the values the library defines.
+It cannot check that the library does what its name says. A library is code the
+operator chooses to trust with keys and network access, as with any library in any
+language:
+
+- `canonical` decides what `only` compares. One that maps two different targets to
+  the same form would let a program reach a target its `only` does not list.
+- The `@target` check proves that the target influences a request, not that it is
+  the request's recipient.
+- The receipt proves that a request was made and that the library accepted the
+  answer; whether the service did what was asked is the library's to check.
+
+Read a library before granting it keys. Packages (roadmap phase 4) will pin a
+library to its exact text by hash, so it cannot change after it was reviewed.
