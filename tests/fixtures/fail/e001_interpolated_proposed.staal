@@ -1,0 +1,6 @@
+// expect: E001
+// Model output must be validated before it is turned into text.
+fn f() -> Text {
+    let p = propose(Text, instruct: "A greeting.")
+    return "Model says: \(p)"
+}

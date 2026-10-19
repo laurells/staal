@@ -1,0 +1,8 @@
+// expect: E101
+// Only Text, Int, Bool and Money become text; a record needs json(x).
+// (to_text(p) is refused the same way.)
+type Point { x: Int, y: Int }
+
+fn f(p: Point) -> Text {
+    return "at \(p)"
+}

@@ -1,0 +1,6 @@
+// expect: E006
+// Interpolation is joining text: untrusted text interpolated into an instruction
+// makes the whole instruction untrusted.
+fn f(ticket: Text) {
+    let s = propose(Text, instruct: "Summarise this: \(ticket)")
+}

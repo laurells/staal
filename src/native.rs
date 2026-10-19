@@ -132,7 +132,7 @@ struct Tables {
 }
 
 /// The built-in functions by the number generated code passes for them.
-const BUILTINS: [Builtin; 14] = [
+const BUILTINS: [Builtin; 15] = [
     Builtin::Len,
     Builtin::Contains,
     Builtin::StartsWith,
@@ -147,6 +147,7 @@ const BUILTINS: [Builtin; 14] = [
     Builtin::MinorUnits,
     Builtin::Currency,
     Builtin::UrlSegment,
+    Builtin::Text,
 ];
 
 const CMPS: [CmpOp; 6] = [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt, CmpOp::Le, CmpOp::Gt, CmpOp::Ge];
@@ -616,7 +617,8 @@ impl<'p> Env<'p> {
                     | Builtin::Trim
                     | Builtin::Form
                     | Builtin::Currency
-                    | Builtin::UrlSegment => named("Text"),
+                    | Builtin::UrlSegment
+                    | Builtin::Text => named("Text"),
                     // Headers and secrets belong to requests, which native code never makes.
                     Builtin::Header | Builtin::FillSecret => return None,
                 }

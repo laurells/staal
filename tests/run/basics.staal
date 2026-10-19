@@ -41,6 +41,14 @@ fn escapes(name: Text) -> Pair {
     return Pair { formal: contains(g, "\n"), length: len(g), greeting: g }
 }
 
+fn interpolated(name: Text, n: Int, paid: Money, ok: Bool) -> Pair {
+    let g = """
+        Dear \(name),
+          you bought \(n * 2) items for \(paid), confirmed: \(ok). \(to_text(0 - 5)) \("{literal braces}")
+        """
+    return Pair { formal: ok, length: len(g), greeting: "\(g)" }
+}
+
 fn first_big(xs: List<Int, 10>, limit: Int) -> Int {
     for x in xs {
         if x > limit {

@@ -1795,6 +1795,19 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     }
                     return Some((text, trusted));
                 }
+                Builtin::Text => {
+                    let t = &tys[0].0;
+                    if ![text.clone(), named("Int"), named("Bool"), named("Money")].contains(t) {
+                        let hint = if *t == named("Secret") || *t == named("Header") {
+                            ": secrets never become text"
+                        } else {
+                            "; use `json(x)` for records and lists"
+                        };
+                        ctx.err("E101", *pos, format!("interpolation and `to_text` need Text, Int, Bool or Money, found {t}{hint}"));
+                        return None;
+                    }
+                    return Some((text, trusted));
+                }
                 Builtin::MinorUnits | Builtin::Currency => {
                     if tys[0].0 != named("Money") {
                         ctx.err("E101", *pos, format!("`{}` needs Money, found {}", f.name(), tys[0].0));
@@ -1862,7 +1875,8 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Form
                 | Builtin::MinorUnits
                 | Builtin::Currency
-                | Builtin::UrlSegment => true,
+                | Builtin::UrlSegment
+                | Builtin::Text => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();

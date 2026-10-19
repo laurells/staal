@@ -1,0 +1,5 @@
+// expect: E901
+// What is inside \( ) must be one whole expression.
+fn f(a: Int, b: Int) -> Text {
+    return "sum \(a b)"
+}

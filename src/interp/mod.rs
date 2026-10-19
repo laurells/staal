@@ -2033,6 +2033,10 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             Ok(Value::Text(seg))
         }
         (Builtin::Trim, [Value::Text(t)]) => Ok(Value::Text(t.trim().to_string())),
+        (Builtin::Text, [Value::Text(t)]) => Ok(Value::Text(t.clone())),
+        (Builtin::Text, [Value::Int(n)]) => Ok(Value::Text(n.to_string())),
+        (Builtin::Text, [Value::Bool(b)]) => Ok(Value::Text(b.to_string())),
+        (Builtin::Text, [Value::Money(m)]) => Ok(Value::Text(m.to_string())),
         (Builtin::Form, [Value::Record { fields, .. }]) => {
             let mut parts = Vec::with_capacity(fields.len());
             for (k, v) in fields {

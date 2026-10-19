@@ -7,6 +7,11 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Multi-line text between `"""` quotes, with the closing quotes' indentation
+  removed.
+- Text interpolation, `"\(expr)"`, for Text, Int, Bool and Money; it is joining
+  text with `+`, so the trust and blinding rules apply unchanged. `to_text(x)`
+  does the conversion directly.
 - Escape sequences in text: `\"`, `\\`, `\n`, `\t`, `\r` and `\u{...}`. An
   unknown escape is an error (E900).
 - Claude as a model provider (`"provider": "anthropic"`), through Anthropic's

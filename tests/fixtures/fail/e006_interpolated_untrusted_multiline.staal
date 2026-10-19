@@ -1,0 +1,8 @@
+// expect: E006
+// The same holds for multi-line text, wherever in it the untrusted part appears.
+fn f(ticket: Text, n: Int @trusted) {
+    let s = propose(Text, instruct: """
+        You are a careful assistant. Give \(n) bullet points.
+        The ticket: \(ticket)
+        """)
+}

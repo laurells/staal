@@ -1,0 +1,8 @@
+// expect: E007 E007
+// A blinded field interpolated into data still reaches the model, and, since
+// joining text can fail, decides whether the call happens: as with `+`.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email)) {
+    let s = propose(Text, instruct: "Greet the customer.", data: ["Name \(c.name), email \(c.email)"])
+}

@@ -69,9 +69,23 @@ The result is either the entry function's return value or a failure
 an escape: `\"` a quote, `\\` a backslash, `\n` a new line, `\t` a tab, `\r` a
 carriage return, and `\u{...}` the Unicode character with that hexadecimal code
 (1 to 6 digits, e.g. `\u{e9}` for é; surrogates are refused). Any other escape
-is an error (E900), never a backslash kept as text; `\(` is reserved for text
-interpolation. Braces are ordinary characters. `len` counts characters, not
-bytes.
+is an error (E900), never a backslash kept as text. Braces are ordinary
+characters. `len` counts characters, not bytes.
+
+**Multi-line text** is written between `"""` quotes. The opening quotes end
+their line; the closing quotes begin a line, after only spaces or tabs, and that
+indentation is removed from every line of the text (a non-blank line
+indented less is an error). Line breaks between the lines are kept, the one
+before the closing quotes is not, and `\r\n` line endings count as `\n`. Code
+may follow the closing quotes on their line. Escapes and interpolation work as
+in one-line text.
+
+**Interpolation.** `\(expr)` inside text is replaced by the value of `expr`,
+which must be `Text`, `Int`, `Bool` or `Money` (`12.50 NGN`); the expression ends
+at the matching `)` on the same line. `"a \(x) b"` is exactly
+`"a " + to_text(x) + " b"`, so the result is trusted only if every part is, and
+blinded data stays blinded (E006, E007). `to_text(x)` is available directly. A
+`Secret` can never be interpolated, and a record or list needs `json(x)`.
 
 No value can be created out of thin air: `Receipt` only by an action, `Done`
 only by `done(...)`, `Outcome` only by `try`, capabilities only by grants.

@@ -1,0 +1,1 @@
+{"entry": "interpolated", "inputs": {"name": "Ada", "n": 3, "paid": {"amount": "12.50", "currency": "NGN"}, "ok": true}, "model": {"provider": "script", "responses": []}, "expect": {"result": {"greeting": "Dear Ada,\n  you bought 6 items for 12.50 NGN, confirmed: true. -5 {literal braces}", "length": 82, "formal": true}}}

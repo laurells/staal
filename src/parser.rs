@@ -887,6 +887,10 @@ impl Parser {
                 self.bump();
                 Ok(Expr::Str(s, pos))
             }
+            Tok::Interp(parts) => {
+                self.bump();
+                interpolation(parts, pos)
+            }
             Tok::Num(_) | Tok::Decimal(_) => self.number(pos),
             Tok::Ident(name) if name == "parse" && self.toks.get(self.i + 1).map(|t| &t.tok) == Some(&Tok::LParen) => {
                 self.bump();
@@ -991,4 +995,32 @@ impl Parser {
         self.expect(Tok::RParen, "')'")?;
         Ok(args)
     }
+}
+
+/// `"a \(x) b"` as `"a " + to_text(x) + " b"`: interpolation is joining text, so every
+/// rule that applies to `+` on text (trust, blinding) applies to it unchanged.
+fn interpolation(parts: Vec<crate::lexer::Part>, pos: Pos) -> PResult<Expr> {
+    use crate::lexer::Part;
+    let mut acc: Option<Expr> = None;
+    for part in parts {
+        let next = match part {
+            Part::Text(t) => Expr::Str(t, pos),
+            Part::Code(tokens) => {
+                let mut p = Parser::new(tokens);
+                let e = p.expr()?;
+                if *p.peek() != Tok::Eof {
+                    return Err((p.pos(), format!("unexpected {:?} in \\( )", p.peek())));
+                }
+                let at = e.pos();
+                Expr::Builtin { f: Builtin::Text, args: vec![e], pos: at }
+            }
+        };
+        acc = Some(match acc {
+            // The first piece is text, so the whole is text even for "\(n)".
+            None if matches!(next, Expr::Str(..)) => next,
+            None => Expr::Arith { op: ArithOp::Add, left: Box::new(Expr::Str(String::new(), pos)), right: Box::new(next), pos },
+            Some(left) => Expr::Arith { op: ArithOp::Add, left: Box::new(left), right: Box::new(next), pos },
+        });
+    }
+    Ok(acc.unwrap_or(Expr::Str(String::new(), pos)))
 }

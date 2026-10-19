@@ -1,0 +1,14 @@
+// Interpolating trusted values keeps an instruction trusted, and untrusted text
+// may be interpolated freely into data.
+type Order { id: Text, total: Money, items: Int, gift: Bool }
+
+fn summary(order: Order @trusted, note: Text) -> Text budget(calls: 1, tokens: 500) {
+    let s: Text = validate propose(Text,
+        instruct: "Write one line about order \(order.id): \(order.items) items, \(order.total), gift \(order.gift).",
+        data: ["Customer note: \(note)"],
+        tokens: 500)
+    return """
+        Order \(order.id)
+        \(s)
+        """
+}

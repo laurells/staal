@@ -70,6 +70,16 @@ treat them all alike.
   cost model calls inside it.
 - **Text:** `"..."` on one line, with the escapes `\"`, `\\`, `\n`, `\t`, `\r`
   and `\u{e9}`. An unknown escape is an error. Braces need no escaping.
+  `"Total: \(price * qty)"` interpolates a Text, Int, Bool or Money, and is the
+  same as joining with `+`: interpolating untrusted text into an instruction is
+  still E006. Several lines go between `"""` quotes; the closing quotes'
+  indentation is removed from every line:
+
+      let note = """
+          Order \(order.id)
+          Total \(order.total)
+          """
+
 - **Built-ins:** `len`, `contains`, `starts_with`, `ends_with`.
 
 The exact rules are in [RUNTIME.md](RUNTIME.md) section 4.

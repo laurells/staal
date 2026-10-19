@@ -201,6 +201,9 @@ pub enum Builtin {
     /// so data placed in a URL can never add a segment, a query or a fragment. Fails for
     /// "", "." and "..", which a URL would treat as no segment or as moving up a level.
     UrlSegment,
+    /// `to_text(x)`: a Text, Int, Bool or Money as text (`12.50 USD`). Interpolation,
+    /// `"\(x)"`, is `"" + to_text(x)`.
+    Text,
 }
 
 impl Builtin {
@@ -220,6 +223,7 @@ impl Builtin {
             "minor_units" => Some(Builtin::MinorUnits),
             "currency" => Some(Builtin::Currency),
             "url_segment" => Some(Builtin::UrlSegment),
+            "to_text" => Some(Builtin::Text),
             _ => None,
         }
     }
@@ -240,6 +244,7 @@ impl Builtin {
             Builtin::MinorUnits => "minor_units",
             Builtin::Currency => "currency",
             Builtin::UrlSegment => "url_segment",
+            Builtin::Text => "to_text",
         }
     }
 
@@ -253,7 +258,8 @@ impl Builtin {
             | Builtin::Form
             | Builtin::MinorUnits
             | Builtin::Currency
-            | Builtin::UrlSegment => 1,
+            | Builtin::UrlSegment
+            | Builtin::Text => 1,
             Builtin::Contains | Builtin::StartsWith | Builtin::EndsWith | Builtin::Header | Builtin::FillSecret => 2,
             Builtin::Replace => 3,
         }
