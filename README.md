@@ -14,8 +14,11 @@ declared by libraries, is built and tested against a local server that answers
 like Termii and Stripe; the same real-service step applies. Phase 4, packages
 fetched from git and locked by hash, is built and tested against git repositories
 made by the tests; fetching from a public host, and a real SMS through a
-package, are left. Not built yet: the native-code backend and C interface
-(phase 5). Real model providers are not built either; only a scripted one exists.
+package, are left. Phase 5 is built in its first form: functions written purely in
+Int and Bool compile to native code through Cranelift, and a C interface lets any
+language run programs (Python is tested). Native code does not yet cover Text,
+records, lists or money, so most of a typical program still runs on the
+interpreter. Real model providers are not built; only a scripted one exists.
 
 ## What it enforces today
 
@@ -696,6 +699,59 @@ registry. Whoever can edit both `intent.lock` and `.intent/packages/` controls t
 code, as with any lockfile: `intentc check` trusts the lock, and `intentc fetch`
 compares both with git. `git` must be installed to fetch.
 
+## Native code and the C interface
+
+    intentc run program.int --config run.json --engine native
+
+On the native engine, every function whose parameters and result are Int or Bool,
+and whose body uses only `let`, `set`, `if`, `repeat`, `loop`, `break`, `return`,
+arithmetic, comparisons, `and`/`or`/`not` and calls to other such functions, is
+compiled to machine code when the run starts (Cranelift, in memory). Everything else
+runs on the interpreter, which stays the reference. Model calls, actions, HTTP,
+files and the journal never run in native code. The full rules are in
+`docs/RUNTIME.md` section 15. In short:
+
+- **The same answer, byte for byte.** Native code counts steps and call depth
+  against the same limits on the same counters, checks every Int operation, and
+  builds every failure with the interpreter's own functions, so results, failure
+  messages, logs and journals are identical.
+- **Crash on one engine, resume on the other.** The engine is not part of the run
+  config, so the journal does not depend on it.
+- **Faster where it applies.** In a release build, a recursive Int program took
+  0.020 s native against 1.45 s on the interpreter. A program with no such
+  functions runs exactly as before.
+
+`include/intent.h` declares the C interface: `intent_check`, `intent_run`,
+`intent_resume`, `intent_resolve`, `intent_free` and `intent_version`, in
+`libintentc.so` (or `.dylib`). Each returns a JSON object whose `status` is `done`,
+`failed`, `stopped`, `invalid` or `error`, mirroring the command line's exit codes,
+with the run's log. `python/intent` wraps it with `ctypes`; Intent contains no
+Python.
+
+    import intent
+    lib = intent.Library("target/release/libintentc.so")
+    out = lib.run("clinic.int", config, journal="run.journal", engine="native")
+
+How this is tested: all 132 runtime cases run on both engines with a journal, and
+their results, logs and journals are identical (114 functions compile across them).
+2,500 generated Int and Bool programs, compiled entirely to native code and run under
+tight step and depth limits with values at the edges of Int, end identically on
+both engines; across them, runs finish, overflow, divide by zero, and reach step and
+depth limits. A program mixing both engines is run at every step limit from 1 to past
+its end. The crash tests run with every pairing of engines for the crash and the
+resume. Fifteen mutations of the native compiler are each caught: a missing step
+per statement, per `loop` or per `repeat` iteration, step and depth limits off by
+one, depth not restored after a call, unchecked overflow, `MIN / -1` or negation,
+no short-circuit, unsigned comparison, a failure ignored after a call, steps not
+handed back to the interpreter, depth off by one at the hand-over, and swapped
+operands in a failure message. A Python script runs every clinic case through the
+shared library on both engines and checks errors come back as values.
+
+What is not built: native code for Text, records, lists, money and the runtime's
+values (they run on the interpreter); compiling ahead of time to an executable
+(native code is made in memory when a run starts); Windows; and calling C libraries
+from Intent, which the plan leaves for last because the broker could not check them.
+
 ## Requirements
 
 Rust 1.89 or newer (for `File::try_lock`), installed from https://rustup.rs.
@@ -703,12 +759,15 @@ Developed with cargo 1.97.0. Dependencies: `serde_json`, `sha2`, `getrandom`,
 `libc` (safe file opening), `url` (WHATWG URL parsing), `ureq` with `rustls`
 (HTTPS, with the ring provider; no compression, cookies or proxies unless
 configured), `rustls` itself (named only to recognise handshake errors) and
-`webpki-root-certs` (Mozilla's root certificates). Tests also use `rcgen` to make
-certificates.
+`webpki-root-certs` (Mozilla's root certificates), and Cranelift 0.136.2
+(`cranelift-codegen`, `-frontend`, `-jit`, `-module`, `-native`) for native code,
+behind the default `native` feature: `cargo build --no-default-features` builds
+without it. Tests also use `rcgen` to make certificates, and `python3` for the
+C-interface test.
 
 `scripts/audit.sh` checks every dependency in `Cargo.lock` against the RustSec
 advisory database and fails on any advisory or warning (`cargo audit --deny
-warnings`). At this release: 114 crates (test-only ones included), none flagged. It needs network access for
+warnings`). At this release: 153 crates (test-only ones included), none flagged. It needs network access for
 the database, so it is run by hand or in CI, not by `cargo test`.
 
 ## Use
@@ -718,6 +777,8 @@ the database, so it is run by hand or in CI, not by `cargo test`.
     cargo test
 
 `intentc check` exits 0 when the program is valid and 1 when it has errors.
+`intentc run ... --engine native` runs pure Int and Bool functions as native code
+(the default engine is the interpreter).
 `intentc fetch [folder]` fetches the packages a project's `intent.json` names;
 it exits 2 if anything is wrong, and then changes nothing.
 
@@ -742,6 +803,9 @@ To add a rule, write the failing program first, then make the checker reject it.
     src/pattern.rs  `only` patterns: matching and containment
     src/modules.rs  loading module files, resolving names across them (E106, E107)
     src/packages.rs manifests, intent.lock, fetching from git, authority (E108)
+    src/native.rs   native code for pure Int and Bool functions (Cranelift)
+    src/capi.rs     the C interface; include/intent.h declares it
+    python/intent/  the Python wrapper over the C interface
     src/targets.rs  canonical URLs and paths for `only`
     src/interp/http.rs  the HTTP client, and what is known about each request
     src/interp/fsx.rs   safe file access: no links followed, atomic writes

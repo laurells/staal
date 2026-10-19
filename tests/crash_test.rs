@@ -64,10 +64,15 @@ const ACCESS: Scenario = Scenario {
     actions: 10,
 };
 
+/// Pure Int functions (native code on the native engine) between three actions.
+const NATIVE: Scenario = Scenario { program: "tests/crash/native.int", config: "tests/crash/native.json", actions: 2 };
+
 /// A fresh directory with the scenario's config pointing at its own world file.
 struct Case {
     dir: PathBuf,
     program: String,
+    /// The engine of the first run, and of every resume.
+    engines: (&'static str, &'static str),
 }
 
 impl Case {
@@ -86,7 +91,7 @@ impl Case {
         sim["world"] = Json::String(dir.join("world.jsonl").to_string_lossy().into());
         sim["idempotent"] = Json::Bool(idempotent);
         std::fs::write(dir.join("cfg.json"), cfg.to_string()).unwrap();
-        Case { dir, program: format!("{ROOT}/{}", sc.program) }
+        Case { dir, program: format!("{ROOT}/{}", sc.program), engines: ("interpreter", "interpreter") }
     }
 
     fn path(&self, f: &str) -> String {
@@ -94,6 +99,7 @@ impl Case {
     }
 
     fn args(&self, cmd: &'static str) -> Vec<String> {
+        let engine = if cmd == "run" { self.engines.0 } else { self.engines.1 };
         vec![
             cmd.into(),
             self.program.clone(),
@@ -101,6 +107,8 @@ impl Case {
             self.path("cfg.json"),
             "--journal".into(),
             self.path("journal"),
+            "--engine".into(),
+            engine.into(),
         ]
     }
 
@@ -224,7 +232,13 @@ fn check_recovered(c: &Case, b: &Baseline, label: &str) {
 }
 
 fn crash_everywhere(sc: &Scenario, tag: &str, idempotent: bool) {
-    let mode = format!("{tag}-{}", if idempotent { "idempotent" } else { "plain" });
+    crash_everywhere_on(sc, tag, idempotent, ("interpreter", "interpreter"));
+}
+
+/// Crashes on one engine at every point and resumes on another. The baseline is
+/// always the interpreter: the reference.
+fn crash_everywhere_on(sc: &Scenario, tag: &str, idempotent: bool, engines: (&'static str, &'static str)) {
+    let mode = format!("{tag}-{}-{}-{}", if idempotent { "idempotent" } else { "plain" }, engines.0, engines.1);
     let b = baseline_of(sc, &mode);
     let mut points = Vec::new();
     for k in 1..=b.writes {
@@ -235,7 +249,8 @@ fn crash_everywhere(sc: &Scenario, tag: &str, idempotent: bool) {
     }
     for fp in &points {
         let label = format!("{mode} {fp}");
-        let c = Case::of(sc, &format!("{mode}-{}", fp.replace(':', "-")), idempotent);
+        let mut c = Case::of(sc, &format!("{mode}-{}", fp.replace(':', "-")), idempotent);
+        c.engines = engines;
         let out = c.run(Some(fp));
         assert_eq!(out.code, None, "{label}: the injected crash did not happen (exit {:?}): {}", out.code, out.stderr);
         check_recovered(&c, &b, &label);
@@ -293,4 +308,15 @@ fn a_crash_during_an_authorized_retry_puts_the_action_back_in_doubt() {
     assert_eq!(out.code, Some(3), "{}", out.stderr);
     assert_eq!(c.world().len(), 1);
     check_recovered(&c, &baseline("retry-interrupted"), "retry-interrupted");
+}
+
+#[test]
+fn native_code_recovers_from_a_crash_on_either_engine() {
+    // Every crash point, every pairing: a run that crashed on native code resumes on
+    // the interpreter, and the other way round, with the same result and world.
+    for engines in [("native", "native"), ("native", "interpreter"), ("interpreter", "native")] {
+        crash_everywhere_on(&NATIVE, "native", true, engines);
+        crash_everywhere_on(&NATIVE, "native", false, engines);
+        crash_everywhere_on(&WORKFLOW, "workflow", false, engines);
+    }
 }

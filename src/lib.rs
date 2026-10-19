@@ -1,9 +1,12 @@
 pub mod ast;
 pub mod budget;
+pub mod capi;
 pub mod checker;
 pub mod interp;
 pub mod lexer;
 pub mod modules;
+#[cfg(feature = "native")]
+pub mod native;
 pub mod packages;
 pub mod parser;
 pub mod pattern;

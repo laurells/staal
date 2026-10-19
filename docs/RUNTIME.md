@@ -843,3 +843,67 @@ package code.
 fetch` compares both with git. Git's commit ids are SHA-1; the SHA-256 file hashes
 in the lock are what a later fetch is compared with. Manifests describe authority;
 they do not prove a package does what its name says.
+
+## 15. Engines and native code
+
+A run uses one of two engines, chosen for the run (`--engine native` on the command
+line, `engine` in the C interface), never in the run config.
+
+- **interpreter** (the default): every function on the interpreter.
+- **native**: functions that qualify, below, are compiled to machine code with
+  Cranelift when the run starts, in memory; every other function runs on the
+  interpreter.
+
+A function qualifies when its parameters and result are `Int` or `Bool`, and its body
+uses only `let` (with no type or an `Int`/`Bool` one), `set`, `if`, `repeat`, `loop`,
+`break`, `return` with a value, integer literals that fit an Int, `true`/`false`,
+`+ - * /`, unary `-`, comparisons (`==` and `!=` on Bool; all six on Int), `and`,
+`or`, `not`, and calls to other qualifying functions. A function that calls one that
+does not qualify does not qualify. Native code is entered only from the interpreter,
+when it calls a compiled function; model calls, actions, HTTP, files, budgets and the
+journal therefore never run in native code.
+
+Both engines give the same results, failures (kind and message), logs and
+journals. Native code:
+
+- counts one step per statement and one per `repeat` or `loop` iteration, on the
+  run's own counter, against `max_steps`;
+- checks `max_depth` before each call, counting the calls already active, exactly as
+  the interpreter does;
+- checks every `+`, `-`, `*`, `/` and unary `-` on Int: an overflow, a division by
+  zero and `MIN / -1` fail as `value`, with the message the interpreter gives (the
+  same function makes it);
+- evaluates left to right, and `and`/`or` evaluate their right side only when it
+  decides the answer.
+
+Because the engine is not in the config, a journal does not record it: a run that
+crashed on one engine resumes on the other.
+
+The interpreter stays the reference. The tests run every runtime case on both
+engines and compare results, logs and journals, and compare generated programs on
+both (README).
+
+## 16. The C interface
+
+`libintentc` (built as a C dynamic library alongside the Rust library) exports the
+functions declared in `include/intent.h`. Each takes UTF-8 strings, borrowed for
+the call, and returns a JSON object as a string the caller frees with
+`intent_free`:
+
+| Function | Does | `status` |
+| --- | --- | --- |
+| `intent_check(program_path)` | checks a program with its modules and packages | `ok`, `invalid`, `error` |
+| `intent_run(program_path, config_json, journal_path, engine)` | runs it, with a new journal if `journal_path` is not NULL | `done`, `failed`, `stopped`, `invalid`, `error` |
+| `intent_resume(program_path, config_json, journal_path, engine)` | resumes a journaled run | as `intent_run` |
+| `intent_resolve(journal_path, resolution_json)` | resolves an action in doubt: `{"performed": "<receipt>"}`, `{"status": 200, "body": "..."}`, `{"failed": "<reason>"}` or `{"retry": true}` | `resolved`, `error` |
+| `intent_version()` | the version, a static string not to be freed | |
+
+`done` carries `result`; `failed` and `stopped` carry `failure` (`kind`, `message`);
+all three carry `log`. `stopped` means resolve (if an action is in doubt) and resume,
+as exit code 3 does on the command line. `invalid` carries `errors`, each with `code`,
+`file`, `line`, `col` and `message`. `error` means nothing ran: a NULL or non-UTF-8
+argument, an unreadable file, invalid JSON, a bad config, journal or engine, or a
+panic inside the library, which is caught and never unwinds into the caller. Runs
+share no state and may be made from several threads. Never use one journal for two
+runs at once: the journal's lock is tested between processes (section 11), not
+between threads of one process.

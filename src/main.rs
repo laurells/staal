@@ -2,8 +2,8 @@
 //
 //   intentc check   <file.int>
 //   intentc fetch   [<project folder>]
-//   intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>]
-//   intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>]
+//   intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
+//   intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
 //   intentc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
 //                                            | --failed <reason> | --retry)
 //
@@ -14,7 +14,7 @@
 //   3  the run stopped before finishing and can be continued: an action is in doubt
 //      (resolve it, then resume) or the journal could not be written (resume)
 
-use intentc::interp::{self, journal, Durability, FailKind};
+use intentc::interp::{self, journal, Durability, Engine, FailKind};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
@@ -22,8 +22,8 @@ use std::process::ExitCode;
 const USAGE: &str = "usage:
   intentc check   <file.int>
   intentc fetch   [<project folder>]
-  intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>]
-  intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>]
+  intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
+  intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
   intentc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
                                            | --failed <reason> | --retry)";
 
@@ -46,21 +46,25 @@ fn main() -> ExitCode {
             Ok((dir, _)) => fetch(dir.as_deref().unwrap_or(".")),
             Err(e) => usage_error(&e),
         },
-        "run" => match parse(rest, &["--config", "--journal", "--log"], &["--config"]) {
+        "run" => match parse(rest, &["--config", "--journal", "--log", "--engine"], &["--config"]) {
             Ok((Some(file), opts)) => {
                 let durability = match opts.get("--journal") {
                     Some(j) => Durability::Create(Path::new(j)),
                     None => Durability::None,
                 };
-                run(&file, &opts["--config"], durability, opts.get("--log"))
+                match engine(&opts) {
+                    Ok(e) => run(&file, &opts["--config"], durability, opts.get("--log"), e),
+                    Err(code) => code,
+                }
             }
             Ok((None, _)) => usage_error("run needs a program file"),
             Err(e) => usage_error(&e),
         },
-        "resume" => match parse(rest, &["--config", "--journal", "--log"], &["--config", "--journal"]) {
-            Ok((Some(file), opts)) => {
-                run(&file, &opts["--config"], Durability::Resume(Path::new(&opts["--journal"])), opts.get("--log"))
-            }
+        "resume" => match parse(rest, &["--config", "--journal", "--log", "--engine"], &["--config", "--journal"]) {
+            Ok((Some(file), opts)) => match engine(&opts) {
+                Ok(e) => run(&file, &opts["--config"], Durability::Resume(Path::new(&opts["--journal"])), opts.get("--log"), e),
+                Err(code) => code,
+            },
             Ok((None, _)) => usage_error("resume needs a program file"),
             Err(e) => usage_error(&e),
         },
@@ -70,6 +74,15 @@ fn main() -> ExitCode {
             Err(e) => usage_error(&e),
         },
         other => usage_error(&format!("unknown command {other}")),
+    }
+}
+
+/// `--engine native` or `--engine interpreter` (the default).
+fn engine(opts: &HashMap<String, String>) -> Result<Engine, ExitCode> {
+    match opts.get("--engine").map(String::as_str) {
+        None | Some("interpreter") => Ok(Engine::Interpreter),
+        Some("native") => Ok(Engine::Native),
+        Some(other) => Err(usage_error(&format!("--engine is native or interpreter, not {other}"))),
     }
 }
 
@@ -154,7 +167,7 @@ fn check(path: &str) -> ExitCode {
     }
 }
 
-fn run(file: &str, config: &str, durability: Durability, log: Option<&String>) -> ExitCode {
+fn run(file: &str, config: &str, durability: Durability, log: Option<&String>, engine: Engine) -> ExitCode {
     let checked = match load(file) {
         Ok(c) => c,
         Err(code) => return code,
@@ -178,7 +191,7 @@ fn run(file: &str, config: &str, durability: Durability, log: Option<&String>) -
             return ExitCode::from(2);
         }
     };
-    let out = match interp::run_config_durable(&prog, &checked.fingerprint, &cfg, durability) {
+    let out = match interp::run_config_engine(&prog, &checked.fingerprint, &cfg, durability, engine) {
         Ok(out) => out,
         Err(e) => {
             eprintln!("intentc: {e}");

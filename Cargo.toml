@@ -3,6 +3,11 @@ name = "intentc"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+# rlib for the command line and tests; cdylib for the C interface (src/capi.rs),
+# which other languages load as libintentc.so / libintentc.dylib.
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 getrandom = "0.4.3"
 libc = "0.2.191"
@@ -19,7 +24,17 @@ rustls = { version = "=0.23.46", default-features = false }
 # them (net.extra_root_certificates). The same 1.0.9 snapshot ureq uses by default.
 webpki-root-certs = "1.0.9"
 
+# Native code for pure functions (src/native.rs): Cranelift, JIT-compiled at load.
+# Exact versions; 0.136.2 rather than 0.136.3, which was under two weeks old.
+cranelift-codegen = { version = "=0.136.2", optional = true }
+cranelift-frontend = { version = "=0.136.2", optional = true }
+cranelift-jit = { version = "=0.136.2", optional = true }
+cranelift-module = { version = "=0.136.2", optional = true }
+cranelift-native = { version = "=0.136.2", optional = true }
+
 [features]
+default = ["native"]
+native = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-native"]
 # Test-only crash injection for the journal (src/interp/journal.rs). Never enable in
 # a production build.
 failpoints = []

@@ -133,6 +133,17 @@ pub struct RunResult {
     pub log: Vec<Json>,
 }
 
+/// Which engine runs the program. Both give the same results, logs and journals: a
+/// run may crash on one and resume on the other (RUNTIME.md section 15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Engine {
+    /// Every function on the interpreter, the reference.
+    #[default]
+    Interpreter,
+    /// Pure Int and Bool functions as native code, the rest on the interpreter.
+    Native,
+}
+
 /// Whether a run keeps a journal (RUNTIME.md section 11).
 pub enum Durability<'a> {
     /// No journal: the run cannot be resumed if it is killed.
@@ -152,11 +163,22 @@ pub fn run_config(prog: &Program, config: &Json) -> Result<RunResult, String> {
 /// Like `run_config`, with a journal. `source` is the program's text: a journal is
 /// bound to the exact program and config it was started with.
 pub fn run_config_durable(prog: &Program, source: &str, config: &Json, durability: Durability) -> Result<RunResult, String> {
+    run_config_engine(prog, source, config, durability, Engine::Interpreter)
+}
+
+/// Like `run_config_durable`, on the given engine.
+pub fn run_config_engine(
+    prog: &Program,
+    source: &str,
+    config: &Json,
+    durability: Durability,
+    engine: Engine,
+) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
     let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
     let provider = ScriptProvider::from_config(model)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
-    run_durable(prog, source, config, durability, Box::new(provider), Box::new(adapter))
+    run_engine(prog, source, config, durability, Box::new(provider), Box::new(adapter), engine)
 }
 
 /// Runs a checked program with the given provider and adapter, without a journal.
@@ -178,8 +200,25 @@ pub fn run_durable(
     provider: Box<dyn Provider + Send>,
     adapter: Box<dyn Adapter + Send>,
 ) -> Result<RunResult, String> {
+    run_engine(prog, source, config, durability, provider, adapter, Engine::Interpreter)
+}
+
+/// Runs a checked program with the given provider, adapter, durability and engine.
+pub fn run_engine(
+    prog: &Program,
+    source: &str,
+    config: &Json,
+    durability: Durability,
+    provider: Box<dyn Provider + Send>,
+    adapter: Box<dyn Adapter + Send>,
+    engine: Engine,
+) -> Result<RunResult, String> {
     // Validate everything first: a bad config must not even create a journal.
     let setup = Setup::from_config(prog, config)?;
+    let native = match engine {
+        Engine::Interpreter => None,
+        Engine::Native => Some(compile_native(prog)?),
+    };
     let program_sha = journal::sha256_hex(source.as_bytes());
     let config_sha = journal::sha256_hex(config.to_string().as_bytes());
     let journal = match durability {
@@ -194,12 +233,28 @@ pub fn run_durable(
             .stack_size(INTERP_STACK_BYTES)
             .spawn_scoped(s, move || {
                 let mut it = Interp::new(prog, setup.limits, &setup.runtime, provider, adapter, journal);
+                it.native = native;
                 it.run(&setup)
             })
             .map_err(|e| format!("could not start the interpreter thread: {e}"))?
             .join()
             .map_err(|_| "the interpreter thread crashed; this is a bug in intentc".to_string())
     })
+}
+
+#[cfg(feature = "native")]
+type NativeCode = crate::native::Native;
+#[cfg(not(feature = "native"))]
+type NativeCode = std::convert::Infallible;
+
+#[cfg(feature = "native")]
+fn compile_native(prog: &Program) -> Result<NativeCode, String> {
+    crate::native::Native::compile(prog)
+}
+
+#[cfg(not(feature = "native"))]
+fn compile_native(_: &Program) -> Result<NativeCode, String> {
+    Err("this intentc was built without native code (the `native` feature)".into())
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +814,8 @@ struct Interp<'p> {
     /// fs.read, and not a request certainly never sent). When a library action fails
     /// after one, its amount may have been spent, and the budget counts it.
     effects: u64,
+    /// Native code for the functions that have it, on the native engine.
+    native: Option<NativeCode>,
 }
 
 #[derive(Clone)]
@@ -820,6 +877,7 @@ impl<'p> Interp<'p> {
             needs: HashMap::new(),
             performed: 0,
             effects: 0,
+            native: None,
         }
     }
 
@@ -929,7 +987,24 @@ impl<'p> Interp<'p> {
             return internal(format!("'{name}' called with {} arguments, expects {}", args.len(), f.params.len()));
         }
         if self.depth >= self.limits.max_depth {
-            return fail(FailKind::DepthLimit, format!("calls nested more than {} deep", self.limits.max_depth));
+            return Err(depth_limit(self.limits.max_depth as u64));
+        }
+        #[cfg(feature = "native")]
+        if let Some(n) = &self.native
+            && n.has(name)
+        {
+            let mut ctx = crate::native::Ctx {
+                steps: self.steps,
+                max_steps: self.limits.max_steps,
+                depth: self.depth as u64 + 1,
+                max_depth: self.limits.max_depth as u64,
+                failed: 0,
+                failure: None,
+            };
+            if let Some(r) = n.call(name, &mut ctx, &args) {
+                self.steps = ctx.steps;
+                return r;
+            }
         }
         let mut frame = Frame { scopes: vec![HashMap::new()] };
         for (p, v) in f.params.iter().zip(args) {
@@ -983,7 +1058,7 @@ impl<'p> Interp<'p> {
     fn tick(&mut self) -> Result<(), Failure> {
         self.steps += 1;
         if self.steps > self.limits.max_steps {
-            return fail(FailKind::StepLimit, format!("more than {} steps executed", self.limits.max_steps));
+            return Err(step_limit(self.limits.max_steps));
         }
         Ok(())
     }
@@ -1076,10 +1151,7 @@ impl<'p> Interp<'p> {
                 arith(*op, l, r)
             }
             Expr::Neg(inner, _) => match self.eval(frame, inner)? {
-                Value::Int(n) => match n.checked_neg() {
-                    Some(v) => Ok(Value::Int(v)),
-                    None => fail(FailKind::Value, format!("integer overflow: -({n})")),
-                },
+                Value::Int(n) => neg(n).map(Value::Int),
                 _ => internal("`-` applied to a value that is not an Int"),
             },
             Expr::Logic { op, left, right, .. } => {
@@ -1747,9 +1819,34 @@ impl<'p> Interp<'p> {
     }
 }
 
+// Failures that native code reports too: one definition, so both engines give the
+// same message (src/native.rs).
+
+pub(crate) fn step_limit(max_steps: u64) -> Failure {
+    Failure { kind: FailKind::StepLimit, message: format!("more than {max_steps} steps executed") }
+}
+
+pub(crate) fn depth_limit(max_depth: u64) -> Failure {
+    Failure { kind: FailKind::DepthLimit, message: format!("calls nested more than {max_depth} deep") }
+}
+
+pub(crate) fn neg(n: i64) -> Result<i64, Failure> {
+    n.checked_neg().ok_or_else(|| Failure { kind: FailKind::Value, message: format!("integer overflow: -({n})") })
+}
+
+/// The failure `arith` gives for Int operands that fail: native code calls this only
+/// after its own check failed, so an Ok here means the two engines disagree.
+#[cfg(feature = "native")]
+pub(crate) fn arith_failure(op: ArithOp, a: i64, b: i64) -> Failure {
+    match arith(op, Value::Int(a), Value::Int(b)) {
+        Err(f) => f,
+        Ok(_) => Failure { kind: FailKind::Internal, message: format!("native code reported {a} {op} {b} as failing; it does not") },
+    }
+}
+
 /// Checked arithmetic (RUNTIME.md section 4). Every overflow, division by zero, mix of
 /// currencies or result below zero is a `value` failure, never a wrapped or rounded answer.
-fn arith(op: ArithOp, l: Value, r: Value) -> Result<Value, Failure> {
+pub(crate) fn arith(op: ArithOp, l: Value, r: Value) -> Result<Value, Failure> {
     let overflow = |a: &dyn fmt::Display, b: &dyn fmt::Display| fail(FailKind::Value, format!("overflow: {a} {op} {b}"));
     match (l, r) {
         (Value::Int(a), Value::Int(b)) => {
