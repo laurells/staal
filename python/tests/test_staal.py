@@ -1,4 +1,4 @@
-"""Runs Staal programs through the C interface from Python (the phase 5 gate).
+"""Runs Staal programs through the C interface from Python.
 
 Usage: STAAL_LIBRARY=/path/to/libstaalc.so python3 -I python/tests/test_staal.py <repo root> <scratch dir>
 """

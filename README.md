@@ -108,19 +108,19 @@ continued.
 | [examples/README.md](examples/README.md) | Programs that send real SMS and email, and how to run them with your keys |
 | [packages/README.md](packages/README.md) | The reference packages and how a service becomes a library |
 | [include/staal.h](include/staal.h) | The C interface |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
 
 ## Status
 
 Staal is pre-release and not yet ready for production use. Built and tested:
 the compiler and all eight safety rules, the reference runtime, exact money, the
 capability broker, budgets, the crash-safe journal, modules, HTTP and file
-capabilities, capabilities declared by libraries, packages locked by hash,
-native code, executables and the C interface.
+capabilities, capabilities declared by libraries, packages fetched from git and
+locked by hash, native code, executables and the C interface.
 
 Not yet done: runs against real services and real model providers (only a
-scripted model exists), fetching packages from a public host, macOS and Windows
-runs (CI for macOS is configured), executables on macOS and Windows, an
-installable Python package, and calling C libraries from Staal.
+scripted model exists), Windows, executables on macOS (`staalc build` is Linux
+only for now), an installable Python package, and calling C libraries from Staal.
 
 ## Repository layout
 

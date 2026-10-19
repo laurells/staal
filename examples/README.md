@@ -2,10 +2,9 @@
 
 Complete programs that act through real APIs: an SMS and an email sent directly
 over `net.http`, and an SMS and a Stripe refund sent through libraries that
-declare their own capabilities. They were checked and run against a local test
-server, but not against the real services: the machine they were built on cannot
-reach the internet. Running them is the remaining step of roadmap phases 2 and 3,
-and needs your own accounts and keys.
+declare their own capabilities. They are checked and run in the test suite against a
+local server that answers like each service. Running them against the real
+services needs your own accounts and keys, as described below.
 
 For a first program that needs no account, see `invoice/`:
 

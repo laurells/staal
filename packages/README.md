@@ -23,5 +23,6 @@ and run `staalc fetch`. The grant for each capability supplies its `needs`
 variable, and for `sms` and `email` the sender.
 
 Each package's code has been run against a local server standing in for its
-service (`tests/packages_test.rs`, with the base URL swapped), but not against the
-real services: the machine they were built on could not reach them.
+service (`tests/packages_test.rs`, with the base URL swapped), and all four have
+been fetched from their GitHub repositories with `staalc fetch`. Runs against the
+live services need your own keys.

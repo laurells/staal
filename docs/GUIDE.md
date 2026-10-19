@@ -27,8 +27,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E900 | Lexer error |
 | E901 | Syntax error |
 
-All eight safety checks from the spec (E001-E008) are implemented. Phase 1's
-gate is met: every one is rejected by tests. 30 valid programs compile,
+All eight safety checks (E001-E008) are implemented, and tests show each one
+rejecting the programs it should. 30 valid programs compile,
 including the two benchmark workflows (`workflow_*.staal`), and 270 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
@@ -488,8 +488,8 @@ containing `/` or `..` before building one.
 Two capability families belong to the runtime: `net.http.get/post/put/patch/delete`
 returning a `Response { status, body, complete }`, and `fs.read` / `fs.write`.
 Every existing limit applies to them, and every request and write goes through
-the journal. Libraries for real services are meant to be written on top of these
-(phase 3). The full rules are in [RUNTIME.md](RUNTIME.md) section 12. In short:
+the journal. Libraries for real services are written on top of these (see
+[Capabilities from libraries](#capabilities-from-libraries)). The full rules are in [RUNTIME.md](RUNTIME.md) section 12. In short:
 
 - **Secrets** come only from environment variables named in the run config. A
   `Secret` cannot become text, be compared, sit in a record, reach a model or go to
@@ -676,9 +676,8 @@ letting the program import a package it does not depend on, allowing a dependenc
 and a folder of one name, each of the four authority rules, allowing two versions,
 allowing plain http, and accepting a misnamed package.
 
-What is not covered: fetching from a real host (GitHub was not reachable from the
-machine this was built on; local repositories exercise the same code), and a
-registry. Whoever can edit both `staal.lock` and `.staal/packages/` controls the
+Packages are fetched from any git host over HTTPS or SSH, GitHub included. There
+is no package registry yet: a dependency is always a git URL and a commit. Whoever can edit both `staal.lock` and `.staal/packages/` controls the
 code, as with any lockfile: `staalc check` trusts the lock, and `staalc fetch`
 compares both with git. `git` must be installed to fetch.
 
@@ -766,7 +765,5 @@ table out of order, constants or record layouts lost, and running through the
 in-memory compiler instead of the linked code.
 
 What is not built: executables on macOS and Windows (`staalc build` refuses there
-for now); runs on macOS (`.github/workflows/ci.yml` runs every test on macOS, Apple
-Silicon and Intel, once the code is on GitHub); an installable Python package; and
-calling C libraries from Staal, which the plan leaves for last because the broker
-could not check them.
+for now); an installable Python package; and calling C libraries from Staal, which is left
+for last on purpose: the broker could not check what native code does.
