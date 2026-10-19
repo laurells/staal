@@ -29,13 +29,15 @@
 // Every place a value flows into a slot (call argument, typed `let`, `return`)
 // goes through `assignable`, so the authority rules are decided in one place.
 //
-// Reassignment: `set x = e` gives a `let` variable a new value. The analysis treats
-// each variable as everything ever assigned to it in its function, wherever that is:
-// the `let` value, every `set` value, and what reaching each `set` reveals (its
-// branch conditions, loop counts, partial operations before it). This is computed by
-// checking the function repeatedly until it no longer grows (`check_fn`). It can
-// reject a program where a variable is read before a later, tainted `set`, but it can
-// never miss a flow, however the branches and loops are arranged.
+// Reassignment: `set x = e` gives a `let` variable a new value. The analysis follows
+// the code in order. After `set x = e`, x reveals what e reveals plus what reaching
+// that `set` reveals (its branch conditions, loop counts, partial operations before
+// it), and is trusted only if e is. Where paths meet (after an `if`, at a loop's head,
+// after a loop), a variable reveals what it reveals on any path that arrives there,
+// and is trusted only if it is trusted on all of them. A loop is checked again until
+// what its variables reveal at its head stops growing. Reading a variable before a
+// tainted `set` therefore sees only what it held then; in a loop, the next iteration
+// sees the later value.
 //
 // Trust: string, number and boolean literals are trusted. Parameters are
 // untrusted unless marked `@trusted`, and callers must pass trusted values to
@@ -77,10 +79,6 @@ struct Ctx<'a> {
     params: HashSet<String>,
     /// The maximum iteration count of each `for` loop, by position, for the cost analysis.
     for_bounds: HashMap<Pos, u64>,
-    /// What `set` statements assign to each `let` variable (keyed by the `let`'s position),
-    /// collected during the current pass over a function, and as settled by earlier passes.
-    assigned: HashMap<Pos, Assigned>,
-    assigned_prev: HashMap<Pos, Assigned>,
     /// Functions that may fail: an action, or a call to a failing function, not under `try`.
     fail_fns: HashSet<String>,
     /// Functions that may never finish: `loop` or recursion, directly or through any call.
@@ -90,31 +88,6 @@ struct Ctx<'a> {
 impl Ctx<'_> {
     fn err(&mut self, code: &'static str, pos: Pos, msg: String) {
         self.diags.push(Diagnostic { code, pos, msg });
-    }
-}
-
-/// Everything `set` statements put into one variable: what it can reveal, and whether
-/// every assigned value was trusted.
-#[derive(Clone, Debug, PartialEq)]
-struct Assigned {
-    srcs: Vec<(Vec<String>, bool)>,
-    trusted: bool,
-}
-
-impl Assigned {
-    fn add(&mut self, srcs: &[Src], trusted: bool) {
-        for s in srcs {
-            let k = (s.path.clone(), s.exact);
-            if !self.srcs.contains(&k) {
-                self.srcs.push(k);
-            }
-        }
-        self.srcs.sort();
-        self.trusted &= trusted;
-    }
-
-    fn srcs(&self) -> Vec<Src> {
-        self.srcs.iter().map(|(path, exact)| Src { path: path.clone(), exact: *exact }).collect()
     }
 }
 
@@ -154,7 +127,7 @@ fn overlaps(a: &[String], b: &[String]) -> bool {
 fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
     let inexact = |v: Vec<Src>| v.into_iter().map(|s| Src { path: s.path, exact: false }).collect::<Vec<_>>();
     match e {
-        Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => Vec::new(),
+        Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => Vec::new(),
         Expr::Var(n, _) => env.get(n).map(|b| b.reveals.clone()).unwrap_or_default(),
         Expr::Field { base, field, .. } => reveals(base, env)
             .into_iter()
@@ -223,7 +196,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Record { ty, .. } => format!("{ty} {{...}}"),
         Expr::List(..) => "[...]".into(),
         Expr::Index { base, .. } => format!("{}[...]", expr_text(base)),
-        Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => "literal".into(),
+        Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => "literal".into(),
     }
 }
 
@@ -260,8 +233,6 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
         diverge_fns: HashSet::new(),
         params: HashSet::new(),
         for_bounds: HashMap::new(),
-        assigned: HashMap::new(),
-        assigned_prev: HashMap::new(),
     };
     (ctx.fail_fns, ctx.diverge_fns) = partial_fns(prog);
     // Built-in result of `try`.
@@ -673,42 +644,10 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
     }
     let ret = f.ret.clone().unwrap_or_else(|| named("Unit"));
     check_ty_known(ctx, &ret, f.pos);
-    ctx.assigned.clear();
-    ctx.assigned_prev.clear();
-    if contains_set(&f.body) {
-        // Settle what each reassigned variable can hold: check, collect what the `set`s
-        // assign, and check again with that folded into each `let`, until nothing grows.
-        // Every pass only adds, and there are finitely many sources, so this ends; the
-        // bound is a safeguard that fails closed.
-        let mut settled = false;
-        for _ in 0..64 {
-            let mark = ctx.diags.len();
-            check_block(ctx, f, &ret, &f.body, env.clone(), false);
-            ctx.diags.truncate(mark);
-            let mut next = ctx.assigned_prev.clone();
-            for (k, a) in std::mem::take(&mut ctx.assigned) {
-                let e = next.entry(k).or_insert(Assigned { srcs: Vec::new(), trusted: true });
-                e.add(&a.srcs(), a.trusted);
-            }
-            if next == ctx.assigned_prev {
-                settled = true;
-                break;
-            }
-            ctx.assigned_prev = next;
-        }
-        if !settled {
-            ctx.err("E101", f.pos, format!("the reassignments in '{}' are too complex to analyse; simplify them", f.name));
-            return;
-        }
-    }
     check_block(ctx, f, &ret, &f.body, env, false);
     if ret != named("Unit") && !always_returns(&f.body) {
         ctx.err("E105", f.pos, format!("'{}' can finish without returning a value of type {ret}", f.name));
     }
-}
-
-fn contains_set(body: &[Stmt]) -> bool {
-    body.iter().any(|s| matches!(s, Stmt::Set { .. }) || s.blocks().into_iter().any(contains_set))
 }
 
 fn f_params_contains(ctx: &Ctx, name: &str) -> bool {
@@ -740,16 +679,120 @@ fn is_param_value(ctx: &Ctx, e: &Expr, env: &Env) -> bool {
     reveals(e, env).iter().any(|s| s.exact && f_params_contains(ctx, &s.path[0]))
 }
 
+/// Whether a `break` appears in this block, or in an `if`, `repeat` or `loop` inside it.
+/// (Conservative where it matters: a `break` of a nested loop counts too.)
+fn has_break(body: &[Stmt]) -> bool {
+    body.iter().any(|s| match s {
+        Stmt::Break(_) => true,
+        Stmt::If { then, els, .. } => has_break(then) || has_break(els),
+        Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => has_break(body),
+        _ => false,
+    })
+}
+
+/// Whether control can never reach the end of this block: every path returns or breaks
+/// first. When unsure, says it can: assuming more paths only adds taint.
+fn never_falls_through(body: &[Stmt]) -> bool {
+    body.iter().any(|s| match s {
+        Stmt::Return(..) | Stmt::Break(_) => true,
+        Stmt::If { then, els, .. } => !els.is_empty() && never_falls_through(then) && never_falls_through(els),
+        Stmt::Loop { body, .. } => !has_break(body),
+        _ => false,
+    })
+}
+
+/// What checking a block found: the taint its early exits carry (see `check_block`), the
+/// variables as they stand where it ends normally (`falls`: whether it can), and the
+/// variables as they stand at each `break` in it that leaves the enclosing loop.
+struct BlockOut {
+    taint: Vec<Src>,
+    end: Env,
+    falls: bool,
+    breaks: Vec<Env>,
+}
+
+/// A loop's exit taint, its variables at the head once settled, and at every `break`.
+struct LoopOut {
+    taint: Vec<Src>,
+    head: Env,
+    breaks: Vec<Env>,
+}
+
+/// Adds `from` to `into` as a set. An exact alias of a path stays exact unless the same
+/// path is also present as merely derived, which already covers everything beneath it.
+fn union_srcs(into: &mut Vec<Src>, from: &[Src]) {
+    for s in from {
+        if s.exact {
+            if !into.iter().any(|x| x.path == s.path) {
+                into.push(s.clone());
+            }
+        } else {
+            into.retain(|x| !(x.path == s.path && x.exact));
+            if !into.iter().any(|x| x.path == s.path) {
+                into.push(s.clone());
+            }
+        }
+    }
+}
+
+/// The binding a `let` at `decl` made, wherever it is in `env` (it may be shadowed).
+fn by_decl(env: &Env, decl: Pos) -> Option<&Binding> {
+    env.values().find(|b| b.decl == Some(decl))
+}
+
+/// A `let` that reuses a name hides the earlier variable for the rest of its block, but
+/// that variable still exists and an earlier `set` may have changed it: keep it under a
+/// key no name can match, so joins still find it by its `let`.
+fn hide_shadowed(env: &mut Env, name: &str) {
+    if let Some(old) = env.remove(name)
+        && let Some(d) = old.decl
+    {
+        env.insert(format!("\0{name}@{}:{}:{}", d.file, d.line, d.col), old);
+    }
+}
+
+/// `base`'s variables where control arrives from any of `paths`: each `let` variable
+/// reveals what it reveals on any of them and is trusted only if trusted on all of them.
+/// With no paths (nothing arrives), `base` is kept.
+fn join(base: &Env, paths: &[&Env]) -> Env {
+    let mut out = base.clone();
+    if paths.is_empty() {
+        return out;
+    }
+    for b in out.values_mut() {
+        let Some(d) = b.decl else { continue };
+        let (mut reveals, mut trusted, mut found) = (Vec::new(), true, false);
+        for p in paths {
+            if let Some(pb) = by_decl(p, d) {
+                union_srcs(&mut reveals, &pb.reveals);
+                trusted &= pb.trusted;
+                found = true;
+            }
+        }
+        if found {
+            b.reveals = reveals;
+            b.trusted = trusted;
+        }
+    }
+    out
+}
+
+/// Whether every `let` variable of `a` reveals the same and has the same trust in `b`.
+fn same_vars(a: &Env, b: &Env) -> bool {
+    let key = |v: &[Src]| {
+        let mut k: Vec<(Vec<String>, bool)> = v.iter().map(|s| (s.path.clone(), s.exact)).collect();
+        k.sort();
+        k.dedup();
+        k
+    };
+    a.values().all(|x| {
+        let Some(d) = x.decl else { return true };
+        by_decl(b, d).is_some_and(|y| y.trusted == x.trusted && key(&x.reveals) == key(&y.reveals))
+    })
+}
+
 /// Does every path through this block end in `return` (or in a `loop` that is never left)?
 fn always_returns(body: &[Stmt]) -> bool {
-    fn has_break(body: &[Stmt]) -> bool {
-        body.iter().any(|s| match s {
-            Stmt::Break(_) => true,
-            Stmt::If { then, els, .. } => has_break(then) || has_break(els),
-            Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => has_break(body),
-            _ => false,
-        })
-    }
     body.iter().any(|s| match s {
         Stmt::Return(..) => true,
         Stmt::If { then, els, .. } => always_returns(then) && always_returns(els),
@@ -806,9 +849,10 @@ fn field_path_exists(ctx: &Ctx, ty: &Ty, rel: &[String]) -> bool {
 /// it includes that condition for the rest of the block. Values bound here, and the
 /// decision to call a model here, carry `ctx.pc`. Returns what this block's early
 /// exits reveal, so enclosing blocks can taint the code that runs after them.
-fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env, in_loop: bool) -> Vec<Src> {
+fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env, in_loop: bool) -> BlockOut {
     let saved_pc = ctx.pc.clone();
     let mut exit_taint: Vec<Src> = Vec::new();
+    let mut breaks: Vec<Env> = Vec::new();
     for stmt in body {
         // If this statement contains an action or a call that might not finish, whether
         // execution gets past it can depend on that operation's arguments. That holds for
@@ -832,13 +876,10 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     && items.is_empty()
                 {
                     check_ty_known(ctx, decl, *pos);
-                    let (mut reveals, mut trusted) = (Vec::new(), true);
+                    let mut reveals = Vec::new();
                     add_srcs(&mut reveals, ctx.pc.clone());
-                    if let Some(a) = ctx.assigned_prev.get(pos) {
-                        add_srcs(&mut reveals, a.srcs());
-                        trusted &= a.trusted;
-                    }
-                    let b = Binding { ty: decl.clone(), trusted, reveals, proven_ok: false, holds_evidence: false, decl: Some(*pos) };
+                    let b = Binding { ty: decl.clone(), trusted: true, reveals, proven_ok: false, holds_evidence: false, decl: Some(*pos) };
+                    hide_shadowed(&mut env, name);
                     env.insert(name.clone(), b);
                     continue;
                 }
@@ -858,11 +899,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 // `let y = x` keeps what is known about x's outcome.
                 let proven_ok = matches!(value, Expr::Var(v, _) if env.get(v).is_some_and(|b| b.proven_ok));
                 let holds_evidence = outcome_holds_evidence(ctx, value, &env);
-                let mut trusted = trusted;
-                if let Some(a) = ctx.assigned_prev.get(pos) {
-                    add_srcs(&mut r, a.srcs());
-                    trusted &= a.trusted;
-                }
+                hide_shadowed(&mut env, name);
                 env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r, proven_ok, holds_evidence, decl: Some(*pos) });
             }
             Stmt::Set { name, value, pos } => {
@@ -892,11 +929,16 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     ctx.err(code, *pos, format!("in `set {name}`: {msg}"));
                     continue;
                 }
-                // The new value, and the fact that this `set` was reached.
+                // From here on the variable holds the new value, and reveals that this
+                // `set` was reached. What it held before no longer matters on this path.
                 let mut r = reveals(value, &env);
                 add_srcs(&mut r, ctx.pc.clone());
-                // Folded into the variable's `let` on the next pass (see `check_fn`).
-                ctx.assigned.entry(decl).or_insert(Assigned { srcs: Vec::new(), trusted: true }).add(&r, trusted);
+                if let Some(cur) = env.get_mut(name)
+                    && cur.decl == Some(decl)
+                {
+                    cur.reveals = r;
+                    cur.trusted = trusted;
+                }
             }
             Stmt::Expr(e) => {
                 type_of(ctx, e, &env);
@@ -932,7 +974,12 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 }
             }
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => {
-                let taint = check_loop(ctx, f, ret, body, env.clone(), &[]);
+                let lo = check_loop(ctx, f, ret, body, env.clone(), &[]);
+                // After the loop: from its head (it may end after any iteration) or a `break`.
+                let mut paths = vec![&lo.head];
+                paths.extend(lo.breaks.iter());
+                env = join(&env, &paths);
+                let taint = lo.taint;
                 ctx.pc = saved_pc.clone();
                 add_srcs(&mut ctx.pc, exit_taint.clone());
                 add_srcs(&mut exit_taint, taint.clone());
@@ -962,7 +1009,11 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 // body does depends on the list, like the body of an `if` on its condition.
                 let mut count = Vec::new();
                 add_srcs(&mut count, list_srcs);
-                let mut taint = check_loop(ctx, f, ret, body, body_env, &count);
+                let lo = check_loop(ctx, f, ret, body, body_env, &count);
+                let mut paths = vec![&lo.head];
+                paths.extend(lo.breaks.iter());
+                env = join(&env, &paths);
+                let mut taint = lo.taint;
                 if may_stop(ctx, body) {
                     add_srcs(&mut taint, count);
                 }
@@ -1010,8 +1061,20 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                         }
                     }
                 }
-                let t1 = check_block(ctx, f, ret, then, then_env, in_loop);
-                let t2 = check_block(ctx, f, ret, els, else_env, in_loop);
+                let o1 = check_block(ctx, f, ret, then, then_env, in_loop);
+                let o2 = check_block(ctx, f, ret, els, else_env, in_loop);
+                // After the `if`: from whichever branches can reach their end.
+                let mut reach = Vec::new();
+                if o1.falls {
+                    reach.push(&o1.end);
+                }
+                if o2.falls {
+                    reach.push(&o2.end);
+                }
+                env = join(&env, &reach);
+                let (t1, t2) = (o1.taint, o2.taint);
+                breaks.extend(o1.breaks);
+                breaks.extend(o2.breaks);
                 if let Some(var) = after_if_proven
                     && let Some(b) = env.get_mut(&var) {
                         b.proven_ok = true;
@@ -1038,6 +1101,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 }
             }
             Stmt::Break(pos) => {
+                breaks.push(env.clone());
                 if !in_loop {
                     ctx.err("E103", *pos, "`break` is only allowed inside `repeat`, `loop` or `for`".into());
                 }
@@ -1045,37 +1109,46 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
         }
     }
     ctx.pc = saved_pc;
-    exit_taint
+    BlockOut { taint: exit_taint, falls: !never_falls_through(body), end: env, breaks }
 }
 
 /// Checks a loop body (`repeat`, `loop`, `for`) under `extra` in addition to the
-/// current pc. A `break` taken in one iteration decides whether later iterations run,
-/// so the body is checked again under its own exit taint until that is stable; the
-/// diagnostics of the trial passes are discarded. Exit taint does not depend on the pc
-/// (it is the inputs of partial operations and the conditions of stopping branches),
-/// so this settles after one extra pass; the bound of 8 is a safeguard. Returns the
-/// body's exit taint. Leaves `ctx.pc` for the caller to set.
-fn check_loop(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], env: Env, extra: &[Src]) -> Vec<Src> {
+/// current pc. Two things are settled first, with the diagnostics of the trial passes
+/// discarded: a `break` taken in one iteration decides whether later iterations run, so
+/// the body is checked again under its own exit taint; and a variable set in one
+/// iteration is read by the next, so the variables at the loop head are joined with
+/// those at the end of the body. Both only grow and there are finitely many sources,
+/// so this settles; the bound is a safeguard that fails closed. Leaves `ctx.pc` for
+/// the caller to set.
+fn check_loop(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], env: Env, extra: &[Src]) -> LoopOut {
     let mut base = ctx.pc.clone();
     add_srcs(&mut base, extra.to_vec());
     let mut taint: Vec<Src> = Vec::new();
-    for _ in 0..8 {
+    let mut head = env;
+    let mut settled = false;
+    for _ in 0..64 {
         let mark = ctx.diags.len();
         ctx.pc = base.clone();
         add_srcs(&mut ctx.pc, taint.clone());
-        let t = check_block(ctx, f, ret, body, env.clone(), true);
+        let out = check_block(ctx, f, ret, body, head.clone(), true);
         ctx.diags.truncate(mark);
         let before = taint.len();
-        add_srcs(&mut taint, t);
-        if taint.len() == before {
+        add_srcs(&mut taint, out.taint);
+        let next = if out.falls { join(&head, &[&head, &out.end]) } else { head.clone() };
+        if taint.len() == before && same_vars(&head, &next) {
+            settled = true;
             break;
         }
+        head = next;
+    }
+    if !settled {
+        ctx.err("E101", f.pos, format!("a loop in '{}' is too complex to analyse; simplify it", f.name));
     }
     ctx.pc = base;
     add_srcs(&mut ctx.pc, taint.clone());
-    let t = check_block(ctx, f, ret, body, env, true);
-    add_srcs(&mut taint, t);
-    taint
+    let out = check_block(ctx, f, ret, body, head.clone(), true);
+    add_srcs(&mut taint, out.taint);
+    LoopOut { taint, head, breaks: out.breaks }
 }
 
 /// E007: no input of a model call may reveal a path the call is blind to, either
@@ -1217,6 +1290,7 @@ fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option
 fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
     match e {
         Expr::Str(..) => Some((named("Text"), true)),
+        Expr::Money(..) => Some((named("Money"), true)),
         Expr::Int(n, pos) => {
             if *n > i64::MAX as u64 {
                 ctx.err("E101", *pos, format!("integer {n} is too large; the largest Int is {}", i64::MAX));

@@ -1,0 +1,5 @@
+// expect: E101
+// Money is never negative.
+fn f() -> Money {
+    return -5 USD
+}

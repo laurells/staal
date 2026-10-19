@@ -1,0 +1,5 @@
+// expect: E901
+// An amount too large for exact minor units.
+fn f() -> Money {
+    return 99999999999999999 USD
+}

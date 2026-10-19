@@ -75,6 +75,10 @@ Money is exact; there is no floating point anywhere in the runtime.
   never true for ordering: `<`, `<=`, `>`, `>=` are all false, `==` is false
   and `!=` is true. So `refund.amount <= order.total` is false when the
   currencies differ, and the refund does not happen.
+- Money literals in source (`12.50 USD`, `0 NGN`, `1000 JPY`) are checked by
+  the compiler with the same rules as money from outside: a supported
+  currency, at most its number of decimal places, and an amount that fits.
+  Their value is exact.
 - Capability limits written in source (`max: 500 USD`) are in **major** units:
   `500 USD` is 50000 minor units. A limit with no currency cannot be enforced
   against money and is rejected when the program is run.

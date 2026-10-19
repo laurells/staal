@@ -1,0 +1,5 @@
+// expect: E901
+// USD has two decimal places.
+fn f() -> Money {
+    return 1.234 USD
+}

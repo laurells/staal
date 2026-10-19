@@ -1,0 +1,5 @@
+// expect: E901
+// Only supported currencies.
+fn f() -> Money {
+    return 5 XYZ
+}

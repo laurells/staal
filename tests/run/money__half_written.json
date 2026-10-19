@@ -1,0 +1,1 @@
+{"entry":"half_written","model": { "provider": "script", "responses": [] },"expect":{"result":{"amount":"12.50","currency":"USD"}}}

@@ -1,0 +1,1 @@
+{"entry":"total","inputs":{"items":[{"sku":"A","price":{"amount":"5.00","currency":"NGN"}}]},"model": { "provider": "script", "responses": [] },"expect":{"failure":"value","message_contains":"different currencies"}}

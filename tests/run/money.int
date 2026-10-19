@@ -1,0 +1,22 @@
+// Money literals at runtime.
+type Item { sku: Text, price: Money }
+
+fn total(items: List<Item, 50>) -> Money {
+    let sum = 0 USD
+    for item in items {
+        set sum = sum + item.price
+    }
+    return sum
+}
+
+fn exact() -> Bool {
+    return 0.10 USD + 0.20 USD == 0.30 USD
+}
+
+fn change(paid: Money) -> Money {
+    return paid - 12.50 USD
+}
+
+fn half_written() -> Money {
+    return 12.5 USD
+}

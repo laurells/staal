@@ -36,8 +36,8 @@ scripted one exists.
 | E901 | Syntax error |
 
 All eight safety checks from the spec (E001-E008) are implemented. Phase 1's
-gate is met: every one is rejected by tests. 25 valid programs compile,
-including the two benchmark workflows (`workflow_*.int`), and 207 invalid ones
+gate is met: every one is rejected by tests. 27 valid programs compile,
+including the two benchmark workflows (`workflow_*.int`), and 220 invalid ones
 are each rejected with the expected code.
 
 Nothing in the compiler or runtime is specific to payments, email or any other
@@ -90,18 +90,25 @@ The exact rules are in `docs/RUNTIME.md` section 4.
 capabilities and proof values (`Receipt`, `Outcome`, `Done`) cannot be
 reassigned, so what a value proves or allows never changes under it.
 
-For blinding and trust, a variable counts as everything ever assigned to it in
-its function, plus whatever decided that each `set` ran: setting `vip = true`
-inside `if ends_with(order.customer.email, "@bigcorp.com")` makes `vip` reveal
-the email (E007), and one untrusted `set` makes the variable untrusted as an
-instruction (E006). This holds through loops and through copies between
-variables, and it is computed by re-checking the function until nothing more
-flows. The cost of that simplicity: the check does not track order, so a
-variable read before a later `set` of blinded data is still treated as
-revealing it, and such a program is rejected even though it is safe.
+For blinding and trust, the compiler follows the code in order. After
+`set x = e`, `x` reveals what `e` reveals, plus whatever decided that the `set`
+ran: setting `vip = true` inside `if ends_with(order.customer.email,
+"@bigcorp.com")` makes `vip` reveal the email (E007), and setting an
+instruction to an untrusted value makes it untrusted (E006). Where paths meet,
+after an `if`, at the top of a loop and after it, a variable reveals what it
+reveals on any path that arrives there. So a value read before a blinded
+`set`, or overwritten before it is read, is safe and accepted; in a loop, the
+next iteration sees what this one set.
 
-Known gap: there is no money literal yet (`0 USD` cannot be written), so a
-running money total has to start from a Money value the function already has.
+What stays conservative: anything that can stop the code, such as `n + 1`
+overflowing or an action failing, still counts as revealing its inputs to
+everything after it. That is the price of never missing a leak.
+
+Money literals are written with their currency: `0 USD`, `12.50 NGN`,
+`1000 JPY`. They follow the rules for money from outside: a supported
+currency, no more decimals than it has, and no amount too large to hold
+exactly. A decimal number without a currency is an error, since Intent has no
+floating point. The number and its currency must be on the same line.
 
 ## Modules
 
@@ -133,12 +140,30 @@ in which each name is qualified by its module (`send` in `sms/termii.int` is
 promises, budgets, trust, evidence and partial operations therefore hold
 across modules with no separate cross-module analysis. This is tested by
 splitting every test program in two (`tests/split_test.rs`): types and called
-functions move to a module, and every one of 124 splittable fixtures and 120
+functions move to a module, and every one of 131 splittable fixtures and 127
 runtime cases must give identical results. Mutations that hide one module's
 model calls, failures or costs from another are each caught.
 
-What is not built yet: packages from outside the program's folder (phase 4),
-and faster per-module checking. Every build checks the whole program.
+What is not built yet: packages from outside the program's folder (phase 4).
+
+Speed. Every build checks the whole program, which keeps the cross-file rules
+simple and exact. Measured on generated programs (`bench/gen_program.py`:
+functions with loops, branches, reassignment, calls across 20 modules, and a
+model call in about one in ten), release build, one core of a 2-core cloud
+machine, best of three runs:
+
+| Functions | Lines | Check time |
+|---|---|---|
+| 100 | 1,653 | 0.021 s |
+| 1,000 | 16,002 | 0.19 s |
+| 5,000 | 79,461 | 1.06 s |
+| 20,000 | 317,876 | 4.85 s |
+
+Time grows slightly faster than size (4 times the functions, about 4.6 times
+the time). Per-module checking with stored summaries is therefore not needed
+yet; it should be built only if real programs approach these sizes. These are
+generated programs, so programs with deeply nested loops full of `set` may cost
+more per line.
 
 ## Capability limits
 

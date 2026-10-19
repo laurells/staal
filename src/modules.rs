@@ -409,7 +409,7 @@ impl Resolver<'_, '_, '_> {
             _ => {}
         }
         match e {
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => {}
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => {}
             Expr::Field { base, .. } => self.expr(base),
             Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => self.expr(inner),
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {

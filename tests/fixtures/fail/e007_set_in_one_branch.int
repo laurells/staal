@@ -1,0 +1,13 @@
+// expect: E007
+// After an if, the variable reveals what either branch left in it.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+fn f(order: Order @blind(customer.email), formal: Bool) {
+    let x = "a"
+    if formal {
+        set x = order.customer.email
+    } else {
+        set x = "b"
+    }
+    let s = propose(Text, instruct: "Say hello.", data: [x], tokens: 50)
+}

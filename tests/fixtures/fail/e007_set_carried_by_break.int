@@ -1,0 +1,12 @@
+// expect: E007
+// A value carried out of a loop by break still reveals what it holds.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+fn f(order: Order @blind(customer.email)) {
+    let x = "a"
+    loop {
+        set x = order.customer.email
+        break
+    }
+    let s = propose(Text, instruct: "Say hello.", data: [x], tokens: 50)
+}

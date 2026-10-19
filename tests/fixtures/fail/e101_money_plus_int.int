@@ -1,0 +1,5 @@
+// expect: E101
+// Money and Int cannot be added.
+fn f() -> Money {
+    return 1 USD + 1
+}

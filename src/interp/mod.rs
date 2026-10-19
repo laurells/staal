@@ -713,6 +713,7 @@ impl<'p> Interp<'p> {
             Expr::Var(n, _) => frame.get(n),
             Expr::Str(s, _) => Ok(Value::Text(s.clone())),
             Expr::Bool(b, _) => Ok(Value::Bool(*b)),
+            Expr::Money(m, _) => Ok(Value::Money(*m)),
             Expr::Int(n, _) => match i64::try_from(*n) {
                 Ok(n) => Ok(Value::Int(n)),
                 Err(_) => internal(format!("integer literal {n} is out of range")),

@@ -1,0 +1,5 @@
+// expect: E901
+// JPY has no decimal places.
+fn f() -> Money {
+    return 1.5 JPY
+}

@@ -1,0 +1,12 @@
+// expect: E007
+// Only one branch reaches the end; the other's clean value does not help.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+fn f(order: Order @blind(customer.email), formal: Bool) {
+    let x = order.customer.email
+    if formal {
+        set x = "b"
+        return
+    }
+    let s = propose(Text, instruct: "Say hello.", data: [x], tokens: 50)
+}

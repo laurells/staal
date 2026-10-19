@@ -5,6 +5,8 @@ pub enum Tok {
     Ident(String),
     Str(String),
     Num(u64),
+    /// Digits with a decimal point, kept as written: `12.50`. Only money uses them.
+    Decimal(String),
     // keywords
     Fn,
     Type,
@@ -131,6 +133,17 @@ pub fn lex_file(src: &str, file: u32) -> Result<Vec<Token>, (Pos, String)> {
             let start = i;
             while i < chars.len() && chars[i].is_ascii_digit() {
                 i += 1;
+            }
+            // `12.50`: a decimal point between digits. Kept as text, never a float.
+            if i + 1 < chars.len() && chars[i] == '.' && chars[i + 1].is_ascii_digit() {
+                i += 1;
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+                let text: String = chars[start..i].iter().collect();
+                col += i - start;
+                out.push(Token { tok: Tok::Decimal(text), pos });
+                continue;
             }
             let text: String = chars[start..i].iter().collect();
             col += i - start;

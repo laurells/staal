@@ -1,0 +1,6 @@
+// expect: E901
+// A decimal number without a currency: Intent has no floating point.
+fn f() -> Int {
+    let x = 1.5
+    return 0
+}

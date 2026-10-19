@@ -1,0 +1,1 @@
+{"entry":"total","inputs":{"items":[]},"model": { "provider": "script", "responses": [] },"expect":{"result":{"amount":"0.00","currency":"USD"}}}

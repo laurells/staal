@@ -1,0 +1,38 @@
+// Safe programs the order-aware reassignment check accepts.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+
+// Read before the blinded value is assigned: the model saw only the name.
+fn read_then_set(order: Order @blind(customer.email)) -> Text budget(calls: 1, tokens: 50) {
+    let contact = order.customer.name
+    let s = validate propose(Text, instruct: "Greet the customer.", data: [contact], tokens: 50)
+    set contact = order.customer.email
+    return s
+}
+
+// Overwritten before use: the variable no longer holds the email.
+fn overwritten(order: Order @blind(customer.email)) budget(calls: 1, tokens: 50) {
+    let c = order.customer.email
+    set c = "hidden"
+    let s = propose(Text, instruct: "Say hello.", data: [c], tokens: 50)
+}
+
+// Both branches replace it, on a condition that is not blinded.
+fn both_branches(order: Order @blind(customer.email), formal: Bool) budget(calls: 1, tokens: 50) {
+    let greeting = order.customer.email
+    if formal {
+        set greeting = "Dear customer"
+    } else {
+        set greeting = "Hi"
+    }
+    let s = propose(Text, instruct: "Write a greeting.", data: [greeting], tokens: 50)
+}
+
+// Set first in every iteration, then read: each read sees the clean value.
+fn set_before_read_in_loop(order: Order @blind(customer.email)) budget(calls: 2, tokens: 100) {
+    let t = order.customer.email
+    repeat 2 {
+        set t = order.customer.name
+        let s = propose(Text, instruct: "Say hello.", data: [t], tokens: 50)
+    }
+}

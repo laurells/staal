@@ -1,0 +1,1 @@
+{"entry":"change","inputs":{"paid":{"amount":"20.00","currency":"USD"}},"model": { "provider": "script", "responses": [] },"expect":{"result":{"amount":"7.50","currency":"USD"}}}

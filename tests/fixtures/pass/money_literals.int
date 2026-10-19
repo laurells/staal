@@ -1,0 +1,30 @@
+// Money literals: exact amounts with a currency, checked like money from outside.
+type Item { sku: Text, price: Money }
+type Fee { name: Text, amount: Money }
+
+fn total(items: List<Item, 50>) -> Money {
+    let sum = 0 USD
+    for item in items {
+        set sum = sum + item.price
+    }
+    return sum
+}
+
+fn small(m: Money) -> Bool {
+    return m < 12.50 USD and m >= 0.01 USD
+}
+
+fn fee() -> Fee {
+    return Fee { name: "delivery", amount: 1500 NGN }
+}
+
+fn yen() -> Money {
+    return 1000 JPY * 3
+}
+
+// A number at the end of one line and a name at the start of the next are not money.
+fn lines(ABC: Int) -> Int {
+    let n = 5
+    let m = n + ABC
+    return m
+}

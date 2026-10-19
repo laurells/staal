@@ -1,0 +1,12 @@
+// expect: E007
+// A set before a shadowing let still changes the outer variable.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+fn f(order: Order @blind(customer.email)) {
+    let x = "a"
+    if order.id == "A1" {
+        set x = order.customer.email
+        let x = "b"
+    }
+    let s = propose(Text, instruct: "Say hello.", data: [x], tokens: 50)
+}

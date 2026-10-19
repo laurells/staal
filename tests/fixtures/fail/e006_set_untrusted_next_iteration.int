@@ -1,0 +1,9 @@
+// expect: E006
+// In a loop, the next iteration's instruction is the untrusted value set in this one.
+fn f(message: Text) {
+    let ask = "Summarise the message in the data."
+    repeat 2 {
+        let s = propose(Text, instruct: ask, data: [message], tokens: 50)
+        set ask = message
+    }
+}

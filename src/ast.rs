@@ -249,6 +249,8 @@ pub enum Expr {
     Str(String, Pos),
     Int(u64, Pos),
     Bool(bool, Pos),
+    /// `12.50 USD`: an exact amount, checked against its currency when parsed.
+    Money(crate::interp::money::Money, Pos),
     /// `base.field`, e.g. `order.total` or `ticket.customer.email`
     Field { base: Box<Expr>, field: String, pos: Pos },
     /// `left op right`, e.g. `count <= 3`
@@ -299,7 +301,7 @@ impl Expr {
     /// that walk expressions through this function can never skip part of one.
     pub fn children(&self) -> Vec<&Expr> {
         match self {
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) => Vec::new(),
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => Vec::new(),
             Expr::Field { base, .. } => vec![base],
             Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => vec![inner],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
@@ -323,6 +325,7 @@ impl Expr {
             | Expr::Str(_, p)
             | Expr::Int(_, p)
             | Expr::Bool(_, p)
+            | Expr::Money(_, p)
             | Expr::Validate(_, p)
             | Expr::Try(_, p)
             | Expr::Neg(_, p)

@@ -37,7 +37,8 @@
 //             | IDENT "." IDENT args      (an action through a capability variable, or
 //                                          a call to function IDENT of an imported module)
 //             | IDENT args                (call to a program function)
-//             | IDENT | STRING | NUM | "true" | "false"
+//             | IDENT | STRING | NUM | money | "true" | "false"
+//   money    := (NUM | DECIMAL) CURRENCY      (on one line: `0 USD`, `12.50 NGN`)
 //   popt     := "instruct" ":" expr | "data" ":" list | "blind_to" ":" list | "tokens" ":" NUM
 //   list     := "[" (expr ("," expr)*)? "]"
 //   args     := "(" (expr ("," expr)*)? ")"
@@ -764,10 +765,7 @@ impl Parser {
                 self.bump();
                 Ok(Expr::Str(s, pos))
             }
-            Tok::Num(n) => {
-                self.bump();
-                Ok(Expr::Int(n, pos))
-            }
+            Tok::Num(_) | Tok::Decimal(_) => self.number(pos),
             Tok::Ident(name) => {
                 self.bump();
                 if *self.peek() == Tok::LParen {
@@ -805,6 +803,38 @@ impl Parser {
             }
             other => Err((pos, format!("expected expression, found {other:?}"))),
         }
+    }
+
+    /// A whole number, or money: a number followed on the same line by a currency
+    /// code. Money is checked exactly as money arriving from outside is (RUNTIME.md
+    /// section 2): a supported currency, no more decimals than it has, no overflow.
+    fn number(&mut self, pos: Pos) -> PResult<Expr> {
+        use crate::interp::money::{Currency, Money};
+        let tok = self.bump().tok;
+        let next = &self.toks[self.i];
+        let code = match &next.tok {
+            Tok::Ident(c) if next.pos.line == pos.line && c.len() == 3 && c.bytes().all(|b| b.is_ascii_uppercase()) => {
+                Some(c.clone())
+            }
+            _ => None,
+        };
+        let (text, code) = match (tok, code) {
+            (Tok::Num(n), None) => return Ok(Expr::Int(n, pos)),
+            (Tok::Num(n), Some(c)) => (n.to_string(), c),
+            (Tok::Decimal(d), Some(c)) => (d, c),
+            (Tok::Decimal(d), None) => {
+                return Err((
+                    pos,
+                    format!("'{d}' needs a currency, e.g. `{d} USD`: decimal numbers are only for money, and Intent has no floating point"),
+                ))
+            }
+            (other, _) => return Err((pos, format!("expected a number, found {other:?}"))),
+        };
+        let cpos = self.pos();
+        self.bump();
+        let currency = Currency::parse(&code).map_err(|e| (cpos, e))?;
+        let m = Money::parse(&text, currency).map_err(|e| (pos, e))?;
+        Ok(Expr::Money(m, pos))
     }
 
     /// "(" (expr ("," expr)*)? ")"

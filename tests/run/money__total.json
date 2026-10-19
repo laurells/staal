@@ -1,0 +1,1 @@
+{"entry":"total","inputs":{"items":[{"sku":"A","price":{"amount":"0.10","currency":"USD"}},{"sku":"B","price":{"amount":"0.20","currency":"USD"}}]},"model": { "provider": "script", "responses": [] },"expect":{"result":{"amount":"0.30","currency":"USD"}}}
