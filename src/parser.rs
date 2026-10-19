@@ -573,6 +573,10 @@ impl Parser {
                 self.bump();
                 Ok(Stmt::Break(pos))
             }
+            Tok::Continue => {
+                self.bump();
+                Ok(Stmt::Continue(pos))
+            }
             Tok::If => self.if_stmt(),
             Tok::Ident(w) if w == "fail" && self.toks.get(self.i + 1).map(|t| &t.tok) == Some(&Tok::LParen) => {
                 self.bump();

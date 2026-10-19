@@ -687,7 +687,7 @@ impl Check<'_, '_> {
                 self.scopes.pop();
                 ok
             }
-            Stmt::Break(_) => true,
+            Stmt::Break(_) | Stmt::Continue(_) => true,
             Stmt::Return(None, _) => false,
         }
     }
@@ -1003,6 +1003,7 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
                 ctx: ir::Value::from_u32(0),
                 scopes: Vec::new(),
                 exits: Vec::new(),
+                heads: Vec::new(),
             };
             g.function(f)?;
         }
@@ -1161,6 +1162,8 @@ struct Gen<'b, 'm, 'p, M: Module> {
     /// For each enclosing loop: where `break` jumps, and how many scopes are open
     /// outside its body (a `break` drops the values of every scope inside).
     exits: Vec<(ir::Block, usize)>,
+    /// Where `continue` jumps for each enclosing loop, and the scope depth it drops to.
+    heads: Vec<(ir::Block, usize)>,
 }
 
 impl<M: Module> Gen<'_, '_, '_, M> {
@@ -1336,6 +1339,12 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 self.b.ins().jump(exit, &[]);
                 Ok(false)
             }
+            Stmt::Continue(_) => {
+                let (head, depth) = *self.heads.last().ok_or("native code: `continue` outside a loop")?;
+                self.drop_scopes_from(depth);
+                self.b.ins().jump(head, &[]);
+                Ok(false)
+            }
             Stmt::If { cond, then, els, .. } => {
                 let c = self.expr(cond)?;
                 let (tb, eb, join) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
@@ -1375,8 +1384,10 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 let next = self.b.ins().iadd_imm_s(iv, 1);
                 self.b.def_var(i, next);
                 self.exits.push((exit, self.scopes.len()));
+                self.heads.push((head, self.scopes.len()));
                 let falls = self.block(body)?;
                 self.exits.pop();
+                self.heads.pop();
                 if falls {
                     self.b.ins().jump(head, &[]);
                 }
@@ -1389,8 +1400,10 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 self.b.switch_to_block(head);
                 self.tick();
                 self.exits.push((exit, self.scopes.len()));
+                self.heads.push((head, self.scopes.len()));
                 let falls = self.block(body)?;
                 self.exits.pop();
+                self.heads.pop();
                 if falls {
                     self.b.ins().jump(head, &[]);
                 }
@@ -1430,8 +1443,11 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 self.declare(var, item, *inner);
                 let item_scope = self.scopes.len() - 1;
                 self.exits.push((exit, item_scope));
+                // `continue` drops the item, as the end of the body does, and goes on.
+                self.heads.push((head, item_scope));
                 let falls = self.block(body)?;
                 self.exits.pop();
+                self.heads.pop();
                 if falls {
                     self.drop_scopes_from(item_scope);
                     self.b.ins().jump(head, &[]);
@@ -1771,5 +1787,58 @@ fn grow(k: Int) -> Int {
             assert!(ctx.peak <= 12, "at most {} values were alive at once", ctx.peak);
             assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
         }
+    }
+
+    #[test]
+    fn continue_drops_what_the_rest_of_the_iteration_would_have() {
+        let src = r#"type P { name: Text, n: Int }
+
+fn skip(k: Int) -> Int {
+    let kept = 0
+    let items = ["a", "bb", "ccc"]
+    repeat 10000 {
+        let p = P { name: "x", n: kept }
+        for w in items {
+            let t = w + p.name
+            // Taken on two of every three items: `continue` must drop `t` and `w`.
+            if len(t) < 4 {
+                continue
+            }
+            set kept = kept + 1
+        }
+        if kept == k {
+            continue
+        }
+    }
+    return kept
+}
+
+fn first_with(words: List<Text, 10>, c: Text) -> Text {
+    let i = 0
+    loop {
+        if i >= len(words) {
+            return "none"
+        }
+        let w = words[i]
+        set i = i + 1
+        if not contains(w, c) {
+            continue
+        }
+        return w
+    }
+}
+"#;
+        let prog = crate::check_program(src).unwrap();
+        let native = Native::compile(&prog).unwrap();
+        assert_eq!(native.compiled(), ["first_with", "skip"]);
+        let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
+        assert_eq!(native.call("skip", &mut ctx, &[Value::Int(7)]).unwrap().unwrap(), Value::Int(10000));
+        assert!(ctx.peak <= 12, "at most {} values were alive at once", ctx.peak);
+        assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
+        let words = Value::List(["cat", "dog", "bird"].iter().map(|w| Value::Text(w.to_string())).collect());
+        let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
+        let r = native.call("first_with", &mut ctx, &[words, Value::Text("i".into())]).unwrap().unwrap();
+        assert_eq!(r, Value::Text("bird".into()));
+        assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
     }
 }

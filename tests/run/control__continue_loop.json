@@ -1,0 +1,1 @@
+{"entry": "first_long", "inputs": {"words": ["a", "to", "tree", "forest"], "min": 3}, "model": {"provider": "script", "responses": []}, "expect": {"result": "tree"}}

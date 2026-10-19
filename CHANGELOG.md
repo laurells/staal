@@ -7,6 +7,8 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `continue` in `repeat`, `loop` and `for`, on both engines. Skipping the rest
+  of an iteration on a blinded value counts as deciding what follows (E007).
 - Multi-line text between `"""` quotes, with the closing quotes' indentation
   removed.
 - Text interpolation, `"\(expr)"`, for Text, Int, Bool and Money; it is joining

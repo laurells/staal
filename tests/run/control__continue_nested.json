@@ -1,0 +1,1 @@
+{"entry": "passed", "inputs": {"rows": [{"name": "x", "scores": [90, 10, 50]}, {"name": "y", "scores": []}, {"name": "z", "scores": [49, 51, 100, 0]}]}, "model": {"provider": "script", "responses": []}, "expect": {"result": [2, 0, 2]}}

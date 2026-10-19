@@ -18,7 +18,7 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E100 | Undefined name or function |
 | E101 | Type mismatch or wrong number of arguments |
 | E102 | Unknown type |
-| E103 | `break` outside `repeat`, `loop` or `for` |
+| E103 | `break` or `continue` outside `repeat`, `loop` or `for` |
 | E104 | Unknown field, or a field read on a value that has no fields |
 | E105 | A function with a return type can finish without returning |
 | E106 | An import problem: a missing module, an import cycle, a name that clashes with an import |

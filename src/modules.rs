@@ -414,7 +414,7 @@ impl Resolver<'_, '_, '_> {
                 Stmt::Set { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value), _) | Stmt::Fail(value, _) => {
                     self.expr(value)
                 }
-                Stmt::Return(None, _) | Stmt::Break(_) => {}
+                Stmt::Return(None, _) | Stmt::Break(_) | Stmt::Continue(_) => {}
                 Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => self.block(body),
                 Stmt::For { var, list, body, pos } => {
                     self.binder(var, *pos);

@@ -1,0 +1,11 @@
+// `continue` on values that are not blinded is ordinary control flow.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email), names: List<Text, 5>) {
+    for n in names {
+        if n == "" {
+            continue
+        }
+        let s = propose(Text, instruct: "Greet.", data: [n, c.name])
+    }
+}

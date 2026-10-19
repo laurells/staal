@@ -191,7 +191,7 @@ impl<'a> Analyzer<'a> {
                 Stmt::Repeat { count, body, .. } => {
                     self.block(body, stack, cycles, diags.as_deref_mut()).times(*count)
                 }
-                Stmt::Break(_) => Cost::ZERO,
+                Stmt::Break(_) | Stmt::Continue(_) => Cost::ZERO,
                 Stmt::For { list, body, pos, .. } => {
                     let l = self.expr(list, stack, cycles);
                     let b = self.block(body, stack, cycles, diags.as_deref_mut());

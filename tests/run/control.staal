@@ -1,0 +1,72 @@
+// `continue` in every kind of loop, and with `break`.
+
+fn sum_positive(xs: List<Int, 10>) -> Int {
+    let total = 0
+    for x in xs {
+        if x <= 0 {
+            continue
+        }
+        set total = total + x
+    }
+    return total
+}
+
+fn odd_rounds(n: Int) -> Int {
+    let i = 0
+    let odd = 0
+    repeat 10 {
+        set i = i + 1
+        if i > n {
+            break
+        }
+        if i / 2 * 2 == i {
+            continue
+        }
+        set odd = odd + 1
+    }
+    return odd
+}
+
+fn first_long(words: List<Text, 10>, min: Int) -> Text {
+    let i = 0
+    loop {
+        if i >= len(words) {
+            return "none"
+        }
+        let w = words[i]
+        set i = i + 1
+        if len(w) < min {
+            continue
+        }
+        return w
+    }
+}
+
+type Row { name: Text, scores: List<Int, 5> }
+
+fn passed(rows: List<Row, 5>) -> List<Int, 5> {
+    let a = 0
+    let b = 0
+    let c = 0
+    let k = 0
+    for r in rows {
+        let good = 0
+        for s in r.scores {
+            if s < 50 {
+                continue
+            }
+            set good = good + 1
+        }
+        if k == 0 {
+            set a = good
+        } else {
+            if k == 1 {
+                set b = good
+            } else {
+                set c = good
+            }
+        }
+        set k = k + 1
+    }
+    return [a, b, c]
+}

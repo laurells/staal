@@ -157,7 +157,9 @@ Evaluation is strictly left to right and statement by statement.
   with `x` bound to that element. The list is evaluated once, before the first
   iteration. Because every list has a declared maximum length, a `for` loop is
   bounded, and the compiler costs it as at most N iterations.
-- `break` leaves the innermost loop. `return` leaves the function.
+- `break` leaves the innermost loop; `continue` goes on to its next iteration
+  (for `repeat` and `for`, the next count or element). Each iteration costs one
+  step either way. `return` leaves the function.
 - A function call evaluates its arguments left to right, then runs the callee
   with a fresh scope containing only its parameters.
 - Field access reads a field of a record or of an `Outcome` (`ok`, `error`).

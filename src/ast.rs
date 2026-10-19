@@ -140,6 +140,8 @@ pub enum Stmt {
     If { cond: Expr, then: Vec<Stmt>, els: Vec<Stmt>, pos: Pos },
     /// `break` — leave the innermost `repeat`, `loop` or `for`
     Break(Pos),
+    /// `continue`: on to the next iteration of the innermost loop.
+    Continue(Pos),
     /// `for x in xs { ... }` — once per element of a bounded list
     For { var: String, list: Expr, body: Vec<Stmt>, pos: Pos },
     /// `set name = value` — give a variable declared with `let` a new value
@@ -274,7 +276,9 @@ impl Stmt {
             Stmt::Expr(e) | Stmt::Return(Some(e), _) => vec![e],
             Stmt::If { cond, .. } => vec![cond],
             Stmt::For { list, .. } => vec![list],
-            Stmt::Return(None, _) | Stmt::Repeat { .. } | Stmt::Loop { .. } | Stmt::Break(_) => Vec::new(),
+            Stmt::Return(None, _) | Stmt::Repeat { .. } | Stmt::Loop { .. } | Stmt::Break(_) | Stmt::Continue(_) => {
+                Vec::new()
+            }
         }
     }
 
@@ -283,9 +287,13 @@ impl Stmt {
         match self {
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } | Stmt::For { body, .. } => vec![body],
             Stmt::If { then, els, .. } => vec![then, els],
-            Stmt::Let { .. } | Stmt::Set { .. } | Stmt::Fail(..) | Stmt::Expr(_) | Stmt::Return(..) | Stmt::Break(_) => {
-                Vec::new()
-            }
+            Stmt::Let { .. }
+            | Stmt::Set { .. }
+            | Stmt::Fail(..)
+            | Stmt::Expr(_)
+            | Stmt::Return(..)
+            | Stmt::Break(_)
+            | Stmt::Continue(_) => Vec::new(),
         }
     }
 }

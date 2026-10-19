@@ -589,10 +589,10 @@ fn collect_partial(ctx: &Ctx, e: &Expr, env: &Env, tried: bool, out: &mut Vec<Sr
 }
 
 /// Does this block contain anything that can stop execution early: `return`, `break`,
-/// `loop`, or a partial operation?
+/// `continue` (the rest of the iteration), `loop`, or a partial operation?
 fn may_stop(ctx: &Ctx, body: &[Stmt]) -> bool {
     body.iter().any(|s| {
-        matches!(s, Stmt::Return(..) | Stmt::Break(_) | Stmt::Loop { .. } | Stmt::Fail(..))
+        matches!(s, Stmt::Return(..) | Stmt::Break(_) | Stmt::Continue(_) | Stmt::Loop { .. } | Stmt::Fail(..))
             || s.exprs().into_iter().any(|e| expr_has_partial(ctx, e, false))
             || s.blocks().into_iter().any(|b| may_stop(ctx, b))
     })
@@ -982,7 +982,7 @@ fn has_break(body: &[Stmt]) -> bool {
 /// first. When unsure, says it can: assuming more paths only adds taint.
 fn never_falls_through(body: &[Stmt]) -> bool {
     body.iter().any(|s| match s {
-        Stmt::Return(..) | Stmt::Break(_) | Stmt::Fail(..) => true,
+        Stmt::Return(..) | Stmt::Break(_) | Stmt::Continue(_) | Stmt::Fail(..) => true,
         Stmt::If { then, els, .. } => !els.is_empty() && never_falls_through(then) && never_falls_through(els),
         Stmt::Loop { body, .. } => !has_break(body),
         _ => false,
@@ -997,6 +997,9 @@ struct BlockOut {
     end: Env,
     falls: bool,
     breaks: Vec<Env>,
+    /// The variables at each `continue` in it that goes on to the enclosing loop's next
+    /// iteration.
+    continues: Vec<Env>,
 }
 
 /// A loop's exit taint, its variables at the head once settled, and at every `break`.
@@ -1142,6 +1145,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
     let saved_pc = ctx.pc.clone();
     let mut exit_taint: Vec<Src> = Vec::new();
     let mut breaks: Vec<Env> = Vec::new();
+    let mut continues: Vec<Env> = Vec::new();
     for stmt in body {
         // If this statement contains an action or a call that might not finish, whether
         // execution gets past it can depend on that operation's arguments. That holds for
@@ -1368,6 +1372,8 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 let (t1, t2) = (o1.taint, o2.taint);
                 breaks.extend(o1.breaks);
                 breaks.extend(o2.breaks);
+                continues.extend(o1.continues);
+                continues.extend(o2.continues);
                 if let Some(var) = after_if_proven
                     && let Some(b) = env.get_mut(&var) {
                         b.proven_ok = true;
@@ -1406,10 +1412,16 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     ctx.err("E103", *pos, "`break` is only allowed inside `repeat`, `loop` or `for`".into());
                 }
             }
+            Stmt::Continue(pos) => {
+                continues.push(env.clone());
+                if !in_loop {
+                    ctx.err("E103", *pos, "`continue` is only allowed inside `repeat`, `loop` or `for`".into());
+                }
+            }
         }
     }
     ctx.pc = saved_pc;
-    BlockOut { taint: exit_taint, falls: !never_falls_through(body), end: env, breaks }
+    BlockOut { taint: exit_taint, falls: !never_falls_through(body), end: env, breaks, continues }
 }
 
 /// Checks a loop body (`repeat`, `loop`, `for`) under `extra` in addition to the
@@ -1434,7 +1446,13 @@ fn check_loop(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], env: Env, extr
         ctx.diags.truncate(mark);
         let before = taint.len();
         add_srcs(&mut taint, out.taint);
-        let next = if out.falls { join(&head, &[&head, &out.end]) } else { head.clone() };
+        // The next iteration starts from the end of this one, or from a `continue`.
+        let mut paths = vec![&head];
+        if out.falls {
+            paths.push(&out.end);
+        }
+        paths.extend(out.continues.iter());
+        let next = join(&head, &paths);
         if taint.len() == before && same_vars(&head, &next) {
             settled = true;
             break;

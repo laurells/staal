@@ -778,6 +778,7 @@ struct Meter {
 enum Flow {
     Next,
     Break,
+    Continue,
     Return(Value),
 }
 
@@ -1062,6 +1063,7 @@ impl<'p> Interp<'p> {
             Flow::Next if f.ret.is_none() => Ok(Value::Unit),
             Flow::Next => internal(format!("'{name}' finished without returning a value")),
             Flow::Break => internal(format!("`break` escaped from '{name}'")),
+            Flow::Continue => internal(format!("`continue` escaped from '{name}'")),
         }
     }
 
@@ -1121,7 +1123,7 @@ impl<'p> Interp<'p> {
                 for _ in 0..*count {
                     self.tick()?;
                     match self.exec_block(frame, body)? {
-                        Flow::Next => {}
+                        Flow::Next | Flow::Continue => {}
                         Flow::Break => break,
                         r @ Flow::Return(_) => return Ok(r),
                     }
@@ -1131,7 +1133,7 @@ impl<'p> Interp<'p> {
             Stmt::Loop { body, .. } => loop {
                 self.tick()?;
                 match self.exec_block(frame, body)? {
-                    Flow::Next => {}
+                    Flow::Next | Flow::Continue => {}
                     Flow::Break => return Ok(Flow::Next),
                     r @ Flow::Return(_) => return Ok(r),
                 }
@@ -1142,6 +1144,7 @@ impl<'p> Interp<'p> {
                 _ => internal("`if` condition was not a Bool"),
             },
             Stmt::Break(_) => Ok(Flow::Break),
+            Stmt::Continue(_) => Ok(Flow::Continue),
             Stmt::For { var, list, body, .. } => {
                 let Value::List(items) = self.eval(frame, list)? else {
                     return internal("`for` over a value that is not a list");
@@ -1153,7 +1156,7 @@ impl<'p> Interp<'p> {
                     let flow = bound.and_then(|()| self.exec_block(frame, body));
                     frame.scopes.pop();
                     match flow? {
-                        Flow::Next => {}
+                        Flow::Next | Flow::Continue => {}
                         Flow::Break => break,
                         r @ Flow::Return(_) => return Ok(r),
                     }

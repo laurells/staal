@@ -1,0 +1,13 @@
+// expect: E007
+// Skipping the rest of an iteration on a blinded value decides whether the model
+// call after it happens.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email), names: List<Text, 5>) {
+    for n in names {
+        if c.email == n {
+            continue
+        }
+        let s = propose(Text, instruct: "Greet.", data: [n])
+    }
+}

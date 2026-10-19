@@ -1,0 +1,7 @@
+// expect: E103
+fn f(x: Int) -> Int {
+    if x > 0 {
+        continue
+    }
+    return x
+}

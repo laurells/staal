@@ -1,0 +1,16 @@
+// expect: E007
+// A value set just before `continue` is what the next iteration starts with: here
+// only that path carries the blinded email into the model call.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email), flags: List<Bool, 3>) {
+    let note = "none"
+    for flag in flags {
+        let s = propose(Text, instruct: "Summarise.", data: [note])
+        if flag {
+            set note = c.email
+            continue
+        }
+        set note = "plain"
+    }
+}

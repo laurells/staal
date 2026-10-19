@@ -1,0 +1,1 @@
+{"entry": "odd_rounds", "inputs": {"n": 7}, "model": {"provider": "script", "responses": []}, "expect": {"result": 4}}

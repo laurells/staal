@@ -1,0 +1,1 @@
+{"entry": "sum_positive", "inputs": {"xs": [3, -1, 0, 4, -7, 5]}, "model": {"provider": "script", "responses": []}, "expect": {"result": 12}}
