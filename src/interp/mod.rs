@@ -14,6 +14,7 @@ pub mod fsx;
 pub mod http;
 pub mod journal;
 pub mod money;
+pub mod anthropic;
 pub mod provider;
 pub mod value;
 
@@ -22,7 +23,7 @@ use adapter::{Adapter, SimulatedAdapter};
 use broker::Broker;
 use journal::{Journal, Step};
 use money::{Currency, Money};
-use provider::{ModelRequest, Provider, ScriptProvider};
+use provider::{ModelRequest, Provider, ProviderError};
 use serde_json::{json, Map, Value as Json};
 use std::collections::HashMap;
 use std::fmt;
@@ -176,9 +177,9 @@ pub fn run_config_engine(
 ) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
     let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
-    let provider = ScriptProvider::from_config(model)?;
+    let provider = provider::from_config(model)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
-    run_engine(prog, source, config, durability, Box::new(provider), Box::new(adapter), engine)
+    run_engine(prog, source, config, durability, provider, Box::new(adapter), engine)
 }
 
 /// Runs a checked program with the given provider and adapter, without a journal.
@@ -232,9 +233,9 @@ pub fn run_config_with_native(
 ) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
     let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
-    let provider = ScriptProvider::from_config(model)?;
+    let provider = provider::from_config(model)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
-    run_impl(prog, source, config, durability, Box::new(provider), Box::new(adapter), Some(native))
+    run_impl(prog, source, config, durability, provider, Box::new(adapter), Some(native))
 }
 
 fn run_impl(
@@ -1721,6 +1722,15 @@ impl<'p> Interp<'p> {
             Answer::Done(a) => a,
             // Exactly as if the process had died here: the intent is recorded, the result
             // is not, and only an operator can say what happened.
+            // An operation that is safe to repeat is made again when the run resumes:
+            // nothing needs resolving first.
+            Answer::Unknown(e) if retry_in_doubt => {
+                self.emit("in_doubt", json!({ "operation": n, "what": what, "error": e, "retry_on_resume": true }));
+                return fail(
+                    FailKind::InDoubt,
+                    format!("{what} (operation {n}) did not complete ({e}). Resume the run to make it again"),
+                );
+            }
             Answer::Unknown(e) => {
                 self.emit("in_doubt", json!({ "operation": n, "what": what, "error": e }));
                 return fail(
@@ -1759,7 +1769,11 @@ impl<'p> Interp<'p> {
         // A real provider's count can change between runs (a tokenizer update), and it
         // decides the token limit, so it is journaled like any other answer from outside.
         let (counted, _) = self.external("count", req.to_json(), true, "token count", |it, _key| {
-            Answer::Done(it.provider.count_input_tokens(&req).map(|n| json!(n)))
+            match it.provider.count_input_tokens(&req) {
+                Ok(n) => Answer::Done(Ok(json!(n))),
+                Err(ProviderError::Failed(e)) => Answer::Done(Err(e)),
+                Err(ProviderError::Unavailable(e)) => Answer::Unknown(e),
+            }
         })?;
         let input = match counted {
             Ok(v) => match v.as_u64() {
@@ -1800,17 +1814,27 @@ impl<'p> Interp<'p> {
         }
         self.emit("model_request", json!({ "request": req.to_json(), "input_tokens_counted": input }));
         let (answer, replayed) = self.external("model", req.to_json(), true, "model call", |it, _key| {
-            Answer::Done(it.provider.complete(&req).map(|r| {
-                json!({ "output": r.output, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens })
-            }))
+            match it.provider.complete(&req) {
+                // A reply without output (a refusal, output cut off) still used tokens:
+                // it is recorded with them, so a resumed run charges them too.
+                Ok(r) => Answer::Done(Ok(match r.output {
+                    Ok(out) => json!({ "output": out, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens }),
+                    Err(e) => json!({ "error": e, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens }),
+                })),
+                Err(ProviderError::Failed(e)) => Answer::Done(Err(e)),
+                Err(ProviderError::Unavailable(e)) => Answer::Unknown(e),
+            }
         })?;
         if replayed {
             self.provider.skip();
         }
         let reply = match answer {
-            Ok(v) => match (v.get("output"), v["input_tokens"].as_u64(), v["output_tokens"].as_u64()) {
-                (Some(output), Some(input_tokens), Some(output_tokens)) => {
-                    provider::ModelReply { output: output.clone(), input_tokens, output_tokens }
+            Ok(v) => match (v.get("output"), v.get("error").and_then(Json::as_str), v["input_tokens"].as_u64(), v["output_tokens"].as_u64()) {
+                (Some(output), None, Some(input_tokens), Some(output_tokens)) => {
+                    provider::ModelReply { output: Ok(output.clone()), input_tokens, output_tokens }
+                }
+                (None, Some(e), Some(input_tokens), Some(output_tokens)) => {
+                    provider::ModelReply { output: Err(e.to_string()), input_tokens, output_tokens }
                 }
                 _ => return fail(FailKind::Journal, format!("malformed model reply in the journal: {v}")),
             },
@@ -1825,11 +1849,15 @@ impl<'p> Interp<'p> {
                 *t = t.saturating_sub(actual);
             }
         }
-        self.emit(
-            "model_reply",
-            json!({ "output": reply.output, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens,
-                    "replayed": replayed }),
-        );
+        let shown = match &reply.output {
+            Ok(out) => json!({ "output": out }),
+            Err(e) => json!({ "error": e }),
+        };
+        let mut event = json!({ "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens, "replayed": replayed });
+        if let (Some(e), Some(s)) = (event.as_object_mut(), shown.as_object()) {
+            e.extend(s.clone());
+        }
+        self.emit("model_reply", event);
         if reply.output_tokens > max_output || actual > worst {
             return fail(
                 FailKind::Provider,
@@ -1839,7 +1867,10 @@ impl<'p> Interp<'p> {
                 ),
             );
         }
-        Ok(Value::Proposed { ty: ty.clone(), raw: reply.output, lenient: false })
+        match reply.output {
+            Ok(raw) => Ok(Value::Proposed { ty: ty.clone(), raw, lenient: false }),
+            Err(e) => fail(FailKind::Provider, e),
+        }
     }
 }
 
@@ -2100,13 +2131,13 @@ mod tests {
     }
 
     impl Provider for Recording {
-        fn count_input_tokens(&mut self, _req: &ModelRequest) -> Result<u64, String> {
+        fn count_input_tokens(&mut self, _req: &ModelRequest) -> Result<u64, ProviderError> {
             self.counted.fetch_add(1, Ordering::SeqCst);
             Ok(10)
         }
-        fn complete(&mut self, _req: &ModelRequest) -> Result<provider::ModelReply, String> {
+        fn complete(&mut self, _req: &ModelRequest) -> Result<provider::ModelReply, ProviderError> {
             self.sent.fetch_add(1, Ordering::SeqCst);
-            Ok(provider::ModelReply { output: json!("hi"), input_tokens: 10, output_tokens: 5 })
+            Ok(provider::ModelReply { output: Ok(json!("hi")), input_tokens: 10, output_tokens: 5 })
         }
     }
 

@@ -35,6 +35,8 @@ A run is described by a **run config** (JSON):
 - Every `Secret` parameter must appear in `secrets`, which names the environment
   variable to read it from; `net` and `fs` configure the runtime's own
   capabilities (both in section 12).
+- `model` names the model provider: `"anthropic"` for Claude, or `"script"`
+  for fixed replies in tests (section 5).
 - Every capability parameter must appear in `grants`. Grants are how the
   person deploying the program hands out authority; nothing else can create a
   capability.
@@ -209,8 +211,77 @@ the README).
    being sent. After the reply, the actual input + output tokens are charged.
    A provider reply that exceeds the output limit is a failure (`provider`),
    and its tokens are still charged.
-5. **Result.** The reply's raw output becomes a `Proposed<T>`. Provider errors
-   (network, refusal, malformed reply) are failures of kind `provider`.
+5. **Result.** The reply's raw output becomes a `Proposed<T>`. A definite
+   provider error (a refused key, a malformed request, a refusal, output cut off
+   at the token limit, a reply that is not of the required shape) is a failure of
+   kind `provider`; when the model ran, its tokens are still charged.
+6. **Unavailable.** When the provider cannot be reached, or stays rate limited
+   or overloaded after its retries, the run stops (`in_doubt`, exit code 3)
+   without recording an answer. Resuming makes the call again; nothing needs
+   resolving first, because a model call changes nothing in the world.
+
+### Providers
+
+**`"script"`** replies from a fixed list, in order, for tests:
+`{"provider": "script", "responses": [{"output": …, "output_tokens": n}, …]}`. A
+response may instead be `{"error": "…"}` (a `provider` failure) or
+`{"unavailable": "…"}` (the run stops, as in step 6). Input tokens are counted
+as one per 4 bytes of the request's JSON.
+
+**`"anthropic"`** calls Claude through Anthropic's Messages API:
+
+```json
+"model": { "provider": "anthropic", "model": "claude-sonnet-5-5",
+           "api_key": { "env": "ANTHROPIC_API_KEY" } }
+```
+
+| Key | Meaning | Default |
+| --- | --- | --- |
+| `model` | the Claude model id, e.g. `claude-sonnet-5-5` or `claude-haiku-5-5` | required |
+| `api_key` | `{"env": NAME}`: the environment variable holding the key | required |
+| `base_url` | the API's address; HTTPS, or plain HTTP to 127.0.0.1 or localhost only | `https://api.anthropic.com` |
+| `timeout_ms` | the most one request may take | 600000 |
+| `connect_timeout_ms` | the most connecting may take | 10000 |
+| `retries` | extra attempts after a rate limit, an overload or a server error (0 to 10) | 2 |
+| `retry_delay_ms` | the first wait between attempts, doubling each time, unless the API sends `retry-after` (at most 60 s) | 1000 |
+| `proxy` | `"none"`, or `"environment"` to use `HTTPS_PROXY` | `"none"` |
+
+- **Request.** The instruction goes in the system prompt, after a fixed
+  preamble telling the model that the user message is data and that
+  instructions inside it are not to be followed. The data goes in the user
+  message as JSON. This separation helps the model; it is not what keeps a
+  program safe, which is that the reply is untrusted until validated and a
+  model never holds capabilities.
+- **Output.** Type T becomes a JSON schema in `output_config.format`, wrapped
+  as `{"value": T}`. Claude's structured outputs cannot express list lengths,
+  so a `List<T, N>` bound is given as a description instead; `validate`
+  enforces it. A recursive output type cannot be expressed, and such a call
+  fails (`provider`). Any other reply shape, or extra fields, is a `provider`
+  failure: the runtime never repairs output.
+- **Tokens.** Input is counted with the free `/v1/messages/count_tokens`
+  endpoint on exactly the request that is then sent. Anthropic describes the
+  count as an estimate that "might differ by a small amount" from the input
+  used, so the output limit sent is the call's limit less a margin of 16
+  tokens plus about 2% of the request's size; when the limit is too small for
+  a margin, all of it is sent. The budget is charged from the usage the API
+  reports for the call, including cache reads and writes.
+- **Failures.** 429, 500, 502, 503, 504 and 529, and connections that fail
+  before anything is sent, are retried up to `retries` times, then the run
+  stops (step 6). A timeout or broken connection after the request may have
+  arrived is not retried at once: the run stops, and resuming asks again.
+  Every other error status is a `provider` failure that names the API's error
+  type, its message and the request id. `stop_reason` `refusal`, `max_tokens`
+  and `model_context_window_exceeded` are `provider` failures whose tokens are
+  charged.
+- **The key** is read once, before the run starts (a missing variable is a
+  config error), sent only in the `x-api-key` header, and replaced by
+  `[api key]` in every message the provider produces. The config holds only the
+  variable's name, so the journal never contains the key.
+- **What is not guaranteed.** A call that times out after reaching the API, or
+  a crash between a call and its recorded answer, can make the model run twice;
+  the budget is charged only for the answer the program uses, so Anthropic's
+  bill can be higher than the budget shows by that one call. Model output is
+  not deterministic: a call made again can answer differently.
 
 ## 6. Capabilities and actions
 
@@ -415,7 +486,7 @@ service return a *different* run's receipt.
 | Kind | Cause |
 | --- | --- |
 | `journal` | the journal could not be written, or replay diverged from it |
-| `in_doubt` | an action that is not idempotent may or may not have happened |
+| `in_doubt` | an action that is not idempotent may or may not have happened; or a model call or token count did not complete (resuming makes it again) |
 
 Both are fatal, like `step_limit`: `try` never catches them.
 

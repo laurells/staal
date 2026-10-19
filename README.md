@@ -105,7 +105,7 @@ continued.
 | --- | --- |
 | [docs/GUIDE.md](docs/GUIDE.md) | The language: rules, syntax, capabilities, packages, native code |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | The runtime specification: semantics, the journal, failure behaviour |
-| [examples/README.md](examples/README.md) | Programs that send real SMS and email, and how to run them with your keys |
+| [examples/README.md](examples/README.md) | Programs that call Claude and send real SMS and email, and how to run them with your keys |
 | [packages/README.md](packages/README.md) | The reference packages and how a service becomes a library |
 | [include/staal.h](include/staal.h) | The C interface |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
@@ -113,14 +113,16 @@ continued.
 ## Status
 
 Staal is pre-release and not yet ready for production use. Built and tested:
-the compiler and all eight safety rules, the reference runtime, exact money, the
-capability broker, budgets, the crash-safe journal, modules, HTTP and file
-capabilities, capabilities declared by libraries, packages fetched from git and
-locked by hash, native code, executables and the C interface.
+the compiler and all eight safety rules, the reference runtime, Claude as a
+model provider, exact money, the capability broker, budgets, the crash-safe
+journal, modules, HTTP and file capabilities, capabilities declared by
+libraries, packages fetched from git and locked by hash, native code,
+executables and the C interface.
 
-Not yet done: runs against real services and real model providers (only a
-scripted model exists), Windows, executables on macOS (`staalc build` is Linux
-only for now), an installable Python package, and calling C libraries from Staal.
+Not yet done: runs against the live services (Claude, Termii, Stripe, Resend,
+Slack) with real keys, which so far are tested against local stand-ins; other
+model providers; Windows; executables on macOS (`staalc build` is Linux only
+for now); an installable Python package; and calling C libraries from Staal.
 
 ## Repository layout
 
@@ -130,7 +132,7 @@ src/checker.rs, budget.rs         type and safety rules, worst-case model cost
 src/modules.rs, packages.rs       modules, manifests, staal.lock, fetching from git
 src/pattern.rs, targets.rs        `only` patterns and canonical targets
 src/interp/                       reference runtime: interpreter, money, broker,
-                                  journal, HTTP, files, model providers
+                                  journal, HTTP, files, model providers (Claude)
 src/native.rs                     native code through Cranelift
 src/capi.rs, include/staal.h      the C interface
 src/cli.rs, main.rs               the command line and built executables' entry

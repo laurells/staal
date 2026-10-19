@@ -408,12 +408,24 @@ Other limits:
     staalc resume  prog.staal --config run.json --journal run.journal
     staalc resolve --journal run.journal (--performed <receipt> | --failed <reason> | --retry)
 
-The reference interpreter runs checked programs against a scripted model and
-simulated adapters (real providers and adapters are not built yet). With
+The reference interpreter runs checked programs. Model calls go to Claude
+(`"provider": "anthropic"`) or, in tests, to a scripted model; actions go through
+the runtime's own `net.http` and `fs` capabilities, libraries built on them, or
+simulated adapters. With
 `--journal`, a run survives being killed at any moment: `resume` finishes it
 without performing any action twice and without losing any action that
 happened. The full protocol is in [RUNTIME.md](RUNTIME.md) section 11.
 
+- Calling Claude takes a model id and the environment variable holding the key:
+
+      "model": { "provider": "anthropic", "model": "claude-sonnet-5-5",
+                 "api_key": { "env": "ANTHROPIC_API_KEY" } }
+
+  Tokens are counted before each call and charged from what the API reports.
+  Rate limits and overloads are retried; if the API stays unavailable, the run
+  stops and `resume` makes the call again. Refusals and output cut off at the
+  token limit are `provider` failures a program can `try`. The full behaviour
+  is in [RUNTIME.md](RUNTIME.md) section 5.
 - Each token count, model call and action is recorded as an intent before it
   and a result after it, each flushed to disk (`fsync`) before the run goes on.
   Resume re-executes the program and takes recorded results from the journal

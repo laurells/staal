@@ -10,6 +10,19 @@ For a first program that needs no account, see `invoice/`:
 
     staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
 
+## A decision by Claude
+
+`claude/triage.staal` asks Claude whether a complaint deserves a refund and
+checks the answer before using it. The complaint tries to instruct the model;
+it stays data. You need an Anthropic API key:
+
+    export ANTHROPIC_API_KEY=...
+    staalc run examples/claude/triage.staal --config examples/claude/run.json --log triage.jsonl
+
+The log shows the request, the tokens counted before the call, and the tokens
+the API reported using. Change `"model"` in `run.json` to use another Claude
+model.
+
 Build staalc first:
 
     cargo build --release

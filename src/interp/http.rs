@@ -151,7 +151,7 @@ pub fn read_root_certificates(path: &str) -> Result<Vec<Vec<u8>>, String> {
 
 /// Errors that are certain to have happened before any byte of the request left are
 /// NotSent; everything else might have reached the server.
-fn classify(e: ureq::Error) -> Outcome {
+pub(super) fn classify(e: ureq::Error) -> Outcome {
     use ureq::Error as E;
     use ureq::Timeout as T;
     let text = e.to_string();

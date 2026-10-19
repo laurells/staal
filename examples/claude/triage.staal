@@ -1,0 +1,24 @@
+// Claude reads a customer complaint and proposes a refund decision. The program
+// checks the proposal before using it: the complaint is untrusted data, so it can
+// inform the answer but never instruct the model, and an answer outside the rules
+// is refused rather than acted on.
+//
+// Run it with your own key:
+//   export ANTHROPIC_API_KEY=...
+//   staalc run examples/claude/triage.staal --config examples/claude/run.json
+
+type Decision { refund: Bool, cents: Int, reason: Text }
+
+fn triage(complaint: Text) -> Text budget(calls: 1, tokens: 1500) {
+    let d: Decision = validate propose(Decision,
+        instruct: "Decide whether this complaint deserves a refund. Give the refund in US cents, at most 5000, and a one-sentence reason.",
+        data: [complaint],
+        tokens: 1500)
+    if not d.refund or d.cents <= 0 {
+        return "no refund: " + d.reason
+    }
+    if d.cents > 5000 {
+        return "refused: the model proposed more than the limit"
+    }
+    return "refund " + json(d.cents) + " cents: " + d.reason
+}

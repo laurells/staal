@@ -4,6 +4,18 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+### Added
+- Claude as a model provider (`"provider": "anthropic"`), through Anthropic's
+  Messages API with structured outputs. Tokens are counted before each call and
+  charged from the usage the API reports; rate limits and overloads are retried.
+- A run whose model provider stays unavailable stops (exit code 3) instead of
+  failing, and resuming makes the call again.
+- Refusals and output cut off at the token limit are `provider` failures, and
+  their tokens are charged.
+- `examples/claude/triage.staal`.
+
 ## 0.22.0 — 2026-10-19
 
 The first version published in this repository. Earlier versions (0.1 to 0.21)
