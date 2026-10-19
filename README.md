@@ -14,11 +14,12 @@ declared by libraries, is built and tested against a local server that answers
 like Termii and Stripe; the same real-service step applies. Phase 4, packages
 fetched from git and locked by hash, is built and tested against git repositories
 made by the tests; fetching from a public host, and a real SMS through a
-package, are left. Phase 5 is built in its first form: functions written purely in
-Int and Bool compile to native code through Cranelift, and a C interface lets any
-language run programs (Python is tested). Native code does not yet cover Text,
-records, lists or money, so most of a typical program still runs on the
-interpreter. Real model providers are not built; only a scripted one exists.
+package, are left. Phase 5 is built: pure functions (Int, Bool, Text, Money,
+records and lists) compile to native code through Cranelift, and a C interface
+lets any language run programs (Python is tested). Functions that call models,
+act, or use `try`, `parse` or `validate` stay on the interpreter. Not built yet:
+ahead-of-time executables, macOS and Windows runs, and an installable Python
+package. Real model providers are not built; only a scripted one exists.
 
 ## What it enforces today
 
@@ -703,23 +704,30 @@ compares both with git. `git` must be installed to fetch.
 
     intentc run program.int --config run.json --engine native
 
-On the native engine, every function whose parameters and result are Int or Bool,
-and whose body uses only `let`, `set`, `if`, `repeat`, `loop`, `break`, `return`,
-arithmetic, comparisons, `and`/`or`/`not` and calls to other such functions, is
-compiled to machine code when the run starts (Cranelift, in memory). Everything else
-runs on the interpreter, which stays the reference. Model calls, actions, HTTP,
-files and the journal never run in native code. The full rules are in
-`docs/RUNTIME.md` section 15. In short:
+On the native engine, every pure function is compiled to machine code when the run
+starts (Cranelift, in memory): its parameters and result are Int, Bool, Text, Money,
+records or lists of these, and its body uses `let`, `set`, `if`, `repeat`, `loop`,
+`for`, `break`, `return`, `fail`, arithmetic, comparisons, field reads, record and
+list literals, indexing, the pure built-in functions, and calls to other such
+functions. Everything else runs on the interpreter, which stays the reference.
+Model calls, actions, `try`, `parse`, `validate`, HTTP, files and the journal never
+run in native code. The full rules are in `docs/RUNTIME.md` section 15. In short:
 
 - **The same answer, byte for byte.** Native code counts steps and call depth
-  against the same limits on the same counters, checks every Int operation, and
-  builds every failure with the interpreter's own functions, so results, failure
-  messages, logs and journals are identical.
+  against the same limits on the same counters, and computes Int and Bool in
+  machine code with every operation checked. Text, money, records and lists live
+  in an arena the runtime owns; every operation on them calls the interpreter's own
+  function, so results, failure messages, logs and journals are identical. Values
+  are dropped exactly when the interpreter would drop them, so a long loop holds no
+  more memory.
 - **Crash on one engine, resume on the other.** The engine is not part of the run
   config, so the journal does not depend on it.
-- **Faster where it applies.** In a release build, a recursive Int program took
-  0.020 s native against 1.45 s on the interpreter. A program with no such
-  functions runs exactly as before.
+- **Faster where it applies, and honest about where it does not.** Release build,
+  best of seven runs: a recursive Int program, 0.016 s native against 1.42 s on the
+  interpreter; a loop over records with money, 0.079 s against 0.115 s; a short
+  text function, 3 ms slower native, as compiling at the start costs more than it
+  saves. Work on text, money, records and lists still calls into the runtime for
+  each operation.
 
 `include/intent.h` declares the C interface: `intent_check`, `intent_run`,
 `intent_resume`, `intent_resolve`, `intent_free` and `intent_version`, in
@@ -733,24 +741,26 @@ Python.
     out = lib.run("clinic.int", config, journal="run.journal", engine="native")
 
 How this is tested: all 132 runtime cases run on both engines with a journal, and
-their results, logs and journals are identical (114 functions compile across them).
-2,500 generated Int and Bool programs, compiled entirely to native code and run under
-tight step and depth limits with values at the edges of Int, end identically on
-both engines; across them, runs finish, overflow, divide by zero, and reach step and
-depth limits. A program mixing both engines is run at every step limit from 1 to past
-its end. The crash tests run with every pairing of engines for the crash and the
-resume. Fifteen mutations of the native compiler are each caught: a missing step
-per statement, per `loop` or per `repeat` iteration, step and depth limits off by
-one, depth not restored after a call, unchecked overflow, `MIN / -1` or negation,
-no short-circuit, unsigned comparison, a failure ignored after a call, steps not
-handed back to the interpreter, depth off by one at the hand-over, and swapped
-operands in a failure message. A Python script runs every clinic case through the
-shared library on both engines and checks errors come back as values.
+their results, logs and journals are identical (295 functions compile across them).
+2,500 generated programs using Int, Bool, Text, money, records and lists, compiled
+entirely to native code and run under tight step and depth limits with values at
+their edges, end identically on both engines; across them, runs finish, fail with
+`value` and with `fail`, and reach step and depth limits. A table of programs hits
+every failure native code reports at its edge. A program mixing both engines is run
+at every step limit from 1 to past its end. A 10,000-iteration loop never holds more
+than 12 values at once. The crash tests run with every pairing of engines for the
+crash and the resume. Twenty-seven mutations of the native compiler are each caught,
+among them: a missing step per statement or per `loop`, `repeat` or `for` iteration;
+limits off by one; unchecked overflow, `MIN / -1` or negation; no short-circuit; a
+value not dropped on `set`, `break` or the end of a block; a variable read without
+copying; record fields stored in the order written; a helper's failure ignored;
+swapped operands; and a field read that moves the record out of its variable. A
+Python script runs every clinic case through the shared library on both engines.
 
-What is not built: native code for Text, records, lists, money and the runtime's
-values (they run on the interpreter); compiling ahead of time to an executable
-(native code is made in memory when a run starts); Windows; and calling C libraries
-from Intent, which the plan leaves for last because the broker could not check them.
+What is not built: compiling ahead of time to an executable (native code is made in
+memory when a run starts); runs on macOS and Windows; an installable Python package;
+and calling C libraries from Intent, which the plan leaves for last because the
+broker could not check them.
 
 ## Requirements
 
@@ -777,8 +787,8 @@ the database, so it is run by hand or in CI, not by `cargo test`.
     cargo test
 
 `intentc check` exits 0 when the program is valid and 1 when it has errors.
-`intentc run ... --engine native` runs pure Int and Bool functions as native code
-(the default engine is the interpreter).
+`intentc run ... --engine native` runs pure functions as native code (the default
+engine is the interpreter).
 `intentc fetch [folder]` fetches the packages a project's `intent.json` names;
 it exits 2 if anything is wrong, and then changes nothing.
 

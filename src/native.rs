@@ -1,28 +1,44 @@
 // Native code for pure functions (roadmap phase 5), through Cranelift.
 //
-// A function is compiled when everything it does can be done without the runtime:
-// its parameters and result are Int or Bool, its body uses only `let`, `set`, `if`,
-// `repeat`, `loop`, `break`, `return`, arithmetic, comparisons, `and`/`or`/`not`, and
-// calls to other compiled functions. Every other function runs on the interpreter, and
-// a compiled function is only ever entered from it. Model calls, actions, HTTP, files
-// and the journal therefore never run in native code: they stay in the Rust runtime.
+// A function is compiled when everything it does can be done without effects: its
+// parameters and result are Int, Bool, Text, Money, records of these, or lists of
+// these; its body uses `let`, `set`, `if`, `repeat`, `loop`, `for`, `break`,
+// `return`, `fail`, arithmetic, comparisons, `and`/`or`/`not`, field reads, record and
+// list literals, indexing, the pure built-in functions, and calls to other compiled
+// functions. Every other function runs on the interpreter, and a compiled function is
+// only ever entered from it. Model calls, actions, `try`, `parse`/`validate`, HTTP,
+// files and the journal therefore never run in native code.
 //
-// The interpreter is the reference. Native code reproduces it exactly:
+// The interpreter is the reference, and native code reproduces it exactly:
 //   - steps: one per statement and one per loop iteration, against the same limit,
 //     on the same counter (passed in and out through `Ctx`);
 //   - depth: checked before each call, with the same limit;
-//   - Int arithmetic: checked; an overflow, a division by zero or MIN / -1 fails;
+//   - Int and Bool: computed in machine code, every operation checked;
+//   - every other value lives in an arena in `Ctx` and is held by native code as a
+//     handle; every operation on it calls the interpreter's own function (`arith`,
+//     `compare`, `builtin`, `list_index`), so results and failure messages are the
+//     interpreter's, byte for byte;
 //   - evaluation order: left to right, `and`/`or` short-circuit.
-// Every failure is built by the interpreter's own functions (`arith`, `neg`,
-// `step_limit`, `depth_limit`), so the message is the same byte for byte.
 //
-// Calling convention: each function takes `*mut Ctx` and its arguments as i64 (Bool is
-// 0 or 1) and returns i64. On failure it records the failure in `Ctx`, sets `failed`,
-// and returns 0; every caller checks `failed` after each call and returns at once.
+// Values: Int and Bool are i64 (Bool is 0 or 1). Anything else is a handle: an i64
+// naming one arena slot. A handle has exactly one owner, as a value in the
+// interpreter does: reading a variable clones its value into a new handle; helpers
+// consume the handles they are given; a variable's value is dropped when the variable
+// is reassigned or leaves scope (at the end of its block, a `break`, or a `return`).
+// So a loop holds no more values than the interpreter would. After a failure the
+// remaining handles are not dropped one by one: the whole arena is freed when native
+// code returns to the interpreter, which it does at once.
+//
+// Calling convention: each function takes `*mut Ctx` and its arguments as i64 and
+// returns i64. On failure it records the failure in `Ctx`, sets `failed`, and returns
+// 0; every caller checks `failed` after each call or fallible helper, and returns.
 
-use crate::ast::{ArithOp, CmpOp, Expr, FnDecl, LogicOp, Program, Stmt, Ty};
-use crate::interp::{arith_failure, depth_limit, neg, step_limit, Failure, FailKind};
-use cranelift_codegen::ir::{self, condcodes::IntCC, types, AbiParam, InstBuilder, MemFlagsData, UserFuncName};
+use crate::ast::{ArithOp, Builtin, CmpOp, Expr, FnDecl, LogicOp, Program, Stmt, Ty};
+use crate::interp::value::Value;
+use crate::interp::{arith, arith_failure, builtin, compare, depth_limit, list_index, neg, step_limit, Failure, FailKind};
+use cranelift_codegen::ir::{
+    self, condcodes::IntCC, types, AbiParam, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, UserFuncName,
+};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -39,6 +55,63 @@ pub struct Ctx {
     pub max_depth: u64,
     pub failed: u64,
     pub failure: Option<Failure>,
+    arena: Vec<Option<Value>>,
+    free: Vec<usize>,
+    tables: *const Tables,
+    /// The most values alive in the arena at once during the last call.
+    pub peak: usize,
+}
+
+impl Ctx {
+    pub fn new(steps: u64, max_steps: u64, depth: u64, max_depth: u64) -> Ctx {
+        Ctx {
+            steps,
+            max_steps,
+            depth,
+            max_depth,
+            failed: 0,
+            failure: None,
+            arena: Vec::new(),
+            free: Vec::new(),
+            tables: std::ptr::null(),
+            peak: 0,
+        }
+    }
+
+    fn put(&mut self, v: Value) -> i64 {
+        let h = match self.free.pop() {
+            Some(i) => {
+                self.arena[i] = Some(v);
+                i as i64 + 1
+            }
+            None => {
+                self.arena.push(Some(v));
+                self.arena.len() as i64
+            }
+        };
+        self.peak = self.peak.max(self.arena.len() - self.free.len());
+        h
+    }
+
+    fn slot(&self, h: i64) -> Option<usize> {
+        let i = usize::try_from(h.checked_sub(1)?).ok()?;
+        (i < self.arena.len() && self.arena[i].is_some()).then_some(i)
+    }
+
+    fn take(&mut self, h: i64) -> Result<Value, Failure> {
+        let i = self.slot(h).ok_or_else(|| bad_handle(h))?;
+        self.free.push(i);
+        Ok(self.arena[i].take().expect("checked"))
+    }
+
+    fn get(&self, h: i64) -> Result<&Value, Failure> {
+        let i = self.slot(h).ok_or_else(|| bad_handle(h))?;
+        Ok(self.arena[i].as_ref().expect("checked"))
+    }
+}
+
+fn bad_handle(h: i64) -> Failure {
+    Failure { kind: FailKind::Internal, message: format!("native code used an invalid value handle {h}") }
 }
 
 const OFF_STEPS: i32 = 0;
@@ -47,19 +120,34 @@ const OFF_DEPTH: i32 = 16;
 const OFF_MAX_DEPTH: i32 = 24;
 const OFF_FAILED: i32 = 32;
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum K {
-    Int,
-    Bool,
+/// Constants and names the generated code refers to by number.
+struct Tables {
+    consts: Vec<Value>,
+    /// Record type name and its field names in declaration order.
+    records: Vec<(String, Vec<String>)>,
+    /// Field names, for field reads.
+    fields: Vec<String>,
 }
 
-fn kind_of(t: &Ty) -> Option<K> {
-    match t {
-        Ty::Named(n) if n == "Int" => Some(K::Int),
-        Ty::Named(n) if n == "Bool" => Some(K::Bool),
-        _ => None,
-    }
-}
+/// The built-in functions by the number generated code passes for them.
+const BUILTINS: [Builtin; 14] = [
+    Builtin::Len,
+    Builtin::Contains,
+    Builtin::StartsWith,
+    Builtin::EndsWith,
+    Builtin::Header,
+    Builtin::Json,
+    Builtin::FillSecret,
+    Builtin::Replace,
+    Builtin::Lower,
+    Builtin::Trim,
+    Builtin::Form,
+    Builtin::MinorUnits,
+    Builtin::Currency,
+    Builtin::UrlSegment,
+];
+
+const CMPS: [CmpOp; 6] = [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt, CmpOp::Le, CmpOp::Gt, CmpOp::Ge];
 
 fn arith_code(op: ArithOp) -> i64 {
     match op {
@@ -71,78 +159,504 @@ fn arith_code(op: ArithOp) -> i64 {
 }
 
 fn arith_op(code: i64) -> Option<ArithOp> {
-    match code {
-        0 => Some(ArithOp::Add),
-        1 => Some(ArithOp::Sub),
-        2 => Some(ArithOp::Mul),
-        3 => Some(ArithOp::Div),
-        _ => None,
+    [ArithOp::Add, ArithOp::Sub, ArithOp::Mul, ArithOp::Div].get(usize::try_from(code).ok()?).copied()
+}
+
+fn internal(message: impl Into<String>) -> Failure {
+    Failure { kind: FailKind::Internal, message: message.into() }
+}
+
+// ---------------------------------------------------------------------------------
+// Runtime helpers called from native code. They never panic (a panic cannot cross
+// into generated code): every failure, even an internal one, is recorded in Ctx.
+
+/// The Ctx native code passed. `Native::call` keeps it alive and exclusively borrowed
+/// for the whole call, and native code makes no other reference to it.
+fn ctx<'a>(c: *mut Ctx) -> &'a mut Ctx {
+    // SAFETY: see above.
+    unsafe { &mut *c }
+}
+
+fn record(c: &mut Ctx, f: Failure) {
+    c.failure = Some(f);
+    c.failed = 1;
+}
+
+/// Runs a helper body; a failure is recorded and 0 returned.
+fn guard(c: *mut Ctx, f: impl FnOnce(&mut Ctx) -> Result<i64, Failure>) -> i64 {
+    let c = ctx(c);
+    match f(c) {
+        Ok(v) => v,
+        Err(e) => {
+            record(c, e);
+            0
+        }
     }
 }
 
-// ---------------------------------------------------------------------------------
-// Runtime helpers called from native code on its failure paths. They never panic:
-// a panic cannot cross into generated code.
-
-fn record(ctx: *mut Ctx, f: Failure) {
-    // SAFETY: native code passes the Ctx it was given, which `Native::call` keeps alive
-    // and exclusively borrowed for the whole call.
-    let ctx = unsafe { &mut *ctx };
-    ctx.failure = Some(f);
-    ctx.failed = 1;
+fn tables<'a>(c: &Ctx) -> Result<&'a Tables, Failure> {
+    if c.tables.is_null() {
+        return Err(internal("native code ran without its tables"));
+    }
+    // SAFETY: `Native::call` points `tables` at the `Tables` it owns before running
+    // any code, and they outlive the call.
+    Ok(unsafe { &*c.tables })
 }
 
-extern "C" fn rt_step_limit(ctx: *mut Ctx) {
-    // SAFETY: as in `record`.
-    let max = unsafe { (*ctx).max_steps };
-    record(ctx, step_limit(max));
+extern "C" fn rt_step_limit(c: *mut Ctx) {
+    let c = ctx(c);
+    let f = step_limit(c.max_steps);
+    record(c, f);
 }
 
-extern "C" fn rt_depth_limit(ctx: *mut Ctx) {
-    // SAFETY: as in `record`.
-    let max = unsafe { (*ctx).max_depth };
-    record(ctx, depth_limit(max));
+extern "C" fn rt_depth_limit(c: *mut Ctx) {
+    let c = ctx(c);
+    let f = depth_limit(c.max_depth);
+    record(c, f);
 }
 
-extern "C" fn rt_arith(ctx: *mut Ctx, op: i64, a: i64, b: i64) {
+extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
     let f = match arith_op(op) {
         Some(op) => arith_failure(op, a, b),
-        None => Failure { kind: FailKind::Internal, message: format!("native code: unknown operator {op}") },
+        None => internal(format!("native code: unknown operator {op}")),
     };
-    record(ctx, f);
+    record(ctx(c), f);
 }
 
-extern "C" fn rt_neg(ctx: *mut Ctx, a: i64) {
+extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
     let f = match neg(a) {
         Err(f) => f,
-        Ok(_) => Failure { kind: FailKind::Internal, message: format!("native code: -({a}) reported as an overflow") },
+        Ok(_) => internal(format!("native code: -({a}) reported as an overflow")),
     };
-    record(ctx, f);
+    record(ctx(c), f);
 }
 
-extern "C" fn rt_no_return(ctx: *mut Ctx) {
-    record(ctx, Failure { kind: FailKind::Internal, message: "a native function finished without returning a value".into() });
+extern "C" fn rt_no_return(c: *mut Ctx) {
+    record(ctx(c), internal("a native function finished without returning a value"));
+}
+
+extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
+    guard(c, |c| {
+        let v = usize::try_from(idx).ok().and_then(|i| tables(c).ok()?.consts.get(i)).cloned();
+        let v = v.ok_or_else(|| internal(format!("native code: no constant {idx}")))?;
+        Ok(c.put(v))
+    })
+}
+
+extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
+    guard(c, |c| {
+        let v = c.get(h)?.clone();
+        Ok(c.put(v))
+    })
+}
+
+extern "C" fn rt_drop(c: *mut Ctx, h: i64) {
+    guard(c, |c| c.take(h).map(|_| 0));
+}
+
+extern "C" fn rt_box(c: *mut Ctx, kind: i64, v: i64) -> i64 {
+    guard(c, |c| Ok(c.put(if kind == 0 { Value::Int(v) } else { Value::Bool(v != 0) })))
+}
+
+extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
+    guard(c, |c| match c.take(h)? {
+        Value::Int(n) => Ok(n),
+        Value::Bool(b) => Ok(b as i64),
+        _ => Err(internal("native code: expected an Int or Bool")),
+    })
+}
+
+extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
+    guard(c, |c| {
+        let op = arith_op(op).ok_or_else(|| internal("native code: unknown operator"))?;
+        let (l, r) = (c.take(a)?, c.take(b)?);
+        let v = arith(op, l, r)?;
+        Ok(c.put(v))
+    })
+}
+
+extern "C" fn rt_cmp(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
+    guard(c, |c| {
+        let op = usize::try_from(op).ok().and_then(|i| CMPS.get(i)).copied();
+        let op = op.ok_or_else(|| internal("native code: unknown comparison"))?;
+        let (l, r) = (c.take(a)?, c.take(b)?);
+        Ok(compare(op, &l, &r)? as i64)
+    })
+}
+
+/// Reads `n` handles from `argv` and takes their values.
+fn take_args(c: &mut Ctx, argv: *const i64, n: i64) -> Result<Vec<Value>, Failure> {
+    let n = usize::try_from(n).map_err(|_| bad_handle(n))?;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        // SAFETY: generated code passes a stack array of exactly `n` i64 handles.
+        let h = unsafe { *argv.add(i) };
+        out.push(c.take(h)?);
+    }
+    Ok(out)
+}
+
+extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
+    guard(c, |c| {
+        let f = usize::try_from(code).ok().and_then(|i| BUILTINS.get(i)).copied();
+        let f = f.ok_or_else(|| internal("native code: unknown built-in"))?;
+        let args = take_args(c, argv, n)?;
+        let v = builtin(f, &args)?;
+        Ok(c.put(v))
+    })
+}
+
+extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
+    guard(c, |c| {
+        let t = tables(c)?;
+        let rec = usize::try_from(idx).ok().and_then(|i| t.records.get(i));
+        let (ty, names) = rec.ok_or_else(|| internal("native code: unknown record"))?;
+        let vals = take_args(c, argv, n)?;
+        if vals.len() != names.len() {
+            return Err(internal(format!("native code: {ty} with {} fields", vals.len())));
+        }
+        let fields = names.iter().cloned().zip(vals).collect();
+        Ok(c.put(Value::Record { ty: ty.clone(), fields }))
+    })
+}
+
+extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
+    guard(c, |c| {
+        let t = tables(c)?;
+        let name = usize::try_from(idx).ok().and_then(|i| t.fields.get(i));
+        let name = name.ok_or_else(|| internal("native code: unknown field"))?;
+        match c.take(h)? {
+            Value::Record { fields, .. } => match fields.into_iter().find(|(f, _)| f == name) {
+                Some((_, v)) => Ok(c.put(v)),
+                None => Err(internal(format!("no field '{name}'"))),
+            },
+            _ => Err(internal(format!("cannot read '.{name}' of this value"))),
+        }
+    })
+}
+
+/// A copy of field `idx` of the record in `h`, which stays owned by the caller: a
+/// field read from a variable copies the field, not the whole record.
+extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
+    guard(c, |c| {
+        let t = tables(c)?;
+        let name = usize::try_from(idx).ok().and_then(|i| t.fields.get(i));
+        let name = name.ok_or_else(|| internal("native code: unknown field"))?;
+        let v = match c.get(h)? {
+            Value::Record { fields, .. } => match fields.iter().find(|(f, _)| f == name) {
+                Some((_, v)) => v.clone(),
+                None => return Err(internal(format!("no field '{name}'"))),
+            },
+            _ => return Err(internal(format!("cannot read '.{name}' of this value"))),
+        };
+        Ok(c.put(v))
+    })
+}
+
+/// Item `i` of the list in `h`, which stays owned by the caller.
+extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
+    guard(c, |c| {
+        let v = match c.get(list)? {
+            Value::List(items) => list_index(items, i)?,
+            _ => return Err(internal("indexing a non-list")),
+        };
+        Ok(c.put(v))
+    })
+}
+
+extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
+    guard(c, |c| {
+        let vals = take_args(c, argv, n)?;
+        Ok(c.put(Value::List(vals)))
+    })
+}
+
+extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
+    guard(c, |c| match c.take(list)? {
+        Value::List(items) => {
+            let v = list_index(&items, i)?;
+            Ok(c.put(v))
+        }
+        _ => Err(internal("indexing a non-list")),
+    })
+}
+
+/// The length of a list, which stays owned by the caller.
+extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
+    guard(c, |c| match c.get(list)? {
+        Value::List(items) => Ok(items.len() as i64),
+        _ => Err(internal("`for` over a value that is not a list")),
+    })
+}
+
+/// A copy of item `i` of a list, which stays owned by the caller.
+extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
+    guard(c, |c| {
+        let v = match c.get(list)? {
+            Value::List(items) => usize::try_from(i).ok().and_then(|u| items.get(u)).cloned(),
+            _ => None,
+        };
+        let v = v.ok_or_else(|| internal("native code: `for` item out of range"))?;
+        Ok(c.put(v))
+    })
+}
+
+extern "C" fn rt_fail(c: *mut Ctx, h: i64) {
+    guard(c, |c| {
+        Err(match c.take(h)? {
+            Value::Text(m) => Failure { kind: FailKind::Action, message: m },
+            _ => internal("`fail` with a message that is not Text"),
+        })
+    });
 }
 
 // ---------------------------------------------------------------------------------
-// Which functions can be compiled
+// Types: which values native code can hold, and the type of every expression.
+
+/// How native code holds a value of a type.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Rep {
+    /// Int or Bool, as an i64.
+    Raw,
+    /// Any other value, as an arena handle.
+    Handle,
+}
+
+fn rep(t: &Ty) -> Rep {
+    if is(t, "Int") || is(t, "Bool") { Rep::Raw } else { Rep::Handle }
+}
+
+fn is(t: &Ty, n: &str) -> bool {
+    matches!(t, Ty::Named(x) if x == n)
+}
+
+fn named(n: &str) -> Ty {
+    Ty::Named(n.into())
+}
+
+/// The program's record types and compilable function signatures.
+struct Env<'p> {
+    records: HashMap<&'p str, &'p [(String, Ty)]>,
+    sigs: HashMap<&'p str, (Vec<Ty>, Ty)>,
+}
+
+impl<'p> Env<'p> {
+    fn new(prog: &'p Program) -> Env<'p> {
+        let records: HashMap<&str, &[(String, Ty)]> = prog.types.iter().map(|t| (t.name.as_str(), t.fields.as_slice())).collect();
+        let mut env = Env { records, sigs: HashMap::new() };
+        let mut sigs = HashMap::new();
+        for f in &prog.fns {
+            if f.name.contains(' ') {
+                continue;
+            }
+            let params: Option<Vec<Ty>> = f.params.iter().map(|p| env.allowed(&p.ty, 0).then(|| p.ty.clone())).collect();
+            if let (Some(params), Some(ret)) = (params, f.ret.as_ref().filter(|r| env.allowed(r, 0))) {
+                sigs.insert(f.name.as_str(), (params, ret.clone()));
+            }
+        }
+        env.sigs = sigs;
+        env
+    }
+
+    /// Values native code may hold: Int, Bool, Text, Money, records and lists of them.
+    fn allowed(&self, t: &Ty, depth: usize) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        match t {
+            Ty::Named(n) if ["Int", "Bool", "Text", "Money"].contains(&n.as_str()) => true,
+            Ty::Named(n) => self.records.get(n.as_str()).is_some_and(|fs| fs.iter().all(|(_, ft)| self.allowed(ft, depth + 1))),
+            Ty::List(inner, _) => self.allowed(inner, depth + 1),
+            Ty::Proposed(_) | Ty::Cap { .. } => false,
+        }
+    }
+
+    /// The type of `e`, or None if native code does not support it.
+    fn ty(&self, e: &Expr, var: &dyn Fn(&str) -> Option<Ty>) -> Option<Ty> {
+        let t = match e {
+            Expr::Var(n, _) => var(n)?,
+            Expr::Str(..) => named("Text"),
+            Expr::Int(n, _) => {
+                i64::try_from(*n).ok()?;
+                named("Int")
+            }
+            Expr::Bool(..) => named("Bool"),
+            Expr::Money(..) => named("Money"),
+            Expr::Arith { op, left, right, .. } => {
+                let (l, r) = (self.ty(left, var)?, self.ty(right, var)?);
+                let money_int = (is(&l, "Money") && is(&r, "Int")) || (is(&l, "Int") && is(&r, "Money"));
+                if is(&l, "Int") && is(&r, "Int") {
+                    named("Int")
+                } else if (is(&l, "Money") && is(&r, "Money") && matches!(op, ArithOp::Add | ArithOp::Sub))
+                    || (*op == ArithOp::Mul && money_int)
+                {
+                    named("Money")
+                } else if is(&l, "Text") && is(&r, "Text") && *op == ArithOp::Add {
+                    named("Text")
+                } else {
+                    return None;
+                }
+            }
+            Expr::Neg(inner, _) => {
+                if !is(&self.ty(inner, var)?, "Int") {
+                    return None;
+                }
+                named("Int")
+            }
+            Expr::Not(inner, _) => {
+                if !is(&self.ty(inner, var)?, "Bool") {
+                    return None;
+                }
+                named("Bool")
+            }
+            Expr::Logic { left, right, .. } => {
+                if !(is(&self.ty(left, var)?, "Bool") && is(&self.ty(right, var)?, "Bool")) {
+                    return None;
+                }
+                named("Bool")
+            }
+            Expr::Cmp { op, left, right, .. } => {
+                let (l, r) = (self.ty(left, var)?, self.ty(right, var)?);
+                let ordered = (is(&l, "Int") && is(&r, "Int")) || (is(&l, "Money") && is(&r, "Money"));
+                if !(ordered || (matches!(op, CmpOp::Eq | CmpOp::Ne) && l == r)) {
+                    return None;
+                }
+                named("Bool")
+            }
+            Expr::Field { base, field, .. } => {
+                let Ty::Named(n) = self.ty(base, var)? else { return None };
+                let fields = self.records.get(n.as_str())?;
+                fields.iter().find(|(f, _)| f == field)?.1.clone()
+            }
+            Expr::Record { ty, fields, .. } => {
+                let decl = self.records.get(ty.as_str())?;
+                if fields.len() != decl.len() {
+                    return None;
+                }
+                for (name, fe) in fields {
+                    let want = &decl.iter().find(|(f, _)| f == name)?.1;
+                    if self.ty(fe, var)? != *want {
+                        return None;
+                    }
+                }
+                named(ty)
+            }
+            Expr::List(items, _) => {
+                let first = self.ty(items.first()?, var)?;
+                for i in &items[1..] {
+                    if self.ty(i, var)? != first {
+                        return None;
+                    }
+                }
+                Ty::List(Box::new(first), items.len() as u64)
+            }
+            Expr::Index { base, index, .. } => {
+                let Ty::List(inner, _) = self.ty(base, var)? else { return None };
+                if !is(&self.ty(index, var)?, "Int") {
+                    return None;
+                }
+                *inner
+            }
+            Expr::Builtin { f, args, .. } => {
+                for a in args {
+                    self.ty(a, var)?;
+                }
+                match f {
+                    Builtin::Len | Builtin::MinorUnits => named("Int"),
+                    Builtin::Contains | Builtin::StartsWith | Builtin::EndsWith => named("Bool"),
+                    Builtin::Json
+                    | Builtin::Replace
+                    | Builtin::Lower
+                    | Builtin::Trim
+                    | Builtin::Form
+                    | Builtin::Currency
+                    | Builtin::UrlSegment => named("Text"),
+                    // Headers and secrets belong to requests, which native code never makes.
+                    Builtin::Header | Builtin::FillSecret => return None,
+                }
+            }
+            Expr::Call { name, args, .. } => {
+                let (params, ret) = self.sigs.get(name.as_str())?;
+                if params.len() != args.len() {
+                    return None;
+                }
+                for (a, p) in args.iter().zip(params) {
+                    if self.ty(a, var)? != *p {
+                        return None;
+                    }
+                }
+                ret.clone()
+            }
+            _ => return None,
+        };
+        self.allowed(&t, 0).then_some(t)
+    }
+}
+
+/// Checks a function's code, tracking the type of every variable in scope.
+struct Check<'e, 'p> {
+    env: &'e Env<'p>,
+    scopes: Vec<HashMap<String, Ty>>,
+    ret: Ty,
+}
+
+impl Check<'_, '_> {
+    fn lookup(&self, n: &str) -> Option<Ty> {
+        self.scopes.iter().rev().find_map(|s| s.get(n).cloned())
+    }
+
+    fn ty(&self, e: &Expr) -> Option<Ty> {
+        self.env.ty(e, &|n| self.lookup(n))
+    }
+
+    fn block(&mut self, body: &[Stmt]) -> bool {
+        self.scopes.push(HashMap::new());
+        let ok = body.iter().all(|s| self.stmt(s));
+        self.scopes.pop();
+        ok
+    }
+
+    fn stmt(&mut self, s: &Stmt) -> bool {
+        match s {
+            Stmt::Let { name, ty, value, .. } => {
+                let Some(t) = self.ty(value) else { return false };
+                if ty.as_ref().is_some_and(|d| *d != t) {
+                    return false;
+                }
+                self.scopes.last_mut().expect("a scope").insert(name.clone(), t);
+                true
+            }
+            Stmt::Set { name, value, .. } => self.lookup(name).is_some() && self.ty(value) == self.lookup(name),
+            Stmt::Expr(e) => self.ty(e).is_some(),
+            Stmt::Return(Some(e), _) => self.ty(e).as_ref() == Some(&self.ret),
+            Stmt::Fail(e, _) => self.ty(e).is_some_and(|t| is(&t, "Text")),
+            Stmt::If { cond, then, els, .. } => self.ty(cond).is_some_and(|t| is(&t, "Bool")) && self.block(then) && self.block(els),
+            Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => self.block(body),
+            Stmt::For { var, list, body, .. } => {
+                let Some(Ty::List(inner, _)) = self.ty(list) else { return false };
+                self.scopes.push(HashMap::from([(var.clone(), *inner)]));
+                let ok = self.block(body);
+                self.scopes.pop();
+                ok
+            }
+            Stmt::Break(_) => true,
+            Stmt::Return(None, _) => false,
+        }
+    }
+}
 
 /// The functions that can run as native code: those whose own code qualifies and
 /// whose every callee does too.
 pub fn eligible(prog: &Program) -> HashSet<String> {
-    let sigs: HashMap<&str, (Vec<K>, K)> = prog
-        .fns
-        .iter()
-        .filter_map(|f| {
-            let params: Option<Vec<K>> = f.params.iter().map(|p| kind_of(&p.ty)).collect();
-            let ret = f.ret.as_ref().and_then(kind_of);
-            Some((f.name.as_str(), (params?, ret?)))
-        })
-        .collect();
+    let env = Env::new(prog);
     let mut set: HashSet<String> = prog
         .fns
         .iter()
-        .filter(|f| !f.name.contains(' ') && sigs.contains_key(f.name.as_str()) && Check::new(&sigs, f).body_ok(f))
+        .filter(|f| {
+            let Some((params, ret)) = env.sigs.get(f.name.as_str()) else { return false };
+            let first = f.params.iter().zip(params).map(|(p, t)| (p.name.clone(), t.clone())).collect();
+            Check { env: &env, scopes: vec![first], ret: ret.clone() }.block(&f.body)
+        })
         .map(|f| f.name.clone())
         .collect();
     // Remove any function that calls one outside the set, until nothing changes.
@@ -183,91 +697,6 @@ fn callees(body: &[Stmt]) -> Vec<String> {
     out
 }
 
-/// Checks a function's code, tracking the kind of every variable in scope.
-struct Check<'a> {
-    sigs: &'a HashMap<&'a str, (Vec<K>, K)>,
-    scopes: Vec<HashMap<String, K>>,
-    ret: K,
-}
-
-impl<'a> Check<'a> {
-    fn new(sigs: &'a HashMap<&'a str, (Vec<K>, K)>, f: &FnDecl) -> Check<'a> {
-        let (params, ret) = &sigs[f.name.as_str()];
-        let first = f.params.iter().zip(params).map(|(p, k)| (p.name.clone(), *k)).collect();
-        Check { sigs, scopes: vec![first], ret: *ret }
-    }
-
-    fn body_ok(&mut self, f: &FnDecl) -> bool {
-        self.block(&f.body)
-    }
-
-    fn lookup(&self, n: &str) -> Option<K> {
-        self.scopes.iter().rev().find_map(|s| s.get(n).copied())
-    }
-
-    fn block(&mut self, body: &[Stmt]) -> bool {
-        self.scopes.push(HashMap::new());
-        let ok = body.iter().all(|s| self.stmt(s));
-        self.scopes.pop();
-        ok
-    }
-
-    fn stmt(&mut self, s: &Stmt) -> bool {
-        match s {
-            Stmt::Let { name, ty, value, .. } => {
-                let Some(k) = self.expr(value) else { return false };
-                if let Some(t) = ty
-                    && kind_of(t) != Some(k)
-                {
-                    return false;
-                }
-                self.scopes.last_mut().expect("a scope").insert(name.clone(), k);
-                true
-            }
-            Stmt::Set { name, value, .. } => self.lookup(name).is_some() && self.expr(value) == self.lookup(name),
-            Stmt::Expr(e) => self.expr(e).is_some(),
-            Stmt::Return(Some(e), _) => self.expr(e) == Some(self.ret),
-            Stmt::If { cond, then, els, .. } => self.expr(cond) == Some(K::Bool) && self.block(then) && self.block(els),
-            Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => self.block(body),
-            Stmt::Break(_) => true,
-            Stmt::Return(None, _) | Stmt::Fail(..) | Stmt::For { .. } => false,
-        }
-    }
-
-    fn expr(&mut self, e: &Expr) -> Option<K> {
-        match e {
-            Expr::Var(n, _) => self.lookup(n),
-            Expr::Int(n, _) => i64::try_from(*n).ok().map(|_| K::Int),
-            Expr::Bool(..) => Some(K::Bool),
-            Expr::Arith { left, right, .. } => (self.expr(left)? == K::Int && self.expr(right)? == K::Int).then_some(K::Int),
-            Expr::Neg(inner, _) => (self.expr(inner)? == K::Int).then_some(K::Int),
-            Expr::Not(inner, _) => (self.expr(inner)? == K::Bool).then_some(K::Bool),
-            Expr::Logic { left, right, .. } => (self.expr(left)? == K::Bool && self.expr(right)? == K::Bool).then_some(K::Bool),
-            Expr::Cmp { op, left, right, .. } => {
-                let (l, r) = (self.expr(left)?, self.expr(right)?);
-                match (l, r) {
-                    (K::Int, K::Int) => Some(K::Bool),
-                    (K::Bool, K::Bool) if matches!(op, CmpOp::Eq | CmpOp::Ne) => Some(K::Bool),
-                    _ => None,
-                }
-            }
-            Expr::Call { name, args, .. } => {
-                let (params, ret) = self.sigs.get(name.as_str())?.clone();
-                if params.len() != args.len() {
-                    return None;
-                }
-                for (a, k) in args.iter().zip(&params) {
-                    if self.expr(a)? != *k {
-                        return None;
-                    }
-                }
-                Some(ret)
-            }
-            _ => None,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------
 // Code generation
 
@@ -275,25 +704,44 @@ impl<'a> Check<'a> {
 pub struct Native {
     module: Option<JITModule>,
     /// Entry wrappers by function name, as addresses (code owned by `module`).
-    entries: HashMap<String, (usize, Vec<K>, K)>,
+    entries: HashMap<String, (usize, Vec<Ty>, Ty)>,
+    tables: Box<Tables>,
 }
 
-/// Helpers imported into every function.
 struct Helpers {
     step: FuncId,
     depth: FuncId,
     arith: FuncId,
     neg: FuncId,
     no_return: FuncId,
+    konst: FuncId,
+    clone: FuncId,
+    drop: FuncId,
+    boxv: FuncId,
+    unbox: FuncId,
+    arith_val: FuncId,
+    cmp: FuncId,
+    builtin: FuncId,
+    record: FuncId,
+    field: FuncId,
+    field_ref: FuncId,
+    index_ref: FuncId,
+    list: FuncId,
+    index: FuncId,
+    list_len: FuncId,
+    list_get: FuncId,
+    fail: FuncId,
 }
 
 impl Native {
     /// Compiles every eligible function. Nothing is compiled for a program with none.
     pub fn compile(prog: &Program) -> Result<Native, String> {
         let set = eligible(prog);
+        let mut tables = Box::new(Tables { consts: Vec::new(), records: Vec::new(), fields: Vec::new() });
         if set.is_empty() {
-            return Ok(Native { module: None, entries: HashMap::new() });
+            return Ok(Native { module: None, entries: HashMap::new(), tables });
         }
+        let env = Env::new(prog);
         let mut flags = settings::builder();
         flags.set("opt_level", "speed").map_err(|e| e.to_string())?;
         flags.set("is_pic", "false").map_err(|e| e.to_string())?;
@@ -303,45 +751,79 @@ impl Native {
             .finish(settings::Flags::new(flags))
             .map_err(|e| e.to_string())?;
         let mut jb = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-        jb.symbol("intent_rt_step_limit", rt_step_limit as *const u8);
-        jb.symbol("intent_rt_depth_limit", rt_depth_limit as *const u8);
-        jb.symbol("intent_rt_arith", rt_arith as *const u8);
-        jb.symbol("intent_rt_neg", rt_neg as *const u8);
-        jb.symbol("intent_rt_no_return", rt_no_return as *const u8);
+        let syms: [(&str, *const u8); 22] = [
+            ("intent_rt_field_ref", rt_field_ref as *const u8),
+            ("intent_rt_index_ref", rt_index_ref as *const u8),
+            ("intent_rt_step_limit", rt_step_limit as *const u8),
+            ("intent_rt_depth_limit", rt_depth_limit as *const u8),
+            ("intent_rt_arith", rt_arith as *const u8),
+            ("intent_rt_neg", rt_neg as *const u8),
+            ("intent_rt_no_return", rt_no_return as *const u8),
+            ("intent_rt_const", rt_const as *const u8),
+            ("intent_rt_clone", rt_clone as *const u8),
+            ("intent_rt_drop", rt_drop as *const u8),
+            ("intent_rt_box", rt_box as *const u8),
+            ("intent_rt_unbox", rt_unbox as *const u8),
+            ("intent_rt_arith_val", rt_arith_val as *const u8),
+            ("intent_rt_cmp", rt_cmp as *const u8),
+            ("intent_rt_builtin", rt_builtin as *const u8),
+            ("intent_rt_record", rt_record as *const u8),
+            ("intent_rt_field", rt_field as *const u8),
+            ("intent_rt_list", rt_list as *const u8),
+            ("intent_rt_index", rt_index as *const u8),
+            ("intent_rt_list_len", rt_list_len as *const u8),
+            ("intent_rt_list_get", rt_list_get as *const u8),
+            ("intent_rt_fail", rt_fail as *const u8),
+        ];
+        for (n, p) in syms {
+            jb.symbol(n, p);
+        }
         let mut module = JITModule::new(jb);
-        let ptr = module.target_config().pointer_type();
-        if ptr != types::I64 {
+        if module.target_config().pointer_type() != types::I64 {
             return Err("native code needs a 64-bit machine".into());
         }
-
-        let helper = |m: &mut JITModule, name: &str, extra: usize| -> Result<FuncId, String> {
+        // A helper takes ctx and `extra` i64 values, and returns one if `ret`.
+        let helper = |m: &mut JITModule, name: &str, extra: usize, ret: bool| -> Result<FuncId, String> {
             let mut sig = m.make_signature();
-            sig.params.push(AbiParam::new(types::I64));
-            for _ in 0..extra {
+            for _ in 0..=extra {
                 sig.params.push(AbiParam::new(types::I64));
+            }
+            if ret {
+                sig.returns.push(AbiParam::new(types::I64));
             }
             m.declare_function(name, Linkage::Import, &sig).map_err(|e| e.to_string())
         };
-        let helpers = Helpers {
-            step: helper(&mut module, "intent_rt_step_limit", 0)?,
-            depth: helper(&mut module, "intent_rt_depth_limit", 0)?,
-            arith: helper(&mut module, "intent_rt_arith", 3)?,
-            neg: helper(&mut module, "intent_rt_neg", 1)?,
-            no_return: helper(&mut module, "intent_rt_no_return", 0)?,
+        let h = Helpers {
+            step: helper(&mut module, "intent_rt_step_limit", 0, false)?,
+            depth: helper(&mut module, "intent_rt_depth_limit", 0, false)?,
+            arith: helper(&mut module, "intent_rt_arith", 3, false)?,
+            neg: helper(&mut module, "intent_rt_neg", 1, false)?,
+            no_return: helper(&mut module, "intent_rt_no_return", 0, false)?,
+            konst: helper(&mut module, "intent_rt_const", 1, true)?,
+            clone: helper(&mut module, "intent_rt_clone", 1, true)?,
+            drop: helper(&mut module, "intent_rt_drop", 1, false)?,
+            boxv: helper(&mut module, "intent_rt_box", 2, true)?,
+            unbox: helper(&mut module, "intent_rt_unbox", 1, true)?,
+            arith_val: helper(&mut module, "intent_rt_arith_val", 3, true)?,
+            cmp: helper(&mut module, "intent_rt_cmp", 3, true)?,
+            builtin: helper(&mut module, "intent_rt_builtin", 3, true)?,
+            record: helper(&mut module, "intent_rt_record", 3, true)?,
+            field: helper(&mut module, "intent_rt_field", 2, true)?,
+            field_ref: helper(&mut module, "intent_rt_field_ref", 2, true)?,
+            index_ref: helper(&mut module, "intent_rt_index_ref", 2, true)?,
+            list: helper(&mut module, "intent_rt_list", 2, true)?,
+            index: helper(&mut module, "intent_rt_index", 2, true)?,
+            list_len: helper(&mut module, "intent_rt_list_len", 1, true)?,
+            list_get: helper(&mut module, "intent_rt_list_get", 2, true)?,
+            fail: helper(&mut module, "intent_rt_fail", 1, false)?,
         };
 
-        // Declare every compiled function and its entry wrapper first, so calls can
-        // refer to any of them.
         let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
         let mut ids: HashMap<String, FuncId> = HashMap::new();
         let mut wrappers: HashMap<String, FuncId> = HashMap::new();
-        let mut kinds: HashMap<String, (Vec<K>, K)> = HashMap::new();
         for (i, f) in fns.iter().enumerate() {
-            let params: Vec<K> = f.params.iter().map(|p| kind_of(&p.ty).expect("eligible")).collect();
-            let ret = f.ret.as_ref().and_then(kind_of).expect("eligible");
             let mut sig = module.make_signature();
-            sig.params.push(AbiParam::new(types::I64));
-            for _ in &params {
+            for _ in 0..=f.params.len() {
                 sig.params.push(AbiParam::new(types::I64));
             }
             sig.returns.push(AbiParam::new(types::I64));
@@ -353,7 +835,6 @@ impl Native {
             let wid = module.declare_function(&format!("w{i}"), Linkage::Local, &wsig).map_err(|e| e.to_string())?;
             ids.insert(f.name.clone(), id);
             wrappers.insert(f.name.clone(), wid);
-            kinds.insert(f.name.clone(), (params, ret));
         }
 
         let mut ctx = module.make_context();
@@ -364,7 +845,17 @@ impl Native {
             ctx.func.name = UserFuncName::user(0, id.as_u32());
             {
                 let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
-                let g = Gen::new(b, &mut module, &helpers, &ids, &kinds);
+                let g = Gen {
+                    b,
+                    module: &mut module,
+                    h: &h,
+                    ids: &ids,
+                    env: &env,
+                    tables: &mut tables,
+                    ctx: ir::Value::from_u32(0),
+                    scopes: Vec::new(),
+                    exits: Vec::new(),
+                };
                 g.function(f)?;
             }
             module.define_function(id, &mut ctx).map_err(|e| format!("native code for '{}': {e:?}", f.name))?;
@@ -398,9 +889,10 @@ impl Native {
         let mut entries = HashMap::new();
         for f in &fns {
             let p = module.get_finalized_function(wrappers[&f.name]);
-            entries.insert(f.name.clone(), (p as usize, kinds[&f.name].0.clone(), kinds[&f.name].1));
+            let (params, ret) = env.sigs[f.name.as_str()].clone();
+            entries.insert(f.name.clone(), (p as usize, params, ret));
         }
-        Ok(Native { module: Some(module), entries })
+        Ok(Native { module: Some(module), entries, tables })
     }
 
     pub fn has(&self, name: &str) -> bool {
@@ -415,39 +907,44 @@ impl Native {
     }
 
     /// Runs compiled function `name`. `ctx.depth` is the number of calls active,
-    /// including this one. Ok(None) if `name` is not compiled or the arguments do not
-    /// fit its parameters, which the caller treats as "run it on the interpreter".
-    pub fn call(&self, name: &str, ctx: &mut Ctx, args: &[crate::interp::value::Value]) -> Option<Result<crate::interp::value::Value, Failure>> {
-        use crate::interp::value::Value;
+    /// including this one. None if `name` is not compiled or the arguments do not fit
+    /// its parameters, which the caller treats as "run it on the interpreter". The
+    /// arena is empty again when this returns, whatever happened.
+    pub fn call(&self, name: &str, ctx: &mut Ctx, args: &[Value]) -> Option<Result<Value, Failure>> {
         let (ptr, params, ret) = self.entries.get(name)?;
         if params.len() != args.len() {
             return None;
         }
         let mut argv: Vec<i64> = Vec::with_capacity(args.len());
-        for (a, k) in args.iter().zip(params) {
-            match (a, k) {
-                (Value::Int(n), K::Int) => argv.push(*n),
-                (Value::Bool(b), K::Bool) => argv.push(*b as i64),
-                _ => return None,
+        for (a, t) in args.iter().zip(params) {
+            match (a, rep(t)) {
+                (Value::Int(n), Rep::Raw) if is(t, "Int") => argv.push(*n),
+                (Value::Bool(b), Rep::Raw) if is(t, "Bool") => argv.push(*b as i64),
+                (_, Rep::Raw) => return None,
+                (v, Rep::Handle) => argv.push(ctx.put(v.clone())),
             }
         }
+        ctx.tables = &*self.tables;
         ctx.failed = 0;
         ctx.failure = None;
         // SAFETY: `ptr` is a finalized wrapper with signature (ctx, argv) -> i64,
         // generated above; `argv` holds exactly as many i64 as the function takes; the
         // module that owns the code lives as long as `self`.
-        let f: extern "C" fn(*mut Ctx, *const i64) -> i64 = unsafe { std::mem::transmute::<usize, extern "C" fn(*mut Ctx, *const i64) -> i64>(*ptr) };
+        let f = unsafe { std::mem::transmute::<usize, extern "C" fn(*mut Ctx, *const i64) -> i64>(*ptr) };
         let r = f(ctx as *mut Ctx, argv.as_ptr());
-        if ctx.failed != 0 {
-            return Some(Err(ctx.failure.take().unwrap_or(Failure {
-                kind: FailKind::Internal,
-                message: "native code failed without saying why".into(),
-            })));
-        }
-        Some(Ok(match ret {
-            K::Int => Value::Int(r),
-            K::Bool => Value::Bool(r != 0),
-        }))
+        let out = if ctx.failed != 0 {
+            Err(ctx.failure.take().unwrap_or_else(|| internal("native code failed without saying why")))
+        } else if is(ret, "Int") {
+            Ok(Value::Int(r))
+        } else if is(ret, "Bool") {
+            Ok(Value::Bool(r != 0))
+        } else {
+            ctx.take(r)
+        };
+        ctx.arena.clear();
+        ctx.free.clear();
+        ctx.tables = std::ptr::null();
+        Some(out)
     }
 }
 
@@ -461,46 +958,44 @@ impl Drop for Native {
     }
 }
 
-struct Gen<'b, 'm> {
-    b: FunctionBuilder<'b>,
-    module: &'m mut JITModule,
-    helpers: &'m Helpers,
-    ids: &'m HashMap<String, FuncId>,
-    kinds: &'m HashMap<String, (Vec<K>, K)>,
-    ctx: ir::Value,
-    scopes: Vec<HashMap<String, Variable>>,
-    /// The block each enclosing loop's `break` jumps to.
-    exits: Vec<ir::Block>,
+struct Var {
+    var: Variable,
+    ty: Ty,
 }
 
-impl<'b, 'm> Gen<'b, 'm> {
-    fn new(
-        b: FunctionBuilder<'b>,
-        module: &'m mut JITModule,
-        helpers: &'m Helpers,
-        ids: &'m HashMap<String, FuncId>,
-        kinds: &'m HashMap<String, (Vec<K>, K)>,
-    ) -> Gen<'b, 'm> {
-        Gen { b, module, helpers, ids, kinds, ctx: ir::Value::from_u32(0), scopes: Vec::new(), exits: Vec::new() }
-    }
+struct Gen<'b, 'm, 'p> {
+    b: FunctionBuilder<'b>,
+    module: &'m mut JITModule,
+    h: &'m Helpers,
+    ids: &'m HashMap<String, FuncId>,
+    env: &'m Env<'p>,
+    tables: &'m mut Tables,
+    ctx: ir::Value,
+    scopes: Vec<Vec<(String, Var)>>,
+    /// For each enclosing loop: where `break` jumps, and how many scopes are open
+    /// outside its body (a `break` drops the values of every scope inside).
+    exits: Vec<(ir::Block, usize)>,
+}
 
+impl Gen<'_, '_, '_> {
     fn function(mut self, f: &FnDecl) -> Result<(), String> {
         let entry = self.b.create_block();
         self.b.append_block_params_for_function_params(entry);
         self.b.switch_to_block(entry);
         let params: Vec<ir::Value> = self.b.block_params(entry).to_vec();
         self.ctx = params[0];
-        let mut first = HashMap::new();
-        for (p, v) in f.params.iter().zip(&params[1..]) {
+        let sig = self.env.sigs[f.name.as_str()].0.clone();
+        let mut first = Vec::new();
+        for ((p, v), t) in f.params.iter().zip(&params[1..]).zip(sig) {
             let var = self.b.declare_var(types::I64);
             self.b.def_var(var, *v);
-            first.insert(p.name.clone(), var);
+            first.push((p.name.clone(), Var { var, ty: t }));
         }
         self.scopes.push(first);
         let falls = self.block(&f.body)?;
         if falls {
             // The checker guarantees a typed function returns; kept for parity.
-            self.helper_call(self.helpers.no_return, &[]);
+            self.call0(self.h.no_return, &[]);
             self.fail_return();
         }
         self.b.seal_all_blocks();
@@ -509,11 +1004,29 @@ impl<'b, 'm> Gen<'b, 'm> {
         Ok(())
     }
 
-    fn helper_call(&mut self, id: FuncId, extra: &[ir::Value]) {
+    /// Calls a helper with ctx and `extra`; returns its result if it has one.
+    fn call0(&mut self, id: FuncId, extra: &[ir::Value]) -> Option<ir::Value> {
         let fref = self.module.declare_func_in_func(id, self.b.func);
         let mut args = vec![self.ctx];
         args.extend_from_slice(extra);
-        self.b.ins().call(fref, &args);
+        let call = self.b.ins().call(fref, &args);
+        self.b.inst_results(call).first().copied()
+    }
+
+    /// Calls a helper that can fail; returns from the function at once if it did.
+    fn call_checked(&mut self, id: FuncId, extra: &[ir::Value]) -> ir::Value {
+        let r = self.call0(id, extra).expect("a helper with a result");
+        self.check_failed();
+        r
+    }
+
+    fn check_failed(&mut self) {
+        let failed = self.b.ins().load(types::I64, MemFlagsData::trusted(), self.ctx, OFF_FAILED);
+        let (bad, ok) = (self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(failed, bad, &[], ok, &[]);
+        self.b.switch_to_block(bad);
+        self.fail_return();
+        self.b.switch_to_block(ok);
     }
 
     /// Returns 0 from the function: the failure is already recorded in Ctx.
@@ -522,14 +1035,13 @@ impl<'b, 'm> Gen<'b, 'm> {
         self.b.ins().return_(&[z]);
     }
 
-    /// Branches to a new block that records a failure and returns when `cond` is set;
-    /// continues in a new block otherwise.
+    /// Records a failure through `helper` and returns when `cond` is set.
     fn fail_if(&mut self, cond: ir::Value, helper: FuncId, extra: &[ir::Value]) {
         let bad = self.b.create_block();
         let ok = self.b.create_block();
         self.b.ins().brif(cond, bad, &[], ok, &[]);
         self.b.switch_to_block(bad);
-        self.helper_call(helper, extra);
+        self.call0(helper, extra);
         self.fail_return();
         self.b.switch_to_block(ok);
     }
@@ -542,12 +1054,36 @@ impl<'b, 'm> Gen<'b, 'm> {
         self.b.ins().store(flags, steps, self.ctx, OFF_STEPS);
         let max = self.b.ins().load(types::I64, flags, self.ctx, OFF_MAX_STEPS);
         let over = self.b.ins().icmp(IntCC::UnsignedGreaterThan, steps, max);
-        self.fail_if(over, self.helpers.step, &[]);
+        self.fail_if(over, self.h.step, &[]);
+    }
+
+    fn lookup(&self, n: &str) -> Option<&Var> {
+        self.scopes.iter().rev().find_map(|s| s.iter().rev().find(|(name, _)| name == n).map(|(_, v)| v))
+    }
+
+    fn ty(&self, e: &Expr) -> Result<Ty, String> {
+        self.env.ty(e, &|n| self.lookup(n).map(|v| v.ty.clone())).ok_or_else(|| "native code: an expression it cannot type".to_string())
+    }
+
+    /// Drops the values held by the variables of scopes `from..`.
+    fn drop_scopes_from(&mut self, from: usize) {
+        let handles: Vec<Variable> =
+            self.scopes[from..].iter().flatten().filter(|(_, v)| rep(&v.ty) == Rep::Handle).map(|(_, v)| v.var).collect();
+        for var in handles {
+            let h = self.b.use_var(var);
+            self.call0(self.h.drop, &[h]);
+        }
+    }
+
+    fn drop_value(&mut self, v: ir::Value, t: &Ty) {
+        if rep(t) == Rep::Handle {
+            self.call0(self.h.drop, &[v]);
+        }
     }
 
     /// Compiles a block in a new scope. Returns whether control can fall out of it.
     fn block(&mut self, body: &[Stmt]) -> Result<bool, String> {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(Vec::new());
         let mut falls = true;
         for s in body {
             if !self.stmt(s)? {
@@ -555,12 +1091,18 @@ impl<'b, 'm> Gen<'b, 'm> {
                 break;
             }
         }
+        if falls {
+            let top = self.scopes.len() - 1;
+            self.drop_scopes_from(top);
+        }
         self.scopes.pop();
         Ok(falls)
     }
 
-    fn var(&self, name: &str) -> Result<Variable, String> {
-        self.scopes.iter().rev().find_map(|s| s.get(name).copied()).ok_or(format!("native code: unknown variable '{name}'"))
+    fn declare(&mut self, name: &str, v: ir::Value, ty: Ty) {
+        let var = self.b.declare_var(types::I64);
+        self.b.def_var(var, v);
+        self.scopes.last_mut().expect("a scope").push((name.to_string(), Var { var, ty }));
     }
 
     /// Compiles one statement. Returns whether control continues after it.
@@ -568,29 +1110,43 @@ impl<'b, 'm> Gen<'b, 'm> {
         self.tick();
         match s {
             Stmt::Let { name, value, .. } => {
+                let t = self.ty(value)?;
                 let v = self.expr(value)?;
-                let var = self.b.declare_var(types::I64);
-                self.b.def_var(var, v);
-                self.scopes.last_mut().expect("a scope").insert(name.clone(), var);
+                self.declare(name, v, t);
                 Ok(true)
             }
             Stmt::Set { name, value, .. } => {
                 let v = self.expr(value)?;
-                let var = self.var(name)?;
+                let (var, t) = {
+                    let x = self.lookup(name).ok_or(format!("native code: unknown variable '{name}'"))?;
+                    (x.var, x.ty.clone())
+                };
+                let old = self.b.use_var(var);
                 self.b.def_var(var, v);
+                self.drop_value(old, &t);
                 Ok(true)
             }
             Stmt::Expr(e) => {
-                self.expr(e)?;
+                let t = self.ty(e)?;
+                let v = self.expr(e)?;
+                self.drop_value(v, &t);
                 Ok(true)
             }
             Stmt::Return(Some(e), _) => {
                 let v = self.expr(e)?;
+                self.drop_scopes_from(0);
                 self.b.ins().return_(&[v]);
                 Ok(false)
             }
+            Stmt::Fail(e, _) => {
+                let v = self.expr(e)?;
+                self.call0(self.h.fail, &[v]);
+                self.fail_return();
+                Ok(false)
+            }
             Stmt::Break(_) => {
-                let exit = *self.exits.last().ok_or("native code: `break` outside a loop")?;
+                let (exit, depth) = *self.exits.last().ok_or("native code: `break` outside a loop")?;
+                self.drop_scopes_from(depth);
                 self.b.ins().jump(exit, &[]);
                 Ok(false)
             }
@@ -632,7 +1188,7 @@ impl<'b, 'm> Gen<'b, 'm> {
                 self.tick();
                 let next = self.b.ins().iadd_imm_s(iv, 1);
                 self.b.def_var(i, next);
-                self.exits.push(exit);
+                self.exits.push((exit, self.scopes.len()));
                 let falls = self.block(body)?;
                 self.exits.pop();
                 if falls {
@@ -646,7 +1202,7 @@ impl<'b, 'm> Gen<'b, 'm> {
                 self.b.ins().jump(head, &[]);
                 self.b.switch_to_block(head);
                 self.tick();
-                self.exits.push(exit);
+                self.exits.push((exit, self.scopes.len()));
                 let falls = self.block(body)?;
                 self.exits.pop();
                 if falls {
@@ -655,8 +1211,102 @@ impl<'b, 'm> Gen<'b, 'm> {
                 self.b.switch_to_block(exit);
                 Ok(true)
             }
-            Stmt::Return(None, _) | Stmt::Fail(..) | Stmt::For { .. } => Err("native code: statement not supported".into()),
+            Stmt::For { var, list, body, .. } => {
+                let Ty::List(inner, _) = self.ty(list)? else { return Err("native code: `for` over a non-list".into()) };
+                // The list is evaluated once. It lives in a scope of its own around the
+                // loop, so a `return` inside drops it; a `break` and the loop's end jump
+                // to `exit`, which drops it.
+                let lv = self.expr(list)?;
+                self.scopes.push(Vec::new());
+                let list_var = self.b.declare_var(types::I64);
+                self.b.def_var(list_var, lv);
+                let list_ty = Ty::List(inner.clone(), 0);
+                self.scopes.last_mut().expect("a scope").push(("\0list".into(), Var { var: list_var, ty: list_ty }));
+                let n = self.call_checked(self.h.list_len, &[lv]);
+                let i = self.b.declare_var(types::I64);
+                let zero = self.b.ins().iconst(types::I64, 0);
+                self.b.def_var(i, zero);
+                let (head, body_b, exit) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+                self.b.ins().jump(head, &[]);
+                self.b.switch_to_block(head);
+                let iv = self.b.use_var(i);
+                let more = self.b.ins().icmp(IntCC::SignedLessThan, iv, n);
+                self.b.ins().brif(more, body_b, &[], exit, &[]);
+                self.b.switch_to_block(body_b);
+                self.tick();
+                let next = self.b.ins().iadd_imm_s(iv, 1);
+                self.b.def_var(i, next);
+                let l = self.b.use_var(list_var);
+                let item = self.call_checked(self.h.list_get, &[l, iv]);
+                let item = self.unhandle(item, &inner);
+                // The item's scope, then the body's (`block` makes that one).
+                self.scopes.push(Vec::new());
+                self.declare(var, item, *inner);
+                let item_scope = self.scopes.len() - 1;
+                self.exits.push((exit, item_scope));
+                let falls = self.block(body)?;
+                self.exits.pop();
+                if falls {
+                    self.drop_scopes_from(item_scope);
+                    self.b.ins().jump(head, &[]);
+                }
+                self.scopes.pop();
+                self.b.switch_to_block(exit);
+                let l = self.b.use_var(list_var);
+                self.call0(self.h.drop, &[l]);
+                self.scopes.pop();
+                Ok(true)
+            }
+            Stmt::Return(None, _) => Err("native code: statement not supported".into()),
         }
+    }
+
+    /// The handle a variable holds, when `e` is a variable holding one. Reading through
+    /// it is the same as reading a copy, as values never change in place.
+    fn var_handle(&mut self, e: &Expr) -> Option<ir::Value> {
+        let Expr::Var(n, _) = e else { return None };
+        let v = self.lookup(n)?;
+        if rep(&v.ty) != Rep::Handle {
+            return None;
+        }
+        let var = v.var;
+        Some(self.b.use_var(var))
+    }
+
+    /// A handle for a value of type `t` (boxing Int and Bool).
+    fn as_handle(&mut self, v: ir::Value, t: &Ty) -> ir::Value {
+        match rep(t) {
+            Rep::Handle => v,
+            Rep::Raw => {
+                let kind = self.b.ins().iconst(types::I64, if is(t, "Int") { 0 } else { 1 });
+                self.call0(self.h.boxv, &[kind, v]).expect("a result")
+            }
+        }
+    }
+
+    /// A handle turned into the representation of type `t`.
+    fn unhandle(&mut self, h: ir::Value, t: &Ty) -> ir::Value {
+        match rep(t) {
+            Rep::Handle => h,
+            Rep::Raw => self.call_checked(self.h.unbox, &[h]),
+        }
+    }
+
+    /// Stores `vals` in a stack array; returns its address.
+    fn argv(&mut self, vals: &[ir::Value]) -> ir::Value {
+        let size = (vals.len().max(1) * 8) as u32;
+        let slot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size, 3));
+        let addr = self.b.ins().stack_addr(types::I64, slot, 0);
+        for (i, v) in vals.iter().enumerate() {
+            self.b.ins().store(MemFlagsData::trusted(), *v, addr, (i * 8) as i32);
+        }
+        addr
+    }
+
+    fn konst(&mut self, v: Value) -> ir::Value {
+        self.tables.consts.push(v);
+        let idx = self.b.ins().iconst(types::I64, (self.tables.consts.len() - 1) as i64);
+        self.call_checked(self.h.konst, &[idx])
     }
 
     fn expr(&mut self, e: &Expr) -> Result<ir::Value, String> {
@@ -666,39 +1316,55 @@ impl<'b, 'm> Gen<'b, 'm> {
                 Ok(self.b.ins().iconst(types::I64, n))
             }
             Expr::Bool(v, _) => Ok(self.b.ins().iconst(types::I64, *v as i64)),
+            Expr::Str(s, _) => Ok(self.konst(Value::Text(s.clone()))),
+            Expr::Money(m, _) => Ok(self.konst(Value::Money(*m))),
             Expr::Var(n, _) => {
-                let var = self.var(n)?;
-                Ok(self.b.use_var(var))
+                let (var, t) = {
+                    let x = self.lookup(n).ok_or(format!("native code: unknown variable '{n}'"))?;
+                    (x.var, x.ty.clone())
+                };
+                let v = self.b.use_var(var);
+                // Reading a variable copies its value, as the interpreter does.
+                Ok(match rep(&t) {
+                    Rep::Raw => v,
+                    Rep::Handle => self.call_checked(self.h.clone, &[v]),
+                })
             }
             Expr::Arith { op, left, right, .. } => {
+                let (lt, rt) = (self.ty(left)?, self.ty(right)?);
                 let l = self.expr(left)?;
                 let r = self.expr(right)?;
                 let code = self.b.ins().iconst(types::I64, arith_code(*op));
-                match op {
-                    ArithOp::Add | ArithOp::Sub | ArithOp::Mul => {
-                        let (v, over) = match op {
-                            ArithOp::Add => self.b.ins().sadd_overflow(l, r),
-                            ArithOp::Sub => self.b.ins().ssub_overflow(l, r),
-                            _ => self.b.ins().smul_overflow(l, r),
-                        };
-                        self.fail_if(over, self.helpers.arith, &[code, l, r]);
-                        Ok(v)
-                    }
-                    ArithOp::Div => {
-                        let zero = self.b.ins().icmp_imm_s(IntCC::Equal, r, 0);
-                        let min = self.b.ins().icmp_imm_s(IntCC::Equal, l, i64::MIN);
-                        let minus1 = self.b.ins().icmp_imm_s(IntCC::Equal, r, -1);
-                        let both = self.b.ins().band(min, minus1);
-                        let bad = self.b.ins().bor(zero, both);
-                        self.fail_if(bad, self.helpers.arith, &[code, l, r]);
-                        Ok(self.b.ins().sdiv(l, r))
-                    }
+                if is(&lt, "Int") && is(&rt, "Int") {
+                    return Ok(match op {
+                        ArithOp::Add | ArithOp::Sub | ArithOp::Mul => {
+                            let (v, over) = match op {
+                                ArithOp::Add => self.b.ins().sadd_overflow(l, r),
+                                ArithOp::Sub => self.b.ins().ssub_overflow(l, r),
+                                _ => self.b.ins().smul_overflow(l, r),
+                            };
+                            self.fail_if(over, self.h.arith, &[code, l, r]);
+                            v
+                        }
+                        ArithOp::Div => {
+                            let zero = self.b.ins().icmp_imm_s(IntCC::Equal, r, 0);
+                            let min = self.b.ins().icmp_imm_s(IntCC::Equal, l, i64::MIN);
+                            let minus1 = self.b.ins().icmp_imm_s(IntCC::Equal, r, -1);
+                            let both = self.b.ins().band(min, minus1);
+                            let bad = self.b.ins().bor(zero, both);
+                            self.fail_if(bad, self.h.arith, &[code, l, r]);
+                            self.b.ins().sdiv(l, r)
+                        }
+                    });
                 }
+                let lh = self.as_handle(l, &lt);
+                let rh = self.as_handle(r, &rt);
+                Ok(self.call_checked(self.h.arith_val, &[code, lh, rh]))
             }
             Expr::Neg(inner, _) => {
                 let v = self.expr(inner)?;
                 let min = self.b.ins().icmp_imm_s(IntCC::Equal, v, i64::MIN);
-                self.fail_if(min, self.helpers.neg, &[v]);
+                self.fail_if(min, self.h.neg, &[v]);
                 Ok(self.b.ins().ineg(v))
             }
             Expr::Not(inner, _) => {
@@ -723,45 +1389,126 @@ impl<'b, 'm> Gen<'b, 'm> {
                 Ok(self.b.use_var(result))
             }
             Expr::Cmp { op, left, right, .. } => {
+                let (lt, rt) = (self.ty(left)?, self.ty(right)?);
                 let l = self.expr(left)?;
                 let r = self.expr(right)?;
-                let cc = match op {
-                    CmpOp::Eq => IntCC::Equal,
-                    CmpOp::Ne => IntCC::NotEqual,
-                    CmpOp::Lt => IntCC::SignedLessThan,
-                    CmpOp::Le => IntCC::SignedLessThanOrEqual,
-                    CmpOp::Gt => IntCC::SignedGreaterThan,
-                    CmpOp::Ge => IntCC::SignedGreaterThanOrEqual,
+                if rep(&lt) == Rep::Raw && rep(&rt) == Rep::Raw {
+                    let cc = match op {
+                        CmpOp::Eq => IntCC::Equal,
+                        CmpOp::Ne => IntCC::NotEqual,
+                        CmpOp::Lt => IntCC::SignedLessThan,
+                        CmpOp::Le => IntCC::SignedLessThanOrEqual,
+                        CmpOp::Gt => IntCC::SignedGreaterThan,
+                        CmpOp::Ge => IntCC::SignedGreaterThanOrEqual,
+                    };
+                    let c = self.b.ins().icmp(cc, l, r);
+                    return Ok(self.b.ins().uextend(types::I64, c));
+                }
+                let code = CMPS.iter().position(|c| c == op).expect("every comparison") as i64;
+                let code = self.b.ins().iconst(types::I64, code);
+                let lh = self.as_handle(l, &lt);
+                let rh = self.as_handle(r, &rt);
+                Ok(self.call_checked(self.h.cmp, &[code, lh, rh]))
+            }
+            Expr::Builtin { f, args, .. } => {
+                let ret = self.ty(e)?;
+                let mut hs = Vec::with_capacity(args.len());
+                for a in args {
+                    let t = self.ty(a)?;
+                    let v = self.expr(a)?;
+                    hs.push(self.as_handle(v, &t));
+                }
+                let argv = self.argv(&hs);
+                let code = BUILTINS.iter().position(|b| b == f).expect("every built-in") as i64;
+                let code = self.b.ins().iconst(types::I64, code);
+                let n = self.b.ins().iconst(types::I64, hs.len() as i64);
+                let h = self.call_checked(self.h.builtin, &[code, argv, n]);
+                Ok(self.unhandle(h, &ret))
+            }
+            Expr::Record { ty, fields, .. } => {
+                // Evaluated in the order written, stored in declaration order.
+                let decl: Vec<(String, Ty)> = self.env.records.get(ty.as_str()).ok_or("native code: unknown record")?.to_vec();
+                let mut given: Vec<(String, ir::Value)> = Vec::with_capacity(fields.len());
+                for (name, fe) in fields {
+                    let t = self.ty(fe)?;
+                    let v = self.expr(fe)?;
+                    let h = self.as_handle(v, &t);
+                    given.push((name.clone(), h));
+                }
+                let mut ordered = Vec::with_capacity(decl.len());
+                for (fname, _) in &decl {
+                    let i = given.iter().position(|(n, _)| n == fname).ok_or("native code: a field is missing")?;
+                    ordered.push(given[i].1);
+                }
+                self.tables.records.push((ty.clone(), decl.iter().map(|(n, _)| n.clone()).collect()));
+                let idx = self.b.ins().iconst(types::I64, (self.tables.records.len() - 1) as i64);
+                let argv = self.argv(&ordered);
+                let n = self.b.ins().iconst(types::I64, ordered.len() as i64);
+                Ok(self.call_checked(self.h.record, &[idx, argv, n]))
+            }
+            Expr::List(items, _) => {
+                let mut hs = Vec::with_capacity(items.len());
+                for i in items {
+                    let t = self.ty(i)?;
+                    let v = self.expr(i)?;
+                    hs.push(self.as_handle(v, &t));
+                }
+                let argv = self.argv(&hs);
+                let n = self.b.ins().iconst(types::I64, hs.len() as i64);
+                Ok(self.call_checked(self.h.list, &[argv, n]))
+            }
+            Expr::Field { base, field, .. } => {
+                let t = self.ty(e)?;
+                self.tables.fields.push(field.clone());
+                let idx = (self.tables.fields.len() - 1) as i64;
+                // From a variable: read the field in place, copying only the field.
+                let h = match self.var_handle(base) {
+                    Some(v) => {
+                        let idx = self.b.ins().iconst(types::I64, idx);
+                        self.call_checked(self.h.field_ref, &[v, idx])
+                    }
+                    None => {
+                        let b = self.expr(base)?;
+                        let idx = self.b.ins().iconst(types::I64, idx);
+                        self.call_checked(self.h.field, &[b, idx])
+                    }
                 };
-                let c = self.b.ins().icmp(cc, l, r);
-                Ok(self.b.ins().uextend(types::I64, c))
+                Ok(self.unhandle(h, &t))
+            }
+            Expr::Index { base, index, .. } => {
+                let t = self.ty(e)?;
+                let h = match self.var_handle(base) {
+                    Some(v) => {
+                        let i = self.expr(index)?;
+                        self.call_checked(self.h.index_ref, &[v, i])
+                    }
+                    None => {
+                        let l = self.expr(base)?;
+                        let i = self.expr(index)?;
+                        self.call_checked(self.h.index, &[l, i])
+                    }
+                };
+                Ok(self.unhandle(h, &t))
             }
             Expr::Call { name, args, .. } => {
                 let mut vals = vec![self.ctx];
                 for a in args {
                     vals.push(self.expr(a)?);
                 }
-                if !self.kinds.contains_key(name) {
-                    return Err(format!("native code: '{name}' is not compiled"));
-                }
+                let id = *self.ids.get(name).ok_or(format!("native code: '{name}' is not compiled"))?;
                 // The interpreter's depth check, then depth + 1 around the call.
                 let flags = MemFlagsData::trusted();
                 let depth = self.b.ins().load(types::I64, flags, self.ctx, OFF_DEPTH);
                 let max = self.b.ins().load(types::I64, flags, self.ctx, OFF_MAX_DEPTH);
                 let deep = self.b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, depth, max);
-                self.fail_if(deep, self.helpers.depth, &[]);
+                self.fail_if(deep, self.h.depth, &[]);
                 let up = self.b.ins().iadd_imm_s(depth, 1);
                 self.b.ins().store(flags, up, self.ctx, OFF_DEPTH);
-                let callee = self.module.declare_func_in_func(self.ids[name], self.b.func);
+                let callee = self.module.declare_func_in_func(id, self.b.func);
                 let call = self.b.ins().call(callee, &vals);
                 let r = self.b.inst_results(call)[0];
                 self.b.ins().store(flags, depth, self.ctx, OFF_DEPTH);
-                let failed = self.b.ins().load(types::I64, flags, self.ctx, OFF_FAILED);
-                let (bad, ok) = (self.b.create_block(), self.b.create_block());
-                self.b.ins().brif(failed, bad, &[], ok, &[]);
-                self.b.switch_to_block(bad);
-                self.fail_return();
-                self.b.switch_to_block(ok);
+                self.check_failed();
                 Ok(r)
             }
             _ => Err("native code: expression not supported".into()),
@@ -775,12 +1522,68 @@ mod tests {
 
     #[test]
     fn ctx_layout_matches_the_offsets_generated_code_uses() {
-        let c = Ctx { steps: 0, max_steps: 0, depth: 0, max_depth: 0, failed: 0, failure: None };
+        let c = Ctx::new(0, 0, 0, 0);
         let base = &c as *const Ctx as usize;
         assert_eq!(&c.steps as *const u64 as usize - base, OFF_STEPS as usize);
         assert_eq!(&c.max_steps as *const u64 as usize - base, OFF_MAX_STEPS as usize);
         assert_eq!(&c.depth as *const u64 as usize - base, OFF_DEPTH as usize);
         assert_eq!(&c.max_depth as *const u64 as usize - base, OFF_MAX_DEPTH as usize);
         assert_eq!(&c.failed as *const u64 as usize - base, OFF_FAILED as usize);
+    }
+
+    #[test]
+    fn handles_are_checked() {
+        let mut c = Ctx::new(0, 0, 0, 0);
+        let h = c.put(Value::Int(1));
+        assert!(c.get(h).is_ok());
+        assert!(c.take(h).is_ok());
+        assert!(c.take(h).is_err(), "a handle is used once");
+        for bad in [0, -1, 99, i64::MIN] {
+            assert!(c.get(bad).is_err(), "{bad}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod memory {
+    use super::*;
+
+    /// A loop that rebuilds a text and a record 10,000 times holds a handful of values
+    /// at a time, as the interpreter would: reassignment and scope exit drop them.
+    #[test]
+    fn values_are_dropped_as_the_interpreter_drops_them() {
+        let src = r#"type P { name: Text, n: Int }
+
+fn grow(k: Int) -> Int {
+    let s = ""
+    let p = P { name: "a", n: 0 }
+    let items = [1, 2, 3]
+    repeat 10000 {
+        set s = s + "x"
+        set p = P { name: p.name + "b", n: p.n + 1 }
+        for i in items {
+            let t = s + json(i)
+            // Taken on most iterations: a `break` must drop what it leaves behind.
+            if len(t) > 50 {
+                break
+            }
+        }
+        if p.n == k {
+            return len(s) + p.n
+        }
+    }
+    return len(s) + len(p.name)
+}
+"#;
+        let prog = crate::check_program(src).unwrap();
+        let native = Native::compile(&prog).unwrap();
+        assert_eq!(native.compiled(), ["grow"]);
+        for (k, want) in [(-1i64, 10000 + 10001), (500, 500 + 500)] {
+            let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
+            let r = native.call("grow", &mut ctx, &[Value::Int(k)]).unwrap();
+            assert_eq!(r.unwrap(), Value::Int(want));
+            assert!(ctx.peak <= 12, "at most {} values were alive at once", ctx.peak);
+            assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
+        }
     }
 }

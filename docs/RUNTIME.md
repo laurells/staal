@@ -854,14 +854,16 @@ line, `engine` in the C interface), never in the run config.
   Cranelift when the run starts, in memory; every other function runs on the
   interpreter.
 
-A function qualifies when its parameters and result are `Int` or `Bool`, and its body
-uses only `let` (with no type or an `Int`/`Bool` one), `set`, `if`, `repeat`, `loop`,
-`break`, `return` with a value, integer literals that fit an Int, `true`/`false`,
-`+ - * /`, unary `-`, comparisons (`==` and `!=` on Bool; all six on Int), `and`,
-`or`, `not`, and calls to other qualifying functions. A function that calls one that
-does not qualify does not qualify. Native code is entered only from the interpreter,
-when it calls a compiled function; model calls, actions, HTTP, files, budgets and the
-journal therefore never run in native code.
+A function qualifies when its parameters and result are `Int`, `Bool`, `Text`,
+`Money`, records whose fields are all of these, or lists of these, and its body uses
+only `let`, `set`, `if`, `repeat`, `loop`, `for`, `break`, `return` with a value,
+`fail`, literals (an integer must fit an Int; a list must not be empty), arithmetic,
+unary `-`, comparisons, `and`, `or`, `not`, field reads, record literals, indexing,
+the built-in functions other than `header` and `fill_secret`, and calls to other
+qualifying functions. A function that calls one that does not qualify does not
+qualify. Native code is entered only from the interpreter, when it calls a compiled
+function; model calls, actions, `try`, `parse`, `validate`, HTTP, files, budgets and
+the journal therefore never run in native code.
 
 Both engines give the same results, failures (kind and message), logs and
 journals. Native code:
@@ -874,7 +876,13 @@ journals. Native code:
   zero and `MIN / -1` fail as `value`, with the message the interpreter gives (the
   same function makes it);
 - evaluates left to right, and `and`/`or` evaluate their right side only when it
-  decides the answer.
+  decides the answer;
+- holds Text, Money, records and lists in an arena owned by the runtime, and does
+  every operation on them with the interpreter's own functions (arithmetic,
+  comparison, built-ins, indexing, record building);
+- copies a value when a variable is read, as the interpreter does (a field or item
+  read from a variable copies only that field or item), and drops a variable's value
+  when it is reassigned or leaves scope, so memory use matches the interpreter's.
 
 Because the engine is not in the config, a journal does not record it: a run that
 crashed on one engine resumes on the other.

@@ -993,14 +993,12 @@ impl<'p> Interp<'p> {
         if let Some(n) = &self.native
             && n.has(name)
         {
-            let mut ctx = crate::native::Ctx {
-                steps: self.steps,
-                max_steps: self.limits.max_steps,
-                depth: self.depth as u64 + 1,
-                max_depth: self.limits.max_depth as u64,
-                failed: 0,
-                failure: None,
-            };
+            let mut ctx = crate::native::Ctx::new(
+                self.steps,
+                self.limits.max_steps,
+                self.depth as u64 + 1,
+                self.limits.max_depth as u64,
+            );
             if let Some(r) = n.call(name, &mut ctx, &args) {
                 self.steps = ctx.steps;
                 return r;
@@ -1206,10 +1204,7 @@ impl<'p> Interp<'p> {
             Expr::Index { base, index, .. } => {
                 let Value::List(items) = self.eval(frame, base)? else { return internal("indexing a non-list") };
                 let Value::Int(i) = self.eval(frame, index)? else { return internal("a non-Int index") };
-                match usize::try_from(i).ok().and_then(|u| items.get(u)) {
-                    Some(v) => Ok(v.clone()),
-                    None => fail(FailKind::Value, format!("index {i} is out of range for a list of {}", items.len())),
-                }
+                list_index(&items, i)
             }
             Expr::Field { base, field, .. } => match self.eval(frame, base)? {
                 Value::Record { fields, .. } => match fields.into_iter().find(|(f, _)| f == field) {
@@ -1822,6 +1817,13 @@ impl<'p> Interp<'p> {
 // Failures that native code reports too: one definition, so both engines give the
 // same message (src/native.rs).
 
+pub(crate) fn list_index(items: &[Value], i: i64) -> Result<Value, Failure> {
+    match usize::try_from(i).ok().and_then(|u| items.get(u)) {
+        Some(v) => Ok(v.clone()),
+        None => fail(FailKind::Value, format!("index {i} is out of range for a list of {}", items.len())),
+    }
+}
+
 pub(crate) fn step_limit(max_steps: u64) -> Failure {
     Failure { kind: FailKind::StepLimit, message: format!("more than {max_steps} steps executed") }
 }
@@ -1892,7 +1894,7 @@ pub(crate) fn arith(op: ArithOp, l: Value, r: Value) -> Result<Value, Failure> {
 }
 
 /// The built-in functions. `len` of Text counts Unicode characters, not bytes.
-fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
+pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
     let count = |n: usize| i64::try_from(n).map(Value::Int).or_else(|_| internal("length does not fit in an Int"));
     match (f, args) {
         (Builtin::Len, [Value::Text(t)]) => count(t.chars().count()),
@@ -2015,7 +2017,7 @@ fn form_escape(s: &str) -> String {
     out
 }
 
-fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, Failure> {
+pub(crate) fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, Failure> {
     use std::cmp::Ordering;
     let ord: Option<Ordering> = match (l, r) {
         (Value::Int(a), Value::Int(b)) => Some(a.cmp(b)),
