@@ -54,7 +54,7 @@ impl FailKind {
     ///
     /// Deployment limits are safeguards, not part of a program's meaning: if a program
     /// could catch them it could observe them, and a runaway loop or recursion would
-    /// end in a "successful" run. An internal failure is a bug in intentc, which no
+    /// end in a "successful" run. An internal failure is a bug in staalc, which no
     /// program may hide. Journal and in-doubt failures mean the run cannot safely
     /// continue at all. All of these end the run.
     pub fn catchable(self) -> bool {
@@ -221,7 +221,7 @@ pub fn run_engine(
 }
 
 /// Runs a checked program with native code made before the run: the code linked into
-/// an executable by `intentc build`.
+/// an executable by `staalc build`.
 #[cfg(feature = "native")]
 pub fn run_config_with_native(
     prog: &Program,
@@ -267,7 +267,7 @@ fn run_impl(
             })
             .map_err(|e| format!("could not start the interpreter thread: {e}"))?
             .join()
-            .map_err(|_| "the interpreter thread crashed; this is a bug in intentc".to_string())
+            .map_err(|_| "the interpreter thread crashed; this is a bug in staalc".to_string())
     })
 }
 
@@ -283,7 +283,7 @@ fn compile_native(prog: &Program) -> Result<NativeCode, String> {
 
 #[cfg(not(feature = "native"))]
 fn compile_native(_: &Program) -> Result<NativeCode, String> {
-    Err("this intentc was built without native code (the `native` feature)".into())
+    Err("this staalc was built without native code (the `native` feature)".into())
 }
 
 // ---------------------------------------------------------------------------
@@ -1711,7 +1711,7 @@ impl<'p> Interp<'p> {
                     FailKind::InDoubt,
                     format!(
                         "{what} (operation {n}) may or may not have happened before the run stopped, and it cannot \
-                         be safely retried. Check whether it happened, record the answer with `intentc resolve` \
+                         be safely retried. Check whether it happened, record the answer with `staalc resolve` \
                          (--performed <receipt>, --failed <reason>, or --retry if it did not happen), then resume"
                     ),
                 );
@@ -1727,7 +1727,7 @@ impl<'p> Interp<'p> {
                     FailKind::InDoubt,
                     format!(
                         "{what} (operation {n}) may or may not have happened ({e}), and it cannot be safely \
-                         retried. Check whether it happened, record the answer with `intentc resolve`, then resume"
+                         retried. Check whether it happened, record the answer with `staalc resolve`, then resume"
                     ),
                 );
             }
@@ -2155,7 +2155,7 @@ mod tests {
         for k in [FailKind::Action, FailKind::Capability, FailKind::Validation, FailKind::Budget, FailKind::Provider] {
             assert!(k.catchable(), "{k} should be catchable");
         }
-        // Deployment limits and intentc bugs always end the run.
+        // Deployment limits and staalc bugs always end the run.
         for k in [FailKind::StepLimit, FailKind::DepthLimit, FailKind::Internal] {
             assert!(!k.catchable(), "{k} must not be catchable");
         }

@@ -7,27 +7,27 @@ server, but not against the real services: the machine they were built on cannot
 reach the internet. Running them is the remaining step of roadmap phases 2 and 3,
 and needs your own accounts and keys.
 
-Build intentc first:
+Build staalc first:
 
     cargo build --release
 
 ## SMS through Termii
 
-`sms_termii/send.int` sends one SMS. The API key is read from the environment and
+`sms_termii/send.staal` sends one SMS. The API key is read from the environment and
 only ever placed inside the JSON body Termii expects; the capability can reach one
 URL, once.
 
 1. In your Termii dashboard, find your API key and an approved sender ID. Check
    which base URL your dashboard shows. The program uses
    `https://api.ng.termii.com`; if yours is different, change the URL in both
-   places in `send.int` (the `only` pattern and the request).
+   places in `send.staal` (the `only` pattern and the request).
 2. Edit `sms_termii/run.json`: `to` (international format without `+`, e.g.
    `2348012345678`), `text`, `sender`, and `channel` (`generic`, or `dnd` if your
    account is set up for it).
 3. Run:
 
        export TERMII_API_KEY=your-key
-       ./target/release/intentc run examples/sms_termii/send.int \
+       ./target/release/staalc run examples/sms_termii/send.staal \
            --config examples/sms_termii/run.json --journal sms.journal
 
 It prints `"sent, message id ..."`, or Termii's status and answer if it refused.
@@ -37,14 +37,14 @@ Termii does not deduplicate requests, so `run.json` does not set
 stops `in_doubt` rather than risk a second SMS. Check your Termii message log; if
 the SMS was sent, record it and finish:
 
-    ./target/release/intentc resolve --journal sms.journal --status 200 --body '{"message_id":"...","code":"ok"}'
-    ./target/release/intentc resume examples/sms_termii/send.int --config examples/sms_termii/run.json --journal sms.journal
+    ./target/release/staalc resolve --journal sms.journal --status 200 --body '{"message_id":"...","code":"ok"}'
+    ./target/release/staalc resume examples/sms_termii/send.staal --config examples/sms_termii/run.json --journal sms.journal
 
 If it was not sent, use `--retry` instead of `--status`.
 
 ## Email through Resend
 
-`email_resend/send.int` sends one email. The API key goes only into the
+`email_resend/send.staal` sends one email. The API key goes only into the
 `Authorization` header.
 
 1. Create an API key in Resend. Until you verify your own domain, Resend lets you
@@ -53,7 +53,7 @@ If it was not sent, use `--retry` instead of `--status`.
 3. Run:
 
        export RESEND_API_KEY=re_your_key
-       ./target/release/intentc run examples/email_resend/send.int \
+       ./target/release/staalc run examples/email_resend/send.staal \
            --config examples/email_resend/run.json --journal email.journal
 
 Resend deduplicates by `Idempotency-Key`, so `run.json` sets
@@ -64,20 +64,20 @@ returns the first answer instead of sending a second email. Resend keeps keys fo
 
 ## Through a library: `capabilities/`
 
-`capabilities/termii.int` and `capabilities/stripe.int` are libraries that declare
-capabilities (`termii.sms.send`, `stripe.refunds.create`); `remind.int` and
-`refund.int` are programs that use them and never see a key or URL. They are
+`capabilities/termii.staal` and `capabilities/stripe.staal` are libraries that declare
+capabilities (`termii.sms.send`, `stripe.refunds.create`); `remind.staal` and
+`refund.staal` are programs that use them and never see a key or URL. They are
 tested against a local server (`tests/library_test.rs`), not the real services.
 `remind.json` and `refund.json` are run configs whose grants supply the
 libraries' `needs` (`docs/RUNTIME.md` section 13). Edit the phone number, sender
 ID, payment intent id and amount, then:
 
     export TERMII_API_KEY=your-key
-    ./target/release/intentc run examples/capabilities/remind.int \
+    ./target/release/staalc run examples/capabilities/remind.staal \
         --config examples/capabilities/remind.json --journal remind.journal
 
     export STRIPE_SECRET_KEY=sk_test_your_key
-    ./target/release/intentc run examples/capabilities/refund.int \
+    ./target/release/staalc run examples/capabilities/refund.staal \
         --config examples/capabilities/refund.json --journal refund.journal
 
 The phone number must match `only` in canonical form (international, no `+` or

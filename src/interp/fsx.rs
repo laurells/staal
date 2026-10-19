@@ -140,7 +140,7 @@ mod imp {
         let mut rnd = [0u8; 8];
         getrandom::fill(&mut rnd).map_err(|e| format!("no randomness for a temporary name: {e}"))?;
         let hex: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
-        let tmp_name = format!(".{leaf}.{hex}.intent-tmp");
+        let tmp_name = format!(".{leaf}.{hex}.staal-tmp");
         if tmp_name.len() > 255 {
             return Err(format!("'{shown}': the file name is too long to write safely"));
         }
@@ -215,7 +215,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("intentc-fsx-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("staalc-fsx-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(d.join("allowed")).unwrap();
         fs::create_dir_all(d.join("outside")).unwrap();

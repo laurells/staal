@@ -57,7 +57,7 @@ pub enum Step {
     InDoubt { n: u64, key: String },
 }
 
-/// How an operator resolves an action left in doubt (`intentc resolve`).
+/// How an operator resolves an action left in doubt (`staalc resolve`).
 pub enum Resolution {
     /// It happened; this is the service's receipt.
     Performed { receipt: String },
@@ -115,7 +115,7 @@ impl Journal {
         std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
         let file = opts.open(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
-                format!("journal {shown} already exists; use `intentc resume` to continue that run")
+                format!("journal {shown} already exists; use `staalc resume` to continue that run")
             } else {
                 format!("cannot create journal {shown}: {e}")
             }
@@ -307,7 +307,7 @@ impl Journal {
 fn lock(file: &File, path: &Path) -> Result<(), String> {
     file.try_lock().map_err(|e| match e {
         std::fs::TryLockError::WouldBlock => {
-            format!("journal {} is in use by another intentc process", path.display())
+            format!("journal {} is in use by another staalc process", path.display())
         }
         std::fs::TryLockError::Error(e) => format!("cannot lock journal {}: {e}", path.display()),
     })
@@ -366,7 +366,7 @@ fn check_start(start: &Json, program_sha256: &str, config_sha256: &str, path: &P
         return Err(format!("journal {shown}: first record is not a start record"));
     }
     if start["version"] != VERSION {
-        return Err(format!("journal {shown} has version {}, but this intentc reads version {VERSION}", start["version"]));
+        return Err(format!("journal {shown} has version {}, but this staalc reads version {VERSION}", start["version"]));
     }
     let id_ok = start["run_id"].as_str().is_some_and(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit()));
     if !id_ok {
@@ -475,7 +475,7 @@ fn divergence(n: u64, recorded: &Json, now: &Json) -> String {
     };
     format!(
         "operation {n}: the journal recorded a {}, but replay now makes a different {}; the program, its \
-         config or intentc has changed since the run started, so it cannot be resumed safely",
+         config or staalc has changed since the run started, so it cannot be resumed safely",
         summary(recorded),
         summary(now)
     )
@@ -485,8 +485,8 @@ fn divergence(n: u64, recorded: &Json, now: &Json) -> String {
 // Failpoints: test-only crash injection. Compiled out unless the `failpoints`
 // feature is enabled, so a production build cannot crash this way.
 //
-//   INTENTC_FAILPOINT=after_write:N     abort right after the Nth journal record is durable
-//   INTENTC_FAILPOINT=before_result:N   abort after operation N happened, before its result is written
+//   STAALC_FAILPOINT=after_write:N     abort right after the Nth journal record is durable
+//   STAALC_FAILPOINT=before_result:N   abort after operation N happened, before its result is written
 
 #[derive(Debug, Default, Clone, Copy)]
 struct Failpoint {
@@ -500,11 +500,11 @@ impl Failpoint {
     #[cfg(feature = "failpoints")]
     fn from_env() -> Failpoint {
         let mut fp = Failpoint::default();
-        if let Ok(spec) = std::env::var("INTENTC_FAILPOINT") {
+        if let Ok(spec) = std::env::var("STAALC_FAILPOINT") {
             match spec.split_once(':').and_then(|(k, v)| v.parse::<u64>().ok().map(|n| (k, n))) {
                 Some(("after_write", n)) => fp.after_write = Some(n),
                 Some(("before_result", n)) => fp.before_result = Some(n),
-                _ => eprintln!("intentc: ignoring malformed INTENTC_FAILPOINT={spec}"),
+                _ => eprintln!("staalc: ignoring malformed STAALC_FAILPOINT={spec}"),
             }
         }
         fp
@@ -537,7 +537,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("intentc-journal-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("staalc-journal-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(name);
         let _ = std::fs::remove_file(&p);

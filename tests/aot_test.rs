@@ -1,5 +1,5 @@
-// Executables built by `intentc build` (phase 5): the same results, failures, logs
-// and journals as `intentc run` on the interpreter, for every runtime case; journals
+// Executables built by `staalc build` (phase 5): the same results, failures, logs
+// and journals as `staalc run` on the interpreter, for every runtime case; journals
 // that each can resume for the other; refusal of a damaged program; and the build's
 // own errors.
 
@@ -13,14 +13,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_intentc");
+const BIN: &str = env!("CARGO_BIN_EXE_staalc");
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// The runtime library cargo built for this test run: next to the test binary.
 fn runtime() -> PathBuf {
     let dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
-    let lib = dir.join("libintentc.a");
-    assert!(lib.is_file(), "no libintentc.a in {}", dir.display());
+    let lib = dir.join("libstaalc.a");
+    assert!(lib.is_file(), "no libstaalc.a in {}", dir.display());
     lib
 }
 
@@ -41,8 +41,8 @@ fn cmd(program: &Path, args: &[&str], failpoint: Option<&str>) -> Out {
     let mut c = Command::new(program);
     c.args(args);
     match failpoint {
-        Some(fp) => c.env("INTENTC_FAILPOINT", fp),
-        None => c.env_remove("INTENTC_FAILPOINT"),
+        Some(fp) => c.env("STAALC_FAILPOINT", fp),
+        None => c.env_remove("STAALC_FAILPOINT"),
     };
     let o = c.output().unwrap();
     Out {
@@ -83,7 +83,7 @@ fn every_runtime_case_is_identical_as_an_executable() {
     let work = tmp("cases");
     let (mut cases, mut failures) = (0, Vec::new());
     for (program, configs) in &by_program {
-        let src = dir.join(format!("{program}.int"));
+        let src = dir.join(format!("{program}.staal"));
         let app = work.join(program);
         let b = build(&src, &app);
         assert_eq!(b.code, Some(0), "{program}: build failed: {}", b.stderr);
@@ -104,7 +104,7 @@ fn every_runtime_case_is_identical_as_an_executable() {
                 && normal_lines(Path::new(&p("i.journal"))) == normal_lines(Path::new(&p("a.journal")));
             if !same {
                 failures.push(format!(
-                    "{stem}:\n  intentc {:?} {} {}\n  app     {:?} {} {}",
+                    "{stem}:\n  staalc {:?} {} {}\n  app     {:?} {} {}",
                     i.code, i.stdout, i.stderr, a.code, a.stdout, a.stderr
                 ));
             }
@@ -120,7 +120,7 @@ fn every_runtime_case_is_identical_as_an_executable() {
 fn a_program_with_modules_runs_as_an_executable() {
     let s = common::server::Server::start();
     let work = tmp("modules");
-    let src = Path::new(ROOT).join("examples/capabilities/remind.int");
+    let src = Path::new(ROOT).join("examples/capabilities/remind.staal");
     let app = work.join("remind");
     assert_eq!(build(&src, &app).code, Some(0));
     let cfg = json!({
@@ -128,13 +128,13 @@ fn a_program_with_modules_runs_as_an_executable() {
         "inputs": { "patients": [ { "name": "Ada", "phone": "+234 801 234 5678" }, { "name": "Bo", "phone": "2348098765432" } ] },
         "grants": { "texts": { "cap": "termii.sms.send", "only": ["2348012345678"], "needs": {
             "http": { "cap": "net.http.post", "only": [s.url("/api/sms/send")] },
-            "key": { "env": "INTENT_AOT_KEY" }, "base": s.url(""), "sender": "Clinic" } } },
+            "key": { "env": "STAAL_AOT_KEY" }, "base": s.url(""), "sender": "Clinic" } } },
         "model": { "provider": "script", "responses": [] }
     });
     let c = work.join("cfg.json");
     fs::write(&c, cfg.to_string()).unwrap();
     let mut command = Command::new(&app);
-    command.args(["run", "--config", c.to_str().unwrap()]).env("INTENT_AOT_KEY", "sk_aot_test_123456");
+    command.args(["run", "--config", c.to_str().unwrap()]).env("STAAL_AOT_KEY", "sk_aot_test_123456");
     let o = command.output().unwrap();
     assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "1");
@@ -142,13 +142,13 @@ fn a_program_with_modules_runs_as_an_executable() {
 }
 
 /// Journals are bound to the program, not to the engine: a run started by the
-/// executable resumes under intentc, and the other way round, after a crash at every
+/// executable resumes under staalc, and the other way round, after a crash at every
 /// point.
 #[cfg(feature = "failpoints")]
 #[test]
 fn a_crash_on_one_resumes_on_the_other() {
     let work = tmp("crash");
-    let src = Path::new(ROOT).join("tests/crash/native.int");
+    let src = Path::new(ROOT).join("tests/crash/native.staal");
     let app = work.join("native_app");
     assert_eq!(build(&src, &app).code, Some(0));
     let mut cfg: Json = serde_json::from_str(&fs::read_to_string(Path::new(ROOT).join("tests/crash/native.json")).unwrap()).unwrap();
@@ -172,12 +172,12 @@ fn a_crash_on_one_resumes_on_the_other() {
             })
             .collect()
     };
-    let intentc = |args: &[&str], fp: Option<&str>| cmd(Path::new(BIN), args, fp);
+    let staalc = |args: &[&str], fp: Option<&str>| cmd(Path::new(BIN), args, fp);
     let src_s = src.to_str().unwrap();
     // The reference: the interpreter, uninterrupted.
     let (bd, bc) = run_dir("baseline");
     let bj = bd.join("journal");
-    let base = intentc(&["run", src_s, "--config", bc.to_str().unwrap(), "--journal", bj.to_str().unwrap()], None);
+    let base = staalc(&["run", src_s, "--config", bc.to_str().unwrap(), "--journal", bj.to_str().unwrap()], None);
     assert_eq!(base.code, Some(0), "{}", base.stderr);
     let writes = normal_lines(&bj).len();
     let ops = normal_lines(&bj).iter().filter(|r| r["j"] == "intent").count();
@@ -185,18 +185,18 @@ fn a_crash_on_one_resumes_on_the_other() {
     points.extend((1..=ops).map(|n| format!("before_result:{n}")));
     for crash_on_app in [true, false] {
         for fp in &points {
-            let label = format!("{} {fp}", if crash_on_app { "app->intentc" } else { "intentc->app" });
+            let label = format!("{} {fp}", if crash_on_app { "app->staalc" } else { "staalc->app" });
             let (d, c) = run_dir(&format!("{}-{}", crash_on_app, fp.replace(':', "-")));
             let j = d.join("journal");
             let (c, j) = (c.to_str().unwrap().to_string(), j.to_str().unwrap().to_string());
             let first = if crash_on_app {
                 cmd(&app, &["run", "--config", &c, "--journal", &j], Some(fp))
             } else {
-                intentc(&["run", src_s, "--config", &c, "--journal", &j], Some(fp))
+                staalc(&["run", src_s, "--config", &c, "--journal", &j], Some(fp))
             };
             assert_eq!(first.code, None, "{label}: the crash did not happen: {}", first.stderr);
             let finished = if crash_on_app {
-                intentc(&["resume", src_s, "--config", &c, "--journal", &j], None)
+                staalc(&["resume", src_s, "--config", &c, "--journal", &j], None)
             } else {
                 cmd(&app, &["resume", "--config", &c, "--journal", &j], None)
             };
@@ -213,7 +213,7 @@ fn a_damaged_program_is_refused() {
     // the length, and the executable refuses to run: its native code was made for the
     // program as it was.
     let work = tmp("damaged");
-    let src = work.join("p.int");
+    let src = work.join("p.staal");
     fs::write(&src, "fn go(n: Int) -> Int {\n    let marker = \"QQMARKERQQ\"\n    return n * 2\n}\n").unwrap();
     let app = work.join("app");
     assert_eq!(build(&src, &app).code, Some(0));
@@ -239,19 +239,19 @@ fn a_damaged_program_is_refused() {
 #[test]
 fn build_errors_are_reported() {
     let work = tmp("errors");
-    let bad = work.join("bad.int");
+    let bad = work.join("bad.staal");
     fs::write(&bad, "fn f() -> Int {\n    return true\n}\n").unwrap();
     let r = build(&bad, &work.join("x"));
     assert_eq!(r.code, Some(1), "{}", r.stderr);
     assert!(r.stderr.contains("E101"), "{}", r.stderr);
     assert!(!work.join("x").exists());
-    let good = work.join("good.int");
+    let good = work.join("good.staal");
     fs::write(&good, "fn f() -> Int {\n    return 1\n}\n").unwrap();
-    let r = cmd(Path::new(BIN), &["build", good.to_str().unwrap(), "-o", work.join("y").to_str().unwrap(), "--runtime", "/nonexistent/libintentc.a"], None);
+    let r = cmd(Path::new(BIN), &["build", good.to_str().unwrap(), "-o", work.join("y").to_str().unwrap(), "--runtime", "/nonexistent/libstaalc.a"], None);
     assert_eq!(r.code, Some(2));
     assert!(r.stderr.contains("runtime library"), "{}", r.stderr);
     // A program with no native functions still builds and runs.
-    let text = work.join("text.int");
+    let text = work.join("text.staal");
     fs::write(&text, "fn f(s: Text) -> Text {\n    let r = try g(s)\n    return s\n}\nfn g(s: Text) -> Text {\n    return s\n}\n").unwrap();
     assert_eq!(build(&text, &work.join("t")).code, Some(0));
     let c = work.join("c.json");

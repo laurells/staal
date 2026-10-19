@@ -205,24 +205,24 @@ fn tables<'a>(c: &Ctx) -> Result<&'a Tables, Failure> {
     Ok(unsafe { &*c.tables })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_step_limit")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_step_limit")]
 extern "C" fn rt_step_limit(c: *mut Ctx) {
     let c = ctx(c);
     let f = step_limit(c.max_steps);
     record(c, f);
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_depth_limit")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_depth_limit")]
 extern "C" fn rt_depth_limit(c: *mut Ctx) {
     let c = ctx(c);
     let f = depth_limit(c.max_depth);
     record(c, f);
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_arith")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_arith")]
 extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
     let f = match arith_op(op) {
         Some(op) => arith_failure(op, a, b),
@@ -231,8 +231,8 @@ extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
     record(ctx(c), f);
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_neg")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_neg")]
 extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
     let f = match neg(a) {
         Err(f) => f,
@@ -241,14 +241,14 @@ extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
     record(ctx(c), f);
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_no_return")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_no_return")]
 extern "C" fn rt_no_return(c: *mut Ctx) {
     record(ctx(c), internal("a native function finished without returning a value"));
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_const")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_const")]
 extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
     guard(c, |c| {
         let v = usize::try_from(idx).ok().and_then(|i| tables(c).ok()?.consts.get(i)).cloned();
@@ -257,8 +257,8 @@ extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
     })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_clone")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_clone")]
 extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
     guard(c, |c| {
         let v = c.get(h)?.clone();
@@ -266,20 +266,20 @@ extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
     })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_drop")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_drop")]
 extern "C" fn rt_drop(c: *mut Ctx, h: i64) {
     guard(c, |c| c.take(h).map(|_| 0));
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_box")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_box")]
 extern "C" fn rt_box(c: *mut Ctx, kind: i64, v: i64) -> i64 {
     guard(c, |c| Ok(c.put(if kind == 0 { Value::Int(v) } else { Value::Bool(v != 0) })))
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_unbox")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_unbox")]
 extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
     guard(c, |c| match c.take(h)? {
         Value::Int(n) => Ok(n),
@@ -288,8 +288,8 @@ extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
     })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_arith_val")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_arith_val")]
 extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
     guard(c, |c| {
         let op = arith_op(op).ok_or_else(|| internal("native code: unknown operator"))?;
@@ -299,8 +299,8 @@ extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
     })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_cmp")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_cmp")]
 extern "C" fn rt_cmp(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
     guard(c, |c| {
         let op = usize::try_from(op).ok().and_then(|i| CMPS.get(i)).copied();
@@ -322,8 +322,8 @@ fn take_args(c: &mut Ctx, argv: *const i64, n: i64) -> Result<Vec<Value>, Failur
     Ok(out)
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_builtin")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_builtin")]
 extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
     guard(c, |c| {
         let f = usize::try_from(code).ok().and_then(|i| BUILTINS.get(i)).copied();
@@ -334,8 +334,8 @@ extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i6
     })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_record")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_record")]
 extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
     guard(c, |c| {
         let t = tables(c)?;
@@ -350,8 +350,8 @@ extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 
     })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_field")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_field")]
 extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
     guard(c, |c| {
         let t = tables(c)?;
@@ -369,8 +369,8 @@ extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 
 /// A copy of field `idx` of the record in `h`, which stays owned by the caller: a
 /// field read from a variable copies the field, not the whole record.
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_field_ref")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_field_ref")]
 extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
     guard(c, |c| {
         let t = tables(c)?;
@@ -388,8 +388,8 @@ extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 }
 
 /// Item `i` of the list in `h`, which stays owned by the caller.
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_index_ref")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_index_ref")]
 extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
     guard(c, |c| {
         let v = match c.get(list)? {
@@ -400,8 +400,8 @@ extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
     })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_list")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_list")]
 extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     guard(c, |c| {
         let vals = take_args(c, argv, n)?;
@@ -409,8 +409,8 @@ extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_index")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_index")]
 extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
     guard(c, |c| match c.take(list)? {
         Value::List(items) => {
@@ -422,8 +422,8 @@ extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
 }
 
 /// The length of a list, which stays owned by the caller.
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_list_len")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_list_len")]
 extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
     guard(c, |c| match c.get(list)? {
         Value::List(items) => Ok(items.len() as i64),
@@ -432,8 +432,8 @@ extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
 }
 
 /// A copy of item `i` of a list, which stays owned by the caller.
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_list_get")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_list_get")]
 extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
     guard(c, |c| {
         let v = match c.get(list)? {
@@ -445,8 +445,8 @@ extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
     })
 }
 
-// Exported so `intentc build` executables link to it by name.
-#[unsafe(export_name = "intent_rt_fail")]
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_fail")]
 extern "C" fn rt_fail(c: *mut Ctx, h: i64) {
     guard(c, |c| {
         Err(match c.take(h)? {
@@ -804,7 +804,7 @@ impl Native {
         Ok(Native { module: Some(module), entries, tables: Box::new(tables) })
     }
 
-    /// Native code linked into an executable by `intentc build`: `fns` are the entry
+    /// Native code linked into an executable by `staalc build`: `fns` are the entry
     /// wrappers, in the order `compiled` names them. The program must be the one the
     /// code was made from; anything that does not match is refused.
     pub fn from_linked(prog: &Program, compiled: &[String], fns: &[usize], tables: &Json) -> Result<Native, String> {
@@ -883,28 +883,28 @@ impl Native {
 
 /// The helpers native code calls, by the symbol it calls them by.
 const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
-    ("intent_rt_step_limit", rt_step_limit as *const u8),
-    ("intent_rt_depth_limit", rt_depth_limit as *const u8),
-    ("intent_rt_arith", rt_arith as *const u8),
-    ("intent_rt_neg", rt_neg as *const u8),
-    ("intent_rt_no_return", rt_no_return as *const u8),
-    ("intent_rt_const", rt_const as *const u8),
-    ("intent_rt_clone", rt_clone as *const u8),
-    ("intent_rt_drop", rt_drop as *const u8),
-    ("intent_rt_box", rt_box as *const u8),
-    ("intent_rt_unbox", rt_unbox as *const u8),
-    ("intent_rt_arith_val", rt_arith_val as *const u8),
-    ("intent_rt_cmp", rt_cmp as *const u8),
-    ("intent_rt_builtin", rt_builtin as *const u8),
-    ("intent_rt_record", rt_record as *const u8),
-    ("intent_rt_field", rt_field as *const u8),
-    ("intent_rt_field_ref", rt_field_ref as *const u8),
-    ("intent_rt_index_ref", rt_index_ref as *const u8),
-    ("intent_rt_list", rt_list as *const u8),
-    ("intent_rt_index", rt_index as *const u8),
-    ("intent_rt_list_len", rt_list_len as *const u8),
-    ("intent_rt_list_get", rt_list_get as *const u8),
-    ("intent_rt_fail", rt_fail as *const u8),
+    ("staal_rt_step_limit", rt_step_limit as *const u8),
+    ("staal_rt_depth_limit", rt_depth_limit as *const u8),
+    ("staal_rt_arith", rt_arith as *const u8),
+    ("staal_rt_neg", rt_neg as *const u8),
+    ("staal_rt_no_return", rt_no_return as *const u8),
+    ("staal_rt_const", rt_const as *const u8),
+    ("staal_rt_clone", rt_clone as *const u8),
+    ("staal_rt_drop", rt_drop as *const u8),
+    ("staal_rt_box", rt_box as *const u8),
+    ("staal_rt_unbox", rt_unbox as *const u8),
+    ("staal_rt_arith_val", rt_arith_val as *const u8),
+    ("staal_rt_cmp", rt_cmp as *const u8),
+    ("staal_rt_builtin", rt_builtin as *const u8),
+    ("staal_rt_record", rt_record as *const u8),
+    ("staal_rt_field", rt_field as *const u8),
+    ("staal_rt_field_ref", rt_field_ref as *const u8),
+    ("staal_rt_index_ref", rt_index_ref as *const u8),
+    ("staal_rt_list", rt_list as *const u8),
+    ("staal_rt_index", rt_index as *const u8),
+    ("staal_rt_list_len", rt_list_len as *const u8),
+    ("staal_rt_list_get", rt_list_get as *const u8),
+    ("staal_rt_fail", rt_fail as *const u8),
 ];
 
 /// The machine to generate code for: this one. `host_features`: use every feature
@@ -941,28 +941,28 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
         m.declare_function(name, Linkage::Import, &sig).map_err(|e| e.to_string())
     };
     let h = Helpers {
-        step: helper(module, "intent_rt_step_limit", 0, false)?,
-        depth: helper(module, "intent_rt_depth_limit", 0, false)?,
-        arith: helper(module, "intent_rt_arith", 3, false)?,
-        neg: helper(module, "intent_rt_neg", 1, false)?,
-        no_return: helper(module, "intent_rt_no_return", 0, false)?,
-        konst: helper(module, "intent_rt_const", 1, true)?,
-        clone: helper(module, "intent_rt_clone", 1, true)?,
-        drop: helper(module, "intent_rt_drop", 1, false)?,
-        boxv: helper(module, "intent_rt_box", 2, true)?,
-        unbox: helper(module, "intent_rt_unbox", 1, true)?,
-        arith_val: helper(module, "intent_rt_arith_val", 3, true)?,
-        cmp: helper(module, "intent_rt_cmp", 3, true)?,
-        builtin: helper(module, "intent_rt_builtin", 3, true)?,
-        record: helper(module, "intent_rt_record", 3, true)?,
-        field: helper(module, "intent_rt_field", 2, true)?,
-        field_ref: helper(module, "intent_rt_field_ref", 2, true)?,
-        index_ref: helper(module, "intent_rt_index_ref", 2, true)?,
-        list: helper(module, "intent_rt_list", 2, true)?,
-        index: helper(module, "intent_rt_index", 2, true)?,
-        list_len: helper(module, "intent_rt_list_len", 1, true)?,
-        list_get: helper(module, "intent_rt_list_get", 2, true)?,
-        fail: helper(module, "intent_rt_fail", 1, false)?,
+        step: helper(module, "staal_rt_step_limit", 0, false)?,
+        depth: helper(module, "staal_rt_depth_limit", 0, false)?,
+        arith: helper(module, "staal_rt_arith", 3, false)?,
+        neg: helper(module, "staal_rt_neg", 1, false)?,
+        no_return: helper(module, "staal_rt_no_return", 0, false)?,
+        konst: helper(module, "staal_rt_const", 1, true)?,
+        clone: helper(module, "staal_rt_clone", 1, true)?,
+        drop: helper(module, "staal_rt_drop", 1, false)?,
+        boxv: helper(module, "staal_rt_box", 2, true)?,
+        unbox: helper(module, "staal_rt_unbox", 1, true)?,
+        arith_val: helper(module, "staal_rt_arith_val", 3, true)?,
+        cmp: helper(module, "staal_rt_cmp", 3, true)?,
+        builtin: helper(module, "staal_rt_builtin", 3, true)?,
+        record: helper(module, "staal_rt_record", 3, true)?,
+        field: helper(module, "staal_rt_field", 2, true)?,
+        field_ref: helper(module, "staal_rt_field_ref", 2, true)?,
+        index_ref: helper(module, "staal_rt_index_ref", 2, true)?,
+        list: helper(module, "staal_rt_list", 2, true)?,
+        index: helper(module, "staal_rt_index", 2, true)?,
+        list_len: helper(module, "staal_rt_list_len", 1, true)?,
+        list_get: helper(module, "staal_rt_list_get", 2, true)?,
+        fail: helper(module, "staal_rt_fail", 1, false)?,
     };
     // In program order, so the same program always gives the same code and tables.
     let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
@@ -974,12 +974,12 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
             sig.params.push(AbiParam::new(types::I64));
         }
         sig.returns.push(AbiParam::new(types::I64));
-        let id = module.declare_function(&format!("intent_f{i}"), Linkage::Local, &sig).map_err(|e| e.to_string())?;
+        let id = module.declare_function(&format!("staal_f{i}"), Linkage::Local, &sig).map_err(|e| e.to_string())?;
         let mut wsig = module.make_signature();
         wsig.params.push(AbiParam::new(types::I64));
         wsig.params.push(AbiParam::new(types::I64));
         wsig.returns.push(AbiParam::new(types::I64));
-        let wid = module.declare_function(&format!("intent_w{i}"), Linkage::Local, &wsig).map_err(|e| e.to_string())?;
+        let wid = module.declare_function(&format!("staal_w{i}"), Linkage::Local, &wsig).map_err(|e| e.to_string())?;
         ids.insert(f.name.clone(), id);
         wrappers.push((f.name.clone(), wid));
     }
@@ -1063,26 +1063,26 @@ impl Tables {
     }
 }
 
-/// An object file for `intentc build`: the program's native code, its tables, and
-/// `main`, which hands everything to `intent_aot_main` in the runtime it is linked
+/// An object file for `staalc build`: the program's native code, its tables, and
+/// `main`, which hands everything to `staal_aot_main` in the runtime it is linked
 /// with. `bundle` builds the data the executable carries (its program and tables),
 /// given the tables and the compiled functions in table order.
 pub fn compile_object(prog: &Program, bundle: impl FnOnce(Json, &[String]) -> Vec<u8>) -> Result<Vec<u8>, String> {
     use cranelift_module::DataDescription;
     use cranelift_object::{ObjectBuilder, ObjectModule};
     let set = eligible(prog);
-    let ob = ObjectBuilder::new(isa(false)?, "intent_program", cranelift_module::default_libcall_names()).map_err(|e| e.to_string())?;
+    let ob = ObjectBuilder::new(isa(false)?, "staal_program", cranelift_module::default_libcall_names()).map_err(|e| e.to_string())?;
     let mut module = ObjectModule::new(ob);
     let (wrappers, tables) = codegen(prog, &mut module, &set)?;
     let names: Vec<String> = wrappers.iter().map(|(n, _)| n.clone()).collect();
     let data = bundle(tables.to_json()?, &names);
 
     // The bundle, and the table of entry wrappers in the same order as `names`.
-    let bundle_id = module.declare_data("intent_aot_bundle", Linkage::Local, false, false).map_err(|e| e.to_string())?;
+    let bundle_id = module.declare_data("staal_aot_bundle", Linkage::Local, false, false).map_err(|e| e.to_string())?;
     let mut d = DataDescription::new();
     d.define(data.clone().into_boxed_slice());
     module.define_data(bundle_id, &d).map_err(|e| e.to_string())?;
-    let table_id = module.declare_data("intent_aot_table", Linkage::Local, false, false).map_err(|e| e.to_string())?;
+    let table_id = module.declare_data("staal_aot_table", Linkage::Local, false, false).map_err(|e| e.to_string())?;
     let mut d = DataDescription::new();
     d.define(vec![0u8; 8 * wrappers.len().max(1)].into_boxed_slice());
     d.set_align(8);
@@ -1092,14 +1092,14 @@ pub fn compile_object(prog: &Program, bundle: impl FnOnce(Json, &[String]) -> Ve
     }
     module.define_data(table_id, &d).map_err(|e| e.to_string())?;
 
-    // int main(int argc, char **argv) { return intent_aot_main(argc, argv, bundle, len, table, n); }
+    // int main(int argc, char **argv) { return staal_aot_main(argc, argv, bundle, len, table, n); }
     let mut aot_sig = module.make_signature();
     aot_sig.params.push(AbiParam::new(types::I32));
     for _ in 0..5 {
         aot_sig.params.push(AbiParam::new(types::I64));
     }
     aot_sig.returns.push(AbiParam::new(types::I32));
-    let aot_main = module.declare_function("intent_aot_main", Linkage::Import, &aot_sig).map_err(|e| e.to_string())?;
+    let aot_main = module.declare_function("staal_aot_main", Linkage::Import, &aot_sig).map_err(|e| e.to_string())?;
     let mut main_sig = module.make_signature();
     main_sig.params.push(AbiParam::new(types::I32));
     main_sig.params.push(AbiParam::new(types::I64));

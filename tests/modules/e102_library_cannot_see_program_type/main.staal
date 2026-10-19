@@ -1,5 +1,5 @@
 // expect: E102
-// expect-in: lib.int
+// expect-in: lib.staal
 // The library names `Order`, which exists only in the program: it is unknown there.
 import lib
 type Order { id: Text }

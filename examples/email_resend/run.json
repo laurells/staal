@@ -2,9 +2,9 @@
   "entry": "send",
   "inputs": {
     "to": "you@example.com",
-    "subject": "Hello from Intent",
-    "text": "This email was sent by an Intent program.",
-    "sender": "Intent <onboarding@resend.dev>"
+    "subject": "Hello from Staal",
+    "text": "This email was sent by a Staal program.",
+    "sender": "Staal <onboarding@resend.dev>"
   },
   "secrets": { "key": { "env": "RESEND_API_KEY" } },
   "grants": { "resend": { "cap": "net.http.post", "idempotency_key": true } },

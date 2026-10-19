@@ -1,7 +1,7 @@
-# Generates large multi-module Intent programs for timing `intentc check`.
+# Generates large multi-module Staal programs for timing `staalc check`.
 #
 #   python3 bench/gen_program.py OUT_DIR N [N ...]
-#   cargo build --release && time ./target/release/intentc check OUT_DIR/pN/main.int
+#   cargo build --release && time ./target/release/staalc check OUT_DIR/pN/main.staal
 #
 # Each program has N functions spread over 20 modules, plus a module of shared
 # types. Every function has a bounded loop with a branch, two reassigned
@@ -12,7 +12,7 @@ def make(root, n_fns, n_mods=20):
     shutil.rmtree(root, ignore_errors=True); os.makedirs(root)
     random.seed(7)
     per = max(1, n_fns // n_mods)
-    open(f"{root}/types.int","w").write("pub type Customer { name: Text, email: Text }\npub type Item { sku: Text, qty: Int }\n")
+    open(f"{root}/types.staal","w").write("pub type Customer { name: Text, email: Text }\npub type Item { sku: Text, qty: Int }\n")
     for m in range(n_mods):
         out = ["import types { Customer, Item }"]
         if m > 0:
@@ -44,11 +44,11 @@ def make(root, n_fns, n_mods=20):
             body.append("    return n")
             body.append("}")
             out += body + [""]
-        open(f"{root}/m{m}.int","w").write("\n".join(out))
+        open(f"{root}/m{m}.staal","w").write("\n".join(out))
     main = [f"import m{n_mods-1}", "import types { Customer, Item }", "",
             "fn main(items: List<Item, 20>, c: Customer @blind(email)) -> Int {",
             f"    return m{n_mods-1}.f0(items, c.name)", "}", ""]
-    open(f"{root}/main.int","w").write("\n".join(main))
+    open(f"{root}/main.staal","w").write("\n".join(main))
     return sum(len(open(os.path.join(root,f)).read().splitlines()) for f in os.listdir(root))
 out_dir = sys.argv[1]
 for n in map(int, sys.argv[2:]):

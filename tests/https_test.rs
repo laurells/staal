@@ -7,12 +7,12 @@ mod common;
 
 use common::server::Server;
 use common::tls::{self_signed, Ca};
-use intentc::interp::{run_config, FailKind, RunResult};
+use staalc::interp::{run_config, FailKind, RunResult};
 use serde_json::{json, Value as Json};
 use std::path::PathBuf;
 
 fn dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("intentc-https-{name}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("staalc-https-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -33,7 +33,7 @@ fn post(server: &Server, roots: Option<&str>) -> RunResult {
 }}"#,
         server.url("/ok")
     );
-    let prog = intentc::check_program(&src).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
     let mut cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
                           "model": { "provider": "script", "responses": [] } });
     if let Some(r) = roots {
@@ -45,7 +45,7 @@ fn post(server: &Server, roots: Option<&str>) -> RunResult {
 #[test]
 fn a_certificate_from_a_trusted_authority_works() {
     let d = dir("trusted");
-    let ca = Ca::new("Intent Test CA");
+    let ca = Ca::new("Staal Test CA");
     let s = Server::start_tls(ca.server(&["localhost"], None));
     let out = post(&s, Some(&write_ca(&d, &ca)));
     assert_eq!(out.result.unwrap(), json!(true));
@@ -78,7 +78,7 @@ fn a_self_signed_certificate_is_refused() {
 #[test]
 fn a_certificate_for_another_name_is_refused() {
     let d = dir("name");
-    let ca = Ca::new("Intent Test CA");
+    let ca = Ca::new("Staal Test CA");
     let roots = write_ca(&d, &ca);
     refused(Server::start_tls(ca.server(&["api.example.com"], None)), Some(&roots), "wrong name");
 }
@@ -86,7 +86,7 @@ fn a_certificate_for_another_name_is_refused() {
 #[test]
 fn an_expired_certificate_is_refused() {
     let d = dir("expired");
-    let ca = Ca::new("Intent Test CA");
+    let ca = Ca::new("Staal Test CA");
     let roots = write_ca(&d, &ca);
     refused(Server::start_tls(ca.server(&["localhost"], Some((2020, 2021)))), Some(&roots), "expired");
 }
@@ -94,7 +94,7 @@ fn an_expired_certificate_is_refused() {
 #[test]
 fn a_certificate_not_yet_valid_is_refused() {
     let d = dir("future");
-    let ca = Ca::new("Intent Test CA");
+    let ca = Ca::new("Staal Test CA");
     let roots = write_ca(&d, &ca);
     refused(Server::start_tls(ca.server(&["localhost"], Some((2090, 2091)))), Some(&roots), "not yet valid");
 }
@@ -112,7 +112,7 @@ fn trusting_one_authority_does_not_trust_another() {
 fn root_certificate_files_are_checked() {
     let d = dir("files");
     let src = "fn f(http: cap net.http.get) -> Int {\n    return 1\n}";
-    let prog = intentc::check_program(src).unwrap();
+    let prog = staalc::check_program(src).unwrap();
     let err = |roots: Json| -> String {
         let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get" } },
                           "model": { "provider": "script", "responses": [] },
@@ -145,7 +145,7 @@ fn a_failed_handshake_is_never_in_doubt_even_without_try() {
 }}"#,
         s.url("/ok")
     );
-    let prog = intentc::check_program(&src).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
     let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
                       "model": { "provider": "script", "responses": [] } });
     let f = run_config(&prog, &cfg).unwrap().result.unwrap_err();
@@ -157,7 +157,7 @@ fn after_the_handshake_a_lost_answer_is_still_in_doubt() {
     // The server's certificate is good and the request is sent; then no answer comes.
     // That is "may have happened", over TLS as over plain HTTP.
     let d = dir("hang");
-    let ca = Ca::new("Intent Test CA");
+    let ca = Ca::new("Staal Test CA");
     let roots = write_ca(&d, &ca);
     let s = Server::start_tls(ca.server(&["localhost"], None));
     let src = format!(
@@ -167,7 +167,7 @@ fn after_the_handshake_a_lost_answer_is_still_in_doubt() {
 }}"#,
         s.url("/hang")
     );
-    let prog = intentc::check_program(&src).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
     let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
                       "model": { "provider": "script", "responses": [] },
                       "net": { "extra_root_certificates": [roots], "timeout_ms": 500 } });
@@ -182,7 +182,7 @@ fn a_tls_error_after_the_request_was_sent_is_in_doubt() {
     // goes out, and then the server sends bytes that are not TLS: a TLS error that
     // comes after sending, so the request may have been acted on.
     let d = dir("garbage");
-    let ca = Ca::new("Intent Test CA");
+    let ca = Ca::new("Staal Test CA");
     let roots = write_ca(&d, &ca);
     let s = Server::start_tls(ca.server(&["localhost"], None));
     let src = format!(
@@ -192,7 +192,7 @@ fn a_tls_error_after_the_request_was_sent_is_in_doubt() {
 }}"#,
         s.url("/garbage")
     );
-    let prog = intentc::check_program(&src).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
     let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
                       "model": { "provider": "script", "responses": [] },
                       "net": { "extra_root_certificates": [roots], "timeout_ms": 2000 } });

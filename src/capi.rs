@@ -1,18 +1,18 @@
 // The C interface (roadmap phase 5): one stable way for any language to check and
-// run Intent programs. Python uses it through `python/intent`, with no Python inside
-// Intent.
+// run Staal programs. Python uses it through `python/staal`, with no Python inside
+// Staal.
 //
-//   char *intent_check(const char *program_path);
-//   char *intent_run(const char *program_path, const char *config_json,
+//   char *staal_check(const char *program_path);
+//   char *staal_run(const char *program_path, const char *config_json,
 //                    const char *journal_path /* or NULL */, const char *engine /* or NULL */);
-//   char *intent_resume(const char *program_path, const char *config_json,
+//   char *staal_resume(const char *program_path, const char *config_json,
 //                       const char *journal_path, const char *engine /* or NULL */);
-//   char *intent_resolve(const char *journal_path, const char *resolution_json);
-//   void  intent_free(char *s);
-//   const char *intent_version(void);
+//   char *staal_resolve(const char *journal_path, const char *resolution_json);
+//   void  staal_free(char *s);
+//   const char *staal_version(void);
 //
-// Every function but `intent_free` and `intent_version` returns a JSON object as a
-// NUL-terminated UTF-8 string that the caller must give back to `intent_free`. Its
+// Every function but `staal_free` and `staal_version` returns a JSON object as a
+// NUL-terminated UTF-8 string that the caller must give back to `staal_free`. Its
 // "status" says what happened, like the command line's exit codes:
 //
 //   "done"     the run finished: "result" holds the entry function's value
@@ -22,8 +22,8 @@
 //   "invalid"  the program has check errors: "errors" lists them; nothing ran
 //   "error"    a bad argument, file, config or journal: "error" says why; nothing ran
 //
-// "done", "failed" and "stopped" also carry "log", the run's events. `intent_check`
-// returns "ok" or "invalid". `intent_resolve` returns "resolved" or "error".
+// "done", "failed" and "stopped" also carry "log", the run's events. `staal_check`
+// returns "ok" or "invalid". `staal_resolve` returns "resolved" or "error".
 //
 // Nothing here panics across the boundary: a panic inside is caught and reported as
 // "error". Strings passed in are borrowed for the call only. Calls may come from any
@@ -67,7 +67,7 @@ fn error(msg: impl Into<String>) -> Json {
 fn guarded(f: impl FnOnce() -> Json) -> *mut c_char {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(v) => out(v),
-        Err(_) => out(error("intentc panicked; this is a bug in intentc")),
+        Err(_) => out(error("staalc panicked; this is a bug in staalc")),
     }
 }
 
@@ -100,7 +100,7 @@ fn diagnostics(checked: &crate::Checked, diags: &[crate::checker::Diagnostic]) -
 /// # Safety
 /// `program` must be NULL or a valid NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn intent_check(program: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn staal_check(program: *const c_char) -> *mut c_char {
     // SAFETY: forwarded from the caller's promise.
     let program = unsafe { arg(program, "program_path") };
     guarded(move || {
@@ -154,7 +154,7 @@ fn run_program(program: String, config: String, journal_path: Option<String>, re
 /// # Safety
 /// Each argument must be NULL or a valid NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn intent_run(
+pub unsafe extern "C" fn staal_run(
     program: *const c_char,
     config_json: *const c_char,
     journal_path: *const c_char,
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn intent_run(
 /// # Safety
 /// Each argument must be NULL or a valid NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn intent_resume(
+pub unsafe extern "C" fn staal_resume(
     program: *const c_char,
     config_json: *const c_char,
     journal_path: *const c_char,
@@ -210,12 +210,12 @@ pub unsafe extern "C" fn intent_resume(
 }
 
 /// `resolution_json` is one of {"performed": "<receipt>"}, {"status": 200, "body": "..."},
-/// {"failed": "<reason>"} or {"retry": true}, as `intentc resolve`.
+/// {"failed": "<reason>"} or {"retry": true}, as `staalc resolve`.
 ///
 /// # Safety
 /// Each argument must be NULL or a valid NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn intent_resolve(journal_path: *const c_char, resolution_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn staal_resolve(journal_path: *const c_char, resolution_json: *const c_char) -> *mut c_char {
     // SAFETY: forwarded from the caller's promise.
     let args = unsafe { (arg(journal_path, "journal_path"), arg(resolution_json, "resolution_json")) };
     guarded(move || {
@@ -265,9 +265,9 @@ pub unsafe extern "C" fn intent_resolve(journal_path: *const c_char, resolution_
 /// Frees a string returned by this library. NULL is ignored.
 ///
 /// # Safety
-/// `s` must be NULL or a string returned by an `intent_*` function, freed only once.
+/// `s` must be NULL or a string returned by an `staal_*` function, freed only once.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn intent_free(s: *mut c_char) {
+pub unsafe extern "C" fn staal_free(s: *mut c_char) {
     if !s.is_null() {
         // SAFETY: `s` came from CString::into_raw in `out`, per the caller's promise.
         drop(unsafe { CString::from_raw(s) });
@@ -276,6 +276,6 @@ pub unsafe extern "C" fn intent_free(s: *mut c_char) {
 
 /// The library's version, a static string: do not free it.
 #[unsafe(no_mangle)]
-pub extern "C" fn intent_version() -> *const c_char {
+pub extern "C" fn staal_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
 }

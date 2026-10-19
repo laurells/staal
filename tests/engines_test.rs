@@ -10,7 +10,7 @@
 
 #![cfg(feature = "native")]
 
-use intentc::interp::{run_config_engine, Durability, Engine, RunResult};
+use staalc::interp::{run_config_engine, Durability, Engine, RunResult};
 use serde_json::{json, Value as Json};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,9 +85,9 @@ fn every_runtime_case_is_identical_on_both_engines() {
     for case in &cases {
         let stem = case.file_stem().unwrap().to_string_lossy().to_string();
         let base = stem.split("__").next().unwrap().to_string();
-        let src = fs::read_to_string(dir.join(format!("{base}.int"))).unwrap();
-        let prog = intentc::check_program(&src).unwrap();
-        compiled += intentc::native::eligible(&prog).len();
+        let src = fs::read_to_string(dir.join(format!("{base}.staal"))).unwrap();
+        let prog = staalc::check_program(&src).unwrap();
+        compiled += staalc::native::eligible(&prog).len();
         let mut cfg: Json = serde_json::from_str(&fs::read_to_string(case).unwrap()).unwrap();
         cfg.as_object_mut().unwrap().remove("expect");
         let mut outs = Vec::new();
@@ -107,9 +107,9 @@ fn every_runtime_case_is_identical_on_both_engines() {
 
 #[test]
 fn the_crash_scenario_really_runs_native_code() {
-    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/crash/native.int")).unwrap();
-    let prog = intentc::check_program(&src).unwrap();
-    let mut got: Vec<String> = intentc::native::eligible(&prog).into_iter().collect();
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/crash/native.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
     got.sort();
     assert_eq!(got, ["big", "score"]);
 }
@@ -457,12 +457,12 @@ fn generated_programs_behave_identically_on_both_engines() {
     let mut skipped = 0;
     let mut outcomes = std::collections::BTreeMap::<String, usize>::new();
     let mut failures = Vec::new();
-    // INTENT_GENERATED sets how many (the mutation checks use fewer, to run faster).
-    let count: u64 = std::env::var("INTENT_GENERATED").ok().and_then(|v| v.parse().ok()).unwrap_or(2500);
+    // STAAL_GENERATED sets how many (the mutation checks use fewer, to run faster).
+    let count: u64 = std::env::var("STAAL_GENERATED").ok().and_then(|v| v.parse().ok()).unwrap_or(2500);
     let mut why_skipped = std::collections::BTreeMap::<String, usize>::new();
     for seed in 0..count {
         let (src, params) = program(seed);
-        let prog = match intentc::check_program(&src) {
+        let prog = match staalc::check_program(&src) {
             Ok(p) => p,
             Err(d) => {
                 skipped += 1;
@@ -470,7 +470,7 @@ fn generated_programs_behave_identically_on_both_engines() {
                 continue;
             }
         };
-        let compiled = intentc::native::eligible(&prog);
+        let compiled = staalc::native::eligible(&prog);
         if compiled.len() != prog.fns.len() {
             failures.push(format!("seed {seed}: only {:?} of {} functions compile\n{src}", compiled, prog.fns.len()));
             continue;
@@ -545,8 +545,8 @@ fn go(label: Text) -> Text {
     return "?"
 }
 "#;
-    let prog = intentc::check_program(src).unwrap();
-    assert_eq!(intentc::native::eligible(&prog).into_iter().collect::<Vec<_>>(), ["work"]);
+    let prog = staalc::check_program(src).unwrap();
+    assert_eq!(staalc::native::eligible(&prog).into_iter().collect::<Vec<_>>(), ["work"]);
     let run = |steps: u64, depth: u64, engine: Engine| {
         let cfg = json!({ "entry": "go", "inputs": { "label": "total" },
                           "limits": { "max_steps": steps, "max_depth": depth },
@@ -591,8 +591,8 @@ fn every_failure_at_its_edge_is_identical() {
     ];
     for (label, e) in cases {
         let src = format!("fn f(x: Int) -> Int {{\n    let v = {e}\n    return v + x\n}}\n");
-        let prog = intentc::check_program(&src).unwrap_or_else(|d| panic!("{label}: {d:?}"));
-        assert_eq!(intentc::native::eligible(&prog).len(), 1, "{label}: not compiled");
+        let prog = staalc::check_program(&src).unwrap_or_else(|d| panic!("{label}: {d:?}"));
+        assert_eq!(staalc::native::eligible(&prog).len(), 1, "{label}: not compiled");
         let cfg = json!({ "entry": "f", "inputs": { "x": 0 }, "model": { "provider": "script", "responses": [] } });
         let i = outcome(&run_config_engine(&prog, &src, &cfg, Durability::None, Engine::Interpreter));
         let n = outcome(&run_config_engine(&prog, &src, &cfg, Durability::None, Engine::Native));
@@ -606,7 +606,7 @@ fn every_failure_at_its_edge_is_identical() {
     // `fail` inside native code, and a step limit inside each kind of loop.
     let src = "fn f(x: Int) -> Int {\n    if x > 0 {\n        fail(\"too big: \" + json(x))\n    }\n    loop {\n        set x = x\n    }\n    return x\n}\n";
     let src = src.replace("set x = x", "let y = x");
-    let prog = intentc::check_program(&src).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
     for (x, steps) in [(1, 1000), (0, 50), (0, 51)] {
         let cfg = json!({ "entry": "f", "inputs": { "x": x }, "limits": { "max_steps": steps },
                           "model": { "provider": "script", "responses": [] } });

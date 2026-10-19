@@ -22,7 +22,7 @@ use serde_json::{json, Value as Json};
 use std::path::PathBuf;
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_intentc");
+const BIN: &str = env!("CARGO_BIN_EXE_staalc");
 const KEY: &str = "sk_test_4f9a8b7c6d5e3f21";
 
 struct Case {
@@ -58,10 +58,10 @@ fn go(key: Secret,
             fixed = s("/fixed"),
             send = s("/send"),
         );
-        std::fs::write(dir.join("prog.int"), program).unwrap();
+        std::fs::write(dir.join("prog.staal"), program).unwrap();
         let cfg = json!({
             "entry": "go",
-            "secrets": { "key": { "env": "INTENT_CRASH_KEY" } },
+            "secrets": { "key": { "env": "STAAL_CRASH_KEY" } },
             "grants": {
                 "quote": { "cap": "net.http.get" },
                 "pay": { "cap": "net.http.post", "idempotency_key": true },
@@ -75,12 +75,12 @@ fn go(key: Secret,
         Case { dir, server }
     }
 
-    fn intentc(&self, args: &[&str], failpoint: Option<&str>) -> (Option<i32>, String, String) {
+    fn staalc(&self, args: &[&str], failpoint: Option<&str>) -> (Option<i32>, String, String) {
         let mut cmd = Command::new(BIN);
-        cmd.args(args).env("INTENT_CRASH_KEY", KEY);
+        cmd.args(args).env("STAAL_CRASH_KEY", KEY);
         match failpoint {
-            Some(fp) => cmd.env("INTENTC_FAILPOINT", fp),
-            None => cmd.env_remove("INTENTC_FAILPOINT"),
+            Some(fp) => cmd.env("STAALC_FAILPOINT", fp),
+            None => cmd.env_remove("STAALC_FAILPOINT"),
         };
         let o = cmd.output().unwrap();
         (o.status.code(), String::from_utf8_lossy(&o.stdout).trim().into(), String::from_utf8_lossy(&o.stderr).trim().into())
@@ -91,8 +91,8 @@ fn go(key: Secret,
     }
 
     fn run(&self, cmd: &str, failpoint: Option<&str>) -> (Option<i32>, String, String) {
-        let (prog, cfg, j) = (self.p("prog.int"), self.p("cfg.json"), self.p("journal"));
-        self.intentc(&[cmd, &prog, "--config", &cfg, "--journal", &j], failpoint)
+        let (prog, cfg, j) = (self.p("prog.staal"), self.p("cfg.json"), self.p("journal"));
+        self.staalc(&[cmd, &prog, "--config", &cfg, "--journal", &j], failpoint)
     }
 
     fn journal(&self) -> Vec<Json> {
@@ -121,9 +121,9 @@ fn go(key: Secret,
                     let j = self.p("journal");
                     let received = self.server.requests().iter().any(|r| r.method == "POST" && r.path == "/fixed");
                     let (c, _, e) = if received {
-                        self.intentc(&["resolve", "--journal", &j, "--status", "200", "--body", "fixed"], None)
+                        self.staalc(&["resolve", "--journal", &j, "--status", "200", "--body", "fixed"], None)
                     } else {
-                        self.intentc(&["resolve", "--journal", &j, "--retry"], None)
+                        self.staalc(&["resolve", "--journal", &j, "--retry"], None)
                     };
                     assert_eq!(c, Some(0), "{label}: resolve failed: {e}");
                 }

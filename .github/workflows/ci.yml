@@ -1,4 +1,4 @@
-# Builds and tests intentc on Linux and macOS: macos-15 is Apple Silicon (arm64),
+# Builds and tests staalc on Linux and macOS: macos-15 is Apple Silicon (arm64),
 # macos-15-intel is Intel (x86_64; GitHub supports it until the macOS 15 image retires).
 # Everything in `cargo test`, with crash injection, plus the build without native code.
 name: ci

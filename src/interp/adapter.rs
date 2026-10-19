@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn the_world_file_survives_reopening() {
-        let p = std::env::temp_dir().join(format!("intentc-world-test-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("staalc-world-test-{}", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let cfg = json!({ "simulated": { "world": p.to_str().unwrap() } });
         let mut a = SimulatedAdapter::from_config(Some(&cfg)).unwrap();

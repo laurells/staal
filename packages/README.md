@@ -1,6 +1,6 @@
 # Reference packages
 
-Four Intent packages, written as references for how a service becomes a library:
+Four Staal packages, written as references for how a service becomes a library:
 
 | Package | Capability | Service | Authority |
 | --- | --- | --- | --- |
@@ -12,9 +12,9 @@ Four Intent packages, written as references for how a service becomes a library:
 Each folder is one package: publish it as its own git repository (the folder's
 contents at the repository's root), then depend on it by URL and commit:
 
-    { "dependencies": { "sms": { "git": "https://github.com/you/intent-sms", "commit": "<full commit id>" } } }
+    { "dependencies": { "sms": { "git": "https://github.com/you/staal-sms", "commit": "<full commit id>" } } }
 
-and run `intentc fetch`. The grant for each capability supplies its `needs`
+and run `staalc fetch`. The grant for each capability supplies its `needs`
 (`docs/RUNTIME.md` section 13): the HTTP capability, the key from an environment
 variable, and for `sms` and `email` the sender.
 

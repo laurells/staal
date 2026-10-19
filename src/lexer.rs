@@ -1,4 +1,4 @@
-// Lexer: turns Intent source text into tokens with line/column positions.
+// Lexer: turns Staal source text into tokens with line/column positions.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tok {

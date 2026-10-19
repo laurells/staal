@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_intentc");
+const BIN: &str = env!("CARGO_BIN_EXE_staalc");
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 struct Out {
@@ -29,14 +29,14 @@ struct Out {
     stderr: String,
 }
 
-fn intentc(args: &[&str], failpoint: Option<&str>) -> Out {
+fn staalc(args: &[&str], failpoint: Option<&str>) -> Out {
     let mut cmd = Command::new(BIN);
     cmd.args(args);
     match failpoint {
-        Some(fp) => cmd.env("INTENTC_FAILPOINT", fp),
-        None => cmd.env_remove("INTENTC_FAILPOINT"),
+        Some(fp) => cmd.env("STAALC_FAILPOINT", fp),
+        None => cmd.env_remove("STAALC_FAILPOINT"),
     };
-    let o = cmd.output().expect("run intentc");
+    let o = cmd.output().expect("run staalc");
     Out {
         code: o.status.code(),
         stdout: String::from_utf8_lossy(&o.stdout).trim().to_string(),
@@ -53,19 +53,19 @@ struct Scenario {
 }
 
 /// Refund workflow: two model calls, three actions (one refused path).
-const WORKFLOW: Scenario = Scenario { program: "tests/crash/workflow.int", config: "tests/crash/workflow.json", actions: 3 };
+const WORKFLOW: Scenario = Scenario { program: "tests/crash/workflow.staal", config: "tests/crash/workflow.json", actions: 3 };
 
 /// Building access: six model calls and ten actions under `uses` and `only` limits,
 /// two of them refused. A resumed run must rebuild the broker's counts exactly, or it
 /// could open a fourth door.
 const ACCESS: Scenario = Scenario {
-    program: "tests/run/domain_access.int",
+    program: "tests/run/domain_access.staal",
     config: "tests/run/domain_access__mixed_batch.json",
     actions: 10,
 };
 
 /// Pure Int functions (native code on the native engine) between three actions.
-const NATIVE: Scenario = Scenario { program: "tests/crash/native.int", config: "tests/crash/native.json", actions: 2 };
+const NATIVE: Scenario = Scenario { program: "tests/crash/native.staal", config: "tests/crash/native.json", actions: 2 };
 
 /// A fresh directory with the scenario's config pointing at its own world file.
 struct Case {
@@ -114,19 +114,19 @@ impl Case {
 
     fn run(&self, failpoint: Option<&str>) -> Out {
         let a = self.args("run");
-        intentc(&a.iter().map(String::as_str).collect::<Vec<_>>(), failpoint)
+        staalc(&a.iter().map(String::as_str).collect::<Vec<_>>(), failpoint)
     }
 
     fn resume(&self) -> Out {
         let a = self.args("resume");
-        intentc(&a.iter().map(String::as_str).collect::<Vec<_>>(), None)
+        staalc(&a.iter().map(String::as_str).collect::<Vec<_>>(), None)
     }
 
     fn resolve(&self, how: &[&str]) -> Out {
         let j = self.path("journal");
         let mut a = vec!["resolve", "--journal", j.as_str()];
         a.extend_from_slice(how);
-        intentc(&a, None)
+        staalc(&a, None)
     }
 
     /// The world's actions, without their idempotency keys (which differ between runs).
@@ -300,7 +300,7 @@ fn a_crash_during_an_authorized_retry_puts_the_action_back_in_doubt() {
     // The authorized attempt: its record is written (write 1 of this process), the refund
     // happens, and the process dies before recording the result.
     let a = c.args("resume");
-    let out = intentc(&a.iter().map(String::as_str).collect::<Vec<_>>(), Some("before_result:5"));
+    let out = staalc(&a.iter().map(String::as_str).collect::<Vec<_>>(), Some("before_result:5"));
     assert_eq!(out.code, None, "{}", out.stderr);
     assert_eq!(c.world().len(), 1, "the retried refund happened once");
     // The attempt may have happened, so it is in doubt again: never retried silently.

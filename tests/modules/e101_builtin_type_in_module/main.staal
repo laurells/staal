@@ -1,4 +1,4 @@
 // expect: E101
-// expect-in: lib.int
+// expect-in: lib.staal
 import lib
 fn f() {}

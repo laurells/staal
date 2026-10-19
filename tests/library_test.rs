@@ -5,7 +5,7 @@
 mod common;
 
 use common::server::Server;
-use intentc::interp::{run_config, FailKind, RunResult};
+use staalc::interp::{run_config, FailKind, RunResult};
 use serde_json::{json, Value as Json};
 use std::path::{Path, PathBuf};
 
@@ -15,7 +15,7 @@ fn init() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     // SAFETY: set once, before any test reads the environment (every test calls init first).
     ONCE.call_once(|| unsafe {
-        std::env::set_var("INTENT_LIB_KEY", KEY);
+        std::env::set_var("STAAL_LIB_KEY", KEY);
     });
 }
 
@@ -23,35 +23,35 @@ fn examples() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/capabilities")
 }
 
-fn load(path: &Path) -> intentc::ast::Program {
-    let checked = intentc::check_path(path).unwrap();
+fn load(path: &Path) -> staalc::ast::Program {
+    let checked = staalc::check_path(path).unwrap();
     match checked.result {
         Ok(p) => p,
         Err(d) => {
-            let msgs: Vec<String> = d.iter().map(|d| intentc::format_diag_in(&checked.files, d)).collect();
+            let msgs: Vec<String> = d.iter().map(|d| staalc::format_diag_in(&checked.files, d)).collect();
             panic!("{}", msgs.join("\n"))
         }
     }
 }
 
-/// A folder holding `main.int` and copies of the example libraries.
-fn program(name: &str, main: &str) -> intentc::ast::Program {
+/// A folder holding `main.staal` and copies of the example libraries.
+fn program(name: &str, main: &str) -> staalc::ast::Program {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("library").join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    for lib in ["termii.int", "stripe.int"] {
+    for lib in ["termii.staal", "stripe.staal"] {
         std::fs::copy(examples().join(lib), dir.join(lib)).unwrap();
     }
-    std::fs::write(dir.join("main.int"), main).unwrap();
-    load(&dir.join("main.int"))
+    std::fs::write(dir.join("main.staal"), main).unwrap();
+    load(&dir.join("main.staal"))
 }
 
-fn run(prog: &intentc::ast::Program, cfg: &Json) -> RunResult {
+fn run(prog: &staalc::ast::Program, cfg: &Json) -> RunResult {
     init();
     run_config(prog, cfg).unwrap_or_else(|e| panic!("config error: {e}"))
 }
 
-fn config_error(prog: &intentc::ast::Program, cfg: &Json) -> String {
+fn config_error(prog: &staalc::ast::Program, cfg: &Json) -> String {
     init();
     match run_config(prog, cfg) {
         Ok(r) => panic!("expected a config error, the run gave {:?}", r.result),
@@ -66,7 +66,7 @@ fn patients(phones: &[&str]) -> Json {
 fn termii_needs(s: &Server) -> Json {
     json!({
         "http": { "cap": "net.http.post", "only": [s.url("/api/sms/send")] },
-        "key": { "env": "INTENT_LIB_KEY" },
+        "key": { "env": "STAAL_LIB_KEY" },
         "base": s.url(""),
         "sender": "Clinic"
     })
@@ -86,8 +86,8 @@ fn remind_cfg(s: &Server, phones: &[&str], grant: Json) -> Json {
     })
 }
 
-fn remind() -> intentc::ast::Program {
-    load(&examples().join("remind.int"))
+fn remind() -> staalc::ast::Program {
+    load(&examples().join("remind.staal"))
 }
 
 fn events<'a>(r: &'a RunResult, name: &str) -> Vec<&'a Json> {
@@ -156,7 +156,7 @@ fn the_librarys_declared_limits_narrow_the_operators_grant() {
     std::fs::create_dir_all(&dir).unwrap();
     // The library asks for its HTTP capability with `uses: 1`; the operator grants 5.
     std::fs::write(
-        dir.join("once.int"),
+        dir.join("once.staal"),
         r#"capability once.ping {
     needs http: cap net.http.post(uses: 1)
     needs base: Text
@@ -169,7 +169,7 @@ fn the_librarys_declared_limits_narrow_the_operators_grant() {
     )
     .unwrap();
     std::fs::write(
-        dir.join("main.int"),
+        dir.join("main.staal"),
         r#"import once
 fn go(p: cap once.ping.send) -> Int {
     let a = try p.send("one")
@@ -182,7 +182,7 @@ fn go(p: cap once.ping.send) -> Int {
 "#,
     )
     .unwrap();
-    let prog = load(&dir.join("main.int"));
+    let prog = load(&dir.join("main.staal"));
     let cfg = json!({
         "entry": "go",
         "grants": { "p": { "cap": "once.ping.send", "needs": {
@@ -201,7 +201,7 @@ fn an_action_that_makes_no_request_gets_no_receipt() {
     std::fs::create_dir_all(&dir).unwrap();
     // A request is written, but only on a path this input never takes.
     std::fs::write(
-        dir.join("fake.int"),
+        dir.join("fake.staal"),
         r#"capability fake.sms {
     needs http: cap net.http.post
     action send(text: Text) -> Text {
@@ -215,8 +215,8 @@ fn an_action_that_makes_no_request_gets_no_receipt() {
 "#,
     )
     .unwrap();
-    std::fs::write(dir.join("main.int"), "import fake\nfn go(p: cap fake.sms.send) -> Receipt {\n    return p.send(\"hello\")\n}\n").unwrap();
-    let prog = load(&dir.join("main.int"));
+    std::fs::write(dir.join("main.staal"), "import fake\nfn go(p: cap fake.sms.send) -> Receipt {\n    return p.send(\"hello\")\n}\n").unwrap();
+    let prog = load(&dir.join("main.staal"));
     let cfg = json!({
         "entry": "go",
         "grants": { "p": { "cap": "fake.sms.send", "needs": { "http": { "cap": "net.http.post" } } } },
@@ -253,7 +253,7 @@ fn refund_cfg(s: &Server, payment: &str, a: &str, b: &str, limits: Json) -> Json
     g["needs"] = json!({
         "get": { "cap": "net.http.get", "only": [s.url("/v1/payment_intents/*")] },
         "post": { "cap": "net.http.post", "only": [s.url("/v1/refunds")], "idempotency_key": true },
-        "key": { "env": "INTENT_LIB_KEY" },
+        "key": { "env": "STAAL_LIB_KEY" },
         "base": s.url("")
     });
     json!({
@@ -322,7 +322,7 @@ fn a_failure_after_a_request_that_may_have_spent_counts_against_the_budget() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("flaky.int"),
+        dir.join("flaky.staal"),
         r#"capability flaky.refunds {
     needs post: cap net.http.post
     needs base: Text
@@ -335,7 +335,7 @@ fn a_failure_after_a_request_that_may_have_spent_counts_against_the_budget() {
     )
     .unwrap();
     std::fs::write(
-        dir.join("main.int"),
+        dir.join("main.staal"),
         r#"import flaky
 fn go(r: cap flaky.refunds.create(max: 15 USD)) -> Int {
     let a = try r.create(10.00 USD)
@@ -348,7 +348,7 @@ fn go(r: cap flaky.refunds.create(max: 15 USD)) -> Int {
 "#,
     )
     .unwrap();
-    let prog = load(&dir.join("main.int"));
+    let prog = load(&dir.join("main.staal"));
     let cfg = json!({
         "entry": "go",
         "grants": { "r": { "cap": "flaky.refunds.create", "needs": {
@@ -390,7 +390,7 @@ fn needs_are_checked_when_the_run_starts() {
     cfg["grants"]["texts"].as_object_mut().unwrap().remove("needs");
     assert!(config_error(&prog, &cfg).contains("needs: missing"));
     // `needs` on a capability that is not a library's.
-    let plain = intentc::check_program("fn f(h: cap net.http.get) -> Int {\n    return 1\n}").unwrap();
+    let plain = staalc::check_program("fn f(h: cap net.http.get) -> Int {\n    return 1\n}").unwrap();
     let cfg = json!({ "entry": "f", "grants": { "h": { "cap": "net.http.get", "needs": {} } },
                       "model": { "provider": "script", "responses": [] } });
     assert!(config_error(&plain, &cfg).contains("not a library capability"));
@@ -420,7 +420,7 @@ fn data_placed_in_a_url_stays_one_segment() {
     // ".." itself is refused by url_segment, before any request.
     let s = Server::start();
     let src = "fn f(t: Text) -> Text {\n    return url_segment(t)\n}\n";
-    let prog = intentc::check_program(src).unwrap();
+    let prog = staalc::check_program(src).unwrap();
     for (t, ok) in [("..", false), (".", false), ("", false), ("a b/c", true), ("...", true)] {
         let cfg = json!({ "entry": "f", "inputs": { "t": t }, "model": { "provider": "script", "responses": [] } });
         let r = run(&prog, &cfg);

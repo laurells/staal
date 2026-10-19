@@ -1,6 +1,6 @@
-# Intent runtime semantics (v0.1)
+# Staal runtime semantics (v0.1)
 
-This document defines what an Intent program does when it runs. The reference
+This document defines what a Staal program does when it runs. The reference
 interpreter (`src/interp/`) implements it directly; any future backend
 (native code via Cranelift) must produce the same results, model requests,
 actions and log for every program. Where this document and an implementation
@@ -311,7 +311,7 @@ A failure has a kind and a message:
 | `budget` | a model call would exceed a token limit or a budget |
 | `provider` | the model provider failed or misbehaved |
 | `step_limit`, `depth_limit` | a deployment limit was reached |
-| `internal` | a state the compiler should have ruled out (a bug in intentc), reported instead of crashing |
+| `internal` | a state the compiler should have ruled out (a bug in staalc), reported instead of crashing |
 | `journal`, `in_doubt` | durability failures (section 11) |
 
 A failure stops the current function and every caller up to the nearest
@@ -324,7 +324,7 @@ the run ends with that failure.
 them, and they always end the run. The deployment limits are safeguards, not
 part of the program's meaning, so a program must not be able to observe them
 (a runaway loop or recursion must not end in a "successful" run). An
-`internal` failure is a bug in intentc, which no program may hide.
+`internal` failure is a bug in staalc, which no program may hide.
 
 ## 9. Evidence
 
@@ -399,7 +399,7 @@ doubt**: it may or may not have happened.
   with the same key and receives the original receipt. Otherwise resume stops
   with a failure of kind `in_doubt`, naming the action, and does nothing
   until an operator checks the real world and records the answer with
-  `intentc resolve`:
+  `staalc resolve`:
   - `--performed <receipt>`: it happened; the program continues with that receipt;
   - `--failed <reason>`: the program sees it as a failed action;
   - `--retry`: it did not happen; resume performs it. This authorizes **one**
@@ -600,7 +600,7 @@ operator's statement to make.
 An HTTP request left in doubt is resolved with the response the server gave, which
 the operator finds in the service's own records:
 
-    intentc resolve --journal run.journal --status 200 --body '{"id": "..."}'
+    staalc resolve --journal run.journal --status 200 --body '{"id": "..."}'
 
 (`--failed` and `--retry` work as for other actions; `--performed` is refused for
 HTTP requests, whose result is a response, not a receipt.) File reads and writes are
@@ -750,22 +750,22 @@ is pinned to its exact text by hash, so it cannot change after it was reviewed.
 
 ## 14. Packages
 
-A project is the folder holding the entry file. Without an `intent.json` there, a
+A project is the folder holding the entry file. Without an `staal.json` there, a
 program has no packages and imports only its own files (section 11 and the README).
 
 ### Manifests
 
-The project's `intent.json` names its dependencies, each by git location and full
+The project's `staal.json` names its dependencies, each by git location and full
 commit id:
 
     { "dependencies": {
-        "sms": { "git": "https://github.com/you/intent-sms", "commit": "<40 lowercase hex digits>" } } }
+        "sms": { "git": "https://github.com/you/staal-sms", "commit": "<40 lowercase hex digits>" } } }
 
 A location is `https://`, `ssh://`, `user@host:path`, `file://` or an absolute path.
 Plain `http://` and `git://` are refused. A branch or tag name is refused: they can
 move, and a dependency must name exactly one tree of files.
 
-A package is a git repository with an `intent.json` at its root:
+A package is a git repository with an `staal.json` at its root:
 
     { "package": "sms", "version": "0.1.0",
       "authority": { "net.http.post": ["https://api.ng.termii.com/api/sms/send"] },
@@ -779,7 +779,7 @@ and `fs` are refused. Unknown keys are refused everywhere.
 
 ### Fetching and the lockfile
 
-`intentc fetch [folder]` reads each dependency's commit from git's objects (a bare
+`staalc fetch [folder]` reads each dependency's commit from git's objects (a bare
 clone, then the commit's tree and blobs; never a checkout, so line-ending settings,
 attributes and filters cannot change a byte). It follows each package's own
 dependencies. Then it refuses, before changing anything:
@@ -791,17 +791,17 @@ dependencies. Then it refuses, before changing anything:
 - a package whose manifest gives another name, or is malformed;
 - two different commits (or locations) of one package anywhere in the graph: one
   version of each package per project;
-- a package already in `intent.lock` at the same commit whose files differ from
+- a package already in `staal.lock` at the same commit whose files differ from
   the lock (the lock was edited, or the repository's history rewritten).
 
-Only then are packages written to `.intent/packages/<name>/` and `intent.lock`
+Only then are packages written to `.staal/packages/<name>/` and `staal.lock`
 replaced. The lock records, per package, its location, commit and the SHA-256 of
 every file. `fetch` prints each package with its authority, marked `new`,
 `unchanged` or `was <old commit>`, for review.
 
 ### Loading
 
-Before a program is checked or run, the lock must match `intent.json`: every
+Before a program is checked or run, the lock must match `staal.json`: every
 dependency, and every package's own dependencies, at the commit wanted, and nothing
 else. Every package folder must hold exactly the files the lock lists, each with its
 hash, and only plain files (a link, even to identical content, is refused). Files
@@ -815,7 +815,7 @@ In the program, `import sms.termii` means module `termii` of package `sms` when
 The program cannot import a package it does not depend on itself, even one another
 package uses. Inside a package, an import whose first name is one of that package's
 dependencies means that package; any other import is the package's own module
-(`import util` in `sms` is `sms/util.int`, never the program's `util`). Qualified
+(`import util` in `sms` is `sms/util.staal`, never the program's `util`). Qualified
 names carry the package (`sms.termii.send`), so nothing in two packages, or in a
 package and the program, can be confused.
 
@@ -838,8 +838,8 @@ package code.
 
 ### What is not checked
 
-`intentc check` and `run` trust `intent.lock`: whoever can edit both the lock and
-`.intent/packages/` decides the code, as with any language's lockfile. `intentc
+`staalc check` and `run` trust `staal.lock`: whoever can edit both the lock and
+`.staal/packages/` decides the code, as with any language's lockfile. `staalc
 fetch` compares both with git. Git's commit ids are SHA-1; the SHA-256 file hashes
 in the lock are what a later fetch is compared with. Manifests describe authority;
 they do not prove a package does what its name says.
@@ -893,18 +893,18 @@ both (README).
 
 ## 16. The C interface
 
-`libintentc` (built as a C dynamic library alongside the Rust library) exports the
-functions declared in `include/intent.h`. Each takes UTF-8 strings, borrowed for
+`libstaalc` (built as a C dynamic library alongside the Rust library) exports the
+functions declared in `include/staal.h`. Each takes UTF-8 strings, borrowed for
 the call, and returns a JSON object as a string the caller frees with
-`intent_free`:
+`staal_free`:
 
 | Function | Does | `status` |
 | --- | --- | --- |
-| `intent_check(program_path)` | checks a program with its modules and packages | `ok`, `invalid`, `error` |
-| `intent_run(program_path, config_json, journal_path, engine)` | runs it, with a new journal if `journal_path` is not NULL | `done`, `failed`, `stopped`, `invalid`, `error` |
-| `intent_resume(program_path, config_json, journal_path, engine)` | resumes a journaled run | as `intent_run` |
-| `intent_resolve(journal_path, resolution_json)` | resolves an action in doubt: `{"performed": "<receipt>"}`, `{"status": 200, "body": "..."}`, `{"failed": "<reason>"}` or `{"retry": true}` | `resolved`, `error` |
-| `intent_version()` | the version, a static string not to be freed | |
+| `staal_check(program_path)` | checks a program with its modules and packages | `ok`, `invalid`, `error` |
+| `staal_run(program_path, config_json, journal_path, engine)` | runs it, with a new journal if `journal_path` is not NULL | `done`, `failed`, `stopped`, `invalid`, `error` |
+| `staal_resume(program_path, config_json, journal_path, engine)` | resumes a journaled run | as `staal_run` |
+| `staal_resolve(journal_path, resolution_json)` | resolves an action in doubt: `{"performed": "<receipt>"}`, `{"status": 200, "body": "..."}`, `{"failed": "<reason>"}` or `{"retry": true}` | `resolved`, `error` |
+| `staal_version()` | the version, a static string not to be freed | |
 
 `done` carries `result`; `failed` and `stopped` carry `failure` (`kind`, `message`);
 all three carry `log`. `stopped` means resolve (if an action is in doubt) and resume,
@@ -918,10 +918,10 @@ between threads of one process.
 
 ## 17. Executables
 
-`intentc build <file.int> -o <executable> [--runtime <libintentc.a>]` makes a
+`staalc build <file.staal> -o <executable> [--runtime <libstaalc.a>]` makes a
 standalone executable (Linux only, for now; elsewhere it refuses):
 
-1. The program is checked as by `intentc check`, packages and authority included. A
+1. The program is checked as by `staalc check`, packages and authority included. A
    program with errors is not built (exit 1).
 2. Every function that qualifies for native code (section 15) is compiled into an
    object file. Code is generated for the baseline of the target processor family,
@@ -931,10 +931,10 @@ standalone executable (Linux only, for now; elsewhere it refuses):
    module and every package module, with how each import was resolved), the SHA-256
    of the program's fingerprint (section 11), the names of the compiled functions,
    and the constants and record layouts their code uses.
-4. It is linked with the runtime, `libintentc.a` (found next to `intentc`, or given
+4. It is linked with the runtime, `libstaalc.a` (found next to `staalc`, or given
    with `--runtime`), using `cc`.
 
-The executable takes `run`, `resume` and `resolve` as `intentc` does, without the
+The executable takes `run`, `resume` and `resolve` as `staalc` does, without the
 program file, with the same options (except `--engine`) and exit codes. When it
 starts, it loads and checks its program again from the sources it carries (package
 authority is not checked again: it needs the manifests, and was checked when it was
@@ -942,6 +942,6 @@ built), and refuses to run (exit 2) unless the program's fingerprint matches the
 recorded and its native functions are exactly the compiled ones. Functions without
 native code run on the interpreter.
 
-Its journals are bound to the program's fingerprint, as `intentc`'s are, and not to
-how it is run: a run started by the executable can be resumed by `intentc resume`
+Its journals are bound to the program's fingerprint, as `staalc`'s are, and not to
+how it is run: a run started by the executable can be resumed by `staalc resume`
 with the same program, and the other way round.

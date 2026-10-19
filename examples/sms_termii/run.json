@@ -2,7 +2,7 @@
   "entry": "send",
   "inputs": {
     "to": "2348012345678",
-    "text": "Hello from Intent.",
+    "text": "Hello from Staal.",
     "sender": "YourSenderID",
     "channel": "generic"
   },

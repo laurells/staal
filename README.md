@@ -1,6 +1,9 @@
-# intentc — the Intent compiler and reference runtime
+# staalc — the Staal compiler and reference runtime
 
-`intentc` checks Intent programs and rejects the ones that break Intent's
+Staal is said "stahl": it is Dutch and Afrikaans for steel. Source files end
+in `.staal`, a project's manifest is `staal.json` and its lockfile `staal.lock`.
+
+`staalc` checks Staal programs and rejects the ones that break Staal's
 rules, and runs checked programs on a reference interpreter with durable,
 crash-safe execution.
 
@@ -17,7 +20,7 @@ made by the tests; fetching from a public host, and a real SMS through a
 package, are left. Phase 5 is built: pure functions (Int, Bool, Text, Money,
 records and lists) compile to native code through Cranelift, and a C interface
 lets any language run programs (Python is tested). Functions that call models,
-act, or use `try`, `parse` or `validate` stay on the interpreter. `intentc build`
+act, or use `try`, `parse` or `validate` stay on the interpreter. `staalc build`
 makes a standalone executable (Linux). Not run yet: macOS (a CI workflow for it is
 ready) and Windows; not built: an installable Python package. Real model providers
 are not built; only a scripted one exists.
@@ -42,13 +45,13 @@ are not built; only a scripted one exists.
 | E105 | A function with a return type can finish without returning |
 | E106 | An import problem: a missing module, an import cycle, a name that clashes with an import |
 | E107 | A declaration used from another module without being `pub` |
-| E108 | A package uses a capability its `intent.json` does not declare, or reaches beyond the targets it declares |
+| E108 | A package uses a capability its `staal.json` does not declare, or reaches beyond the targets it declares |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
 All eight safety checks from the spec (E001-E008) are implemented. Phase 1's
 gate is met: every one is rejected by tests. 30 valid programs compile,
-including the two benchmark workflows (`workflow_*.int`), and 270 invalid ones
+including the two benchmark workflows (`workflow_*.staal`), and 270 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -119,24 +122,24 @@ everything after it. That is the price of never missing a leak.
 Money literals are written with their currency: `0 USD`, `12.50 NGN`,
 `1000 JPY`. They follow the rules for money from outside: a supported
 currency, no more decimals than it has, and no amount too large to hold
-exactly. A decimal number without a currency is an error, since Intent has no
+exactly. A decimal number without a currency is an error, since Staal has no
 floating point. The number and its currency must be on the same line.
 
 ## Modules
 
-    // sms/termii.int
+    // sms/termii.staal
     pub type Message { to: Text, body: Text }
     pub fn send(m: Message, http: cap net.http.post) -> Receipt { ... }
     fn endpoint() -> Text { ... }          // private to this file
 
-    // clinic.int
+    // clinic.staal
     import sms.termii                      // as `termii`
     import util.text as txt { clean }      // as `txt`, and `clean` unqualified
 
     let m = termii.Message { to: phone, body: text }
     let r = termii.send(m, http)
 
-A file is a module. `import a.b` reads `a/b.int` from the folder of the
+A file is a module. `import a.b` reads `a/b.staal` from the folder of the
 program file and names it `b` (or the name after `as`); `{ ... }` also brings
 those names in unqualified. Only `pub` declarations can be used from another
 file (E107). Imports come first in a file. A name is defined once per file: a
@@ -147,7 +150,7 @@ Names never leak between files. A library that calls `helper()` gets its own
 `helper` or an error, never the program's function of that name.
 
 How the rules cross files: the compiler resolves every module into one program
-in which each name is qualified by its module (`send` in `sms/termii.int` is
+in which each name is qualified by its module (`send` in `sms/termii.staal` is
 `sms.termii.send`), then checks it exactly as it checks a single file. Blinding
 promises, budgets, trust, evidence and partial operations therefore hold
 across modules with no separate cross-module analysis. This is tested by
@@ -389,7 +392,7 @@ In practice, with `@blind(customer.email)`:
 ### Side channels: what is closed and what is not
 
 Two observers matter. The **model** sees only each request's instruction and
-data; it has no clock, and Intent gives programs none. The **provider** (or
+data; it has no clock, and Staal gives programs none. The **provider** (or
 anyone on the network path) also sees when requests arrive, how many there
 are, and their sizes.
 
@@ -423,9 +426,9 @@ Other limits:
 
 ## Running programs, and surviving crashes
 
-    intentc run     prog.int --config run.json --journal run.journal [--log run.jsonl]
-    intentc resume  prog.int --config run.json --journal run.journal
-    intentc resolve --journal run.journal (--performed <receipt> | --failed <reason> | --retry)
+    staalc run     prog.staal --config run.json --journal run.journal [--log run.jsonl]
+    staalc resume  prog.staal --config run.json --journal run.journal
+    staalc resolve --journal run.journal (--performed <receipt> | --failed <reason> | --retry)
 
 The reference interpreter runs checked programs against a scripted model and
 simulated adapters (real providers and adapters are not built yet). With
@@ -442,7 +445,7 @@ happened. The full protocol is in `docs/RUNTIME.md` section 11.
   action was in flight when the process died, resume retries it only if the
   adapter declares the service idempotent. Otherwise it stops (exit 3,
   `in_doubt`) and does nothing until an operator records what really happened
-  with `intentc resolve`.
+  with `staalc resolve`.
 - Only one process may use a journal at a time (an OS lock, freed if the
   process dies). A torn last line is discarded; any other damage is refused.
 
@@ -469,7 +472,7 @@ declares itself idempotent must really be: the runtime trusts that contract.
 
 ## Programs from different fields
 
-`tests/run/domain_*.int` are complete programs, each run against a scripted
+`tests/run/domain_*.staal` are complete programs, each run against a scripted
 model and simulated services, with cases for success, for model mistakes, for
 limits refusing, and for bad input:
 
@@ -529,7 +532,7 @@ the journal. Libraries for real services are meant to be written on top of these
 - **A request that may have happened is in doubt.** If a POST's connection breaks
   after it was sent, the run stops `in_doubt` instead of failing, so the program
   cannot retry and send twice, and an operator records what the server answered
-  (`intentc resolve --status 200 --body ...`). If the grant says the service
+  (`staalc resolve --status 200 --body ...`). If the grant says the service
   deduplicates (`"idempotency_key": true`), the runtime sends an
   `Idempotency-Key` and retries safely instead.
 - **Data from services** is untrusted (never an instruction, E006) and unchecked
@@ -568,7 +571,7 @@ Resend email programs with instructions to run them with your own keys.
 
 ## Capabilities from libraries
 
-    // termii.int: a library
+    // termii.staal: a library
     capability termii.sms {
         needs http: cap net.http.post
         needs key: Secret
@@ -585,7 +588,7 @@ Resend email programs with instructions to run them with your own keys.
         }
     }
 
-    // remind.int: a program
+    // remind.staal: a program
     import termii
     fn remind(patients: List<Patient, 50>, texts: cap termii.sms.send(uses: 50)) -> Int { ... }
 
@@ -640,27 +643,27 @@ change after it was read (next section).
 
 ## Packages
 
-    // intent.json, next to the program
+    // staal.json, next to the program
     { "dependencies": {
-        "sms": { "git": "https://github.com/you/intent-sms", "commit": "5ea44d1181fef1ccb2f7a96862a392f9f15ac807" } } }
+        "sms": { "git": "https://github.com/you/staal-sms", "commit": "5ea44d1181fef1ccb2f7a96862a392f9f15ac807" } } }
 
-    // main.int
+    // main.staal
     import sms.termii
     fn remind(phone: Text, texts: cap sms.termii.send(uses: 1)) -> Receipt { ... }
 
-    $ intentc fetch
-    sms https://github.com/you/intent-sms at 5ea44d1181fe (new)
+    $ staalc fetch
+    sms https://github.com/you/staal-sms at 5ea44d1181fe (new)
         authority: net.http.post only https://api.ng.termii.com/api/sms/send
 
-A package is a git repository with an `intent.json` naming it and listing its
+A package is a git repository with an `staal.json` naming it and listing its
 `authority`: every capability its code may use, with the targets it may reach.
-`intentc fetch` reads each dependency at its exact commit (a branch or tag is
-refused: they move), writes it to `.intent/packages/`, records the SHA-256 of
-every file in `intent.lock`, and prints each package's authority for review.
+`staalc fetch` reads each dependency at its exact commit (a branch or tag is
+refused: they move), writes it to `.staal/packages/`, records the SHA-256 of
+every file in `staal.lock`, and prints each package's authority for review.
 The full rules are in `docs/RUNTIME.md` section 14. In short:
 
 - **Nothing unverified is read as code.** Before checking or running, every
-  package folder is compared with `intent.lock`: a file changed, added, removed,
+  package folder is compared with `staal.lock`: a file changed, added, removed,
   or replaced by a link is refused. `fetch` reads files from git's objects, not a
   checkout, so no line-ending conversion or filter can change them, and it compares
   them with the lock every time, so an edited lock is caught too.
@@ -697,13 +700,13 @@ allowing plain http, and accepting a misnamed package.
 
 What is not covered: fetching from a real host (GitHub was not reachable from the
 machine this was built on; local repositories exercise the same code), and a
-registry. Whoever can edit both `intent.lock` and `.intent/packages/` controls the
-code, as with any lockfile: `intentc check` trusts the lock, and `intentc fetch`
+registry. Whoever can edit both `staal.lock` and `.staal/packages/` controls the
+code, as with any lockfile: `staalc check` trusts the lock, and `staalc fetch`
 compares both with git. `git` must be installed to fetch.
 
 ## Native code and the C interface
 
-    intentc run program.int --config run.json --engine native
+    staalc run program.staal --config run.json --engine native
 
 On the native engine, every pure function is compiled to machine code when the run
 starts (Cranelift, in memory): its parameters and result are Int, Bool, Text, Money,
@@ -730,16 +733,16 @@ run in native code. The full rules are in `docs/RUNTIME.md` section 15. In short
   saves. Work on text, money, records and lists still calls into the runtime for
   each operation.
 
-`include/intent.h` declares the C interface: `intent_check`, `intent_run`,
-`intent_resume`, `intent_resolve`, `intent_free` and `intent_version`, in
-`libintentc.so` (or `.dylib`). Each returns a JSON object whose `status` is `done`,
+`include/staal.h` declares the C interface: `staal_check`, `staal_run`,
+`staal_resume`, `staal_resolve`, `staal_free` and `staal_version`, in
+`libstaalc.so` (or `.dylib`). Each returns a JSON object whose `status` is `done`,
 `failed`, `stopped`, `invalid` or `error`, mirroring the command line's exit codes,
-with the run's log. `python/intent` wraps it with `ctypes`; Intent contains no
+with the run's log. `python/staal` wraps it with `ctypes`; Staal contains no
 Python.
 
-    import intent
-    lib = intent.Library("target/release/libintentc.so")
-    out = lib.run("clinic.int", config, journal="run.journal", engine="native")
+    import staal
+    lib = staal.Library("target/release/libstaalc.so")
+    out = lib.run("clinic.staal", config, journal="run.journal", engine="native")
 
 How this is tested: all 132 runtime cases run on both engines with a journal, and
 their results, logs and journals are identical (295 functions compile across them).
@@ -760,34 +763,34 @@ Python script runs every clinic case through the shared library on both engines.
 
 ### Executables
 
-    intentc build clinic.int -o clinic
+    staalc build clinic.staal -o clinic
     ./clinic run --config run.json --journal run.journal
 
-`intentc build` checks the program, compiles its native functions into an object
+`staalc build` checks the program, compiles its native functions into an object
 file with Cranelift for the baseline of this processor family (so the executable
 runs on any x86-64 Linux machine, not only this one), and links it with the runtime
-(`libintentc.a`, built next to `intentc`) using `cc`. The executable carries the
+(`libstaalc.a`, built next to `staalc`) using `cc`. The executable carries the
 program's source files, modules and packages included: it checks them again when it
 starts, refuses to run if they are not exactly the program its code was made from,
 and runs functions without native code on the interpreter. Its journals are the same
-as `intentc`'s, so a run started by one can be resumed by the other. In a release
+as `staalc`'s, so a run started by one can be resumed by the other. In a release
 build an executable is about 23 MB (13 MB stripped) and needs only the system's C
 library; the recursive Int program above runs in 0.015 s, against 0.018 s for
-`intentc --engine native`, which compiles when the run starts.
+`staalc --engine native`, which compiles when the run starts.
 
 How this is tested: every runtime case, run by its built executable, gives the same
-exit code, output, log and journal as `intentc run`; a program with modules runs as
+exit code, output, log and journal as `staalc run`; a program with modules runs as
 an executable; a run crashed at every journal point by the executable resumes under
-`intentc`, and the other way round, with the same result and world; an executable
+`staalc`, and the other way round, with the same result and world; an executable
 whose embedded program was changed by one character refuses to run; build errors are
 reported. Five mutations are each caught: the program check skipped, the native code
 table out of order, constants or record layouts lost, and running through the
 in-memory compiler instead of the linked code.
 
-What is not built: executables on macOS and Windows (`intentc build` refuses there
+What is not built: executables on macOS and Windows (`staalc build` refuses there
 for now); runs on macOS (`.github/workflows/ci.yml` runs every test on macOS, Apple
 Silicon and Intel, once the code is on GitHub); an installable Python package; and
-calling C libraries from Intent, which the plan leaves for last because the broker
+calling C libraries from Staal, which the plan leaves for last because the broker
 could not check them.
 
 ## Requirements
@@ -800,7 +803,7 @@ configured), `rustls` itself (named only to recognise handshake errors) and
 `webpki-root-certs` (Mozilla's root certificates), and Cranelift 0.136.2
 (`cranelift-codegen`, `-frontend`, `-jit`, `-module`, `-native`) for native code,
 behind the default `native` feature: `cargo build --no-default-features` builds
-without it. `intentc build` also needs a C compiler (`cc`) to link executables. Tests
+without it. `staalc build` also needs a C compiler (`cc`) to link executables. Tests
 also use `rcgen` to make certificates, and `python3` for the C-interface test.
 
 `scripts/audit.sh` checks every dependency in `Cargo.lock` against the RustSec
@@ -811,14 +814,14 @@ the database, so it is run by hand or in CI, not by `cargo test`.
 ## Use
 
     cargo build
-    ./target/debug/intentc check tests/fixtures/pass/refund.int
+    ./target/debug/staalc check tests/fixtures/pass/refund.staal
     cargo test
 
-`intentc check` exits 0 when the program is valid and 1 when it has errors.
-`intentc run ... --engine native` runs pure functions as native code (the default
-engine is the interpreter). `intentc build program.int -o app` makes an executable
-that takes `run`, `resume` and `resolve` like `intentc`, without the program file.
-`intentc fetch [folder]` fetches the packages a project's `intent.json` names;
+`staalc check` exits 0 when the program is valid and 1 when it has errors.
+`staalc run ... --engine native` runs pure functions as native code (the default
+engine is the interpreter). `staalc build program.staal -o app` makes an executable
+that takes `run`, `resume` and `resolve` like `staalc`, without the program file.
+`staalc fetch [folder]` fetches the packages a project's `staal.json` names;
 it exits 2 if anything is wrong, and then changes nothing.
 
 ## Tests
@@ -827,7 +830,7 @@ it exits 2 if anything is wrong, and then changes nothing.
 `tests/fixtures/fail/` holds programs that must be rejected. Each starts with
 `// expect: CODE`, and the test fails unless the compiler reports exactly that code.
 `tests/modules/` holds multi-file programs, one folder each, with the same
-`// expect:` header in `main.int`. `tests/run/` holds runtime cases.
+`// expect:` header in `main.staal`. `tests/run/` holds runtime cases.
 `tests/split_test.rs` re-runs the fixtures and runtime cases split across two
 modules and requires identical results.
 To add a rule, write the failing program first, then make the checker reject it.
@@ -841,11 +844,11 @@ To add a rule, write the failing program first, then make the checker reject it.
     src/budget.rs   worst-case model cost (E004, E005)
     src/pattern.rs  `only` patterns: matching and containment
     src/modules.rs  loading module files, resolving names across them (E106, E107)
-    src/packages.rs manifests, intent.lock, fetching from git, authority (E108)
+    src/packages.rs manifests, staal.lock, fetching from git, authority (E108)
     src/native.rs   native code for pure Int and Bool functions (Cranelift)
-    src/capi.rs     the C interface; include/intent.h declares it
-    src/cli.rs      the command line, `intentc build`, and built executables' entry
-    python/intent/  the Python wrapper over the C interface
+    src/capi.rs     the C interface; include/staal.h declares it
+    src/cli.rs      the command line, `staalc build`, and built executables' entry
+    python/staal/  the Python wrapper over the C interface
     src/targets.rs  canonical URLs and paths for `only`
     src/interp/http.rs  the HTTP client, and what is known about each request
     src/interp/fsx.rs   safe file access: no links followed, atomic writes

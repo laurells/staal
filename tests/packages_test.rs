@@ -1,5 +1,5 @@
 // Packages (phase 4): fetching from git at an exact commit, verifying every file
-// against intent.lock before use, resolving imports inside packages, and holding a
+// against staal.lock before use, resolving imports inside packages, and holding a
 // package's code to the authority its manifest declares (E108).
 //
 // Repositories are made here with git, in the test's own folder, and fetched by path:
@@ -8,8 +8,8 @@
 mod common;
 
 use common::server::Server;
-use intentc::interp::{run_config_durable, Durability};
-use intentc::packages;
+use staalc::interp::{run_config_durable, Durability};
+use staalc::packages;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,7 +20,7 @@ fn init() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     // SAFETY: set once, before any test reads the environment (every test calls init first).
     ONCE.call_once(|| unsafe {
-        std::env::set_var("INTENT_PKG_KEY", KEY);
+        std::env::set_var("STAAL_PKG_KEY", KEY);
     });
 }
 
@@ -81,13 +81,13 @@ fn manifest(deps: &[(&str, &Path, &str)]) -> String {
 
 fn project(dir: &Path, deps: &[(&str, &Path, &str)], main: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(dir.join("intent.json"), manifest(deps)).unwrap();
-    std::fs::write(dir.join("main.int"), main).unwrap();
-    dir.join("main.int")
+    std::fs::write(dir.join("staal.json"), manifest(deps)).unwrap();
+    std::fs::write(dir.join("main.staal"), main).unwrap();
+    dir.join("main.staal")
 }
 
 fn codes(main: &Path) -> Result<Vec<&'static str>, String> {
-    let c = intentc::check_path(main)?;
+    let c = staalc::check_path(main)?;
     Ok(match c.result {
         Ok(_) => vec![],
         Err(d) => d.iter().map(|d| d.code).collect(),
@@ -95,10 +95,10 @@ fn codes(main: &Path) -> Result<Vec<&'static str>, String> {
 }
 
 fn messages(main: &Path) -> String {
-    let c = intentc::check_path(main).unwrap();
+    let c = staalc::check_path(main).unwrap();
     match c.result {
         Ok(_) => String::new(),
-        Err(d) => d.iter().map(|d| intentc::format_diag_in(&c.files, d)).collect::<Vec<_>>().join("\n"),
+        Err(d) => d.iter().map(|d| staalc::format_diag_in(&c.files, d)).collect::<Vec<_>>().join("\n"),
     }
 }
 
@@ -140,8 +140,8 @@ fn the_reference_packages_fetch_check_and_report_their_authority() {
     // A second fetch changes nothing and says so.
     let again = packages::fetch(&b.join("app")).unwrap().join("\n");
     assert_eq!(again.matches("(unchanged)").count(), 4, "{again}");
-    let lock = std::fs::read_to_string(b.join("app/intent.lock")).unwrap();
-    assert!(lock.contains("\"termii.int\""), "{lock}");
+    let lock = std::fs::read_to_string(b.join("app/staal.lock")).unwrap();
+    assert!(lock.contains("\"termii.staal\""), "{lock}");
 }
 
 /// A project depending on package `sms` made from the reference package.
@@ -161,66 +161,66 @@ fn fetched_sms(name: &str) -> (PathBuf, PathBuf) {
 #[test]
 fn a_tampered_package_is_refused_before_it_is_read() {
     let (app, main) = fetched_sms("tamper");
-    let pkg = app.join(".intent/packages/sms");
-    let original = std::fs::read_to_string(pkg.join("termii.int")).unwrap();
+    let pkg = app.join(".staal/packages/sms");
+    let original = std::fs::read_to_string(pkg.join("termii.staal")).unwrap();
 
     // One character changed.
-    std::fs::write(pkg.join("termii.int"), original.replace("api.ng.termii.com", "api.ng.termii.co")).unwrap();
+    std::fs::write(pkg.join("termii.staal"), original.replace("api.ng.termii.com", "api.ng.termii.co")).unwrap();
     let e = codes(&main).unwrap_err();
-    assert!(e.contains("termii.int has been changed"), "{e}");
-    std::fs::write(pkg.join("termii.int"), &original).unwrap();
+    assert!(e.contains("termii.staal has been changed"), "{e}");
+    std::fs::write(pkg.join("termii.staal"), &original).unwrap();
     assert!(codes(&main).is_ok());
 
     // A file added: even one that is not code.
-    std::fs::write(pkg.join("extra.int"), "fn x() -> Int {\n    return 1\n}\n").unwrap();
+    std::fs::write(pkg.join("extra.staal"), "fn x() -> Int {\n    return 1\n}\n").unwrap();
     let e = codes(&main).unwrap_err();
-    assert!(e.contains("extra.int is not part of it"), "{e}");
-    std::fs::remove_file(pkg.join("extra.int")).unwrap();
+    assert!(e.contains("extra.staal is not part of it"), "{e}");
+    std::fs::remove_file(pkg.join("extra.staal")).unwrap();
 
     // A file removed.
-    std::fs::remove_file(pkg.join("termii.int")).unwrap();
+    std::fs::remove_file(pkg.join("termii.staal")).unwrap();
     let e = codes(&main).unwrap_err();
-    assert!(e.contains("termii.int is missing"), "{e}");
+    assert!(e.contains("termii.staal is missing"), "{e}");
 
     // A link in place of a file, even one pointing at identical content.
-    let copy = app.join("copy.int");
+    let copy = app.join("copy.staal");
     std::fs::write(&copy, &original).unwrap();
-    std::os::unix::fs::symlink(&copy, pkg.join("termii.int")).unwrap();
+    std::os::unix::fs::symlink(&copy, pkg.join("termii.staal")).unwrap();
     let e = codes(&main).unwrap_err();
     assert!(e.contains("link or a special file"), "{e}");
-    std::fs::remove_file(pkg.join("termii.int")).unwrap();
+    std::fs::remove_file(pkg.join("termii.staal")).unwrap();
 
     // `fetch` restores the package from git, and the program checks again.
     let report = packages::fetch(&app).unwrap().join("\n");
     assert!(report.contains("(unchanged)"), "{report}");
     std::fs::remove_file(&copy).unwrap();
-    assert_eq!(std::fs::read_to_string(pkg.join("termii.int")).unwrap(), original);
+    assert_eq!(std::fs::read_to_string(pkg.join("termii.staal")).unwrap(), original);
     assert_eq!(codes(&main).unwrap(), Vec::<&str>::new());
 }
 
 #[test]
 fn the_lockfile_itself_is_checked() {
     let (app, main) = fetched_sms("lock");
-    let lock_path = app.join("intent.lock");
+    let lock_path = app.join("staal.lock");
     let lock = std::fs::read_to_string(&lock_path).unwrap();
     // A hash edited to match a tampered file is still a mismatch with the commit: the
     // next fetch re-reads git and refuses rather than trusting either.
-    let tampered = app.join(".intent/packages/sms/termii.int");
+    let tampered = app.join(".staal/packages/sms/termii.staal");
     let evil = std::fs::read_to_string(&tampered).unwrap().replace("api.ng.termii.com", "evil.example.com");
     std::fs::write(&tampered, &evil).unwrap();
     let parsed = packages::Lock::parse(&lock, "lock").unwrap();
-    let old_hash = parsed.packages["sms"].files["termii.int"].clone();
+    let old_hash = parsed.packages["sms"].files["termii.staal"].clone();
     std::fs::write(&lock_path, lock.replace(&old_hash, &packages::sha256_hex(evil.as_bytes()))).unwrap();
     // The check alone cannot tell (the lock is the record); fetch compares with git.
     assert!(codes(&main).is_ok());
     let e = packages::fetch(&app).unwrap_err();
-    assert!(e.contains("does not have the files intent.lock records"), "{e}");
+    assert!(e.contains("does not have the files staal.lock records"), "{e}");
     assert!(e.contains("Nothing was changed"), "{e}");
     assert_eq!(std::fs::read_to_string(&tampered).unwrap(), evil, "a refused fetch changed the store");
 
     // No lock at all: nothing runs until `fetch`.
     std::fs::remove_file(&lock_path).unwrap();
-    assert!(codes(&main).unwrap_err().contains("run `intentc fetch`"));
+    assert!(codes(&main).unwrap_err().contains("run `staalc fetch`"));
 }
 
 #[test]
@@ -238,7 +238,7 @@ fn dependencies_are_exact() {
     project(&app, &[("texts", &b.join("repos/sms"), &commit)], "fn go() -> Int {\n    return 1\n}\n");
     assert!(packages::fetch(&app).unwrap_err().contains("names it 'sms'"));
     // Plain http is refused.
-    std::fs::write(app.join("intent.json"), json!({"dependencies": {"sms": {"git": "http://example.com/sms", "commit": commit}}}).to_string())
+    std::fs::write(app.join("staal.json"), json!({"dependencies": {"sms": {"git": "http://example.com/sms", "commit": commit}}}).to_string())
         .unwrap();
     assert!(packages::fetch(&app).unwrap_err().contains("must be https://"));
     // A manifest changed after fetching: the lock no longer matches it.
@@ -247,7 +247,7 @@ fn dependencies_are_exact() {
     packages::fetch(&app).unwrap();
     assert!(codes(&main).is_ok());
     project(&app, &[("sms", &b.join("repos/sms"), &other)], "fn go() -> Int {\n    return 1\n}\n");
-    assert!(codes(&main).unwrap_err().contains("run `intentc fetch`"));
+    assert!(codes(&main).unwrap_err().contains("run `staalc fetch`"));
     let report = packages::fetch(&app).unwrap().join("\n");
     assert!(report.contains(&format!("(was {})", &commit[..12])), "{report}");
     assert!(codes(&main).is_ok());
@@ -257,14 +257,14 @@ fn dependencies_are_exact() {
 fn a_repository_with_a_link_or_unsafe_path_is_refused() {
     let b = base("links");
     let r = b.join("repos/bad");
-    let commit = repo(&r, &[("intent.json", r#"{"package": "bad", "authority": {}}"#), ("a.int", "fn f() -> Int {\n    return 1\n}\n")]);
-    std::os::unix::fs::symlink("/etc/passwd", r.join("b.int")).unwrap();
+    let commit = repo(&r, &[("staal.json", r#"{"package": "bad", "authority": {}}"#), ("a.staal", "fn f() -> Int {\n    return 1\n}\n")]);
+    std::os::unix::fs::symlink("/etc/passwd", r.join("b.staal")).unwrap();
     let linked = repo(&r, &[]);
     let app = b.join("app");
     project(&app, &[("bad", &r, &linked)], "fn go() -> Int {\n    return 1\n}\n");
     let e = packages::fetch(&app).unwrap_err();
-    assert!(e.contains("b.int is a link or submodule"), "{e}");
-    assert!(!app.join(".intent/packages/bad").exists());
+    assert!(e.contains("b.staal is a link or submodule"), "{e}");
+    assert!(!app.join(".staal/packages/bad").exists());
     // The commit before the link is fine.
     project(&app, &[("bad", &r, &commit)], "fn go() -> Int {\n    return 1\n}\n");
     packages::fetch(&app).unwrap();
@@ -278,8 +278,8 @@ fn imports_resolve_inside_packages() {
     let fmt = repo(
         &repos.join("fmt"),
         &[
-            ("intent.json", r#"{"package": "fmt", "authority": {}}"#),
-            ("text.int", "pub fn shout(t: Text) -> Text {\n    return t + \"!\"\n}\n"),
+            ("staal.json", r#"{"package": "fmt", "authority": {}}"#),
+            ("text.staal", "pub fn shout(t: Text) -> Text {\n    return t + \"!\"\n}\n"),
         ],
     );
     let greet_manifest = json!({"package": "greet", "authority": {},
@@ -288,16 +288,16 @@ fn imports_resolve_inside_packages() {
     let greet = repo(
         &repos.join("greet"),
         &[
-            ("intent.json", greet_manifest.as_str()),
+            ("staal.json", greet_manifest.as_str()),
             // `util` is greet's own module; `fmt.text` is the dependency.
-            ("hello.int", "import util\nimport fmt.text\npub fn hello(n: Text) -> Text {\n    return text.shout(util.prefix() + n)\n}\n"),
-            ("util.int", "pub fn prefix() -> Text {\n    return \"hello \"\n}\n"),
+            ("hello.staal", "import util\nimport fmt.text\npub fn hello(n: Text) -> Text {\n    return text.shout(util.prefix() + n)\n}\n"),
+            ("util.staal", "pub fn prefix() -> Text {\n    return \"hello \"\n}\n"),
         ],
     );
     let app = b.join("app");
     // The program has its own `util` too: a different module from greet's.
     std::fs::create_dir_all(&app).unwrap();
-    std::fs::write(app.join("util.int"), "pub fn prefix() -> Text {\n    return \"WRONG \"\n}\n").unwrap();
+    std::fs::write(app.join("util.staal"), "pub fn prefix() -> Text {\n    return \"WRONG \"\n}\n").unwrap();
     let main = project(
         &app,
         &[("greet", &repos.join("greet"), &greet)],
@@ -305,10 +305,10 @@ fn imports_resolve_inside_packages() {
     );
     let report = packages::fetch(&app).unwrap().join("\n");
     assert!(report.contains("fmt ") && report.contains("greet "), "{report}");
-    let checked = intentc::check_path(&main).unwrap();
+    let checked = staalc::check_path(&main).unwrap();
     let prog = checked.result.unwrap_or_else(|d| panic!("{d:?}"));
     let cfg = json!({ "entry": "go", "model": { "provider": "script", "responses": [] } });
-    let out = intentc::interp::run_config(&prog, &cfg).unwrap();
+    let out = staalc::interp::run_config(&prog, &cfg).unwrap();
     assert_eq!(out.result.unwrap(), json!("hello ada! WRONG "));
 
     // The program cannot reach a package it does not depend on itself.
@@ -324,13 +324,13 @@ fn imports_resolve_inside_packages() {
 fn one_version_per_package() {
     let b = base("versions");
     let repos = b.join("repos");
-    let v1 = repo(&repos.join("fmt"), &[("intent.json", r#"{"package": "fmt", "authority": {}}"#), ("text.int", "pub fn f() -> Int {\n    return 1\n}\n")]);
-    let v2 = repo(&repos.join("fmt"), &[("text.int", "pub fn f() -> Int {\n    return 2\n}\n")]);
+    let v1 = repo(&repos.join("fmt"), &[("staal.json", r#"{"package": "fmt", "authority": {}}"#), ("text.staal", "pub fn f() -> Int {\n    return 1\n}\n")]);
+    let v2 = repo(&repos.join("fmt"), &[("text.staal", "pub fn f() -> Int {\n    return 2\n}\n")]);
     let user = |name: &str, commit: &str| {
         let m = json!({"package": name, "authority": {},
             "dependencies": {"fmt": {"git": repos.join("fmt").to_str().unwrap(), "commit": commit}}})
         .to_string();
-        repo(&repos.join(name), &[("intent.json", m.as_str()), ("m.int", "pub fn g() -> Int {\n    return 3\n}\n")])
+        repo(&repos.join(name), &[("staal.json", m.as_str()), ("m.staal", "pub fn g() -> Int {\n    return 3\n}\n")])
     };
     let a = user("a", &v1);
     let bb = user("b", &v2);
@@ -344,7 +344,7 @@ fn one_version_per_package() {
 fn authority_case(name: &str, authority: serde_json::Value, code: &str) -> PathBuf {
     let b = base(name);
     let m = json!({"package": "lib", "authority": authority}).to_string();
-    let commit = repo(&b.join("repos/lib"), &[("intent.json", m.as_str()), ("m.int", code)]);
+    let commit = repo(&b.join("repos/lib"), &[("staal.json", m.as_str()), ("m.staal", code)]);
     let main = project(&b.join("app"), &[("lib", &b.join("repos/lib"), &commit)], "import lib.m\nfn go() -> Int {\n    return 1\n}\n");
     packages::fetch(&b.join("app")).unwrap();
     main
@@ -400,9 +400,9 @@ fn a_package_is_held_to_its_declared_authority() {
 fn the_program_itself_is_not_limited_by_a_manifest() {
     let b = base("root");
     std::fs::create_dir_all(&b).unwrap();
-    std::fs::write(b.join("intent.json"), r#"{"package": "app", "authority": {}}"#).unwrap();
-    std::fs::write(b.join("main.int"), "fn go(h: cap net.http.post) -> Int {\n    return 1\n}\n").unwrap();
-    assert_eq!(codes(&b.join("main.int")).unwrap(), Vec::<&str>::new());
+    std::fs::write(b.join("staal.json"), r#"{"package": "app", "authority": {}}"#).unwrap();
+    std::fs::write(b.join("main.staal"), "fn go(h: cap net.http.post) -> Int {\n    return 1\n}\n").unwrap();
+    assert_eq!(codes(&b.join("main.staal")).unwrap(), Vec::<&str>::new());
 }
 
 /// The phase 4 gate: a project adds a package from git, builds, refuses a tampered
@@ -415,10 +415,10 @@ fn a_program_runs_through_a_fetched_package() {
     let b = base("gate");
     let send = s.url("/api/sms/send");
     let m = json!({"package": "sms", "version": "0.1.0", "authority": {"net.http.post": [send]}}).to_string();
-    let reference = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/sms/termii.int")).unwrap();
+    let reference = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/sms/termii.staal")).unwrap();
     // The reference package, pointed at the local server.
     let code = reference.replace("https://api.ng.termii.com/api/sms/send", &send);
-    let commit = repo(&b.join("repos/sms"), &[("intent.json", m.as_str()), ("termii.int", code.as_str())]);
+    let commit = repo(&b.join("repos/sms"), &[("staal.json", m.as_str()), ("termii.staal", code.as_str())]);
     let app = b.join("app");
     let main = project(
         &app,
@@ -426,14 +426,14 @@ fn a_program_runs_through_a_fetched_package() {
         "import sms.termii\nfn remind(phone: Text, texts: cap sms.termii.send(only: [\"2348012345678\"], uses: 1)) -> Receipt {\n    return texts.send(phone, \"See you tomorrow.\")\n}\n",
     );
     packages::fetch(&app).unwrap();
-    let checked = intentc::check_path(&main).unwrap();
+    let checked = staalc::check_path(&main).unwrap();
     let prog = checked.result.unwrap_or_else(|d| panic!("{d:?}"));
     let cfg = json!({
         "entry": "remind",
         "inputs": { "phone": "+234 801 234 5678" },
         "grants": { "texts": { "cap": "sms.termii.send", "needs": {
             "http": { "cap": "net.http.post" },
-            "key": { "env": "INTENT_PKG_KEY" },
+            "key": { "env": "STAAL_PKG_KEY" },
             "sender": "Clinic" } } },
         "model": { "provider": "script", "responses": [] }
     });
@@ -447,7 +447,7 @@ fn a_program_runs_through_a_fetched_package() {
     assert_eq!(body["api_key"], KEY);
 
     // Same package code: the finished run replays.
-    let again = intentc::check_path(&main).unwrap();
+    let again = staalc::check_path(&main).unwrap();
     assert_eq!(again.fingerprint, checked.fingerprint);
     let replay = run_config_durable(&again.result.unwrap(), &again.fingerprint, &cfg, Durability::Resume(&journal)).unwrap();
     assert_eq!(replay.result.unwrap(), out.result.unwrap());
@@ -455,10 +455,10 @@ fn a_program_runs_through_a_fetched_package() {
 
     // A new commit of the package: resume refuses.
     let changed = code.replace("channel: \"generic\"", "channel: \"dnd\"");
-    let commit2 = repo(&b.join("repos/sms"), &[("termii.int", changed.as_str())]);
-    std::fs::write(app.join("intent.json"), manifest(&[("sms", &b.join("repos/sms"), &commit2)])).unwrap();
+    let commit2 = repo(&b.join("repos/sms"), &[("termii.staal", changed.as_str())]);
+    std::fs::write(app.join("staal.json"), manifest(&[("sms", &b.join("repos/sms"), &commit2)])).unwrap();
     packages::fetch(&app).unwrap();
-    let newer = intentc::check_path(&main).unwrap();
+    let newer = staalc::check_path(&main).unwrap();
     assert_ne!(newer.fingerprint, checked.fingerprint);
     let Err(e) = run_config_durable(&newer.result.unwrap(), &newer.fingerprint, &cfg, Durability::Resume(&journal)) else {
         panic!("resume must refuse different package code");
@@ -475,17 +475,17 @@ fn files_are_taken_from_git_objects_not_a_checkout() {
     let commit = repo(
         &r,
         &[
-            (".gitattributes", "*.int text eol=crlf\n"),
-            ("intent.json", r#"{"package": "eol", "authority": {}}"#),
-            ("m.int", "pub fn f() -> Int {\n    return 1\n}\n"),
+            (".gitattributes", "*.staal text eol=crlf\n"),
+            ("staal.json", r#"{"package": "eol", "authority": {}}"#),
+            ("m.staal", "pub fn f() -> Int {\n    return 1\n}\n"),
         ],
     );
     let app = b.join("app");
     project(&app, &[("eol", &r, &commit)], "import eol.m\nfn go() -> Int {\n    return m.f()\n}\n");
     packages::fetch(&app).unwrap();
-    let text = std::fs::read(app.join(".intent/packages/eol/m.int")).unwrap();
+    let text = std::fs::read(app.join(".staal/packages/eol/m.staal")).unwrap();
     assert!(!text.contains(&b'\r'), "line endings were converted");
-    let blob = git(&r, &["rev-parse", &format!("{commit}:m.int")]);
+    let blob = git(&r, &["rev-parse", &format!("{commit}:m.staal")]);
     let committed = Command::new("git").arg("-C").arg(&r).args(["cat-file", "blob", &blob]).output().unwrap().stdout;
     assert_eq!(text, committed);
 }
@@ -543,23 +543,23 @@ fn go(texts: cap sms.termii.send(uses: 1), refunds: cap payments.stripe.refund(m
 "#,
     );
     packages::fetch(&b.join("app")).unwrap();
-    let checked = intentc::check_path(&main).unwrap();
+    let checked = staalc::check_path(&main).unwrap();
     let prog = checked.result.unwrap_or_else(|d| panic!("{d:?}"));
     let http = |p: &str| json!({ "cap": "net.http.post", "only": [s.url(p)] });
     let cfg = json!({
         "entry": "go",
         "grants": {
-            "texts": { "cap": "sms.termii.send", "needs": { "http": http("/api/sms/send"), "key": { "env": "INTENT_PKG_KEY" }, "sender": "Clinic" } },
+            "texts": { "cap": "sms.termii.send", "needs": { "http": http("/api/sms/send"), "key": { "env": "STAAL_PKG_KEY" }, "sender": "Clinic" } },
             "refunds": { "cap": "payments.stripe.refund", "needs": {
                 "get": { "cap": "net.http.get", "only": [s.url("/v1/payment_intents/*")] },
                 "post": { "cap": "net.http.post", "only": [s.url("/v1/refunds")], "idempotency_key": true },
-                "key": { "env": "INTENT_PKG_KEY" } } },
-            "mail": { "cap": "email.resend.send", "needs": { "http": http("/emails"), "key": { "env": "INTENT_PKG_KEY" }, "sender": "clinic@clinic.org" } },
-            "channel": { "cap": "chat.slack.post", "needs": { "http": http("/api/chat.postMessage"), "token": { "env": "INTENT_PKG_KEY" } } }
+                "key": { "env": "STAAL_PKG_KEY" } } },
+            "mail": { "cap": "email.resend.send", "needs": { "http": http("/emails"), "key": { "env": "STAAL_PKG_KEY" }, "sender": "clinic@clinic.org" } },
+            "channel": { "cap": "chat.slack.post", "needs": { "http": http("/api/chat.postMessage"), "token": { "env": "STAAL_PKG_KEY" } } }
         },
         "model": { "provider": "script", "responses": [] }
     });
-    let out = intentc::interp::run_config(&prog, &cfg).unwrap();
+    let out = staalc::interp::run_config(&prog, &cfg).unwrap();
     assert_eq!(out.result.as_ref().unwrap(), &json!("action: Slack refused the message: channel_not_found"), "{:?}", out.log);
     let reqs = s.requests();
     let paths: Vec<&str> = reqs.iter().map(|r| r.path.as_str()).collect();

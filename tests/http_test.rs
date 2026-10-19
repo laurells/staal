@@ -5,7 +5,7 @@
 mod common;
 
 use common::server::Server;
-use intentc::interp::{run_config, run_config_durable, Durability, FailKind, RunResult};
+use staalc::interp::{run_config, run_config_durable, Durability, FailKind, RunResult};
 use serde_json::{json, Value as Json};
 use std::sync::Once;
 
@@ -15,14 +15,14 @@ fn init() {
     static ONCE: Once = Once::new();
     // SAFETY: set once, before any test reads the environment (every test calls init first).
     ONCE.call_once(|| unsafe {
-        std::env::set_var("INTENT_TEST_KEY", KEY);
-        std::env::set_var("INTENT_TEST_SHORT", "abc");
-        std::env::set_var("INTENT_TEST_SPACE", "has a space in it");
+        std::env::set_var("STAAL_TEST_KEY", KEY);
+        std::env::set_var("STAAL_TEST_SHORT", "abc");
+        std::env::set_var("STAAL_TEST_SPACE", "has a space in it");
     });
 }
 
-fn prog(src: &str) -> intentc::ast::Program {
-    intentc::check_program(src).unwrap_or_else(|d| panic!("check errors: {d:?}\n{src}"))
+fn prog(src: &str) -> staalc::ast::Program {
+    staalc::check_program(src).unwrap_or_else(|d| panic!("check errors: {d:?}\n{src}"))
 }
 
 fn run(src: &str, cfg: Json) -> RunResult {
@@ -54,7 +54,7 @@ fn a_secret_reaches_only_the_header_and_never_the_log() {
         s.url("/echo-auth")
     );
     let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
-                      "secrets": { "key": { "env": "INTENT_TEST_KEY" } },
+                      "secrets": { "key": { "env": "STAAL_TEST_KEY" } },
                       "model": { "provider": "script", "responses": [] } });
     let out = run(&src, cfg);
     let reqs = s.requests();
@@ -70,7 +70,7 @@ fn a_secret_reaches_only_the_header_and_never_the_log() {
 #[test]
 fn a_secret_in_a_json_body_and_the_journal_never_holds_it() {
     let s = Server::start();
-    let dir = std::env::temp_dir().join(format!("intentc-http-journal-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("staalc-http-journal-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let journal = dir.join("run.journal");
@@ -85,7 +85,7 @@ fn f(key: Secret, http: cap net.http.post(only: ["{0}"])) -> Int {{
     );
     init();
     let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
-                      "secrets": { "key": { "env": "INTENT_TEST_KEY" } },
+                      "secrets": { "key": { "env": "STAAL_TEST_KEY" } },
                       "model": { "provider": "script", "responses": [] } });
     let p = prog(&src);
     let out = run_config_durable(&p, &src, &cfg, Durability::Create(&journal)).unwrap();
@@ -94,7 +94,7 @@ fn f(key: Secret, http: cap net.http.post(only: ["{0}"])) -> Int {{
     assert_eq!(sent, json!({ "to": "+2348000000000", "sms": "hi", "api_key": KEY }));
     let text = std::fs::read_to_string(&journal).unwrap();
     assert!(!text.contains(KEY), "the journal holds the key");
-    assert!(text.contains("{secret INTENT_TEST_KEY}"), "the journal records the template: {text}");
+    assert!(text.contains("{secret STAAL_TEST_KEY}"), "the journal records the template: {text}");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -206,7 +206,7 @@ fn nothing_listening_is_an_ordinary_failure() {
 #[test]
 fn a_post_without_an_answer_stops_the_run_in_doubt() {
     let s = Server::start();
-    let dir = std::env::temp_dir().join(format!("intentc-http-doubt-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("staalc-http-doubt-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let journal = dir.join("run.journal");
@@ -233,7 +233,7 @@ fn a_post_without_an_answer_stops_the_run_in_doubt() {
     assert_eq!(f.kind, FailKind::InDoubt);
     assert_eq!(s.requests().len(), 1, "resume must not repeat the request");
     // A receipt is the wrong answer for an HTTP request; the operator records the response.
-    use intentc::interp::journal::{Journal, Resolution};
+    use staalc::interp::journal::{Journal, Resolution};
     assert!(Journal::resolve(&journal, Resolution::Performed { receipt: "x".into() }).unwrap_err().contains("--status"));
     Journal::resolve(&journal, Resolution::Responded { status: 200, body: "{}".into() }).unwrap();
     let out = run_config_durable(&p, &src, &cfg, Durability::Resume(&journal)).unwrap();
@@ -340,11 +340,11 @@ fn secrets_come_only_from_the_environment() {
     };
     assert!(err(base("f")).contains("missing"));
     assert!(err(with(base("f"), "inputs", json!({ "key": "inline" }))).contains("never written into a run config"));
-    assert!(err(with(base("f"), "secrets", json!({ "key": { "env": "INTENT_TEST_UNSET_9" } }))).contains("is not set"));
-    assert!(err(with(base("f"), "secrets", json!({ "key": { "env": "INTENT_TEST_SHORT" } }))).contains("shorter"));
-    assert!(err(with(base("f"), "secrets", json!({ "key": { "env": "INTENT_TEST_SPACE" } }))).contains("space"));
+    assert!(err(with(base("f"), "secrets", json!({ "key": { "env": "STAAL_TEST_UNSET_9" } }))).contains("is not set"));
+    assert!(err(with(base("f"), "secrets", json!({ "key": { "env": "STAAL_TEST_SHORT" } }))).contains("shorter"));
+    assert!(err(with(base("f"), "secrets", json!({ "key": { "env": "STAAL_TEST_SPACE" } }))).contains("space"));
     assert!(err(with(base("f"), "secrets", json!({ "key": { "value": "x" } }))).contains("only from the environment"));
-    assert!(run_config(&p, &with(base("f"), "secrets", json!({ "key": { "env": "INTENT_TEST_KEY" } }))).is_ok());
+    assert!(run_config(&p, &with(base("f"), "secrets", json!({ "key": { "env": "STAAL_TEST_KEY" } }))).is_ok());
 }
 
 #[test]
@@ -367,7 +367,7 @@ fn grants_for_runtime_capabilities_are_checked() {
 #[cfg(unix)]
 #[test]
 fn files_are_read_and_written_inside_only() {
-    let d = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("intentc-http-fs-{}", std::process::id()));
+    let d = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("staalc-http-fs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(d.join("in")).unwrap();
     std::fs::create_dir_all(d.join("out")).unwrap();
@@ -412,7 +412,7 @@ fn f(to: Text, text: Text, key: Secret, http: cap net.http.post(only: ["{0}"])) 
     let cfg = |text: &str| {
         json!({ "entry": "f", "inputs": { "to": "+2348000000000", "text": text },
                 "grants": { "http": { "cap": "net.http.post" } },
-                "secrets": { "key": { "env": "INTENT_TEST_KEY" } },
+                "secrets": { "key": { "env": "STAAL_TEST_KEY" } },
                 "model": { "provider": "script", "responses": [] } })
     };
     let f = run(&src, cfg("Your code is {secret}")).result.unwrap_err();

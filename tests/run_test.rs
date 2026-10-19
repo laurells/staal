@@ -1,4 +1,4 @@
-// Runtime tests. Each case is tests/run/NAME.int plus tests/run/NAME.json: a run
+// Runtime tests. Each case is tests/run/NAME.staal plus tests/run/NAME.json: a run
 // config with an extra "expect" object. Expectations:
 //   "result": <json>             the entry function's return value, exactly
 //   "failure": "<kind>"          the run must fail with this kind instead
@@ -27,12 +27,12 @@ fn runtime_cases() {
     assert!(!cases.is_empty(), "no runtime cases");
     let mut failures = Vec::new();
     for case in &cases {
-        // NAME.json runs NAME.int, or BASE.int for NAME = BASE__variant.
+        // NAME.json runs NAME.staal, or BASE.staal for NAME = BASE__variant.
         let stem = case.file_stem().unwrap().to_string_lossy().to_string();
         let base = stem.split("__").next().unwrap().to_string();
-        let prog = dir.join(format!("{base}.int"));
+        let prog = dir.join(format!("{base}.staal"));
         let checked = fs::read_to_string(&prog).map_err(|e| e.to_string()).and_then(|src| {
-            intentc::check_program(&src).map_err(|d| format!("program has check errors: {d:?}"))
+            staalc::check_program(&src).map_err(|d| format!("program has check errors: {d:?}"))
         });
         if let Err(e) = checked.and_then(|p| common::check_case(&p, case, "")) {
             failures.push(format!("{}: {e}", case.file_name().unwrap().to_string_lossy()));

@@ -13,8 +13,8 @@
 
 mod common;
 
-use intentc::ast::{Expr, FnDecl, Program, Stmt};
-use intentc::SourceFile;
+use staalc::ast::{Expr, FnDecl, Program, Stmt};
+use staalc::SourceFile;
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,8 +54,8 @@ fn calls_in(f: &FnDecl) -> Vec<String> {
 
 /// Splits `src`, or returns None when it does not parse or has nothing to move.
 fn split(src: &str) -> Option<Split> {
-    let toks = intentc::lexer::lex(src).ok()?;
-    let prog: Program = intentc::parser::Parser::new(toks).program().ok()?;
+    let toks = staalc::lexer::lex(src).ok()?;
+    let prog: Program = staalc::parser::Parser::new(toks).program().ok()?;
     assert!(prog.imports.is_empty(), "test programs are single files");
     // Every function called by some function, and everything those call.
     let mut moved: HashSet<String> = prog.fns.iter().flat_map(calls_in).collect();
@@ -115,18 +115,18 @@ fn split(src: &str) -> Option<Split> {
     Some(Split { main, lib, moved })
 }
 
-fn check_split(s: &Split) -> intentc::Checked {
+fn check_split(s: &Split) -> staalc::Checked {
     let lib = s.lib.clone();
-    intentc::check_files(SourceFile { name: "main.int".into(), text: s.main.clone() }, move |m| {
+    staalc::check_files(SourceFile { name: "main.staal".into(), text: s.main.clone() }, move |m| {
         if m == [LIB.to_string()] {
-            Ok(SourceFile { name: format!("{LIB}.int"), text: lib.clone() })
+            Ok(SourceFile { name: format!("{LIB}.staal"), text: lib.clone() })
         } else {
             Err("not part of the split".into())
         }
     })
 }
 
-fn sorted_codes(r: &Result<Program, Vec<intentc::checker::Diagnostic>>) -> Vec<&'static str> {
+fn sorted_codes(r: &Result<Program, Vec<staalc::checker::Diagnostic>>) -> Vec<&'static str> {
     let mut v: Vec<&'static str> = match r {
         Ok(_) => Vec::new(),
         Err(d) => d.iter().map(|d| d.code).collect(),
@@ -147,7 +147,7 @@ fn files_in(dir: &str, ext: &str) -> Vec<PathBuf> {
 fn fixtures_keep_their_results_across_modules() {
     let mut failures = Vec::new();
     let (mut split_n, mut crossing) = (0, 0);
-    for f in files_in("tests/fixtures/pass", "int").into_iter().chain(files_in("tests/fixtures/fail", "int")) {
+    for f in files_in("tests/fixtures/pass", "staal").into_iter().chain(files_in("tests/fixtures/fail", "staal")) {
         let src = fs::read_to_string(&f).unwrap();
         let name = f.file_name().unwrap().to_string_lossy().to_string();
         // The fixture's written expectation, not a recomputed one: a compiler bug that
@@ -158,9 +158,9 @@ fn fixtures_keep_their_results_across_modules() {
         };
         want.sort();
         let Some(s) = split(&src) else {
-            let unparsable = intentc::lexer::lex(&src)
+            let unparsable = staalc::lexer::lex(&src)
                 .ok()
-                .and_then(|t| intentc::parser::Parser::new(t).program().ok())
+                .and_then(|t| staalc::parser::Parser::new(t).program().ok())
                 .is_none();
             if unparsable && !want.iter().all(|c| *c == "E900" || *c == "E901") {
                 failures.push(format!("{name}: does not parse but expects {want:?}"));
@@ -174,7 +174,7 @@ fn fixtures_keep_their_results_across_modules() {
         let got = sorted_codes(&check_split(&s).result);
         if got != want {
             failures.push(format!(
-                "{name}: one file gives {want:?}, split gives {got:?}\n--- main.int\n{}\n--- {LIB}.int\n{}",
+                "{name}: one file gives {want:?}, split gives {got:?}\n--- main.staal\n{}\n--- {LIB}.staal\n{}",
                 s.main, s.lib
             ));
         }
@@ -188,14 +188,14 @@ fn fixtures_keep_their_results_across_modules() {
 fn runtime_cases_behave_the_same_across_modules() {
     let mut failures = Vec::new();
     let mut ran = 0;
-    for prog_path in files_in("tests/run", "int") {
+    for prog_path in files_in("tests/run", "staal") {
         let src = fs::read_to_string(&prog_path).unwrap();
         let base = prog_path.file_stem().unwrap().to_string_lossy().to_string();
         let Some(s) = split(&src) else { continue };
         let prog = match check_split(&s).result {
             Ok(p) => p,
             Err(d) => {
-                failures.push(format!("{base}.int: split program has errors: {d:?}"));
+                failures.push(format!("{base}.staal: split program has errors: {d:?}"));
                 continue;
             }
         };

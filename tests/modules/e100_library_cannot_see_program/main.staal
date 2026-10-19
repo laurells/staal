@@ -1,5 +1,5 @@
 // expect: E100
-// expect-in: lib.int
+// expect-in: lib.staal
 // The library calls `helper`, which exists only in the program. Names never leak
 // between modules: it is undefined in the library.
 import lib

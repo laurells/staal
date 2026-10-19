@@ -1,19 +1,19 @@
 // Packages (roadmap phase 4): libraries from outside the program's folder.
 //
-// A project is the folder of the entry file. If it holds `intent.json`, its
+// A project is the folder of the entry file. If it holds `staal.json`, its
 // `dependencies` name packages by git URL and exact commit:
 //
 //   { "dependencies": { "sms": { "git": "https://github.com/x/sms", "commit": "<40 hex>" } } }
 //
-// A package is a git repository with `intent.json` at its root:
+// A package is a git repository with `staal.json` at its root:
 //
 //   { "package": "sms", "version": "0.1.0",
 //     "authority": { "net.http.post": ["https://api.ng.termii.com/api/sms/send"] },
 //     "dependencies": { ... } }
 //
-// `intentc fetch` reads each commit's files straight from git's objects (no checkout,
+// `staalc fetch` reads each commit's files straight from git's objects (no checkout,
 // so no filters or line-ending conversion can change them), writes them to
-// `.intent/packages/<name>/`, and records the SHA-256 of every file in `intent.lock`.
+// `.staal/packages/<name>/`, and records the SHA-256 of every file in `staal.lock`.
 // Checking or running a program first verifies every package folder against the lock:
 // a file changed, added or removed is refused before anything is read as code.
 //
@@ -37,10 +37,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const MANIFEST: &str = "intent.json";
-pub const LOCKFILE: &str = "intent.lock";
+pub const MANIFEST: &str = "staal.json";
+pub const LOCKFILE: &str = "staal.lock";
 /// Where fetched packages live, under the project folder.
-pub const STORE: &str = ".intent/packages";
+pub const STORE: &str = ".staal/packages";
 
 /// Bounds on what one package may hold, so a hostile repository cannot exhaust memory.
 const MAX_FILES: usize = 10_000;
@@ -68,7 +68,7 @@ pub struct Manifest {
     pub dependencies: BTreeMap<String, Dep>,
 }
 
-/// One verified package: its manifest and its `.int` files, read once and kept, so the
+/// One verified package: its manifest and its `.staal` files, read once and kept, so the
 /// text that is checked is exactly the text that was verified.
 #[derive(Debug, Clone)]
 pub struct Package {
@@ -231,7 +231,7 @@ impl Manifest {
     }
 }
 
-/// `intent.lock`: for each package, where it came from and the SHA-256 of every file.
+/// `staal.lock`: for each package, where it came from and the SHA-256 of every file.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Lock {
     pub packages: BTreeMap<String, LockedPackage>,
@@ -247,11 +247,11 @@ impl Lock {
     pub fn parse(text: &str, at: &str) -> Result<Lock, String> {
         let v: Json = serde_json::from_str(text).map_err(|e| format!("{at}: not valid JSON: {e}"))?;
         let obj = v.as_object().ok_or(format!("{at}: expected an object"))?;
-        if obj.get("intent_lock") != Some(&json!(1)) {
-            return Err(format!("{at}: not an intent.lock of version 1"));
+        if obj.get("staal_lock") != Some(&json!(1)) {
+            return Err(format!("{at}: not an staal.lock of version 1"));
         }
         for k in obj.keys() {
-            if k != "intent_lock" && k != "packages" {
+            if k != "staal_lock" && k != "packages" {
                 return Err(format!("{at}: unknown key '{k}'"));
             }
         }
@@ -289,7 +289,7 @@ impl Lock {
             let files: Map<String, Json> = p.files.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
             ps.insert(name.clone(), json!({ "git": p.dep.git, "commit": p.dep.commit, "files": files }));
         }
-        let mut text = serde_json::to_string_pretty(&json!({ "intent_lock": 1, "packages": ps })).expect("serialisable");
+        let mut text = serde_json::to_string_pretty(&json!({ "staal_lock": 1, "packages": ps })).expect("serialisable");
         text.push('\n');
         text
     }
@@ -348,8 +348,8 @@ fn read_tree(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
 }
 
 impl Project {
-    /// Opens the project in `root`: None when it has no `intent.json` (a program
-    /// without packages). Every package is verified against `intent.lock` here.
+    /// Opens the project in `root`: None when it has no `staal.json` (a program
+    /// without packages). Every package is verified against `staal.lock` here.
     pub fn open(root: &Path) -> Result<Option<Project>, String> {
         let mpath = root.join(MANIFEST);
         let lpath = root.join(LOCKFILE);
@@ -368,12 +368,12 @@ impl Project {
             return Ok(Some(Project { root: root.to_path_buf(), deps: BTreeMap::new(), packages: BTreeMap::new() }));
         }
         let ltext = std::fs::read_to_string(&lpath)
-            .map_err(|e| format!("cannot read {}: {e}; run `intentc fetch` to fetch the dependencies", lpath.display()))?;
+            .map_err(|e| format!("cannot read {}: {e}; run `staalc fetch` to fetch the dependencies", lpath.display()))?;
         let lock = Lock::parse(&ltext, LOCKFILE)?;
         let mut packages = BTreeMap::new();
         for (name, lp) in &lock.packages {
             let dir = root.join(STORE).join(name);
-            let tree = read_tree(&dir).map_err(|e| format!("package {name}: {e}; run `intentc fetch`"))?;
+            let tree = read_tree(&dir).map_err(|e| format!("package {name}: {e}; run `staalc fetch`"))?;
             verify(name, &tree, &lp.files)?;
             let mtext = std::str::from_utf8(&tree[MANIFEST]).map_err(|_| format!("package {name}: {MANIFEST} is not UTF-8"))?;
             let m = Manifest::parse(mtext, &format!("package {name}: {MANIFEST}"), true)?;
@@ -382,7 +382,7 @@ impl Project {
             }
             let mut modules = BTreeMap::new();
             for (f, bytes) in &tree {
-                if let Some(stem) = f.strip_suffix(".int") {
+                if let Some(stem) = f.strip_suffix(".staal") {
                     let text = String::from_utf8(bytes.clone()).map_err(|_| format!("package {name}: {f} is not UTF-8"))?;
                     modules.insert(stem.to_string(), text);
                 }
@@ -403,9 +403,9 @@ impl Project {
             }
             let p = packages
                 .get(&n)
-                .ok_or(format!("{LOCKFILE} has no package {n} (wanted by {by}); run `intentc fetch`"))?;
+                .ok_or(format!("{LOCKFILE} has no package {n} (wanted by {by}); run `staalc fetch`"))?;
             if p.dep != d {
-                return Err(format!("{LOCKFILE} has package {n} at {}, but {by} wants {}; run `intentc fetch`", p.dep.commit, d.commit));
+                return Err(format!("{LOCKFILE} has package {n} at {}, but {by} wants {}; run `staalc fetch`", p.dep.commit, d.commit));
             }
             for (dn, dd) in &p.manifest.dependencies {
                 queue.push((dn.clone(), dd.clone(), format!("package {n}")));
@@ -414,7 +414,7 @@ impl Project {
         }
         for n in packages.keys() {
             if !wanted.contains_key(n) {
-                return Err(format!("{LOCKFILE} has package {n}, which nothing depends on; run `intentc fetch`"));
+                return Err(format!("{LOCKFILE} has package {n}, which nothing depends on; run `staalc fetch`"));
             }
         }
         Ok(Some(Project { root: root.to_path_buf(), deps: manifest.dependencies, packages }))
@@ -481,7 +481,7 @@ impl ProjectSource {
     }
 
     fn local_exists(&self, base: &Path, first: &str) -> bool {
-        base.join(first).exists() || base.join(format!("{first}.int")).exists()
+        base.join(first).exists() || base.join(format!("{first}.staal")).exists()
     }
 }
 
@@ -528,14 +528,14 @@ impl Source for ProjectSource {
     fn read(&mut self, module: &[String]) -> Result<SourceFile, String> {
         if let Some(pkg) = self.project.as_ref().and_then(|p| p.package_of(module)) {
             let rel = module[1..].join("/");
-            let text = pkg.modules.get(&rel).ok_or(format!("package {} has no module {rel}.int", pkg.name))?;
-            return Ok(SourceFile { name: format!("{}:{rel}.int", pkg.name), text: text.clone() });
+            let text = pkg.modules.get(&rel).ok_or(format!("package {} has no module {rel}.staal", pkg.name))?;
+            return Ok(SourceFile { name: format!("{}:{rel}.staal", pkg.name), text: text.clone() });
         }
         let mut file = self.root.clone();
         for seg in module {
             file.push(seg);
         }
-        file.set_extension("int");
+        file.set_extension("staal");
         if self.entry_real.is_some() && std::fs::canonicalize(&file).ok() == self.entry_real {
             return Err(format!("{} is the program itself", file.display()));
         }
@@ -715,8 +715,8 @@ fn hashes(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, String> {
 
 type Fetched = (BTreeMap<String, Vec<u8>>, Manifest, String);
 
-/// `intentc fetch`: fetches every dependency at its commit, writes the packages and
-/// `intent.lock`, and reports each package and its authority. A package already in the
+/// `staalc fetch`: fetches every dependency at its commit, writes the packages and
+/// `staal.lock`, and reports each package and its authority. A package already in the
 /// lock at the same commit must have exactly the files the lock records.
 pub fn fetch(root: &Path) -> Result<Vec<String>, String> {
     let mpath = root.join(MANIFEST);
@@ -728,7 +728,7 @@ pub fn fetch(root: &Path) -> Result<Vec<String>, String> {
         Err(e) => return Err(format!("cannot read {LOCKFILE}: {e}")),
     };
     let store = root.join(STORE);
-    let scratch = root.join(".intent/scratch");
+    let scratch = root.join(".staal/scratch");
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).map_err(|e| format!("cannot create {}: {e}", scratch.display()))?;
 
@@ -792,7 +792,7 @@ pub fn fetch(root: &Path) -> Result<Vec<String>, String> {
             }
         }
     }
-    let ltmp = scratch.join("intent.lock.new");
+    let ltmp = scratch.join("staal.lock.new");
     std::fs::write(&ltmp, lock.to_text()).map_err(|e| format!("cannot write {LOCKFILE}: {e}"))?;
     std::fs::rename(&ltmp, root.join(LOCKFILE)).map_err(|e| format!("cannot write {LOCKFILE}: {e}"))?;
     let _ = std::fs::remove_dir_all(&scratch);
@@ -829,10 +829,10 @@ mod tests {
 
     #[test]
     fn paths_inside_a_package_are_plain() {
-        for ok in ["a.int", "lib/sms.int", "README.md"] {
+        for ok in ["a.staal", "lib/sms.staal", "README.md"] {
             assert!(check_rel_path(ok).is_ok(), "{ok}");
         }
-        for bad in ["", "/etc/passwd", "../x.int", "a/../b", "a//b", ".git/config", "a/.GIT/x", "a\\b", "c:x", "./a"] {
+        for bad in ["", "/etc/passwd", "../x.staal", "a/../b", "a//b", ".git/config", "a/.GIT/x", "a\\b", "c:x", "./a"] {
             assert!(check_rel_path(bad).is_err(), "{bad}");
         }
     }

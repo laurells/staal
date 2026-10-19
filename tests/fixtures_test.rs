@@ -11,7 +11,7 @@ fn files(dir: &str) -> Vec<std::path::PathBuf> {
     let mut v: Vec<_> = fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join(dir))
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "int"))
+        .filter(|p| p.extension().is_some_and(|e| e == "staal"))
         .collect();
     v.sort();
     assert!(!v.is_empty(), "no fixtures in {dir}");
@@ -22,7 +22,7 @@ fn files(dir: &str) -> Vec<std::path::PathBuf> {
 fn valid_programs_compile() {
     for f in files("tests/fixtures/pass") {
         let src = fs::read_to_string(&f).unwrap();
-        let diags = intentc::compile_check(&src);
+        let diags = staalc::compile_check(&src);
         assert!(diags.is_empty(), "{} should compile, got {:?}", f.display(), diags);
     }
 }
@@ -38,7 +38,7 @@ fn invalid_programs_are_rejected_with_the_right_code() {
             .unwrap_or_else(|| panic!("{} lacks `// expect: CODE`", f.display()))
             .split_whitespace()
             .collect();
-        let diags = intentc::compile_check(&src);
+        let diags = staalc::compile_check(&src);
         let codes: Vec<&str> = diags.iter().map(|d| d.code).collect();
         assert_eq!(codes, expected, "{}", f.display());
         if let Some(want) = src.lines().nth(1).and_then(|l| l.strip_prefix("// message: ")) {

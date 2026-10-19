@@ -77,7 +77,7 @@ impl Client {
             .timeout_global(Some(s.timeout))
             .timeout_connect(Some(s.connect_timeout))
             .proxy(if s.proxy_from_env { ureq::Proxy::try_from_env() } else { None })
-            .user_agent(concat!("intentc/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("staalc/", env!("CARGO_PKG_VERSION")))
             .build();
         Client { agent: ureq::Agent::new_with_config(config), max: s.max_response_bytes }
     }

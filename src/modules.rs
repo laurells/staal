@@ -1,12 +1,12 @@
 // Modules: loading the files of a program and resolving names across them.
 //
-// A file is a module. `import sms.termii` loads `sms/termii.int` from the program's
+// A file is a module. `import sms.termii` loads `sms/termii.staal` from the program's
 // root folder (the folder of the entry file) and makes it known as `termii`;
 // `import sms.termii as t` names it `t`; `import sms.termii { Message, send }` also
 // brings those names in unqualified. Declarations are private unless marked `pub`.
 //
 // Resolution turns all modules into ONE program in which every name is qualified by
-// its module: `send` in sms/termii.int becomes `sms.termii.send`. Names in the entry
+// its module: `send` in sms/termii.staal becomes `sms.termii.send`. Names in the entry
 // file keep their plain form. Identifiers cannot contain `.`, so qualified names never
 // collide with each other or with entry names. The checker then sees the whole program
 // exactly as it sees a single file, so every rule (blinding, budgets, trust, evidence,
@@ -58,7 +58,7 @@ impl Loaded {
         }
         // Module paths, not file names: the same program resumed from another folder,
         // or after the folder was moved, is still the same program.
-        let mut s = String::from("intent-modules-v2\n");
+        let mut s = String::from("staal-modules-v2\n");
         for (f, path) in self.files.iter().zip(&self.paths) {
             let name = path.join(".");
             s.push_str(&format!("{}\n{name}\n{}\n{}\n", name.len(), f.text.len(), f.text));

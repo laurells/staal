@@ -621,27 +621,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "intentc"
-version = "0.1.0"
-dependencies = [
- "cranelift-codegen",
- "cranelift-frontend",
- "cranelift-jit",
- "cranelift-module",
- "cranelift-native",
- "cranelift-object",
- "getrandom 0.4.3",
- "libc",
- "rcgen",
- "rustls",
- "serde_json",
- "sha2",
- "ureq",
- "url",
- "webpki-root-certs",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1002,6 +981,27 @@ name = "smallvec"
 version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
+
+[[package]]
+name = "staalc"
+version = "0.1.0"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "getrandom 0.4.3",
+ "libc",
+ "rcgen",
+ "rustls",
+ "serde_json",
+ "sha2",
+ "ureq",
+ "url",
+ "webpki-root-certs",
+]
 
 [[package]]
 name = "stable_deref_trait"

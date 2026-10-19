@@ -21,7 +21,7 @@ use std::process::Command;
 
 static RESOLVED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-const BIN: &str = env!("CARGO_BIN_EXE_intentc");
+const BIN: &str = env!("CARGO_BIN_EXE_staalc");
 const KEY: &str = "sk_test_crash_lib_5e4d3c2b1a";
 
 const PROGRAM: &str = r#"import stripe
@@ -47,10 +47,10 @@ impl Case {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/capabilities");
-        for lib in ["termii.int", "stripe.int"] {
+        for lib in ["termii.staal", "stripe.staal"] {
             std::fs::copy(examples.join(lib), dir.join(lib)).unwrap();
         }
-        std::fs::write(dir.join("prog.int"), PROGRAM).unwrap();
+        std::fs::write(dir.join("prog.staal"), PROGRAM).unwrap();
         let server = Server::start();
         let s = |p: &str| server.url(p);
         let cfg = json!({
@@ -60,12 +60,12 @@ impl Case {
                 "refunds": { "cap": "stripe.refunds.create", "only": ["pi_usd"], "needs": {
                     "get": { "cap": "net.http.get", "only": [s("/v1/payment_intents/*")] },
                     "post": { "cap": "net.http.post", "only": [s("/v1/refunds")], "idempotency_key": true },
-                    "key": { "env": "INTENT_CRASH_LIB_KEY" },
+                    "key": { "env": "STAAL_CRASH_LIB_KEY" },
                     "base": s("")
                 } },
                 "texts": { "cap": "termii.sms.send", "only": ["2348012345678"], "needs": {
                     "http": { "cap": "net.http.post", "only": [s("/api/sms/send")] },
-                    "key": { "env": "INTENT_CRASH_LIB_KEY" },
+                    "key": { "env": "STAAL_CRASH_LIB_KEY" },
                     "base": s(""),
                     "sender": "Shop"
                 } }
@@ -77,12 +77,12 @@ impl Case {
         Case { dir, server }
     }
 
-    fn intentc(&self, args: &[&str], failpoint: Option<&str>) -> (Option<i32>, String, String) {
+    fn staalc(&self, args: &[&str], failpoint: Option<&str>) -> (Option<i32>, String, String) {
         let mut cmd = Command::new(BIN);
-        cmd.args(args).env("INTENT_CRASH_LIB_KEY", KEY);
+        cmd.args(args).env("STAAL_CRASH_LIB_KEY", KEY);
         match failpoint {
-            Some(fp) => cmd.env("INTENTC_FAILPOINT", fp),
-            None => cmd.env_remove("INTENTC_FAILPOINT"),
+            Some(fp) => cmd.env("STAALC_FAILPOINT", fp),
+            None => cmd.env_remove("STAALC_FAILPOINT"),
         };
         let o = cmd.output().unwrap();
         (o.status.code(), String::from_utf8_lossy(&o.stdout).trim().into(), String::from_utf8_lossy(&o.stderr).trim().into())
@@ -93,8 +93,8 @@ impl Case {
     }
 
     fn run(&self, cmd: &str, failpoint: Option<&str>) -> (Option<i32>, String, String) {
-        let (prog, cfg, j) = (self.p("prog.int"), self.p("cfg.json"), self.p("journal"));
-        self.intentc(&[cmd, &prog, "--config", &cfg, "--journal", &j], failpoint)
+        let (prog, cfg, j) = (self.p("prog.staal"), self.p("cfg.json"), self.p("journal"));
+        self.staalc(&[cmd, &prog, "--config", &cfg, "--journal", &j], failpoint)
     }
 
     fn journal(&self) -> Vec<Json> {
@@ -123,9 +123,9 @@ impl Case {
                     let j = self.p("journal");
                     let (c, _, e) = if self.sms_count() > 0 {
                         let body = "{\"message_id\": \"t-resolved\", \"code\": \"ok\"}";
-                        self.intentc(&["resolve", "--journal", &j, "--status", "200", "--body", body], None)
+                        self.staalc(&["resolve", "--journal", &j, "--status", "200", "--body", body], None)
                     } else {
-                        self.intentc(&["resolve", "--journal", &j, "--retry"], None)
+                        self.staalc(&["resolve", "--journal", &j, "--retry"], None)
                     };
                     assert_eq!(c, Some(0), "{label}: resolve failed: {e}");
                 }

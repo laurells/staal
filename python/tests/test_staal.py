@@ -1,6 +1,6 @@
-"""Runs Intent programs through the C interface from Python (the phase 5 gate).
+"""Runs Staal programs through the C interface from Python (the phase 5 gate).
 
-Usage: INTENT_LIBRARY=/path/to/libintentc.so python3 -I python/tests/test_intent.py <repo root> <scratch dir>
+Usage: STAAL_LIBRARY=/path/to/libstaalc.so python3 -I python/tests/test_staal.py <repo root> <scratch dir>
 """
 
 import json
@@ -9,9 +9,9 @@ import sys
 
 root, scratch = sys.argv[1], sys.argv[2]
 sys.path.insert(0, os.path.join(root, "python"))
-import intent  # noqa: E402
+import staal  # noqa: E402
 
-lib = intent.Library()
+lib = staal.Library()
 checks = 0
 
 
@@ -32,12 +32,12 @@ def case(name):
 expect(lib.version, "a version")
 
 # The clinic program: booked, and refused for a foreign number, on both engines.
-clinic = os.path.join(root, "tests", "run", "domain_clinic.int")
+clinic = os.path.join(root, "tests", "run", "domain_clinic.staal")
 expect(lib.check(clinic) == {"status": "ok"}, "the clinic program checks")
 # Every clinic case, on both engines, against the case's written expectation.
 clinic_cases = sorted(f[:-5] for f in os.listdir(os.path.join(root, "tests", "run")) if f.startswith("domain_clinic__"))
 expect(len(clinic_cases) >= 6, "the clinic cases")
-has_native = os.environ.get("INTENT_HAS_NATIVE") == "1"
+has_native = os.environ.get("STAAL_HAS_NATIVE") == "1"
 if not has_native:
     cfg, _ = case("domain_clinic__booked")
     r = lib.run(clinic, cfg, engine="native")
@@ -69,8 +69,8 @@ again = lib.resume(clinic, cfg, journal, engine="native" if has_native else "int
 expect(again["status"] == "done" and again["result"] == out["result"], "resume on the other engine replays the result")
 
 # Errors come back as values, never crashes.
-expect(lib.check(os.path.join(scratch, "missing.int"))["status"] == "error", "a missing file is an error")
-bad = os.path.join(scratch, "bad.int")
+expect(lib.check(os.path.join(scratch, "missing.staal"))["status"] == "error", "a missing file is an error")
+bad = os.path.join(scratch, "bad.staal")
 with open(bad, "w") as f:
     f.write("fn f() -> Int {\n    return true\n}\n")
 r = lib.check(bad)
@@ -79,9 +79,9 @@ expect(lib.run(clinic, {"entry": "nope"})["status"] == "error", "a bad config is
 expect(lib.run(clinic, cfg, engine="fast")["status"] == "error", "an unknown engine is an error")
 expect(lib.resolve(journal, retry=True)["status"] == "error", "nothing to resolve in a finished run")
 expect(lib.resolve(journal, retry=True, failed="x")["status"] == "error", "one resolution at a time")
-r = lib._call("intent_run", clinic, "{not json", None, None)
+r = lib._call("staal_run", clinic, "{not json", None, None)
 expect(r["status"] == "error" and "not valid JSON" in r["error"], "invalid JSON config")
-r = lib._call("intent_run", None, "{}", None, None)
+r = lib._call("staal_run", None, "{}", None, None)
 expect(r["status"] == "error" and "NULL" in r["error"], "a NULL program path")
 
 print(f"python: {checks} checks passed")

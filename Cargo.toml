@@ -1,12 +1,12 @@
 [package]
-name = "intentc"
+name = "staalc"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
 # rlib for the command line and tests; cdylib for the C interface (src/capi.rs),
-# which other languages load as libintentc.so / libintentc.dylib;
-# staticlib: the runtime `intentc build` links into each executable.
+# which other languages load as libstaalc.so / libstaalc.dylib;
+# staticlib: the runtime `staalc build` links into each executable.
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
@@ -32,7 +32,7 @@ cranelift-frontend = { version = "=0.136.2", optional = true }
 cranelift-jit = { version = "=0.136.2", optional = true }
 cranelift-module = { version = "=0.136.2", optional = true }
 cranelift-native = { version = "=0.136.2", optional = true }
-# Object files for `intentc build` (ahead-of-time executables).
+# Object files for `staalc build` (ahead-of-time executables).
 cranelift-object = { version = "=0.136.2", optional = true }
 
 [features]

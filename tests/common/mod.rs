@@ -11,7 +11,7 @@ use std::path::Path;
 
 /// Runs one case against a checked program. `entry_prefix` is prepended to the
 /// case's entry function name (for programs whose entry lives in a module).
-pub fn check_case(prog: &intentc::ast::Program, case_path: &Path, entry_prefix: &str) -> Result<(), String> {
+pub fn check_case(prog: &staalc::ast::Program, case_path: &Path, entry_prefix: &str) -> Result<(), String> {
     let mut cfg: Json = serde_json::from_str(&fs::read_to_string(case_path).map_err(|e| e.to_string())?)
         .map_err(|e| format!("case JSON: {e}"))?;
     let expect = cfg.as_object_mut().and_then(|o| o.remove("expect")).ok_or("case has no \"expect\"")?;
@@ -31,7 +31,7 @@ pub fn check_case(prog: &intentc::ast::Program, case_path: &Path, entry_prefix: 
     {
         *e = Json::String(format!("{entry_prefix}{name}"));
     }
-    let out = match intentc::interp::run_config(prog, &cfg) {
+    let out = match staalc::interp::run_config(prog, &cfg) {
         Ok(out) => out,
         Err(e) => {
             return match expect.get("config_error_contains").and_then(Json::as_str) {

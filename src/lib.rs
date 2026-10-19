@@ -42,16 +42,16 @@ pub fn check_files(entry: SourceFile, fetch: impl FnMut(&[String]) -> Result<Sou
 }
 
 /// Checks the program in the file at `path`. Modules are found under the folder that
-/// holds it: `import sms.termii` reads `<folder>/sms/termii.int`, unless `sms` is a
-/// package the folder's `intent.json` depends on (see `packages`). Packages are
-/// verified against `intent.lock` before anything is read, and their code is checked
+/// holds it: `import sms.termii` reads `<folder>/sms/termii.staal`, unless `sms` is a
+/// package the folder's `staal.json` depends on (see `packages`). Packages are
+/// verified against `staal.lock` before anything is read, and their code is checked
 /// against the authority their manifests declare (E108).
 pub fn check_path(path: &Path) -> Result<Checked, String> {
     check_path_recorded(path).map(|(c, _)| c)
 }
 
 /// Everything a program was loaded from, so it can be loaded again without its files:
-/// what `intentc build` puts in an executable.
+/// what `staalc build` puts in an executable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Recorded {
     pub entry: (String, String),

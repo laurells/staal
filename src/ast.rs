@@ -1,4 +1,4 @@
-// Abstract syntax tree for the Intent v0.1 subset.
+// Abstract syntax tree for the Staal v0.1 subset.
 
 use crate::lexer::Pos;
 
@@ -411,7 +411,7 @@ impl Expr {
     }
 }
 
-/// `import a.b`, `import a.b as c`, `import a.b { T, f }`: makes module `a/b.int`
+/// `import a.b`, `import a.b as c`, `import a.b { T, f }`: makes module `a/b.staal`
 /// available as `b` (or `c`), and optionally names from it without qualification.
 #[derive(Debug, Clone)]
 pub struct Import {

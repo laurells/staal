@@ -1,11 +1,11 @@
-// The command line, shared by `intentc` and by executables `intentc build` makes.
+// The command line, shared by `staalc` and by executables `staalc build` makes.
 //
-//   intentc check   <file.int>
-//   intentc fetch   [<project folder>]
-//   intentc build   <file.int> -o <executable> [--runtime <libintentc.a>]
-//   intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
-//   intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
-//   intentc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
+//   staalc check   <file.staal>
+//   staalc fetch   [<project folder>]
+//   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
+//   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
+//   staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
+//   staalc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
 //                                            | --failed <reason> | --retry)
 //
 // A built executable takes the same commands without the program file:
@@ -26,12 +26,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 const USAGE: &str = "usage:
-  intentc check   <file.int>
-  intentc fetch   [<project folder>]
-  intentc build   <file.int> -o <executable> [--runtime <libintentc.a>]
-  intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
-  intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
-  intentc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
+  staalc check   <file.staal>
+  staalc fetch   [<project folder>]
+  staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
+  staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
+  staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
+  staalc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
                                            | --failed <reason> | --retry)";
 
 #[cfg(feature = "native")]
@@ -42,12 +42,12 @@ const APP_USAGE: &str = "usage:
                                    | --failed <reason> | --retry)";
 
 fn usage_error(usage: &str, msg: &str) -> u8 {
-    eprintln!("intentc: {msg}\n{usage}");
+    eprintln!("staalc: {msg}\n{usage}");
     2
 }
 
-/// `intentc` with its arguments (without the program name). Returns the exit code.
-pub fn intentc_main(args: Vec<String>) -> u8 {
+/// `staalc` with its arguments (without the program name). Returns the exit code.
+pub fn staalc_main(args: Vec<String>) -> u8 {
     let u = |m: &str| usage_error(USAGE, m);
     let Some(cmd) = args.first() else { return u("no command given") };
     let rest = &args[1..];
@@ -79,7 +79,7 @@ pub fn intentc_main(args: Vec<String>) -> u8 {
                     let checked = match crate::check_path(Path::new(&file)) {
                         Ok(c) => c,
                         Err(e) => {
-                            eprintln!("intentc: {e}");
+                            eprintln!("staalc: {e}");
                             return 2;
                         }
                     };
@@ -147,7 +147,7 @@ fn check(path: &str) -> u8 {
     let checked = match crate::check_path(Path::new(path)) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("intentc: {e}");
+            eprintln!("staalc: {e}");
             return 2;
         }
     };
@@ -175,7 +175,7 @@ fn run(
         Ok(p) => p,
         Err(diags) => {
             report(&checked.files, diags);
-            eprintln!("intentc: not running {name}: it has check errors");
+            eprintln!("staalc: not running {name}: it has check errors");
             return 1;
         }
     };
@@ -183,14 +183,14 @@ fn run(
     let cfg_text = match std::fs::read_to_string(config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("intentc: cannot read {config}: {e}");
+            eprintln!("staalc: cannot read {config}: {e}");
             return 2;
         }
     };
     let cfg: serde_json::Value = match serde_json::from_str(&cfg_text) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("intentc: {config} is not valid JSON: {e}");
+            eprintln!("staalc: {config} is not valid JSON: {e}");
             return 2;
         }
     };
@@ -202,7 +202,7 @@ fn run(
     let out = match go(prog, &checked.fingerprint, &cfg, durability) {
         Ok(out) => out,
         Err(e) => {
-            eprintln!("intentc: {e}");
+            eprintln!("staalc: {e}");
             return 2;
         }
     };
@@ -213,7 +213,7 @@ fn run(
             text.push('\n');
         }
         if let Err(e) = std::fs::write(log, text) {
-            eprintln!("intentc: cannot write log {log}: {e}");
+            eprintln!("staalc: cannot write log {log}: {e}");
             return 2;
         }
     }
@@ -223,17 +223,17 @@ fn run(
             0
         }
         Err(f) if matches!(f.kind, FailKind::InDoubt | FailKind::Journal) => {
-            eprintln!("intentc: run stopped: {}: {}", f.kind, f.message);
+            eprintln!("staalc: run stopped: {}: {}", f.kind, f.message);
             3
         }
         Err(f) => {
-            eprintln!("intentc: run failed: {}: {}", f.kind, f.message);
+            eprintln!("staalc: run failed: {}: {}", f.kind, f.message);
             1
         }
     }
 }
 
-/// Fetches the project's packages, writes intent.lock, and shows each package's
+/// Fetches the project's packages, writes staal.lock, and shows each package's
 /// authority, so it can be reviewed before any of its code is used.
 fn fetch(dir: &str) -> u8 {
     match crate::packages::fetch(Path::new(dir)) {
@@ -247,7 +247,7 @@ fn fetch(dir: &str) -> u8 {
             0
         }
         Err(e) => {
-            eprintln!("intentc: {e}");
+            eprintln!("staalc: {e}");
             2
         }
     }
@@ -283,14 +283,14 @@ fn resolve_cmd(rest: &[String], usage: &str) -> u8 {
             0
         }
         Err(e) => {
-            eprintln!("intentc: {e}");
+            eprintln!("staalc: {e}");
             2
         }
     }
 }
 
 // ---------------------------------------------------------------------------------
-// Executables (`intentc build`)
+// Executables (`staalc build`)
 
 /// What an executable carries besides its machine code, as JSON.
 #[cfg(feature = "native")]
@@ -304,7 +304,7 @@ fn build(file: &str, out: &str, runtime: Option<&str>) -> u8 {
             0
         }
         Err((code, e)) => {
-            eprintln!("intentc: {e}");
+            eprintln!("staalc: {e}");
             code
         }
     }
@@ -312,7 +312,7 @@ fn build(file: &str, out: &str, runtime: Option<&str>) -> u8 {
 
 #[cfg(not(feature = "native"))]
 fn build(_: &str, _: &str, _: Option<&str>) -> u8 {
-    eprintln!("intentc: this intentc was built without native code (the `native` feature), so it cannot build executables");
+    eprintln!("staalc: this staalc was built without native code (the `native` feature), so it cannot build executables");
     2
 }
 
@@ -337,12 +337,12 @@ pub fn build_executable(file: &Path, out: &Path, runtime: Option<&Path>) -> Resu
             return Err((1, format!("not building {}: it has check errors", file.display())));
         }
     };
-    // The runtime: the static library built alongside this intentc.
+    // The runtime: the static library built alongside this staalc.
     let lib = match runtime {
         Some(p) => p.to_path_buf(),
         None => {
-            let exe = std::env::current_exe().map_err(|e| (2, format!("cannot find intentc itself: {e}")))?;
-            exe.parent().map(|d| d.join("libintentc.a")).unwrap_or_default()
+            let exe = std::env::current_exe().map_err(|e| (2, format!("cannot find staalc itself: {e}")))?;
+            exe.parent().map(|d| d.join("libstaalc.a")).unwrap_or_default()
         }
     };
     if !lib.is_file() {
@@ -354,7 +354,7 @@ pub fn build_executable(file: &Path, out: &Path, runtime: Option<&Path>) -> Resu
         compiled = names.to_vec();
         let bundle = serde_json::json!({
             "format": BUNDLE_FORMAT,
-            "intentc": env!("CARGO_PKG_VERSION"),
+            "staalc": env!("CARGO_PKG_VERSION"),
             "program": recorded.to_json(),
             "fingerprint_sha256": fingerprint_sha,
             "compiled": names,
@@ -363,7 +363,7 @@ pub fn build_executable(file: &Path, out: &Path, runtime: Option<&Path>) -> Resu
         bundle.to_string().into_bytes()
     })
     .map_err(|e| (2, e))?;
-    let dir = std::env::temp_dir().join(format!("intentc-build-{}-{}", std::process::id(), journal::sha256_hex(out.to_string_lossy().as_bytes()).get(..12).unwrap_or("x")));
+    let dir = std::env::temp_dir().join(format!("staalc-build-{}-{}", std::process::id(), journal::sha256_hex(out.to_string_lossy().as_bytes()).get(..12).unwrap_or("x")));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| (2, format!("cannot create {}: {e}", dir.display())))?;
     let obj = dir.join("program.o");
@@ -391,7 +391,7 @@ pub fn build_executable(file: &Path, out: &Path, runtime: Option<&Path>) -> Resu
 /// to `n` function addresses. The generated `main` passes exactly these.
 #[cfg(feature = "native")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn intent_aot_main(
+pub unsafe extern "C" fn staal_aot_main(
     argc: i32,
     argv: *const *const std::ffi::c_char,
     bundle: *const u8,
@@ -414,7 +414,7 @@ pub unsafe extern "C" fn intent_aot_main(
     match std::panic::catch_unwind(|| app_main(args, bundle, &fns)) {
         Ok(code) => code as i32,
         Err(_) => {
-            eprintln!("intentc: the program crashed; this is a bug in intentc");
+            eprintln!("staalc: the program crashed; this is a bug in staalc");
             70
         }
     }
@@ -443,30 +443,30 @@ fn app_main(args: Vec<String>, bundle: &[u8], fns: &[usize]) -> u8 {
     let b: serde_json::Value = match serde_json::from_slice(bundle) {
         Ok(v) => v,
         Err(_) => {
-            eprintln!("intentc: this executable's program data is damaged");
+            eprintln!("staalc: this executable's program data is damaged");
             return 2;
         }
     };
     if b["format"] != serde_json::json!(BUNDLE_FORMAT) {
-        eprintln!("intentc: this executable was built by a different intentc");
+        eprintln!("staalc: this executable was built by a different staalc");
         return 2;
     }
     let recorded = match crate::Recorded::from_json(&b["program"]) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("intentc: {e}");
+            eprintln!("staalc: {e}");
             return 2;
         }
     };
     let checked = crate::check_recorded(&recorded);
     if Some(journal::sha256_hex(checked.fingerprint.as_bytes()).as_str()) != b["fingerprint_sha256"].as_str() {
-        eprintln!("intentc: this executable's program does not match the one it was built from");
+        eprintln!("staalc: this executable's program does not match the one it was built from");
         return 2;
     }
     let compiled: Vec<String> = match serde_json::from_value(b["compiled"].clone()) {
         Ok(v) => v,
         Err(_) => {
-            eprintln!("intentc: this executable's program data is damaged");
+            eprintln!("staalc: this executable's program data is damaged");
             return 2;
         }
     };

@@ -498,7 +498,7 @@ impl Parser {
                     if *self.peek() != Tok::Comma {
                         return Err((
                             self.pos(),
-                            "a list type needs a maximum length, e.g. List<Text, 100>: every list in Intent is bounded".into(),
+                            "a list type needs a maximum length, e.g. List<Text, 100>: every list in Staal is bounded".into(),
                         ));
                     }
                     self.bump();
@@ -958,7 +958,7 @@ impl Parser {
             (Tok::Decimal(d), None) => {
                 return Err((
                     pos,
-                    format!("'{d}' needs a currency, e.g. `{d} USD`: decimal numbers are only for money, and Intent has no floating point"),
+                    format!("'{d}' needs a currency, e.g. `{d} USD`: decimal numbers are only for money, and Staal has no floating point"),
                 ))
             }
             (other, _) => return Err((pos, format!("expected a number, found {other:?}"))),
