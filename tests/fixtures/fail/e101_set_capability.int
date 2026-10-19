@@ -1,0 +1,6 @@
+// expect: E101
+// A capability is never reassigned.
+fn f(a: cap email.send, b: cap email.send) {
+    let m = a
+    set m = b
+}

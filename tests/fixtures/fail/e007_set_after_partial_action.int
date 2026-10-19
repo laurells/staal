@@ -1,0 +1,12 @@
+// expect: E007 E007
+// A set after a partial operation reveals that operation's arguments succeeded.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+fn f(order: Order @blind(customer.email), mail: cap email.send) {
+    let sent = "no"
+    if order.id == "A1" {
+        mail.send(order.customer.email)
+        set sent = "yes"
+    }
+    let s = propose(Text, instruct: "Report the status.", data: [sent], tokens: 50)
+}

@@ -1,0 +1,3 @@
+// expect: E107
+import lib { secret }
+fn f() {}

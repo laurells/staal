@@ -1,0 +1,3 @@
+pub fn g() -> Int {
+    return helper()
+}

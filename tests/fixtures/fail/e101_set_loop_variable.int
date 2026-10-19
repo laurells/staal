@@ -1,0 +1,7 @@
+// expect: E101
+// Loop variables cannot be reassigned.
+fn f(xs: List<Int, 5>) {
+    for x in xs {
+        set x = 0
+    }
+}

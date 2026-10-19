@@ -1,0 +1,11 @@
+// expect: E101
+// An Outcome is never reassigned: it would change what a checked .ok proves.
+fn f(mail: cap email.send) -> Done {
+    let r = try mail.send("a@x.org")
+    if r.ok {
+        set r = try mail.send("b@x.org")
+        return done(evidence: [r])
+    }
+    let flagged = mail.send("ops@x.org")
+    return done(evidence: [flagged])
+}

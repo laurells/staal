@@ -1,0 +1,11 @@
+// expect: E007
+// Read before the set, but in a loop: the second iteration sees the blinded value.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+fn f(order: Order @blind(customer.email)) {
+    let last = "none"
+    repeat 2 {
+        let s = propose(Text, instruct: "Write a follow-up to the previous message.", data: [last], tokens: 50)
+        set last = order.customer.email
+    }
+}

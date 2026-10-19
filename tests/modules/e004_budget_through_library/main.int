@@ -1,0 +1,5 @@
+// expect: E004
+import lib
+fn f() budget(calls: 1) {
+    let a = lib.two_calls()
+}

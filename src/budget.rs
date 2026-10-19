@@ -185,7 +185,7 @@ impl<'a> Analyzer<'a> {
         let mut total = Cost::ZERO;
         for stmt in body {
             let c = match stmt {
-                Stmt::Let { value, .. } => self.expr(value, stack, cycles),
+                Stmt::Let { value, .. } | Stmt::Set { value, .. } => self.expr(value, stack, cycles),
                 Stmt::Expr(e) | Stmt::Return(Some(e), _) => self.expr(e, stack, cycles),
                 Stmt::Return(None, _) => Cost::ZERO,
                 Stmt::Repeat { count, body, .. } => {

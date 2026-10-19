@@ -1,0 +1,9 @@
+// expect: E006
+// One untrusted assignment makes the variable untrusted as an instruction.
+fn f(message: Text) {
+    let ask = "Summarise the message in the data."
+    if len(message) > 1000 {
+        set ask = message
+    }
+    let s = propose(Text, instruct: ask, data: [message], tokens: 50)
+}

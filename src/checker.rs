@@ -15,6 +15,7 @@
 //   E103  `break` outside a loop
 //   E104  unknown field, or field access on a value that has no fields
 //   E105  a function with a return type can finish without returning
+//   (E106 and E107, import errors, come from `crate::modules`.)
 //
 // Lists are bounded (`List<T, N>`), so every `for` loop is bounded: its maximum
 // iteration count is recorded for the cost analysis (see `check_with_bounds`).
@@ -27,6 +28,14 @@
 //
 // Every place a value flows into a slot (call argument, typed `let`, `return`)
 // goes through `assignable`, so the authority rules are decided in one place.
+//
+// Reassignment: `set x = e` gives a `let` variable a new value. The analysis treats
+// each variable as everything ever assigned to it in its function, wherever that is:
+// the `let` value, every `set` value, and what reaching each `set` reveals (its
+// branch conditions, loop counts, partial operations before it). This is computed by
+// checking the function repeatedly until it no longer grows (`check_fn`). It can
+// reject a program where a variable is read before a later, tainted `set`, but it can
+// never miss a flow, however the branches and loops are arranged.
 //
 // Trust: string, number and boolean literals are trusted. Parameters are
 // untrusted unless marked `@trusted`, and callers must pass trusted values to
@@ -68,6 +77,10 @@ struct Ctx<'a> {
     params: HashSet<String>,
     /// The maximum iteration count of each `for` loop, by position, for the cost analysis.
     for_bounds: HashMap<Pos, u64>,
+    /// What `set` statements assign to each `let` variable (keyed by the `let`'s position),
+    /// collected during the current pass over a function, and as settled by earlier passes.
+    assigned: HashMap<Pos, Assigned>,
+    assigned_prev: HashMap<Pos, Assigned>,
     /// Functions that may fail: an action, or a call to a failing function, not under `try`.
     fail_fns: HashSet<String>,
     /// Functions that may never finish: `loop` or recursion, directly or through any call.
@@ -77,6 +90,31 @@ struct Ctx<'a> {
 impl Ctx<'_> {
     fn err(&mut self, code: &'static str, pos: Pos, msg: String) {
         self.diags.push(Diagnostic { code, pos, msg });
+    }
+}
+
+/// Everything `set` statements put into one variable: what it can reveal, and whether
+/// every assigned value was trusted.
+#[derive(Clone, Debug, PartialEq)]
+struct Assigned {
+    srcs: Vec<(Vec<String>, bool)>,
+    trusted: bool,
+}
+
+impl Assigned {
+    fn add(&mut self, srcs: &[Src], trusted: bool) {
+        for s in srcs {
+            let k = (s.path.clone(), s.exact);
+            if !self.srcs.contains(&k) {
+                self.srcs.push(k);
+            }
+        }
+        self.srcs.sort();
+        self.trusted &= trusted;
+    }
+
+    fn srcs(&self) -> Vec<Src> {
+        self.srcs.iter().map(|(path, exact)| Src { path: path.clone(), exact: *exact }).collect()
     }
 }
 
@@ -91,6 +129,9 @@ struct Binding {
     /// For an `Outcome`: it was made by `try` in this function around an action, or
     /// around a call that returns a Receipt or a Done, so on success it holds proof.
     holds_evidence: bool,
+    /// The position of the `let` that declared it; None for parameters and loop variables,
+    /// which cannot be reassigned.
+    decl: Option<Pos>,
 }
 
 /// A source a value can reveal. `path` is rooted at a parameter, e.g. ["order", "customer"].
@@ -219,6 +260,8 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
         diverge_fns: HashSet::new(),
         params: HashSet::new(),
         for_bounds: HashMap::new(),
+        assigned: HashMap::new(),
+        assigned_prev: HashMap::new(),
     };
     (ctx.fail_fns, ctx.diverge_fns) = partial_fns(prog);
     // Built-in result of `try`.
@@ -625,15 +668,47 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl) {
         }
         let reveals = vec![Src { path: vec![p.name.clone()], exact: true }];
         // A parameter's Outcome came from the caller: it is never this function's proof.
-        let b = Binding { ty: p.ty.clone(), trusted: p.trusted, reveals, proven_ok: false, holds_evidence: false };
+        let b = Binding { ty: p.ty.clone(), trusted: p.trusted, reveals, proven_ok: false, holds_evidence: false, decl: None };
         env.insert(p.name.clone(), b);
     }
     let ret = f.ret.clone().unwrap_or_else(|| named("Unit"));
     check_ty_known(ctx, &ret, f.pos);
+    ctx.assigned.clear();
+    ctx.assigned_prev.clear();
+    if contains_set(&f.body) {
+        // Settle what each reassigned variable can hold: check, collect what the `set`s
+        // assign, and check again with that folded into each `let`, until nothing grows.
+        // Every pass only adds, and there are finitely many sources, so this ends; the
+        // bound is a safeguard that fails closed.
+        let mut settled = false;
+        for _ in 0..64 {
+            let mark = ctx.diags.len();
+            check_block(ctx, f, &ret, &f.body, env.clone(), false);
+            ctx.diags.truncate(mark);
+            let mut next = ctx.assigned_prev.clone();
+            for (k, a) in std::mem::take(&mut ctx.assigned) {
+                let e = next.entry(k).or_insert(Assigned { srcs: Vec::new(), trusted: true });
+                e.add(&a.srcs(), a.trusted);
+            }
+            if next == ctx.assigned_prev {
+                settled = true;
+                break;
+            }
+            ctx.assigned_prev = next;
+        }
+        if !settled {
+            ctx.err("E101", f.pos, format!("the reassignments in '{}' are too complex to analyse; simplify them", f.name));
+            return;
+        }
+    }
     check_block(ctx, f, &ret, &f.body, env, false);
     if ret != named("Unit") && !always_returns(&f.body) {
         ctx.err("E105", f.pos, format!("'{}' can finish without returning a value of type {ret}", f.name));
     }
+}
+
+fn contains_set(body: &[Stmt]) -> bool {
+    body.iter().any(|s| matches!(s, Stmt::Set { .. }) || s.blocks().into_iter().any(contains_set))
 }
 
 fn f_params_contains(ctx: &Ctx, name: &str) -> bool {
@@ -739,7 +814,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
         // execution gets past it can depend on that operation's arguments. That holds for
         // model calls later in this statement and everything after it.
         let stmt_expr = match stmt {
-            Stmt::Let { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => Some(e),
+            Stmt::Let { value: e, .. } | Stmt::Set { value: e, .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => Some(e),
             Stmt::If { cond, .. } => Some(cond),
             _ => None,
         };
@@ -757,7 +832,13 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     && items.is_empty()
                 {
                     check_ty_known(ctx, decl, *pos);
-                    let b = Binding { ty: decl.clone(), trusted: true, reveals: Vec::new(), proven_ok: false, holds_evidence: false };
+                    let (mut reveals, mut trusted) = (Vec::new(), true);
+                    add_srcs(&mut reveals, ctx.pc.clone());
+                    if let Some(a) = ctx.assigned_prev.get(pos) {
+                        add_srcs(&mut reveals, a.srcs());
+                        trusted &= a.trusted;
+                    }
+                    let b = Binding { ty: decl.clone(), trusted, reveals, proven_ok: false, holds_evidence: false, decl: Some(*pos) };
                     env.insert(name.clone(), b);
                     continue;
                 }
@@ -777,7 +858,45 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 // `let y = x` keeps what is known about x's outcome.
                 let proven_ok = matches!(value, Expr::Var(v, _) if env.get(v).is_some_and(|b| b.proven_ok));
                 let holds_evidence = outcome_holds_evidence(ctx, value, &env);
-                env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r, proven_ok, holds_evidence });
+                let mut trusted = trusted;
+                if let Some(a) = ctx.assigned_prev.get(pos) {
+                    add_srcs(&mut r, a.srcs());
+                    trusted &= a.trusted;
+                }
+                env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r, proven_ok, holds_evidence, decl: Some(*pos) });
+            }
+            Stmt::Set { name, value, pos } => {
+                let Some(b) = env.get(name).cloned() else {
+                    type_of(ctx, value, &env);
+                    ctx.err("E100", *pos, format!("cannot `set {name}`: no variable named '{name}' is declared here"));
+                    continue;
+                };
+                let Some(decl) = b.decl else {
+                    ctx.err(
+                        "E101",
+                        *pos,
+                        format!("cannot `set {name}`: parameters and loop variables cannot be reassigned; copy it into a `let` first"),
+                    );
+                    continue;
+                };
+                if let Some(bad) = proof_or_authority(&b.ty) {
+                    ctx.err(
+                        "E101",
+                        *pos,
+                        format!("cannot `set {name}`: it holds a {bad}, which is never reassigned, so what it proves or allows cannot change under it"),
+                    );
+                    continue;
+                }
+                let Some((vty, trusted)) = type_of(ctx, value, &env) else { continue };
+                if let Err((code, msg)) = assignable(&vty, &b.ty) {
+                    ctx.err(code, *pos, format!("in `set {name}`: {msg}"));
+                    continue;
+                }
+                // The new value, and the fact that this `set` was reached.
+                let mut r = reveals(value, &env);
+                add_srcs(&mut r, ctx.pc.clone());
+                // Folded into the variable's `let` on the next pass (see `check_fn`).
+                ctx.assigned.entry(decl).or_insert(Assigned { srcs: Vec::new(), trusted: true }).add(&r, trusted);
             }
             Stmt::Expr(e) => {
                 type_of(ctx, e, &env);
@@ -836,6 +955,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     reveals: list_srcs.clone(),
                     proven_ok: false,
                     holds_evidence: false,
+                    decl: None,
                 };
                 body_env.insert(var.clone(), b);
                 // How many times the body runs reveals the list's length, so everything the
@@ -919,7 +1039,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
             }
             Stmt::Break(pos) => {
                 if !in_loop {
-                    ctx.err("E103", *pos, "`break` is only allowed inside `repeat` or `loop`".into());
+                    ctx.err("E103", *pos, "`break` is only allowed inside `repeat`, `loop` or `for`".into());
                 }
             }
         }

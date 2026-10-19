@@ -81,6 +81,8 @@ impl std::fmt::Display for Ty {
 
 #[derive(Debug)]
 pub struct TypeDecl {
+    /// `pub type ...`: other modules may use it.
+    pub public: bool,
     pub name: String,
     pub fields: Vec<(String, Ty)>,
     pub pos: Pos,
@@ -100,6 +102,8 @@ pub struct Param {
 
 #[derive(Debug)]
 pub struct FnDecl {
+    /// `pub fn ...`: other modules may call it.
+    pub public: bool,
     pub name: String,
     pub params: Vec<Param>,
     pub ret: Option<Ty>,
@@ -134,6 +138,8 @@ pub enum Stmt {
     Break(Pos),
     /// `for x in xs { ... }` — once per element of a bounded list
     For { var: String, list: Expr, body: Vec<Stmt>, pos: Pos },
+    /// `set name = value` — give a variable declared with `let` a new value
+    Set { name: String, value: Expr, pos: Pos },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -195,7 +201,7 @@ impl Stmt {
     /// The expressions this statement evaluates itself (not those in nested blocks).
     pub fn exprs(&self) -> Vec<&Expr> {
         match self {
-            Stmt::Let { value, .. } => vec![value],
+            Stmt::Let { value, .. } | Stmt::Set { value, .. } => vec![value],
             Stmt::Expr(e) | Stmt::Return(Some(e), _) => vec![e],
             Stmt::If { cond, .. } => vec![cond],
             Stmt::For { list, .. } => vec![list],
@@ -208,7 +214,7 @@ impl Stmt {
         match self {
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } | Stmt::For { body, .. } => vec![body],
             Stmt::If { then, els, .. } => vec![then, els],
-            Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Return(..) | Stmt::Break(_) => Vec::new(),
+            Stmt::Let { .. } | Stmt::Set { .. } | Stmt::Expr(_) | Stmt::Return(..) | Stmt::Break(_) => Vec::new(),
         }
     }
 }
@@ -334,8 +340,24 @@ impl Expr {
     }
 }
 
+/// `import a.b`, `import a.b as c`, `import a.b { T, f }`: makes module `a/b.int`
+/// available as `b` (or `c`), and optionally names from it without qualification.
+#[derive(Debug, Clone)]
+pub struct Import {
+    /// The module path, e.g. ["sms", "termii"].
+    pub path: Vec<String>,
+    /// The name the module is known by in this file.
+    pub alias: String,
+    /// Names brought in unqualified, with where each was written.
+    pub names: Vec<(String, Pos)>,
+    pub pos: Pos,
+}
+
 #[derive(Debug, Default)]
 pub struct Program {
+    /// The imports of a single parsed file. Empty after modules are resolved into one
+    /// program (see `crate::modules`), where every name is already qualified.
+    pub imports: Vec<Import>,
     pub types: Vec<TypeDecl>,
     pub fns: Vec<FnDecl>,
 }

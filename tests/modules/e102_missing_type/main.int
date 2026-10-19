@@ -1,0 +1,3 @@
+// expect: E102
+import lib
+fn f(x: lib.Nope) {}

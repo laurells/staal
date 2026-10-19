@@ -114,39 +114,47 @@ fn read(path: &str) -> Result<String, ExitCode> {
     })
 }
 
-fn report(path: &str, diags: &[intentc::checker::Diagnostic]) {
+fn report(files: &[intentc::SourceFile], diags: &[intentc::checker::Diagnostic]) {
     for d in diags {
-        eprintln!("{}", intentc::format_diag(path, d));
+        eprintln!("{}", intentc::format_diag_in(files, d));
     }
     eprintln!("{} error(s)", diags.len());
 }
 
+/// Loads and checks the program at `path` with all its modules.
+fn load(path: &str) -> Result<intentc::Checked, ExitCode> {
+    intentc::check_path(Path::new(path)).map_err(|e| {
+        eprintln!("intentc: {e}");
+        ExitCode::from(2)
+    })
+}
+
 fn check(path: &str) -> ExitCode {
-    let src = match read(path) {
-        Ok(s) => s,
+    let checked = match load(path) {
+        Ok(c) => c,
         Err(code) => return code,
     };
-    match intentc::check_program(&src) {
+    match checked.result {
         Ok(_) => {
             println!("{path}: ok");
             ExitCode::SUCCESS
         }
         Err(diags) => {
-            report(path, &diags);
+            report(&checked.files, &diags);
             ExitCode::FAILURE
         }
     }
 }
 
 fn run(file: &str, config: &str, durability: Durability, log: Option<&String>) -> ExitCode {
-    let src = match read(file) {
-        Ok(s) => s,
+    let checked = match load(file) {
+        Ok(c) => c,
         Err(code) => return code,
     };
-    let prog = match intentc::check_program(&src) {
+    let prog = match checked.result {
         Ok(p) => p,
         Err(diags) => {
-            report(file, &diags);
+            report(&checked.files, &diags);
             eprintln!("intentc: not running {file}: it has check errors");
             return ExitCode::FAILURE;
         }
@@ -162,7 +170,7 @@ fn run(file: &str, config: &str, durability: Durability, log: Option<&String>) -
             return ExitCode::from(2);
         }
     };
-    let out = match interp::run_config_durable(&prog, &src, &cfg, durability) {
+    let out = match interp::run_config_durable(&prog, &checked.fingerprint, &cfg, durability) {
         Ok(out) => out,
         Err(e) => {
             eprintln!("intentc: {e}");

@@ -1,0 +1,4 @@
+// expect: E106
+import a { g }
+import b { g }
+fn f() {}

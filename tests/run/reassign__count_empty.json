@@ -1,0 +1,1 @@
+{"entry":"count_in_stock","inputs":{"items":[]},"model": { "provider": "script", "responses": [] },"expect":{"result":0}}

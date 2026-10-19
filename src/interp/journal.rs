@@ -348,7 +348,7 @@ fn check_start(start: &Json, program_sha256: &str, config_sha256: &str, path: &P
     }
     if start["program_sha256"] != program_sha256 {
         return Err(format!(
-            "journal {shown} was started with a different program; resume needs the identical program file"
+            "journal {shown} was started with a different program; resume needs the identical program, every module included"
         ));
     }
     if start["config_sha256"] != config_sha256 {

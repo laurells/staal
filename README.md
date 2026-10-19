@@ -1,13 +1,16 @@
 # intentc — the Intent compiler and reference runtime
 
 `intentc` checks Intent programs and rejects the ones that break Intent's
-rules (phase 1, complete), and runs checked programs on a reference
-interpreter with durable, crash-safe execution (phase 2, in progress).
+rules, and runs checked programs on a reference interpreter with durable,
+crash-safe execution.
 
-Phase 2 status: the interpreter, exact money, the capability broker, budgets,
-`try`, evidence and the crash-safe journal are built and tested. Not built
-yet: real model providers (only a scripted provider exists), real action
-adapters (only a simulated one), and the native-code backend.
+Status: the compiler, the interpreter, exact money, the capability broker,
+budgets, `try`, evidence and the crash-safe journal are built and tested.
+Roadmap phase 1, modules and reassignment, is complete. Not built yet: the
+general `net.http` and `fs` capabilities (phase 2), library-declared
+capabilities (phase 3), packages (phase 4), and the native-code backend and C
+interface (phase 5). Real model providers are not built either; only a
+scripted one exists.
 
 ## What it enforces today
 
@@ -27,12 +30,14 @@ adapters (only a simulated one), and the native-code backend.
 | E103 | `break` outside `repeat`, `loop` or `for` |
 | E104 | Unknown field, or a field read on a value that has no fields |
 | E105 | A function with a return type can finish without returning |
+| E106 | An import problem: a missing module, an import cycle, a name that clashes with an import |
+| E107 | A declaration used from another module without being `pub` |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
 All eight safety checks from the spec (E001-E008) are implemented. Phase 1's
-gate is met: every one is rejected by tests. 24 valid programs compile,
-including the two benchmark workflows (`workflow_*.int`), and 191 invalid ones
+gate is met: every one is rejected by tests. 25 valid programs compile,
+including the two benchmark workflows (`workflow_*.int`), and 207 invalid ones
 are each rejected with the expected code.
 
 Nothing in the compiler or runtime is specific to payments, email or any other
@@ -73,6 +78,67 @@ treat them all alike.
 - **Built-ins:** `len`, `contains`, `starts_with`, `ends_with`.
 
 The exact rules are in `docs/RUNTIME.md` section 4.
+
+### Reassignment
+
+    let total = 0
+    for item in items {
+        if item.qty > 0 { set total = total + item.qty }
+    }
+
+`set x = e` changes a variable declared with `let`. Parameters, loop variables,
+capabilities and proof values (`Receipt`, `Outcome`, `Done`) cannot be
+reassigned, so what a value proves or allows never changes under it.
+
+For blinding and trust, a variable counts as everything ever assigned to it in
+its function, plus whatever decided that each `set` ran: setting `vip = true`
+inside `if ends_with(order.customer.email, "@bigcorp.com")` makes `vip` reveal
+the email (E007), and one untrusted `set` makes the variable untrusted as an
+instruction (E006). This holds through loops and through copies between
+variables, and it is computed by re-checking the function until nothing more
+flows. The cost of that simplicity: the check does not track order, so a
+variable read before a later `set` of blinded data is still treated as
+revealing it, and such a program is rejected even though it is safe.
+
+Known gap: there is no money literal yet (`0 USD` cannot be written), so a
+running money total has to start from a Money value the function already has.
+
+## Modules
+
+    // sms/termii.int
+    pub type Message { to: Text, body: Text }
+    pub fn send(m: Message, http: cap net.http.post) -> Receipt { ... }
+    fn endpoint() -> Text { ... }          // private to this file
+
+    // clinic.int
+    import sms.termii                      // as `termii`
+    import util.text as txt { clean }      // as `txt`, and `clean` unqualified
+
+    let m = termii.Message { to: phone, body: text }
+    let r = termii.send(m, http)
+
+A file is a module. `import a.b` reads `a/b.int` from the folder of the
+program file and names it `b` (or the name after `as`); `{ ... }` also brings
+those names in unqualified. Only `pub` declarations can be used from another
+file (E107). Imports come first in a file. A name is defined once per file: a
+local name, parameter or variable that clashes with an import, a module
+imported twice, and import cycles are errors (E106).
+
+Names never leak between files. A library that calls `helper()` gets its own
+`helper` or an error, never the program's function of that name.
+
+How the rules cross files: the compiler resolves every module into one program
+in which each name is qualified by its module (`send` in `sms/termii.int` is
+`sms.termii.send`), then checks it exactly as it checks a single file. Blinding
+promises, budgets, trust, evidence and partial operations therefore hold
+across modules with no separate cross-module analysis. This is tested by
+splitting every test program in two (`tests/split_test.rs`): types and called
+functions move to a module, and every one of 124 splittable fixtures and 120
+runtime cases must give identical results. Mutations that hide one module's
+model calls, failures or costs from another are each caught.
+
+What is not built yet: packages from outside the program's folder (phase 4),
+and faster per-module checking. Every build checks the whole program.
 
 ## Capability limits
 
@@ -404,6 +470,10 @@ Developed with cargo 1.97.0. Dependencies: `serde_json`, `sha2` and `getrandom`.
 `tests/fixtures/pass/` holds programs that must compile.
 `tests/fixtures/fail/` holds programs that must be rejected. Each starts with
 `// expect: CODE`, and the test fails unless the compiler reports exactly that code.
+`tests/modules/` holds multi-file programs, one folder each, with the same
+`// expect:` header in `main.int`. `tests/run/` holds runtime cases.
+`tests/split_test.rs` re-runs the fixtures and runtime cases split across two
+modules and requires identical results.
 To add a rule, write the failing program first, then make the checker reject it.
 
 ## Layout
@@ -414,6 +484,7 @@ To add a rule, write the failing program first, then make the checker reject it.
     src/checker.rs  type and safety rules
     src/budget.rs   worst-case model cost (E004, E005)
     src/pattern.rs  `only` patterns: matching and containment
+    src/modules.rs  loading module files, resolving names across them (E106, E107)
     src/interp/     reference runtime: interpreter, money, broker, adapters,
                     model providers, journal
     src/main.rs     command-line interface

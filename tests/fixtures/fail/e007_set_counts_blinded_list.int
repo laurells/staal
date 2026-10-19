@@ -1,0 +1,9 @@
+// expect: E007 E007
+// Counting the elements of a blinded list reveals its length.
+fn f(contacts: List<Text, 20> @blind) {
+    let n = 0
+    for c in contacts {
+        set n = n + 1
+    }
+    let s = propose(Text, instruct: "Report how many there are.", data: [n], tokens: 50)
+}

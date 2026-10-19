@@ -1,0 +1,5 @@
+import billing.tax
+
+pub fn total(n: Int) -> Int {
+    return n + tax.on(n)
+}

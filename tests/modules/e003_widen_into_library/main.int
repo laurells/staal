@@ -1,0 +1,6 @@
+// expect: E003
+// A 50 USD capability cannot be handed to a library that asks for 500 USD.
+import pay
+fn f(r: pay.Refund, p: cap payments.refund(max: 50 USD)) -> Receipt {
+    return pay.big(r, p)
+}

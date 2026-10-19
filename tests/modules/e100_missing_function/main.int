@@ -1,0 +1,5 @@
+// expect: E100
+import lib
+fn f() {
+    lib.nope()
+}

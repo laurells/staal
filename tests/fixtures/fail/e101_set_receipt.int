@@ -1,0 +1,7 @@
+// expect: E101
+// A Receipt is never reassigned.
+fn f(mail: cap email.send) -> Done {
+    let r = mail.send("a@x.org")
+    set r = mail.send("b@x.org")
+    return done(evidence: [r])
+}

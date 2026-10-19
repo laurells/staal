@@ -1,0 +1,3 @@
+fn secret() -> Text {
+    return "x"
+}

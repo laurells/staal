@@ -1,0 +1,3 @@
+// expect: E100
+import lib { nothing }
+fn f() {}

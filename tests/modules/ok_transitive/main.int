@@ -1,0 +1,7 @@
+// expect: ok
+// A module may import other modules; the program sees only what it imports.
+import billing.invoice
+
+fn total(n: Int) -> Int {
+    return invoice.total(n)
+}

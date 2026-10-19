@@ -1,0 +1,9 @@
+// expect: E100
+// A variable declared inside a block is gone after it.
+fn f(flag: Bool) -> Int {
+    if flag {
+        let n = 1
+    }
+    set n = 2
+    return 0
+}

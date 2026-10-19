@@ -1,0 +1,9 @@
+// expect: E007
+// Assigning blinded data to a variable makes the variable reveal it.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+fn f(order: Order @blind(customer.email)) {
+    let contact = order.customer.name
+    set contact = order.customer.email
+    let s = propose(Text, instruct: "Greet the customer.", data: [contact], tokens: 50)
+}

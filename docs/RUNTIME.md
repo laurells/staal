@@ -25,7 +25,8 @@ A run is described by a **run config** (JSON):
 }
 ```
 
-- `entry` names the function to run.
+- `entry` names the function to run, in the program file. A `pub` function of
+  an imported module can be named with its module path, e.g. `"sms.termii.send"`.
 - Every non-capability parameter of the entry function must appear in
   `inputs`, and its JSON must match the declared type exactly (section 3).
   Unknown keys are an error.
@@ -111,6 +112,11 @@ Evaluation is strictly left to right and statement by statement.
 
 - `let` binds a name for the rest of its block. A block's names disappear at
   its end.
+- `set x = e` evaluates `e` and replaces the value of `x`: the innermost
+  variable named `x` that a `let` declared. An inner `let x` declares a
+  different variable, which disappears at the end of its block. Parameters,
+  loop variables, capabilities, `Receipt`, `Outcome` and `Done` values cannot
+  be reassigned (compiler, E101). If `e` fails, `x` keeps its old value.
 - `if` evaluates its condition, then exactly one branch.
 - `repeat N { }` runs its body N times unless `break` or `return` leaves it.
 - `loop { }` runs its body until `break` or `return`.
@@ -362,7 +368,9 @@ Resuming re-executes the program from the start. At each external operation:
 
 Resume requires the **identical** program text and run config: the journal's
 first record holds the SHA-256 of each, and any difference is refused before
-anything runs.
+anything runs. For a program with modules, the program hash covers every file
+it loads (each file's name, length and text), so a change to any imported
+module is refused too. A single-file program's hash is the hash of its text.
 
 ### The crash window, and idempotency
 

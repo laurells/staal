@@ -1,0 +1,4 @@
+// expect: E106
+import a.lib
+import b.lib
+fn f() {}

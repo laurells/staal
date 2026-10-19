@@ -1,0 +1,3 @@
+pub fn by_name(name: Text, email: Text @blind) -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: "Greet the person named in the data.", data: [name], tokens: 100)
+}

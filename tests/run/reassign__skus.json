@@ -1,0 +1,1 @@
+{"entry":"skus","inputs":{"items":[{"sku":"A","qty":3},{"sku":"B","qty":0},{"sku":"C","qty":1}]},"model": { "provider": "script", "responses": [] },"expect":{"result":"A, B, C"}}

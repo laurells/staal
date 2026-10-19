@@ -1,0 +1,5 @@
+// expect: E107
+import lib
+fn f() {
+    let k = lib.Key { id: "x" }
+}

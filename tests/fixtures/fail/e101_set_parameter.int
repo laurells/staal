@@ -1,0 +1,6 @@
+// expect: E101
+// Parameters cannot be reassigned.
+fn f(n: Int) -> Int {
+    set n = n + 1
+    return n
+}

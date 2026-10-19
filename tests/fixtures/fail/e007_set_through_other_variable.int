@@ -1,0 +1,13 @@
+// expect: E007
+// Taint through another variable set later: b copies a, and a later holds the email.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+fn f(order: Order @blind(customer.email)) {
+    let a = "x"
+    let b = "y"
+    repeat 2 {
+        set b = a
+        set a = order.customer.email
+    }
+    let s = propose(Text, instruct: "Say hello.", data: [b], tokens: 50)
+}

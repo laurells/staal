@@ -1,0 +1,7 @@
+// expect: E101
+// The new value must fit the variable's type.
+fn f() -> Int {
+    let n = 0
+    set n = "zero"
+    return n
+}

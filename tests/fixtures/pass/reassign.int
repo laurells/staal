@@ -1,0 +1,46 @@
+// Reassignment with `set`: counting, building text, retrying a model call, and
+// trusted instructions that stay trusted.
+type Item { sku: Text, qty: Int }
+type Note { text: Text }
+
+fn count_in_stock(items: List<Item, 50>) -> Int {
+    let n = 0
+    for item in items {
+        if item.qty > 0 {
+            set n = n + 1
+        }
+    }
+    return n
+}
+
+fn skus(items: List<Item, 50>) -> Text {
+    let out = ""
+    for item in items {
+        if len(out) > 0 {
+            set out = out + ", "
+        }
+        set out = out + item.sku
+    }
+    return out
+}
+
+// Ask again, at most twice, while the note is too long.
+fn short_note(topic: Text) -> Note budget(calls: 3, tokens: 300) {
+    let note: Note = validate propose(Note, instruct: "Write a one-line note about the topic in the data.", data: [topic], tokens: 100)
+    repeat 2 {
+        if len(note.text) <= 80 {
+            break
+        }
+        set note = validate propose(Note, instruct: "Write a shorter one-line note about the topic in the data.", data: [topic], tokens: 100)
+    }
+    return note
+}
+
+// Every value assigned is a literal, so the instruction is still trusted.
+fn summary(text: Text, brief: Bool) -> Text budget(calls: 1, tokens: 200) {
+    let ask = "Summarise the text in the data."
+    if brief {
+        set ask = "Summarise the text in the data in one sentence."
+    }
+    return validate propose(Text, instruct: ask, data: [text], tokens: 200)
+}

@@ -1,7 +1,8 @@
 // Hand-written recursive-descent parser.
 //
-// Grammar (v0.1 subset):
-//   program  := (typedecl | fndecl)*
+// Grammar:
+//   program  := import* ("pub"? (typedecl | fndecl))*
+//   import   := "import" IDENT ("." IDENT)* ("as" IDENT)? ("{" IDENT ("," IDENT)* ","? "}")?
 //   typedecl := "type" IDENT "{" (IDENT ":" ty ","?)* "}"
 //   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty ("@" "trusted")?)? budget? block
 //   budget   := "budget" "(" limit ("," limit)* ")"      limit := ("calls" | "tokens") ":" NUM
@@ -10,9 +11,10 @@
 //   field_path := IDENT ("." IDENT)*
 //   ty       := "cap" IDENT ("." IDENT)* ("(" climit ("," climit)* ")")?
 //   climit   := ("max" | "each") ":" NUM IDENT? | "uses" ":" NUM | "only" ":" "[" (STRING ","?)* "]"
-//             | "List" "<" ty "," NUM ">" | "Proposed" "<" ty ">" | IDENT
+//             | "List" "<" ty "," NUM ">" | "Proposed" "<" ty ">" | IDENT ("." IDENT)?
+//               (`m.T` is type T of the module imported as m)
 //   block    := "{" stmt* "}"
-//   stmt     := "let" IDENT (":" ty)? "=" expr | "return" expr?
+//   stmt     := "let" IDENT (":" ty)? "=" expr | "set" IDENT "=" expr | "return" expr?
 //             | "repeat" NUM block | "loop" block | "break"
 //             | "for" IDENT "in" expr* block
 //             | "if" expr* block ("else" (block | if-stmt))? | expr
@@ -30,9 +32,10 @@
 //             | "propose" "(" ty ("," popt)* ")" | "validate" primary
 //             | "try" primary             (an action or call; failure becomes an Outcome)
 //             | "done" "(" "evidence" ":" list ")"
-//             | IDENT "{" (IDENT ":" expr ","?)* "}"     (record literal)
+//             | IDENT ("." IDENT)? "{" (IDENT ":" expr ","?)* "}"   (record literal)
 //             | BUILTIN args              (len, contains, starts_with, ends_with)
-//             | IDENT "." IDENT args      (action through a capability variable)
+//             | IDENT "." IDENT args      (an action through a capability variable, or
+//                                          a call to function IDENT of an imported module)
 //             | IDENT args                (call to a program function)
 //             | IDENT | STRING | NUM | "true" | "false"
 //   popt     := "instruct" ":" expr | "data" ":" list | "blind_to" ":" list | "tokens" ":" NUM
@@ -217,19 +220,61 @@ impl Parser {
 
     pub fn program(&mut self) -> PResult<Program> {
         let mut p = Program::default();
+        while *self.peek() == Tok::Import {
+            p.imports.push(self.import()?);
+        }
         loop {
+            let public = *self.peek() == Tok::Pub;
+            if public {
+                self.bump();
+            }
             match self.peek() {
-                Tok::Type => p.types.push(self.typedecl()?),
-                Tok::Fn => p.fns.push(self.fndecl()?),
-                Tok::Eof => return Ok(p),
+                Tok::Type => p.types.push(self.typedecl(public)?),
+                Tok::Fn => p.fns.push(self.fndecl(public)?),
+                Tok::Eof if !public => return Ok(p),
+                Tok::Import => return Err((self.pos(), "imports must come before every declaration".into())),
                 other => {
-                    return Err((self.pos(), format!("expected 'type' or 'fn', found {other:?}")))
+                    let want = if public { "'type' or 'fn' after 'pub'" } else { "'type' or 'fn'" };
+                    return Err((self.pos(), format!("expected {want}, found {other:?}")));
                 }
             }
         }
     }
 
-    fn typedecl(&mut self) -> PResult<TypeDecl> {
+    fn import(&mut self) -> PResult<Import> {
+        let pos = self.pos();
+        self.expect(Tok::Import, "'import'")?;
+        let mut path = vec![self.ident()?];
+        while *self.peek() == Tok::Dot {
+            self.bump();
+            path.push(self.ident()?);
+        }
+        let mut alias = path.last().cloned().unwrap_or_default();
+        if *self.peek() == Tok::Ident("as".into()) {
+            self.bump();
+            alias = self.ident()?;
+        }
+        let mut names = Vec::new();
+        if *self.peek() == Tok::LBrace {
+            self.bump();
+            while *self.peek() != Tok::RBrace {
+                let npos = self.pos();
+                names.push((self.ident()?, npos));
+                if *self.peek() == Tok::Comma {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+            self.expect(Tok::RBrace, "'}'")?;
+            if names.is_empty() {
+                return Err((pos, "an import list `{ }` must name at least one thing".into()));
+            }
+        }
+        Ok(Import { path, alias, names, pos })
+    }
+
+    fn typedecl(&mut self, public: bool) -> PResult<TypeDecl> {
         let pos = self.pos();
         self.expect(Tok::Type, "'type'")?;
         let name = self.ident()?;
@@ -245,10 +290,10 @@ impl Parser {
             }
         }
         self.expect(Tok::RBrace, "'}'")?;
-        Ok(TypeDecl { name, fields, pos })
+        Ok(TypeDecl { public, name, fields, pos })
     }
 
-    fn fndecl(&mut self) -> PResult<FnDecl> {
+    fn fndecl(&mut self, public: bool) -> PResult<FnDecl> {
         let pos = self.pos();
         self.expect(Tok::Fn, "'fn'")?;
         let name = self.ident()?;
@@ -281,7 +326,7 @@ impl Parser {
         };
         let budget = if *self.peek() == Tok::Budget { Some(self.budget()?) } else { None };
         let body = self.block()?;
-        Ok(FnDecl { name, params, ret, ret_trusted, budget, body, pos })
+        Ok(FnDecl { public, name, params, ret, ret_trusted, budget, body, pos })
     }
 
     fn ty(&mut self) -> PResult<Ty> {
@@ -352,6 +397,12 @@ impl Parser {
         if name == "List" {
             return Err((npos, "a list type needs an element type and a maximum length, e.g. List<Text, 100>".into()));
         }
+        // `m.T`: a type from the module imported as `m`.
+        if *self.peek() == Tok::Dot {
+            self.bump();
+            let t = self.ident()?;
+            return Ok(Ty::Named(format!("{name}.{t}")));
+        }
         Ok(Ty::Named(name))
     }
 
@@ -408,6 +459,13 @@ impl Parser {
                 Ok(Stmt::Break(pos))
             }
             Tok::If => self.if_stmt(),
+            Tok::Set => {
+                self.bump();
+                let name = self.ident()?;
+                self.expect(Tok::Eq, "'='")?;
+                let value = self.expr()?;
+                Ok(Stmt::Set { name, value, pos })
+            }
             Tok::For => {
                 self.bump();
                 let var = self.ident()?;
@@ -721,6 +779,16 @@ impl Parser {
                 }
                 if *self.peek() == Tok::LBrace && !self.no_record {
                     return self.record_literal(name, pos);
+                }
+                // `m.T { ... }`: a record of type T from the module imported as `m`.
+                let qualified_record = !self.no_record
+                    && *self.peek() == Tok::Dot
+                    && matches!(self.toks.get(self.i + 1).map(|t| &t.tok), Some(Tok::Ident(_)))
+                    && matches!(self.toks.get(self.i + 2).map(|t| &t.tok), Some(Tok::LBrace));
+                if qualified_record {
+                    self.bump();
+                    let t = self.ident()?;
+                    return self.record_literal(format!("{name}.{t}"), pos);
                 }
                 // `name.method(` is an action; `name.field` is left to `primary`.
                 let is_action = *self.peek() == Tok::Dot

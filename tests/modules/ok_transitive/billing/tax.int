@@ -1,0 +1,3 @@
+pub fn on(n: Int) -> Int {
+    return n / 10
+}

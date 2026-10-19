@@ -1,0 +1,6 @@
+// expect: E106
+// A parameter named like an import would make `lib.send(...)` ambiguous.
+import lib
+fn f(lib: cap email.send) {
+    lib.send("x")
+}

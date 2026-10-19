@@ -1,0 +1,1 @@
+{"entry":"short_note","inputs":{"topic":"rain"},"model":{"provider":"script","responses":[{"output":{"text":"A very long note about the rain today"}},{"output":{"text":"Still a long note about the rain"}},{"output":{"text":"Third long note about the rain"}}]},"expect":{"result":"Third long note about the rain","model_calls":3}}

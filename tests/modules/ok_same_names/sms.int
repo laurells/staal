@@ -1,0 +1,4 @@
+pub type Message { to: Text }
+pub fn send(m: Message, c: cap sms.send) -> Receipt {
+    return c.send(m.to)
+}

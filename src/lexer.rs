@@ -28,6 +28,9 @@ pub enum Tok {
     Not,
     For,
     In,
+    Import,
+    Pub,
+    Set,
     // symbols
     LParen,
     RParen,
@@ -54,8 +57,12 @@ pub enum Tok {
     Eof,
 }
 
+/// A place in the source: which file (an index into the program's file list, 0 for
+/// the entry file), and the line and column there. Positions from different files
+/// never compare equal, so analyses can key on them across a whole program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pos {
+    pub file: u32,
     pub line: usize,
     pub col: usize,
 }
@@ -66,7 +73,13 @@ pub struct Token {
     pub pos: Pos,
 }
 
+/// Lexes a single-file program (file 0).
 pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
+    lex_file(src, 0)
+}
+
+/// Lexes file number `file` of a program.
+pub fn lex_file(src: &str, file: u32) -> Result<Vec<Token>, (Pos, String)> {
     let chars: Vec<char> = src.chars().collect();
     let mut i = 0;
     let (mut line, mut col) = (1, 1);
@@ -74,7 +87,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
 
     while i < chars.len() {
         let c = chars[i];
-        let pos = Pos { line, col };
+        let pos = Pos { file, line, col };
 
         if c == '\n' {
             line += 1;
@@ -157,6 +170,9 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
                 "not" => Tok::Not,
                 "for" => Tok::For,
                 "in" => Tok::In,
+                "import" => Tok::Import,
+                "pub" => Tok::Pub,
+                "set" => Tok::Set,
                 _ => Tok::Ident(word),
             };
             out.push(Token { tok, pos });
@@ -200,6 +216,6 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
         i += 1;
         col += 1;
     }
-    out.push(Token { tok: Tok::Eof, pos: Pos { line, col } });
+    out.push(Token { tok: Tok::Eof, pos: Pos { file, line, col } });
     Ok(out)
 }

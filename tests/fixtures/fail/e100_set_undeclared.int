@@ -1,0 +1,6 @@
+// expect: E100
+// set needs a declared variable.
+fn f() -> Int {
+    set total = 1
+    return 0
+}

@@ -1,0 +1,5 @@
+pub type Clean { text: Text }
+
+pub fn clean(t: Text) -> Clean {
+    return Clean { text: t }
+}

@@ -1,0 +1,4 @@
+// expect: E101
+// expect-in: lib.int
+import lib
+fn f() {}

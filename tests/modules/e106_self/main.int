@@ -1,0 +1,3 @@
+// expect: E106
+import main
+fn f() {}

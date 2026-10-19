@@ -1,0 +1,11 @@
+// expect: E007
+// A variable set inside a branch on blinded data reveals that data.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+fn f(order: Order @blind(customer.email)) {
+    let vip = false
+    if ends_with(order.customer.email, "@bigcorp.com") {
+        set vip = true
+    }
+    let s = propose(Text, instruct: "Greet the customer.", data: [order.customer.name, vip], tokens: 50)
+}

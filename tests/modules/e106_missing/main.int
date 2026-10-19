@@ -1,0 +1,3 @@
+// expect: E106
+import no.such.module
+fn f() {}

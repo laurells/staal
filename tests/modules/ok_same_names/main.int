@@ -1,0 +1,13 @@
+// expect: ok
+// Two modules may declare the same names; each is reached through its own import.
+import sms
+import email
+
+fn both(to: Text, s: cap sms.send, e: cap email.send) {
+    let a = sms.send(sms.Message { to: to }, s)
+    let b = email.send(email.Message { to: to }, e)
+}
+
+fn send(x: Text) -> Text {
+    return x
+}

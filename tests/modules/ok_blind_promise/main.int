@@ -1,0 +1,9 @@
+// expect: ok
+// A library function that promises @blind may be given blinded data.
+import greet
+
+type Customer { name: Text, email: Text }
+
+fn hello(c: Customer @blind(email)) -> Text budget(calls: 1, tokens: 100) {
+    return greet.by_name(c.name, c.email)
+}

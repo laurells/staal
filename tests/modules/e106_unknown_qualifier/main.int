@@ -1,0 +1,2 @@
+// expect: E106
+fn f(m: lib.Message) {}

@@ -1,0 +1,12 @@
+// expect: ok
+// Qualified calls, types and records; `as`; and names imported unqualified.
+import sms.termii
+import util.text as txt { Clean, clean }
+
+fn notify(phone: Text, body: Text, http: cap net.http.post) -> Receipt {
+    let m = termii.Message { to: phone, body: body }
+    let c: Clean = clean(body)
+    let d: txt.Clean = txt.clean(body)
+    let same: termii.Message = m
+    return termii.send(same, http)
+}

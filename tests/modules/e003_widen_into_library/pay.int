@@ -1,0 +1,4 @@
+pub type Refund { id: Text, amount: Money }
+pub fn big(r: Refund, p: cap payments.refund(max: 500 USD)) -> Receipt {
+    return p.refund(r)
+}

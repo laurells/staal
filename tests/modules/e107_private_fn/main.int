@@ -1,0 +1,5 @@
+// expect: E107
+import lib
+fn f() -> Text {
+    return lib.secret()
+}

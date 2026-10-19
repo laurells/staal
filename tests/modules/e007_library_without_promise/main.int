@@ -1,0 +1,7 @@
+// expect: E007
+// The library does not promise to keep the email from its model call.
+import greet
+type Customer { name: Text, email: Text }
+fn hello(c: Customer @blind(email)) -> Text {
+    return greet.write(c.email)
+}

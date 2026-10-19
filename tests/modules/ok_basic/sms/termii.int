@@ -1,0 +1,10 @@
+pub type Message { to: Text, body: Text }
+
+pub fn send(m: Message, http: cap net.http.post) -> Receipt {
+    return http.post(endpoint(), m)
+}
+
+// Private: only this module can call it.
+fn endpoint() -> Text {
+    return "https://api.ng.termii.com/api/sms/send"
+}

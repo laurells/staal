@@ -451,6 +451,17 @@ impl Frame {
         internal(format!("undefined variable '{name}'"))
     }
 
+    /// `set name = v`: replaces the value in the innermost scope that declares `name`.
+    fn assign(&mut self, name: &str, v: Value) -> Result<(), Failure> {
+        for s in self.scopes.iter_mut().rev() {
+            if let Some(slot) = s.get_mut(name) {
+                *slot = v;
+                return Ok(());
+            }
+        }
+        internal(format!("`set` of undeclared variable '{name}'"))
+    }
+
     fn set(&mut self, name: &str, v: Value) -> Result<(), Failure> {
         match self.scopes.last_mut() {
             Some(s) => {
@@ -638,6 +649,11 @@ impl<'p> Interp<'p> {
                     v = self.narrow(v, limits)?;
                 }
                 frame.set(name, v)?;
+                Ok(Flow::Next)
+            }
+            Stmt::Set { name, value, .. } => {
+                let v = self.eval(frame, value)?;
+                frame.assign(name, v)?;
                 Ok(Flow::Next)
             }
             Stmt::Expr(e) => {

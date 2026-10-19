@@ -1,0 +1,4 @@
+pub fn two_calls() -> Text {
+    let a = validate propose(Text, tokens: 10)
+    return validate propose(Text, tokens: 10)
+}
