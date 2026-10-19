@@ -1,0 +1,12 @@
+// `parse` drops fields the type does not declare; model output stays strict.
+type Reply { message_id: Text, code: Text }
+
+fn read(body: Text) -> Text {
+    let r: Reply = validate parse(Reply, body)
+    return r.message_id + "/" + r.code
+}
+
+fn model() -> Text budget(calls: 1, tokens: 500) {
+    let r: Reply = validate propose(Reply, instruct: "Reply.", tokens: 500)
+    return r.code
+}

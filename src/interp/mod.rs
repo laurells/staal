@@ -10,6 +10,8 @@
 
 pub mod adapter;
 pub mod broker;
+pub mod fsx;
+pub mod http;
 pub mod journal;
 pub mod money;
 pub mod provider;
@@ -25,7 +27,7 @@ use serde_json::{json, Map, Value as Json};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
-use value::{from_json, schema, to_json, Receipt, Types, Value};
+use value::{from_json, from_json_lenient, schema, to_json, HeaderValue, Receipt, Secret, Types, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailKind {
@@ -191,7 +193,7 @@ pub fn run_durable(
         std::thread::Builder::new()
             .stack_size(INTERP_STACK_BYTES)
             .spawn_scoped(s, move || {
-                let mut it = Interp::new(prog, setup.limits, provider, adapter, journal);
+                let mut it = Interp::new(prog, setup.limits, &setup.runtime, provider, adapter, journal);
                 it.run(&setup)
             })
             .map_err(|e| format!("could not start the interpreter thread: {e}"))?
@@ -208,11 +210,105 @@ struct Setup {
     /// Entry arguments in parameter order: data values, or grants for capabilities.
     args: Vec<Arg>,
     limits: Limits,
+    runtime: RuntimeSettings,
+}
+
+/// Settings for the runtime's own capabilities (RUNTIME.md section 12).
+struct RuntimeSettings {
+    net: http::Settings,
+    fs_max_read_bytes: usize,
+    /// Every secret value of the run, removed from anything recorded or shown.
+    secrets: Vec<String>,
 }
 
 enum Arg {
     Data(Value),
-    Grant { path: String, limits: broker::Limits },
+    Grant { path: String, limits: broker::Limits, idempotency_key: bool },
+}
+
+/// The shortest secret accepted: a shorter one would be found by accident in ordinary
+/// text, and removing it from responses and logs would damage them.
+const MIN_SECRET_BYTES: usize = 8;
+
+/// Whether `path` is one of the runtime's own capabilities (`net.http.*`, `fs.*`).
+fn is_runtime_cap(path: &str) -> bool {
+    path.starts_with("net.") || path.starts_with("fs.")
+}
+
+/// Replaces every secret value in `text` with a marker.
+fn scrub_text(secrets: &[String], text: &str) -> String {
+    let mut out = text.to_string();
+    for s in secrets {
+        if out.contains(s.as_str()) {
+            out = out.replace(s.as_str(), "[secret removed]");
+        }
+    }
+    out
+}
+
+fn scrub_json(secrets: &[String], j: &mut Json) {
+    match j {
+        Json::String(t) => {
+            if secrets.iter().any(|s| t.contains(s.as_str())) {
+                *t = scrub_text(secrets, t);
+            }
+        }
+        Json::Array(a) => a.iter_mut().for_each(|x| scrub_json(secrets, x)),
+        Json::Object(o) => o.values_mut().for_each(|x| scrub_json(secrets, x)),
+        _ => {}
+    }
+}
+
+fn positive(v: &Json, at: &str) -> Result<u64, String> {
+    v.as_u64().filter(|n| *n > 0).ok_or(format!("{at}: expected a positive whole number"))
+}
+
+/// `"net": {"timeout_ms", "connect_timeout_ms", "max_response_bytes", "proxy"}` and
+/// `"fs": {"max_read_bytes"}`.
+fn runtime_settings(cfg: &Map<String, Json>) -> Result<RuntimeSettings, String> {
+    let mut net = http::Settings::default();
+    if let Some(n) = cfg.get("net") {
+        let n = n.as_object().ok_or("net: expected an object")?;
+        for (k, v) in n {
+            let at = format!("net.{k}");
+            match k.as_str() {
+                "timeout_ms" => net.timeout = std::time::Duration::from_millis(positive(v, &at)?),
+                "connect_timeout_ms" => net.connect_timeout = std::time::Duration::from_millis(positive(v, &at)?),
+                "max_response_bytes" => {
+                    let b = positive(v, &at)?;
+                    if b > MAX_TEXT_BYTES as u64 {
+                        return Err(format!("{at}: at most {MAX_TEXT_BYTES}"));
+                    }
+                    net.max_response_bytes = b;
+                }
+                "proxy" => {
+                    net.proxy_from_env = match v.as_str() {
+                        Some("none") => false,
+                        Some("environment") => true,
+                        _ => return Err(format!("{at}: expected \"none\" or \"environment\"")),
+                    }
+                }
+                _ => return Err(format!("net: unknown key '{k}'")),
+            }
+        }
+    }
+    let mut fs_max_read_bytes = MAX_TEXT_BYTES;
+    if let Some(f) = cfg.get("fs") {
+        let f = f.as_object().ok_or("fs: expected an object")?;
+        for (k, v) in f {
+            match k.as_str() {
+                "max_read_bytes" => {
+                    let b = positive(v, "fs.max_read_bytes")?;
+                    if b > MAX_TEXT_BYTES as u64 {
+                        return Err(format!("fs.max_read_bytes: at most {MAX_TEXT_BYTES}"));
+                    }
+                    fs_max_read_bytes = b as usize;
+                }
+                _ => return Err(format!("fs: unknown key '{k}'")),
+            }
+        }
+    }
+    Ok(RuntimeSettings { net, fs_max_read_bytes, secrets: Vec::new() })
 }
 
 /// Converts a limit written in source (`max: 500 USD`) to money.
@@ -279,7 +375,7 @@ impl Setup {
     fn from_config(prog: &Program, config: &Json) -> Result<Setup, String> {
         let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
         for k in cfg.keys() {
-            if !["entry", "inputs", "grants", "model", "adapters", "limits"].contains(&k.as_str()) {
+            if !["entry", "inputs", "grants", "secrets", "model", "adapters", "limits", "net", "fs"].contains(&k.as_str()) {
                 return Err(format!("run config: unknown key '{k}'"));
             }
         }
@@ -298,11 +394,30 @@ impl Setup {
             None => &empty,
             Some(v) => v.as_object().ok_or("grants: expected an object")?,
         };
+        let secrets = match cfg.get("secrets") {
+            None => &empty,
+            Some(v) => v.as_object().ok_or("secrets: expected an object")?,
+        };
+        let is_secret = |p: &Param| p.ty == Ty::Named("Secret".into());
+        for k in secrets.keys() {
+            match f.params.iter().find(|p| &p.name == k) {
+                Some(p) if is_secret(p) => {}
+                Some(_) => return Err(format!("secrets.{k}: is not a Secret parameter")),
+                None => return Err(format!("secrets.{k}: '{entry}' has no parameter named '{k}'")),
+            }
+        }
+        let mut runtime = runtime_settings(cfg)?;
         for k in inputs.keys() {
             match f.params.iter().find(|p| &p.name == k) {
                 None => return Err(format!("inputs.{k}: '{entry}' has no parameter named '{k}'")),
                 Some(p) if matches!(p.ty, Ty::Cap { .. }) => {
                     return Err(format!("inputs.{k}: is a capability; capabilities are given in \"grants\""))
+                }
+                Some(p) if is_secret(p) => {
+                    return Err(format!(
+                        "inputs.{k}: is a Secret; secrets are read from the environment through \"secrets\", \
+                         never written into a run config"
+                    ))
                 }
                 _ => {}
             }
@@ -325,7 +440,7 @@ impl Setup {
                     let g = grants.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this capability"))?;
                     let g = g.as_object().ok_or(format!("{at}: expected an object"))?;
                     for k in g.keys() {
-                        if !["cap", "max", "each", "uses", "only"].contains(&k.as_str()) {
+                        if !["cap", "max", "each", "uses", "only", "idempotency_key"].contains(&k.as_str()) {
                             return Err(format!("{at}: unknown key '{k}'"));
                         }
                     }
@@ -335,6 +450,26 @@ impl Setup {
                         return Err(format!("{at}.cap: is '{gpath}', but the parameter needs '{want}'"));
                     }
                     let limits = grant_limits(g, &at, &types)?;
+                    let idempotency_key = match g.get("idempotency_key") {
+                        None => false,
+                        Some(Json::Bool(b)) => *b,
+                        Some(_) => return Err(format!("{at}.idempotency_key: expected true or false")),
+                    };
+                    if is_runtime_cap(&want) {
+                        if limits.max.is_some() || limits.each.is_some() {
+                            return Err(format!("{at}: `{want}` spends no money the runtime can measure; max and each do not apply"));
+                        }
+                        let http = want.starts_with("net.http.");
+                        for (i, pat) in limits.only.iter().flatten().enumerate() {
+                            let checked = if http { crate::targets::check_url_pattern(pat) } else { crate::targets::check_path_pattern(pat) };
+                            checked.map_err(|e| format!("{at}.only[{i}]: {e}"))?;
+                        }
+                        if idempotency_key && (!http || want == "net.http.get") {
+                            return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete"));
+                        }
+                    } else if idempotency_key {
+                        return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete"));
+                    }
                     // The parameter's own limits narrow the grant when the run starts. Money
                     // limits in different currencies could never both be met: refuse now.
                     let d = runtime_limits(declared)?;
@@ -348,10 +483,37 @@ impl Setup {
                             ));
                         }
                     }
-                    args.push(Arg::Grant { path: want, limits });
+                    args.push(Arg::Grant { path: want, limits, idempotency_key });
                 }
                 Ty::Proposed(_) => {
                     return Err(format!("inputs.{}: an entry parameter cannot be Proposed; only model calls produce those", p.name))
+                }
+                ty if is_secret(p) => {
+                    let _ = ty;
+                    let at = format!("secrets.{}", p.name);
+                    let spec = secrets.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this secret"))?;
+                    let spec = spec.as_object().ok_or(format!("{at}: expected {{\"env\": \"VARIABLE_NAME\"}}"))?;
+                    for k in spec.keys() {
+                        if k != "env" {
+                            return Err(format!("{at}: unknown key '{k}'; secrets come only from the environment"));
+                        }
+                    }
+                    let var = spec.get("env").and_then(Json::as_str).ok_or(format!("{at}.env: expected a variable name"))?;
+                    let value = std::env::var(var).map_err(|_| format!("{at}: environment variable {var} is not set"))?;
+                    if value.len() < MIN_SECRET_BYTES {
+                        return Err(format!("{at}: {var} is shorter than {MIN_SECRET_BYTES} characters, too short to keep out of logs reliably"));
+                    }
+                    // Printable ASCII without quotes, backslashes or spaces: then filling it
+                    // into a JSON string or a header can never change their structure.
+                    if !value.bytes().all(|b| (0x21..=0x7e).contains(&b) && b != b'"' && b != b'\\') {
+                        return Err(format!(
+                            "{at}: {var} contains a space, quote, backslash or non-ASCII character; \
+                             secrets must be printable ASCII without those"
+                        ));
+                    }
+                    runtime.secrets.push(value.clone());
+                    let shown = "{secret}".to_string();
+                    args.push(Arg::Data(Value::Secret(Secret { name: var.to_string(), value, shown })));
                 }
                 ty => {
                     let at = format!("inputs.{}", p.name);
@@ -379,13 +541,21 @@ impl Setup {
                 }
             }
         }
-        Ok(Setup { entry: entry.to_string(), args, limits })
+        Ok(Setup { entry: entry.to_string(), args, limits, runtime })
     }
 }
 
 fn types_of(prog: &Program) -> Types {
     let mut t = Types::new();
     t.insert("Outcome".into(), vec![("ok".into(), Ty::Named("Bool".into())), ("error".into(), Ty::Named("Text".into()))]);
+    t.insert(
+        "Response".into(),
+        vec![
+            ("status".into(), Ty::Named("Int".into())),
+            ("body".into(), Ty::Named("Text".into())),
+            ("complete".into(), Ty::Named("Bool".into())),
+        ],
+    );
     for d in &prog.types {
         t.insert(d.name.clone(), d.fields.clone());
     }
@@ -485,12 +655,25 @@ struct Interp<'p> {
     steps: u64,
     depth: usize,
     limits: Limits,
+    http: http::Client,
+    fs_max_read_bytes: usize,
+    secrets: Vec<String>,
+}
+
+/// What `live` in `Interp::external` learned from the world.
+enum Answer {
+    /// A definite answer: success, or a failure that certainly left the world unchanged
+    /// or is safe to report as failed.
+    Done(Result<Json, String>),
+    /// The operation may or may not have happened, and it is not safe to repeat.
+    Unknown(String),
 }
 
 impl<'p> Interp<'p> {
     fn new(
         prog: &'p Program,
         limits: Limits,
+        runtime: &RuntimeSettings,
         provider: Box<dyn Provider + Send>,
         adapter: Box<dyn Adapter + Send>,
         journal: Journal,
@@ -507,10 +690,15 @@ impl<'p> Interp<'p> {
             steps: 0,
             depth: 0,
             limits,
+            http: http::Client::new(&runtime.net),
+            fs_max_read_bytes: runtime.fs_max_read_bytes,
+            secrets: runtime.secrets.clone(),
         }
     }
 
     fn emit(&mut self, event: &str, mut fields: Json) {
+        // Nothing logged may contain a secret, wherever it came from.
+        scrub_json(&self.secrets, &mut fields);
         if let Some(obj) = fields.as_object_mut() {
             obj.insert("seq".into(), json!(self.log.len() + 1));
             obj.insert("event".into(), json!(event));
@@ -525,8 +713,11 @@ impl<'p> Interp<'p> {
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
-                Arg::Grant { path, limits } => {
+                Arg::Grant { path, limits, idempotency_key } => {
                     let h = self.broker.grant(path, limits.clone());
+                    if *idempotency_key {
+                        self.broker.set_idempotency_key(h).unwrap_or_default();
+                    }
                     self.emit(
                         "grant",
                         json!({ "capability": path, "max": limits.max.map(|m| m.to_string()),
@@ -837,8 +1028,19 @@ impl<'p> Interp<'p> {
                 }
                 self.model_call(ty, instruction, payload, *tokens)
             }
+            Expr::Parse { ty, text, .. } => match self.eval(frame, text)? {
+                Value::Text(t) => match serde_json::from_str::<Json>(&t) {
+                    Ok(raw) => Ok(Value::Proposed { ty: ty.clone(), raw, lenient: true }),
+                    Err(e) => fail(FailKind::Validation, format!("`parse` was given text that is not JSON: {e}")),
+                },
+                _ => internal("`parse` was given a value that is not Text"),
+            },
             Expr::Validate(inner, _) => match self.eval(frame, inner)? {
-                Value::Proposed { ty, raw } => match from_json(&ty, &raw, &self.types, "model output") {
+                Value::Proposed { ty, raw, lenient } => match if lenient {
+                    from_json_lenient(&ty, &raw, &self.types, "parsed text")
+                } else {
+                    from_json(&ty, &raw, &self.types, "model output")
+                } {
                     Ok(v) => {
                         self.emit("validated", json!({ "type": ty.to_string(), "ok": true }));
                         Ok(v)
@@ -881,6 +1083,19 @@ impl<'p> Interp<'p> {
     // RUNTIME.md section 6
     fn action(&mut self, h: usize, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
         let path = self.broker.path(h).or_else(internal)?.to_string();
+        // The runtime's own capabilities never reach an adapter.
+        if path.starts_with("net.http.") {
+            return self.http_action(h, &path, method, args);
+        }
+        if path.starts_with("fs.") {
+            return self.fs_action(h, &path, method, args);
+        }
+        if is_runtime_cap(&path) {
+            return internal(format!("'{path}' is not a runtime capability; the compiler should have refused it"));
+        }
+        if args.iter().any(|a| matches!(a, Value::Secret(_) | Value::Header { .. })) {
+            return internal("a secret was passed to an adapter's action; the compiler should have refused it");
+        }
         let amount = self.adapter.amount(&path, method, &args);
         let target = self.adapter.target(&path, method, &args);
         let amount_text = amount.map(|m| m.to_string());
@@ -911,7 +1126,7 @@ impl<'p> Interp<'p> {
         let idempotent = self.adapter.idempotent(&path, method);
         let what = format!("action {path}.{method}");
         let (answer, replayed) = self.external("action", body, idempotent, &what, |it, key| {
-            it.adapter.perform(key, &path, method, &args_json).map(|id| json!({ "receipt": id }))
+            Answer::Done(it.adapter.perform(key, &path, method, &args_json).map(|id| json!({ "receipt": id })))
         })?;
         match answer {
             Ok(v) => {
@@ -935,6 +1150,175 @@ impl<'p> Interp<'p> {
         }
     }
 
+    fn refuse<T>(&mut self, path: &str, method: &str, kind: FailKind, why: String) -> Result<T, Failure> {
+        self.emit("action_refused", json!({ "capability": path, "method": method, "reason": why }));
+        fail(kind, why)
+    }
+
+    // RUNTIME.md section 12
+    fn http_action(&mut self, h: usize, path: &str, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        let has_body = matches!(method, "post" | "put" | "patch");
+        let mut it = args.into_iter();
+        let Some(Value::Text(raw_url)) = it.next() else { return internal("net.http without a URL") };
+        // A body is Text, or a Secret (a template filled by `fill_secret`).
+        let (body, body_shown): (Option<String>, Json) = if has_body {
+            match it.next() {
+                Some(Value::Text(b)) => (Some(b.clone()), json!(b)),
+                Some(Value::Secret(s)) => (Some(s.value), json!({ "secret": s.name, "shown": s.shown })),
+                _ => return internal("net.http without a body"),
+            }
+        } else {
+            (None, Json::Null)
+        };
+        let mut headers: Vec<(String, HeaderValue)> = Vec::new();
+        match it.next() {
+            None => {}
+            Some(Value::List(hs)) => {
+                for h in hs {
+                    match h {
+                        Value::Header { name, value } => headers.push((name, value)),
+                        _ => return internal("a header list holds something that is not a header"),
+                    }
+                }
+            }
+            Some(_) => return internal("net.http headers are not a list"),
+        }
+        let url = match crate::targets::canonical_url(&raw_url) {
+            Ok(u) => u,
+            Err(e) => return self.refuse(path, method, FailKind::Capability, e),
+        };
+        for (n, v) in &headers {
+            let value = match v {
+                HeaderValue::Text(t) => t.as_str(),
+                HeaderValue::Secret(s) => s.value.as_str(),
+            };
+            if let Err(e) = http::check_header(n, value) {
+                return self.refuse(path, method, FailKind::Value, e);
+            }
+        }
+        self.emit("action_requested", json!({ "capability": path, "method": method, "target": url }));
+        if let Err(why) = self.broker.authorize(h, None, Some(&url)) {
+            return self.refuse(path, method, FailKind::Capability, why);
+        }
+        // GET is safe to repeat by definition; the others only when the operator has said
+        // the service deduplicates by Idempotency-Key, which the runtime then sends.
+        let keyed = method != "get" && self.broker.idempotency_key(h).or_else(internal)?;
+        let retryable = method == "get" || keyed;
+        self.broker.count_use(h).or_else(internal)?;
+        let shown: Vec<Json> = headers
+            .iter()
+            .map(|(n, v)| match v {
+                HeaderValue::Text(t) => json!([n, t]),
+                HeaderValue::Secret(s) => json!([n, { "secret": s.name, "shown": s.shown }]),
+            })
+            .collect();
+        // What the journal records: never a secret's value (see `Secret::shown`).
+        let jbody = json!({ "capability": path, "method": method, "target": url, "headers": shown,
+                            "body": body_shown, "idempotency_key": keyed });
+        let what = format!("action {path} {url}");
+        let mut send: Vec<(String, String)> = headers
+            .into_iter()
+            .map(|(n, v)| match v {
+                HeaderValue::Text(t) => (n, t),
+                HeaderValue::Secret(s) => (n, s.value),
+            })
+            .collect();
+        let (answer, replayed) = self.external("action", jbody, retryable, &what, |it, key| {
+            if keyed {
+                send.push(("Idempotency-Key".into(), key.to_string()));
+            }
+            let req = http::Request { method, url: &url, headers: &send, body: body.as_deref() };
+            match it.http.send(&req) {
+                http::Outcome::Response { status, body, complete } => Answer::Done(Ok(
+                    json!({ "status": status, "body": scrub_text(&it.secrets, &body), "complete": complete }),
+                )),
+                http::Outcome::NotSent(e) => Answer::Done(Err(format!("not sent: {e}"))),
+                // Safe to report as a failure: repeating it cannot do anything twice.
+                http::Outcome::Unknown(e) if retryable => Answer::Done(Err(format!("no answer: {e}"))),
+                http::Outcome::Unknown(e) => Answer::Unknown(e),
+            }
+        })?;
+        match answer {
+            Ok(v) => {
+                let (Some(status), Some(text), Some(complete)) =
+                    (v["status"].as_i64(), v["body"].as_str(), v["complete"].as_bool())
+                else {
+                    return fail(FailKind::Journal, format!("malformed HTTP result in the journal: {v}"));
+                };
+                self.emit(
+                    "action_performed",
+                    json!({ "capability": path, "method": method, "target": url, "status": status, "replayed": replayed }),
+                );
+                Ok(Value::Record {
+                    ty: "Response".into(),
+                    fields: vec![
+                        ("status".into(), Value::Int(status)),
+                        ("body".into(), Value::Text(text.to_string())),
+                        ("complete".into(), Value::Bool(complete)),
+                    ],
+                })
+            }
+            Err(msg) => {
+                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
+                fail(FailKind::Action, msg)
+            }
+        }
+    }
+
+    // RUNTIME.md section 12
+    fn fs_action(&mut self, h: usize, path: &str, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        let Some(Value::Text(raw)) = args.first() else { return internal("fs without a path") };
+        let file = match crate::targets::canonical_path(raw) {
+            Ok(f) => f,
+            Err(e) => return self.refuse(path, method, FailKind::Capability, e),
+        };
+        self.emit("action_requested", json!({ "capability": path, "method": method, "target": file }));
+        if let Err(why) = self.broker.authorize(h, None, Some(&file)) {
+            return self.refuse(path, method, FailKind::Capability, why);
+        }
+        self.broker.count_use(h).or_else(internal)?;
+        let what = format!("action {path} {file}");
+        let (answer, replayed) = match method {
+            // Reading changes nothing, and writing the same content again leaves the same
+            // file, so both are safe to retry after a crash.
+            "read" => {
+                let jbody = json!({ "capability": path, "method": method, "target": file });
+                self.external("action", jbody, true, &what, |it, _key| {
+                    Answer::Done(fsx::read(&file, it.fs_max_read_bytes).map(|t| json!({ "text": scrub_text(&it.secrets, &t) })))
+                })?
+            }
+            "write" => {
+                let Some(Value::Text(content)) = args.get(1) else { return internal("fs.write without content") };
+                let sha = journal::sha256_hex(content.as_bytes());
+                // The journal records the content's hash, not the content: on resume the
+                // program computes it again, and the hash detects any difference.
+                let jbody = json!({ "capability": path, "method": method, "target": file,
+                                    "bytes": content.len(), "sha256": sha });
+                let id = format!("write:{}", &sha[..16]);
+                self.external("action", jbody, true, &what, |_it, _key| {
+                    Answer::Done(fsx::write(&file, content.as_bytes()).map(|()| json!({ "receipt": id })))
+                })?
+            }
+            other => return internal(format!("fs has no method '{other}'")),
+        };
+        match answer {
+            Ok(v) => {
+                self.emit("action_performed", json!({ "capability": path, "method": method, "target": file, "replayed": replayed }));
+                match (method, v["text"].as_str(), v["receipt"].as_str()) {
+                    ("read", Some(t), _) => Ok(Value::Text(t.to_string())),
+                    ("write", _, Some(id)) => {
+                        Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
+                    }
+                    _ => fail(FailKind::Journal, format!("malformed file result in the journal: {v}")),
+                }
+            }
+            Err(msg) => {
+                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
+                fail(FailKind::Action, msg)
+            }
+        }
+    }
+
     /// Performs one external operation through the journal (RUNTIME.md section 11).
     ///
     /// `live` contacts the world and returns its answer. It runs for a new operation,
@@ -947,7 +1331,7 @@ impl<'p> Interp<'p> {
         body: Json,
         retry_in_doubt: bool,
         what: &str,
-        live: impl FnOnce(&mut Self, &str) -> Result<Json, String>,
+        live: impl FnOnce(&mut Self, &str) -> Answer,
     ) -> Result<(Result<Json, String>, bool), Failure> {
         let step = match self.journal.begin(op, body) {
             Ok(step) => step,
@@ -979,7 +1363,21 @@ impl<'p> Interp<'p> {
                 );
             }
         };
-        let answer = live(self, &key);
+        let answer = match live(self, &key) {
+            Answer::Done(a) => a,
+            // Exactly as if the process had died here: the intent is recorded, the result
+            // is not, and only an operator can say what happened.
+            Answer::Unknown(e) => {
+                self.emit("in_doubt", json!({ "operation": n, "what": what, "error": e }));
+                return fail(
+                    FailKind::InDoubt,
+                    format!(
+                        "{what} (operation {n}) may or may not have happened ({e}), and it cannot be safely \
+                         retried. Check whether it happened, record the answer with `intentc resolve`, then resume"
+                    ),
+                );
+            }
+        };
         if let Err(e) = self.journal.finish(n, answer.clone()) {
             // The operation happened but is not durably recorded. Keep it in the log, then
             // stop: resume will find it in doubt.
@@ -1007,7 +1405,7 @@ impl<'p> Interp<'p> {
         // A real provider's count can change between runs (a tokenizer update), and it
         // decides the token limit, so it is journaled like any other answer from outside.
         let (counted, _) = self.external("count", req.to_json(), true, "token count", |it, _key| {
-            it.provider.count_input_tokens(&req).map(|n| json!(n))
+            Answer::Done(it.provider.count_input_tokens(&req).map(|n| json!(n)))
         })?;
         let input = match counted {
             Ok(v) => match v.as_u64() {
@@ -1048,9 +1446,9 @@ impl<'p> Interp<'p> {
         }
         self.emit("model_request", json!({ "request": req.to_json(), "input_tokens_counted": input }));
         let (answer, replayed) = self.external("model", req.to_json(), true, "model call", |it, _key| {
-            it.provider.complete(&req).map(|r| {
+            Answer::Done(it.provider.complete(&req).map(|r| {
                 json!({ "output": r.output, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens })
-            })
+            }))
         })?;
         if replayed {
             self.provider.skip();
@@ -1087,7 +1485,7 @@ impl<'p> Interp<'p> {
                 ),
             );
         }
-        Ok(Value::Proposed { ty: ty.clone(), raw: reply.output })
+        Ok(Value::Proposed { ty: ty.clone(), raw: reply.output, lenient: false })
     }
 }
 
@@ -1148,6 +1546,53 @@ fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         (Builtin::Contains, [Value::List(xs), v]) => Ok(Value::Bool(xs.contains(v))),
         (Builtin::StartsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.starts_with(b.as_str()))),
         (Builtin::EndsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.ends_with(b.as_str()))),
+        (Builtin::Header, [Value::Text(name), v]) => {
+            let value = match v {
+                Value::Text(t) => HeaderValue::Text(t.clone()),
+                Value::Secret(s) => HeaderValue::Secret(s.clone()),
+                _ => return internal("`header` value is neither Text nor a Secret"),
+            };
+            let check = match &value {
+                HeaderValue::Text(t) => http::check_header(name, t),
+                HeaderValue::Secret(s) => http::check_header(name, &s.value),
+            };
+            check.map_err(|e| Failure { kind: FailKind::Value, message: e })?;
+            Ok(Value::Header { name: name.clone(), value })
+        }
+        (Builtin::FillSecret, [Value::Text(template), Value::Secret(key)]) => {
+            // Exactly once. The program writes its own placeholder; a second one can only
+            // have come in with data (a message text saying "{secret}"), which would copy
+            // the key into the message and send it wherever that data goes.
+            match template.matches("{secret}").count() {
+                1 => {}
+                0 => return fail(FailKind::Value, "`fill_secret` template has no {secret} placeholder"),
+                n => {
+                    return fail(
+                        FailKind::Value,
+                        format!(
+                            "`fill_secret` template contains {{secret}} {n} times; it must appear exactly once, \
+                             or text from outside could copy the key into a message"
+                        ),
+                    )
+                }
+            }
+            if template.len().saturating_add(key.value.len()) > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("text would be longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            let placeholder = format!("{{secret {}}}", key.name);
+            Ok(Value::Secret(Secret {
+                name: key.name.clone(),
+                value: template.replace("{secret}", &key.value),
+                shown: template.replace("{secret}", &key.shown.replace("{secret}", &placeholder)),
+            }))
+        }
+        (Builtin::Json, [v]) => {
+            let text = to_json(v, true).map_err(|e| Failure { kind: FailKind::Internal, message: e })?.to_string();
+            if text.len() > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("json would be longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            Ok(Value::Text(text))
+        }
         _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
     }
 }

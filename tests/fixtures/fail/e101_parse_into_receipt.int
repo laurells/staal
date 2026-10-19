@@ -1,0 +1,5 @@
+// expect: E101
+// Text from outside can never become a receipt.
+fn f(t: Text) -> Receipt {
+    return validate parse(Receipt, t)
+}

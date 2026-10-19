@@ -1,0 +1,3 @@
+// expect: E101
+// Patterns must be canonical, or they would never match a canonical target.
+fn f(h: cap net.http.get(only: ["https://API.example.com/*"])) {}

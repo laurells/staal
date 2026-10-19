@@ -38,6 +38,10 @@ struct CapState {
     /// Actions attempted through this capability and its children.
     used: u64,
     parent: Option<usize>,
+    /// For `net.http`: the operator has stated that the service deduplicates requests
+    /// by an `Idempotency-Key` header, so one left in doubt may be retried. Set only by
+    /// a grant, and inherited by every capability narrowed from it.
+    idempotency_key: bool,
 }
 
 #[derive(Debug, Default)]
@@ -48,16 +52,27 @@ pub struct Broker {
 impl Broker {
     /// A root capability, created only from a grant.
     pub fn grant(&mut self, path: &str, limits: Limits) -> usize {
-        self.caps.push(CapState { path: path.to_string(), limits, spent: 0, used: 0, parent: None });
+        self.caps.push(CapState { path: path.to_string(), limits, spent: 0, used: 0, parent: None, idempotency_key: false });
         self.caps.len() - 1
+    }
+
+    /// Marks a granted capability as deduplicated by `Idempotency-Key` (see CapState).
+    pub fn set_idempotency_key(&mut self, h: usize) -> Result<(), String> {
+        let c = self.caps.get_mut(h).ok_or("unknown capability handle")?;
+        c.idempotency_key = true;
+        Ok(())
+    }
+
+    pub fn idempotency_key(&self, h: usize) -> Result<bool, String> {
+        self.caps.get(h).map(|c| c.idempotency_key).ok_or_else(|| "unknown capability handle".into())
     }
 
     /// A child with (possibly) tighter limits. Everything it does also counts against
     /// every ancestor, so the child can never do more than they allow.
     pub fn narrow(&mut self, parent: usize, limits: Limits) -> Result<usize, String> {
         let p = self.caps.get(parent).ok_or("unknown capability handle")?;
-        let path = p.path.clone();
-        self.caps.push(CapState { path, limits, spent: 0, used: 0, parent: Some(parent) });
+        let (path, idempotency_key) = (p.path.clone(), p.idempotency_key);
+        self.caps.push(CapState { path, limits, spent: 0, used: 0, parent: Some(parent), idempotency_key });
         Ok(self.caps.len() - 1)
     }
 

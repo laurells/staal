@@ -1,0 +1,6 @@
+// expect: E008
+// A response is data, not proof of work.
+fn f(h: cap net.http.post) -> Done {
+    let r = h.post("https://x.org/", "x")
+    return done(evidence: [r])
+}

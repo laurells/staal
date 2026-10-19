@@ -1,0 +1,28 @@
+// net.http and fs: requests with a secret header, responses parsed and validated,
+// JSON bodies, files read and written under `only` limits.
+type Sms { to: Text, sms: Text, from: Text }
+type SmsReply { message_id: Text }
+type Report { sent: Int, note: Text }
+
+fn send_sms(to: Text, text: Text, key: Secret,
+            http: cap net.http.post(only: ["https://api.ng.termii.com/api/sms/send"], uses: 1)) -> Text {
+    let body = json(Sms { to: to, sms: text, from: "TeamOzy" })
+    let r = http.post("https://api.ng.termii.com/api/sms/send", body, [header("Authorization", key), header("Content-Type", "application/json")])
+    if r.status != 200 or not r.complete {
+        return "failed"
+    }
+    let reply: SmsReply = validate parse(SmsReply, r.body)
+    return reply.message_id
+}
+
+fn status(http: cap net.http.get(only: ["https://status.example.com/*"])) -> Bool {
+    let r = http.get("https://status.example.com/v1/health")
+    return r.status == 200
+}
+
+fn file_report(rd: cap fs.read(only: ["/data/in/*.csv"]), wr: cap fs.write(only: ["/data/out/*"])) -> Done {
+    let text = rd.read("/data/in/day.csv")
+    let report = Report { sent: len(text), note: "daily" }
+    let w = wr.write("/data/out/report.json", json(report))
+    return done(evidence: [w])
+}

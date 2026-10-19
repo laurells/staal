@@ -28,7 +28,8 @@ use std::collections::{HashMap, HashSet};
 
 /// The types every module can name without importing them. A module may not declare
 /// a type with one of these names.
-pub const BUILTIN_TYPES: &[&str] = &["Text", "Int", "Bool", "Money", "Unit", "Receipt", "Outcome", "Done"];
+pub const BUILTIN_TYPES: &[&str] =
+    &["Text", "Int", "Bool", "Money", "Unit", "Receipt", "Outcome", "Done", "Secret", "Header", "Response"];
 
 /// One source file of a program. `name` is how it is shown in messages.
 #[derive(Debug, Clone)]
@@ -405,13 +406,14 @@ impl Resolver<'_, '_, '_> {
                 };
             }
             Expr::Record { ty, pos, .. } => *ty = self.type_name(ty, *pos),
-            Expr::Propose { ty, pos, .. } => self.ty(ty, *pos),
+            Expr::Propose { ty, pos, .. } | Expr::Parse { ty, pos, .. } => self.ty(ty, *pos),
             _ => {}
         }
         match e {
             Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => {}
             Expr::Field { base, .. } => self.expr(base),
             Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => self.expr(inner),
+            Expr::Parse { text, .. } => self.expr(text),
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 self.expr(left);
                 self.expr(right);

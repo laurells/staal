@@ -174,6 +174,13 @@ pub enum Builtin {
     Contains,
     StartsWith,
     EndsWith,
+    /// `header(name, value)`: an HTTP header; the value may be a Secret.
+    Header,
+    /// `json(x)`: x encoded as JSON text.
+    Json,
+    /// `fill_secret(template, key)`: the template with `{secret}` replaced by the key,
+    /// as a new Secret (for a request body or header that embeds the key).
+    FillSecret,
 }
 
 impl Builtin {
@@ -183,6 +190,9 @@ impl Builtin {
             "contains" => Some(Builtin::Contains),
             "starts_with" => Some(Builtin::StartsWith),
             "ends_with" => Some(Builtin::EndsWith),
+            "header" => Some(Builtin::Header),
+            "json" => Some(Builtin::Json),
+            "fill_secret" => Some(Builtin::FillSecret),
             _ => None,
         }
     }
@@ -193,6 +203,17 @@ impl Builtin {
             Builtin::Contains => "contains",
             Builtin::StartsWith => "starts_with",
             Builtin::EndsWith => "ends_with",
+            Builtin::Header => "header",
+            Builtin::Json => "json",
+            Builtin::FillSecret => "fill_secret",
+        }
+    }
+
+    /// The number of arguments it takes.
+    pub fn arity(self) -> usize {
+        match self {
+            Builtin::Len | Builtin::Json => 1,
+            Builtin::Contains | Builtin::StartsWith | Builtin::EndsWith | Builtin::Header | Builtin::FillSecret => 2,
         }
     }
 }
@@ -286,6 +307,8 @@ pub enum Expr {
     },
     /// `validate x` — turn Proposed<T> into T
     Validate(Box<Expr>, Pos),
+    /// `parse(T, text)` — JSON text from outside, as an unchecked Proposed<T>
+    Parse { ty: Ty, text: Box<Expr>, pos: Pos },
     /// `done(evidence: [e, ...])` — the only way to make a `Done`: proof of completed work.
     Done { evidence: Vec<Expr>, pos: Pos },
     /// `try action` or `try call(...)`: a failure becomes an `Outcome` value
@@ -304,6 +327,7 @@ impl Expr {
             Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => Vec::new(),
             Expr::Field { base, .. } => vec![base],
             Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => vec![inner],
+            Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
             }
@@ -337,7 +361,7 @@ impl Expr {
             | Expr::Record { pos, .. }
             | Expr::Index { pos, .. } => *pos,
             Expr::Cmp { pos, .. } | Expr::Field { pos, .. } | Expr::Done { pos, .. } => *pos,
-            Expr::Propose { pos, .. } => *pos,
+            Expr::Propose { pos, .. } | Expr::Parse { pos, .. } => *pos,
             Expr::Action { pos, .. } | Expr::Call { pos, .. } => *pos,
         }
     }

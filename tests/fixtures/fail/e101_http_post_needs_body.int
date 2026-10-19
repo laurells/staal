@@ -1,0 +1,5 @@
+// expect: E101
+// post takes a URL and a body.
+fn f(h: cap net.http.post) -> Response {
+    return h.post("https://x.org/")
+}

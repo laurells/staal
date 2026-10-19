@@ -6,6 +6,7 @@ pub mod lexer;
 pub mod modules;
 pub mod parser;
 pub mod pattern;
+pub mod targets;
 
 use checker::Diagnostic;
 pub use modules::SourceFile;

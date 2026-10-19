@@ -1,0 +1,5 @@
+// expect: E101
+// A response is made by the runtime, not built in code.
+fn f() -> Response {
+    return Response { status: 200, body: "ok", complete: true }
+}

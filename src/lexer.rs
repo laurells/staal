@@ -76,6 +76,41 @@ pub struct Token {
 }
 
 /// Lexes a single-file program (file 0).
+impl Tok {
+    /// The text of a keyword, which may also be used as a record field name: JSON from
+    /// real services has fields such as "type" and "in".
+    pub fn keyword_text(&self) -> Option<&'static str> {
+        Some(match self {
+            Tok::Fn => "fn",
+            Tok::Type => "type",
+            Tok::Let => "let",
+            Tok::Return => "return",
+            Tok::Cap => "cap",
+            Tok::Propose => "propose",
+            Tok::Validate => "validate",
+            Tok::Budget => "budget",
+            Tok::Repeat => "repeat",
+            Tok::Loop => "loop",
+            Tok::If => "if",
+            Tok::Else => "else",
+            Tok::Break => "break",
+            Tok::True => "true",
+            Tok::False => "false",
+            Tok::Try => "try",
+            Tok::Done => "done",
+            Tok::And => "and",
+            Tok::Or => "or",
+            Tok::Not => "not",
+            Tok::For => "for",
+            Tok::In => "in",
+            Tok::Import => "import",
+            Tok::Pub => "pub",
+            Tok::Set => "set",
+            _ => return None,
+        })
+    }
+}
+
 pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
     lex_file(src, 0)
 }

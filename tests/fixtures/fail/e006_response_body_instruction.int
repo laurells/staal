@@ -1,0 +1,6 @@
+// expect: E006
+// A response body is untrusted: never a model instruction.
+fn f(h: cap net.http.get) {
+    let r = h.get("https://x.org/prompt")
+    let s = propose(Text, instruct: r.body, tokens: 10)
+}

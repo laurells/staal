@@ -1,0 +1,1 @@
+{"entry":"read","inputs":{"body":"{\"message_id\":\"9a\",\"code\":\"ok\",\"balance\":12.5,\"user\":\"TeamOzy\"}"},"model": { "provider": "script", "responses": [] },"expect":{"result":"9a/ok"}}

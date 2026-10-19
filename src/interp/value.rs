@@ -7,6 +7,30 @@ use crate::ast::Ty;
 use serde_json::{json, Map, Value as Json};
 use std::collections::{HashMap, HashSet};
 
+/// A secret from the run config (an API key), or a template filled with one by
+/// `fill_secret`. Its value is only ever placed in an HTTP request (a header or the
+/// body); it is never printed, logged, journaled or sent to a model. `name` is the
+/// environment variable it came from, and `shown` is what may be recorded: `{secret}`
+/// for the key itself, or the template with a placeholder where the key goes.
+#[derive(Clone, PartialEq)]
+pub struct Secret {
+    pub name: String,
+    pub value: String,
+    pub shown: String,
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Secret({})", self.name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HeaderValue {
+    Text(String),
+    Secret(Secret),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Receipt {
     pub id: String,
@@ -25,14 +49,19 @@ pub enum Value {
     /// A list; its length never exceeds the maximum in its type (checked where lists
     /// enter from outside, and fixed for literals).
     List(Vec<Value>),
-    /// Raw model output, not yet checked against `ty`.
-    Proposed { ty: Ty, raw: Json },
+    /// Raw output from outside (a model, or text given to `parse`), not yet checked
+    /// against `ty`. `lenient`: fields the type does not declare are dropped when it is
+    /// validated, as services add fields over time. Model output is strict.
+    Proposed { ty: Ty, raw: Json, lenient: bool },
     Receipt(Receipt),
     /// `held` is the successful result a `try` produced (hidden from programs).
     Outcome { ok: bool, error: String, held: Option<Box<Value>> },
     Done(Vec<Value>),
     /// A handle into the capability broker.
     Cap(usize),
+    Secret(Secret),
+    /// An HTTP header, made by `header(name, value)`.
+    Header { name: String, value: HeaderValue },
 }
 
 /// Declared record types: name -> fields in declaration order.
@@ -44,16 +73,23 @@ const MAX_JSON_DEPTH: usize = 64;
 /// Converts outside JSON into a value of type `ty`, strictly (RUNTIME.md section 3).
 /// `path` names the location for error messages, e.g. "inputs.order.customer".
 pub fn from_json(ty: &Ty, json: &Json, types: &Types, path: &str) -> Result<Value, String> {
-    from_json_at(ty, json, types, path, 0)
+    from_json_at(ty, json, types, path, 0, false)
 }
 
-fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize) -> Result<Value, String> {
+/// Like `from_json`, but a record may carry fields its type does not declare; they
+/// are dropped and never reach the program. Every declared field is still required
+/// and checked exactly. For responses from services, which add fields over time.
+pub fn from_json_lenient(ty: &Ty, json: &Json, types: &Types, path: &str) -> Result<Value, String> {
+    from_json_at(ty, json, types, path, 0, true)
+}
+
+fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, lenient: bool) -> Result<Value, String> {
     if depth > MAX_JSON_DEPTH {
         return Err(format!("{path}: nested more than {MAX_JSON_DEPTH} levels deep"));
     }
     let expected = |what: &str| format!("{path}: expected {what}, found {}", describe(json));
     match ty {
-        Ty::Proposed(inner) => Ok(Value::Proposed { ty: (**inner).clone(), raw: json.clone() }),
+        Ty::Proposed(inner) => Ok(Value::Proposed { ty: (**inner).clone(), raw: json.clone(), lenient: false }),
         Ty::Cap { .. } => Err(format!("{path}: a capability cannot be supplied as data")),
         Ty::List(inner, max) => {
             let items = json.as_array().ok_or_else(|| expected("a list"))?;
@@ -64,7 +100,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize) -
             }
             let mut out = Vec::with_capacity(items.len());
             for (i, item) in items.iter().enumerate() {
-                out.push(from_json_at(inner, item, types, &format!("{path}[{i}]"), depth + 1)?);
+                out.push(from_json_at(inner, item, types, &format!("{path}[{i}]"), depth + 1, lenient)?);
             }
             Ok(Value::List(out))
         }
@@ -78,23 +114,28 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize) -
                 _ => Err(expected("a whole number")),
             },
             "Money" => money_from_json(json, path).map(Value::Money),
-            "Receipt" | "Outcome" | "Done" => {
+            "Receipt" | "Outcome" | "Done" | "Response" => {
                 Err(format!("{path}: a {n} can only be created by the runtime, never supplied from outside"))
             }
+            "Secret" | "Header" => Err(format!(
+                "{path}: a {n} cannot be supplied as data; secrets come from the environment through \"secrets\""
+            )),
             "Unit" => Err(format!("{path}: Unit cannot be supplied from outside")),
             _ => {
                 let fields = types.get(n).ok_or_else(|| format!("{path}: unknown type {n}"))?;
                 let obj = json.as_object().ok_or_else(|| expected(&format!("a {n} object")))?;
-                for key in obj.keys() {
-                    if !fields.iter().any(|(f, _)| f == key) {
-                        return Err(format!("{path}: {n} has no field '{key}'"));
+                if !lenient {
+                    for key in obj.keys() {
+                        if !fields.iter().any(|(f, _)| f == key) {
+                            return Err(format!("{path}: {n} has no field '{key}'"));
+                        }
                     }
                 }
                 let mut out = Vec::with_capacity(fields.len());
                 for (fname, fty) in fields {
                     let sub = format!("{path}.{fname}");
                     let fjson = obj.get(fname).ok_or_else(|| format!("{sub}: missing"))?;
-                    out.push((fname.clone(), from_json_at(fty, fjson, types, &sub, depth + 1)?));
+                    out.push((fname.clone(), from_json_at(fty, fjson, types, &sub, depth + 1, lenient)?));
                 }
                 Ok(Value::Record { ty: n.clone(), fields: out })
             }
@@ -162,6 +203,13 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
         }
         Value::Cap(_) if for_model => return Err("a capability cannot be sent to a model".into()),
         Value::Cap(h) => json!({ "capability_handle": h }),
+        // A secret's value is never encoded anywhere; for the log, only its name.
+        Value::Secret(_) | Value::Header { .. } if for_model => return Err("a secret cannot be sent to a model".into()),
+        Value::Secret(s) => json!({ "secret": s.name, "shown": s.shown }),
+        Value::Header { name, value } => match value {
+            HeaderValue::Text(t) => json!({ "header": name, "value": t }),
+            HeaderValue::Secret(s) => json!({ "header": name, "value": { "secret": s.name, "shown": s.shown } }),
+        },
     })
 }
 

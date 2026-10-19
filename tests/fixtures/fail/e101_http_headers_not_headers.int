@@ -1,0 +1,5 @@
+// expect: E101
+// Headers are a list of Header values.
+fn f(h: cap net.http.get) -> Response {
+    return h.get("https://x.org/", ["Authorization: x"])
+}

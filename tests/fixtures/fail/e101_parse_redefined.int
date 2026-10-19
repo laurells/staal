@@ -1,0 +1,5 @@
+// expect: E101
+// parse is a built-in and cannot be redefined.
+fn parse(t: Text) -> Text {
+    return t
+}

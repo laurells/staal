@@ -30,6 +30,7 @@
 //   primary  := atom ("." IDENT | "[" expr "]")*     (field access, indexing)
 //   atom     := "(" expr ")" | "[" (expr ("," expr)*)? "]"
 //             | "propose" "(" ty ("," popt)* ")" | "validate" primary
+//             | "parse" "(" ty "," expr ")"   (JSON text as an unchecked Proposed<ty>)
 //             | "try" primary             (an action or call; failure becomes an Outcome)
 //             | "done" "(" "evidence" ":" list ")"
 //             | IDENT ("." IDENT)? "{" (IDENT ":" expr ","?)* "}"   (record literal)
@@ -91,6 +92,15 @@ impl Parser {
         }
     }
 
+    /// A record field name: an identifier, or a keyword (fields are never ambiguous).
+    fn field_name(&mut self) -> PResult<String> {
+        if let Some(k) = self.peek().keyword_text() {
+            self.bump();
+            return Ok(k.to_string());
+        }
+        self.ident()
+    }
+
     fn num(&mut self) -> PResult<u64> {
         match self.peek().clone() {
             Tok::Num(n) => {
@@ -131,10 +141,10 @@ impl Parser {
                     if *self.peek() == Tok::LParen {
                         self.bump();
                         loop {
-                            let mut path = vec![self.ident()?];
+                            let mut path = vec![self.field_name()?];
                             while *self.peek() == Tok::Dot {
                                 self.bump();
-                                path.push(self.ident()?);
+                                path.push(self.field_name()?);
                             }
                             blind.push(path);
                             if *self.peek() == Tok::Comma {
@@ -282,7 +292,7 @@ impl Parser {
         self.expect(Tok::LBrace, "'{'")?;
         let mut fields = Vec::new();
         while *self.peek() != Tok::RBrace {
-            let f = self.ident()?;
+            let f = self.field_name()?;
             self.expect(Tok::Colon, "':'")?;
             let t = self.ty()?;
             fields.push((f, t));
@@ -676,7 +686,7 @@ impl Parser {
                 Tok::Dot => {
                     self.bump();
                     let pos = self.pos();
-                    let field = self.ident()?;
+                    let field = self.field_name()?;
                     if *self.peek() == Tok::LParen {
                         return Err((
                             pos,
@@ -705,7 +715,7 @@ impl Parser {
         let fields = self.with_records(true, |p| {
             let mut fields = Vec::new();
             while *p.peek() != Tok::RBrace {
-                let name = p.ident()?;
+                let name = p.field_name()?;
                 p.expect(Tok::Colon, "':'")?;
                 let value = p.expr()?;
                 fields.push((name, value));
@@ -766,6 +776,17 @@ impl Parser {
                 Ok(Expr::Str(s, pos))
             }
             Tok::Num(_) | Tok::Decimal(_) => self.number(pos),
+            Tok::Ident(name) if name == "parse" && self.toks.get(self.i + 1).map(|t| &t.tok) == Some(&Tok::LParen) => {
+                self.bump();
+                self.with_records(true, |p| {
+                    p.expect(Tok::LParen, "'('")?;
+                    let ty = p.ty()?;
+                    p.expect(Tok::Comma, "','")?;
+                    let text = p.expr()?;
+                    p.expect(Tok::RParen, "')'")?;
+                    Ok(Expr::Parse { ty, text: Box::new(text), pos })
+                })
+            }
             Tok::Ident(name) => {
                 self.bump();
                 if *self.peek() == Tok::LParen {

@@ -20,7 +20,9 @@ A run is described by a **run config** (JSON):
   "inputs": { "message": "I was charged twice", "order": { ... } },
   "grants": { "pay": { "cap": "payments.refund", "max": { "amount": "500.00", "currency": "USD" } } },
   "model":  { "provider": "script", "responses": [ ... ] },
+  "secrets": { "key": { "env": "API_KEY" } },
   "adapters": { "simulated": { "fail": [ ... ] } },
+  "net": { "timeout_ms": 30000 },
   "limits": { "max_steps": 1000000, "max_depth": 256, "default_max_tokens": 1024 }
 }
 ```
@@ -30,6 +32,9 @@ A run is described by a **run config** (JSON):
 - Every non-capability parameter of the entry function must appear in
   `inputs`, and its JSON must match the declared type exactly (section 3).
   Unknown keys are an error.
+- Every `Secret` parameter must appear in `secrets`, which names the environment
+  variable to read it from; `net` and `fs` configure the runtime's own
+  capabilities (both in section 12).
 - Every capability parameter must appear in `grants`. Grants are how the
   person deploying the program hands out authority; nothing else can create a
   capability.
@@ -440,3 +445,155 @@ sensitive data. Like the log, it must never be given to a model as context.
 - An adapter's `amount` must be a pure function of the action's arguments.
 - An adapter that declares an action idempotent must, given a key it has seen,
   not perform the action again and must return the original receipt.
+
+## 12. The runtime's own capabilities: `net.http` and `fs`
+
+Most capabilities are performed by an adapter and return a `Receipt`. Two families
+belong to the runtime itself, which performs them, checks them, and records them in
+the journal like any other action. Capability paths starting with `net.` or `fs.` are
+reserved for them; any other path under those names is a compile error (E101).
+
+| Capability | Action | Result |
+| --- | --- | --- |
+| `net.http.get`, `net.http.delete` | `c.get(url)`, `c.get(url, headers)` | `Response` |
+| `net.http.post`, `net.http.put`, `net.http.patch` | `c.post(url, body)`, `c.post(url, body, headers)` | `Response` |
+| `fs.read` | `c.read(path)` | `Text` |
+| `fs.write` | `c.write(path, content)` | `Receipt` |
+
+`url`, `path` and `content` are `Text`. A `body` is `Text` or a `Secret` (below).
+`headers` is a `List<Header, N>`. `uses` and `only` apply as to any capability;
+`max` and `each` do not (no money the runtime can measure is spent), and are
+refused (E101, or a config error on a grant).
+
+### Built-in types and functions
+
+- `Response { status: Int, body: Text, complete: Bool }`, made only by the runtime.
+  Any status is a response, not a failure: a 500 or a 404 is data for the program.
+  `complete` is false when the body was larger than `net.max_response_bytes`, was
+  cut off, or was not UTF-8; `body` is then empty. The request still happened.
+- `Secret`: a value from the environment (below). It cannot become `Text`, be
+  compared, be stored in a record, be sent to a model, be encoded by `json`, or be
+  passed to any action other than as part of an HTTP request (E101). Its value is
+  never logged or journaled.
+- `Header`, made by `header(name: Text, value: Text or Secret)`. A header can hold a
+  secret, so the rules for secrets apply to headers too.
+- `fill_secret(template: Text, key: Secret) -> Secret`: the template with its
+  `{secret}` placeholder replaced by the key, as a new Secret, for APIs that want
+  `Bearer <key>` or the key inside a JSON body. The template must contain
+  `{secret}` exactly once: the program writes its own placeholder, and a second one
+  can only have come in with data (a message text saying `{secret}`), which would
+  copy the key into the message. Such a call fails (`value`) and nothing is sent.
+- `json(x) -> Text`: x encoded as JSON (records as objects, money as
+  `{"amount", "currency"}`). Secrets, headers and capabilities cannot be encoded.
+- `parse(T, text) -> Proposed<T>`: JSON text from outside, unchecked until
+  `validate` (so E001 applies). Text that is not JSON fails `validation`. When
+  validated, fields the type does not declare are dropped, since services add
+  fields over time; every declared field is still required and checked exactly.
+  (Model output stays strict: an unknown field fails validation.)
+- Record field names may be keywords (`type`, `in`, `for`), as JSON APIs need.
+
+### Secrets
+
+An entry parameter of type `Secret` is supplied only from the environment:
+
+```json
+"secrets": { "key": { "env": "TERMII_API_KEY" } }
+```
+
+Giving it in `inputs` is a config error: secrets are never written into a run
+config. The variable must be set, at least 8 characters long, and printable ASCII
+without spaces, quotes or backslashes (so filling it into a JSON string or a
+header can never change their structure). The journal and the log record a secret
+by its variable name only. Every secret value is also removed from every response
+body, file read and log event (replaced by `[secret removed]`), so a service that
+echoes a key back cannot leak it into the program, the log or the journal.
+
+### Canonical targets
+
+`only` compares text, so every target is first put into one canonical form, and a
+target that cannot be is refused (`capability`) before anything is sent.
+
+- **URLs** are parsed by the WHATWG URL Standard, as browsers do: scheme and host
+  lowercased, international hosts in ASCII, the default port dropped, and `.` and
+  `..` segments resolved, including percent-encoded ones. Then: the scheme must be
+  `https`, or `http` for `localhost`, `127.0.0.0/8` or `::1` only; user names and
+  passwords in URLs are refused; an encoded `/` or `\` in the path is refused,
+  since servers disagree on what it means; escapes of unreserved characters are
+  decoded and other escapes uppercased; the fragment is dropped.
+- **Paths** must be absolute; empty and `.` segments are removed and `..` resolved
+  as text, never above `/`.
+- **Patterns** in `only` for these capabilities must themselves be canonical
+  (E101 in source, a config error in a grant), and in a URL pattern the `*` must
+  come after `scheme://host/`, so it can never match another server.
+
+### Files
+
+Every path is opened one directory at a time, each relative to the one before, and
+no symbolic link is ever followed, in any directory or as the file itself. A
+directory swapped for a link while a program runs is therefore either refused or
+irrelevant. Reads accept only regular files, opened without blocking (a FIFO
+cannot hang the run), refuse a file with more than one hard link, and stop at
+`fs.max_read_bytes`; the text must be UTF-8. Writes go to a new temporary file in
+the same directory, are flushed, and replace the target with one atomic rename, then
+the directory is flushed: a crash never leaves half a file, an existing file keeps
+its permissions, and another hard link to it keeps its own contents. A write
+returns a `Receipt` whose id is derived from the content's SHA-256.
+
+Linux and macOS only; on other systems every file action fails.
+
+### HTTP requests
+
+No redirect is followed (a redirect could lead outside `only`; the program gets the
+3xx response). The runtime owns these headers and refuses them from programs:
+`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Upgrade`, `TE`,
+`Trailer`, `Keep-Alive`, `Idempotency-Key` and any `Proxy-*`; header names must be
+HTTP tokens and values contain no control characters. No proxy is used unless the
+run config asks for one.
+
+```json
+"net": { "timeout_ms": 30000, "connect_timeout_ms": 10000,
+         "max_response_bytes": 4194304, "proxy": "none" },
+"fs":  { "max_read_bytes": 16777216 }
+```
+
+(These are the defaults. `proxy` is `"none"` or `"environment"`, which reads the
+usual `HTTPS_PROXY` and `NO_PROXY` variables.)
+
+### What is known about a request, and crashes
+
+| What happened | Example | Result |
+| --- | --- | --- |
+| The server answered | any status | a `Response` |
+| Failed before anything was sent | host not found, connection refused, TLS handshake, connect timeout | failure `action`, which `try` can catch |
+| Failed after it may have reached the server | timeout or broken connection while sending or waiting | see below |
+
+A request that may have reached the server is treated exactly like a crash in the
+middle of an action. For `get`, which HTTP defines as safe, it is a failure
+`action`, and after a crash it is retried. For `post`, `put`, `patch` and `delete`
+the run stops `in_doubt` (the program cannot catch it, so it cannot retry and send
+twice), unless the grant says the service deduplicates:
+
+```json
+"grants": { "pay": { "cap": "net.http.post", "idempotency_key": true } }
+```
+
+Then the runtime sends `Idempotency-Key: <run id>-<operation>` with the request,
+the same key on every attempt, and such a request is retried after a crash or a
+lost answer. Only the operator can say this, in the grant; a program cannot. If the
+service does not really deduplicate, or a retry comes after it has forgotten the key
+(Resend keeps keys for 24 hours), a request can be performed twice: this is the
+operator's statement to make.
+
+An HTTP request left in doubt is resolved with the response the server gave, which
+the operator finds in the service's own records:
+
+    intentc resolve --journal run.journal --status 200 --body '{"id": "..."}'
+
+(`--failed` and `--retry` work as for other actions; `--performed` is refused for
+HTTP requests, whose result is a response, not a receipt.) File reads and writes are
+always safe to retry: reading changes nothing, and writing the same content again
+leaves the same file. The journal records a write's content by its SHA-256, which a
+resumed run must reproduce.
+
+Journal files are created readable and writable by their owner only (0600), since
+they hold what the run sent and received.

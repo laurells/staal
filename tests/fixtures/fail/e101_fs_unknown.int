@@ -1,0 +1,3 @@
+// expect: E101
+// Only fs.read and fs.write.
+fn f(d: cap fs.delete) {}

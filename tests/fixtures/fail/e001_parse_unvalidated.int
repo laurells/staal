@@ -1,0 +1,6 @@
+// expect: E001
+// Parsed text is unchecked until validated.
+type Refund { amount: Money }
+fn f(t: Text, pay: cap payments.refund) -> Receipt {
+    return pay.refund(parse(Refund, t))
+}

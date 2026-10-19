@@ -1,0 +1,3 @@
+// expect: E101
+// Path patterns must be canonical.
+fn f(r: cap fs.read(only: ["/data/../etc/*"])) {}

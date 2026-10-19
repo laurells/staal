@@ -1,0 +1,15 @@
+// Keywords as record field names, as real JSON APIs need ("type", "in", "for").
+type Sms { to: Text, type: Text, channel: Text }
+type Window { in: Int, for: Text }
+
+fn plain(to: Text) -> Sms {
+    return Sms { to: to, type: "plain", channel: "generic" }
+}
+
+fn kind(s: Sms) -> Text {
+    return s.type
+}
+
+fn hidden(w: Window @blind(in)) -> Text {
+    return w.for
+}

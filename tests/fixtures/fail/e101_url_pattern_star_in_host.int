@@ -1,0 +1,3 @@
+// expect: E101
+// A * in the host could match any server whose name starts the same way.
+fn f(h: cap net.http.get(only: ["https://api.example.com*"])) {}

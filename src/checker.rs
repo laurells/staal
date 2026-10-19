@@ -151,6 +151,7 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
         Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => {
             inexact(reveals(inner, env))
         }
+        Expr::Parse { text, .. } => inexact(reveals(text, env)),
         Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
             let mut v = reveals(left, env);
             v.extend(reveals(right, env));
@@ -183,6 +184,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Validate(inner, _) => format!("validate {}", expr_text(inner)),
         Expr::Try(inner, _) => format!("try {}", expr_text(inner)),
         Expr::Propose { .. } => "propose(...)".into(),
+        Expr::Parse { .. } => "parse(...)".into(),
         Expr::Done { .. } => "done(...)".into(),
         Expr::Cmp { left, op, right, .. } => format!("{} {op} {}", expr_text(left), expr_text(right)),
         Expr::Arith { left, op, right, .. } => format!("{} {op} {}", expr_text(left), expr_text(right)),
@@ -239,6 +241,14 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
     ctx.known.insert("Outcome".into());
     ctx.known.insert("Done".into()); // built-in; made only by `done(evidence: [...])`
     ctx.fields.insert("Outcome".into(), vec![("ok".into(), named("Bool")), ("error".into(), named("Text"))]);
+    // Built-in for net.http: a secret from the run config, a header, and a response.
+    for t in ["Secret", "Header", "Response"] {
+        ctx.known.insert(t.into());
+    }
+    ctx.fields.insert(
+        "Response".into(),
+        vec![("status".into(), named("Int")), ("body".into(), named("Text")), ("complete".into(), named("Bool"))],
+    );
     for t in &prog.types {
         if ctx.known.contains(&t.name) {
             ctx.err("E101", t.pos, format!("type '{}' is already defined", t.name));
@@ -259,11 +269,24 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
                 };
                 ctx.err("E101", t.pos, format!("field '{}.{fname}' cannot hold a {bad}: {why}", t.name));
             }
+            if let Some(bad) = secret_inside(&ctx, fty, &mut HashSet::new()) {
+                ctx.err(
+                    "E101",
+                    t.pos,
+                    format!(
+                        "field '{}.{fname}' cannot hold a {bad}: secrets never travel inside data, where they could \
+                         be logged, encoded or sent to a model",
+                        t.name
+                    ),
+                );
+            }
         }
         ctx.fields.insert(t.name.clone(), t.fields.clone());
     }
     for f in &prog.fns {
-        if Builtin::from_name(&f.name).is_some() {
+        // A library's `len` is `lib.len`: the name a call is written with is the last part.
+        let base = f.name.rsplit('.').next().unwrap_or(&f.name);
+        if Builtin::from_name(base).is_some() || base == "parse" {
             ctx.err("E101", f.pos, format!("'{}' is a built-in function and cannot be redefined", f.name));
             continue;
         }
@@ -342,7 +365,67 @@ fn model_calling_fns(prog: &Program) -> HashSet<String> {
 /// arithmetic (overflow, division by zero, money in different currencies or below
 /// zero) and indexing (out of range). Actions and calls are judged separately.
 fn expr_can_fail_itself(e: &Expr) -> bool {
-    matches!(e, Expr::Arith { .. } | Expr::Neg(..) | Expr::Index { .. })
+    // `parse` fails on text that is not JSON; `json` on a result too long; `header` on
+    // a name or value that is not valid in HTTP.
+    matches!(
+        e,
+        Expr::Arith { .. }
+            | Expr::Neg(..)
+            | Expr::Index { .. }
+            | Expr::Parse { .. }
+            | Expr::Builtin { f: Builtin::Json | Builtin::Header | Builtin::FillSecret, .. }
+    )
+}
+
+/// The capabilities the runtime implements itself (RUNTIME.md section 12). Every other
+/// capability path is performed by an adapter and returns a Receipt.
+#[derive(Clone, Copy, PartialEq)]
+enum RuntimeCap {
+    /// `net.http.<method>`; `body` for post, put and patch.
+    Http { body: bool },
+    FsRead,
+    FsWrite,
+}
+
+const HTTP_METHODS: &[&str] = &["get", "post", "put", "patch", "delete"];
+
+fn runtime_cap(path: &[String]) -> Option<RuntimeCap> {
+    match path.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["net", "http", m] if HTTP_METHODS.contains(m) => Some(RuntimeCap::Http { body: matches!(*m, "post" | "put" | "patch") }),
+        ["fs", "read"] => Some(RuntimeCap::FsRead),
+        ["fs", "write"] => Some(RuntimeCap::FsWrite),
+        _ => None,
+    }
+}
+
+/// A Secret, or a Header (which may hold one), anywhere inside `ty`. Such values only
+/// ever leave the program as an HTTP header: never as text, data, model input or JSON.
+fn secret_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<&'static str> {
+    match ty {
+        Ty::Named(n) if n == "Secret" => Some("Secret"),
+        Ty::Named(n) if n == "Header" => Some("Header"),
+        Ty::Named(n) => {
+            if !seen.insert(n.clone()) {
+                return None;
+            }
+            let fields = ctx.fields.get(n)?.clone();
+            fields.iter().find_map(|(_, fty)| secret_inside(ctx, fty, seen))
+        }
+        Ty::Proposed(inner) | Ty::List(inner, _) => secret_inside(ctx, inner, seen),
+        Ty::Cap { .. } => None,
+    }
+}
+
+/// Whether a capability appears anywhere inside `ty`.
+fn cap_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> bool {
+    match ty {
+        Ty::Cap { .. } => true,
+        Ty::Proposed(inner) | Ty::List(inner, _) => cap_inside(ctx, inner, seen),
+        Ty::Named(n) => {
+            seen.insert(n.clone())
+                && ctx.fields.get(n).cloned().is_some_and(|fs| fs.iter().any(|(_, t)| cap_inside(ctx, t, seen)))
+        }
+    }
 }
 
 /// Per function: whether it may fail (an action or a failing call not directly under
@@ -501,7 +584,7 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
     match ty {
         Ty::Named(n) if !ctx.known.contains(n) => ctx.err("E102", pos, format!("unknown type '{n}'")),
         Ty::Named(_) => {}
-        Ty::Cap { limits, .. } => {
+        Ty::Cap { path, limits } => {
             if let (Some(m), Some(e)) = (&limits.max, &limits.each)
                 && m.unit != e.unit
             {
@@ -510,6 +593,39 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                     pos,
                     format!("`max: {m}` and `each: {e}` use different units, so no action could satisfy both"),
                 );
+            }
+            // `net` and `fs` belong to the runtime (RUNTIME.md section 12).
+            let p = path.join(".");
+            let family = path.first().map(String::as_str);
+            if matches!(family, Some("net") | Some("fs")) {
+                match runtime_cap(path) {
+                    None => ctx.err(
+                        "E101",
+                        pos,
+                        format!(
+                            "`cap {p}` is not a runtime capability; there are net.http.get, net.http.post, \
+                             net.http.put, net.http.patch, net.http.delete, fs.read and fs.write"
+                        ),
+                    ),
+                    Some(kind) => {
+                        if limits.max.is_some() || limits.each.is_some() {
+                            ctx.err(
+                                "E101",
+                                pos,
+                                format!("`cap {p}` spends no money the runtime can measure, so `max` or `each` would refuse every action"),
+                            );
+                        }
+                        for pat in limits.only.iter().flatten() {
+                            let checked = match kind {
+                                RuntimeCap::Http { .. } => crate::targets::check_url_pattern(pat),
+                                RuntimeCap::FsRead | RuntimeCap::FsWrite => crate::targets::check_path_pattern(pat),
+                            };
+                            if let Err(e) = checked {
+                                ctx.err("E101", pos, format!("in `cap {p}`: {e}"));
+                            }
+                        }
+                    }
+                }
             }
         }
         Ty::Proposed(inner) => check_ty_known(ctx, inner, pos),
@@ -661,7 +777,13 @@ fn f_params_contains(ctx: &Ctx, name: &str) -> bool {
 fn outcome_holds_evidence(ctx: &Ctx, value: &Expr, env: &Env) -> bool {
     match value {
         Expr::Try(inner, _) => match inner.as_ref() {
-            Expr::Action { .. } => true,
+            // An action holds a receipt unless it is one of the runtime's that returns data.
+            Expr::Action { receiver, .. } => match env.get(receiver).map(|b| &b.ty) {
+                Some(Ty::Cap { path, .. }) => {
+                    !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead))
+                }
+                _ => false,
+            },
             Expr::Call { name, .. } => ctx.sigs.get(name.as_str()).is_some_and(|s| is_proof_type(&s.ret)),
             _ => false,
         },
@@ -1461,7 +1583,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
         }
         Expr::Builtin { f, args, pos } => {
             let tys: Vec<Option<(Ty, bool)>> = args.iter().map(|a| type_of(ctx, a, env)).collect();
-            let arity = if *f == Builtin::Len { 1 } else { 2 };
+            let arity = f.arity();
             if args.len() != arity {
                 ctx.err("E101", *pos, format!("`{}` takes {arity} argument(s) but {} were given", f.name(), args.len()));
                 return None;
@@ -1475,6 +1597,46 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             }
             let trusted = tys.iter().all(|(_, tr)| *tr);
             let text = named("Text");
+            match f {
+                Builtin::Header => {
+                    if tys[0].0 != text || (tys[1].0 != text && tys[1].0 != named("Secret")) {
+                        ctx.err(
+                            "E101",
+                            *pos,
+                            format!("`header` needs (name: Text, value: Text or Secret), found ({}, {})", tys[0].0, tys[1].0),
+                        );
+                        return None;
+                    }
+                    return Some((named("Header"), trusted));
+                }
+                Builtin::FillSecret => {
+                    if tys[0].0 != text || tys[1].0 != named("Secret") {
+                        ctx.err(
+                            "E101",
+                            *pos,
+                            format!("`fill_secret` needs (template: Text, key: Secret), found ({}, {})", tys[0].0, tys[1].0),
+                        );
+                        return None;
+                    }
+                    return Some((named("Secret"), true));
+                }
+                Builtin::Json => {
+                    if let Some(bad) = secret_inside(ctx, &tys[0].0, &mut HashSet::new()) {
+                        ctx.err("E101", *pos, format!("`json` cannot encode a {bad}: secrets never become text"));
+                        return None;
+                    }
+                    if cap_inside(ctx, &tys[0].0, &mut HashSet::new()) {
+                        ctx.err("E101", *pos, "`json` cannot encode a capability".into());
+                        return None;
+                    }
+                    return Some((text, trusted));
+                }
+                _ => {}
+            }
+            if *f == Builtin::Contains && secret_inside(ctx, &tys[0].0, &mut HashSet::new()).is_some() {
+                ctx.err("E101", *pos, "`contains` cannot search secrets or headers: comparing them would reveal them".into());
+                return None;
+            }
             let ok = match f {
                 Builtin::Len => matches!(&tys[0].0, Ty::List(..)) || tys[0].0 == text,
                 Builtin::Contains => match (&tys[0].0, &tys[1].0) {
@@ -1483,6 +1645,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     _ => false,
                 },
                 Builtin::StartsWith | Builtin::EndsWith => tys[0].0 == text && tys[1].0 == text,
+                Builtin::Header | Builtin::Json | Builtin::FillSecret => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();
@@ -1490,6 +1653,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     Builtin::Len => "Text or a list",
                     Builtin::Contains => "(Text, Text) or (a list, a value of its element type)",
                     Builtin::StartsWith | Builtin::EndsWith => "(Text, Text)",
+                    Builtin::Header | Builtin::Json | Builtin::FillSecret => "",
                 };
                 ctx.err("E101", *pos, format!("`{}` needs {want}, found ({})", f.name(), found.join(", ")));
                 return None;
@@ -1497,10 +1661,27 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             let result = if *f == Builtin::Len { named("Int") } else { named("Bool") };
             Some((result, trusted))
         }
+        Expr::Parse { ty, text, pos } => {
+            check_ty_known(ctx, ty, *pos);
+            if let Some(bad) = runtime_only_inside(ctx, ty, &mut HashSet::new()) {
+                ctx.err("E101", *pos, format!("text from outside cannot be parsed into a {bad}: only the runtime creates one"));
+            }
+            if let Some(bad) = secret_inside(ctx, ty, &mut HashSet::new()) {
+                ctx.err("E101", *pos, format!("text cannot be parsed into a {bad}"));
+            }
+            let (tt, _) = type_of(ctx, text, env)?;
+            if tt != named("Text") {
+                let code = if matches!(tt, Ty::Proposed(_)) { "E001" } else { "E101" };
+                ctx.err(code, text.pos(), format!("`parse` needs Text, found {tt}"));
+                return None;
+            }
+            // Like model output: unchecked until validated, and never trusted.
+            Some((Ty::Proposed(Box::new(ty.clone())), false))
+        }
         Expr::Record { ty, fields, pos } => {
             // Outcome is a built-in record made only by `try`; other built-ins have no fields.
             let decl = match ctx.fields.get(ty) {
-                Some(d) if ty != "Outcome" => d.clone(),
+                Some(d) if ty != "Outcome" && ty != "Response" => d.clone(),
                 _ => {
                     if ctx.known.contains(ty) {
                         ctx.err("E101", *pos, format!("a {ty} cannot be built in code; only the runtime makes one"));
@@ -1633,6 +1814,10 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             let ordered = matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge);
             if matches!(lt, Ty::Cap { .. }) || matches!(rt, Ty::Cap { .. }) {
                 ctx.err("E101", *pos, "capabilities cannot be compared".into());
+            } else if secret_inside(ctx, &lt, &mut HashSet::new()).is_some()
+                || secret_inside(ctx, &rt, &mut HashSet::new()).is_some()
+            {
+                ctx.err("E101", *pos, "secrets and headers cannot be compared: a comparison would reveal them".into());
             } else if lt != rt {
                 ctx.err("E101", *pos, format!("cannot compare {lt} with {rt}"));
             } else if ordered && lt != named("Int") && lt != named("Money") {
@@ -1667,9 +1852,20 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                         );
                     }
                 }
+            if let Some(bad) = secret_inside(ctx, ty, &mut HashSet::new()) {
+                ctx.err("E101", *pos, format!("a model cannot produce a {bad}"));
+            }
             for d in data {
-                if let Some((Ty::Cap { .. }, _)) = type_of(ctx, d, env) {
-                    ctx.err("E101", d.pos(), "a capability cannot be sent to a model as data".into());
+                match type_of(ctx, d, env) {
+                    Some((Ty::Cap { .. }, _)) => {
+                        ctx.err("E101", d.pos(), "a capability cannot be sent to a model as data".into())
+                    }
+                    Some((t, _)) => {
+                        if let Some(bad) = secret_inside(ctx, &t, &mut HashSet::new()) {
+                            ctx.err("E101", d.pos(), format!("a {bad} cannot be sent to a model"));
+                        }
+                    }
+                    None => {}
                 }
             }
             Some((Ty::Proposed(Box::new(ty.clone())), false))
@@ -1715,20 +1911,25 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             Some((ret, ret_trusted))
         }
         Expr::Action { receiver, method, args, pos } => {
-            match env.get(receiver).map(|b| &b.ty) {
-                Some(Ty::Cap { path, .. }) if path.last() == Some(method) => {}
-                Some(Ty::Cap { path, .. }) => {
+            let cap_path = match env.get(receiver).map(|b| &b.ty) {
+                Some(Ty::Cap { path, .. }) => Some(path.clone()),
+                _ => None,
+            };
+            match &cap_path {
+                Some(path) if path.last() == Some(method) => {}
+                Some(path) => {
                     let p = path.join(".");
                     ctx.err("E002", *pos, format!("capability '{receiver}' is `cap {p}` and does not permit '{method}'"))
                 }
-                _ => ctx.err(
+                None => ctx.err(
                     "E002",
                     *pos,
                     format!("'{receiver}.{method}' acts on the world but '{receiver}' is not a capability in scope"),
                 ),
             }
-            for a in args {
-                if let Some((Ty::Proposed(inner), _)) = type_of(ctx, a, env) {
+            let arg_tys: Vec<Option<(Ty, bool)>> = args.iter().map(|a| type_of(ctx, a, env)).collect();
+            for (a, t) in args.iter().zip(&arg_tys) {
+                if let Some((Ty::Proposed(inner), _)) = t {
                     ctx.err(
                         "E001",
                         a.pos(),
@@ -1736,7 +1937,49 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     );
                 }
             }
-            Some((named("Receipt"), false))
+            let kind = cap_path.as_deref().and_then(runtime_cap);
+            let Some(kind) = kind else {
+                // An adapter's action: anything but secrets may be passed.
+                for (a, t) in args.iter().zip(&arg_tys) {
+                    if let Some((t, _)) = t
+                        && let Some(bad) = secret_inside(ctx, t, &mut HashSet::new())
+                    {
+                        ctx.err("E101", a.pos(), format!("a {bad} can only be sent as an HTTP header, through net.http"));
+                    }
+                }
+                return Some((named("Receipt"), false));
+            };
+            let text = named("Text");
+            let is_headers = |t: &Ty| matches!(t, Ty::List(el, _) if **el == named("Header"));
+            let tys: Vec<Ty> = arg_tys.iter().map(|t| t.as_ref().map_or(named("?"), |(t, _)| t.clone())).collect();
+            let (ok, want, result) = match kind {
+                RuntimeCap::Http { body } => {
+                    let base = if body { 2 } else { 1 };
+                    // A body may be a Secret: a template filled by `fill_secret`.
+                    let ok = (tys.len() == base || tys.len() == base + 1)
+                        && tys[0] == text
+                        && (!body || tys[1] == text || tys[1] == named("Secret"))
+                        && tys.get(base).is_none_or(is_headers);
+                    let want = if body {
+                        format!("{method}(url: Text, body: Text or Secret) or {method}(url, body, headers: List<Header, N>)")
+                    } else {
+                        format!("{method}(url: Text) or {method}(url, headers: List<Header, N>)")
+                    };
+                    (ok, want, named("Response"))
+                }
+                RuntimeCap::FsRead => (tys.len() == 1 && tys[0] == text, "read(path: Text)".to_string(), text.clone()),
+                RuntimeCap::FsWrite => (
+                    tys.len() == 2 && tys.iter().all(|t| *t == text),
+                    "write(path: Text, content: Text)".to_string(),
+                    named("Receipt"),
+                ),
+            };
+            if !ok && arg_tys.iter().all(Option::is_some) {
+                let found: Vec<String> = tys.iter().map(|t| t.to_string()).collect();
+                ctx.err("E101", *pos, format!("'{receiver}.{method}' takes {want}, found ({})", found.join(", ")));
+            }
+            // What comes back from the outside world is untrusted.
+            Some((result, false))
         }
     }
 }

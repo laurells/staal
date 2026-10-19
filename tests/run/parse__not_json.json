@@ -1,0 +1,1 @@
+{"entry":"read","inputs":{"body":"Service Unavailable"},"model": { "provider": "script", "responses": [] },"expect":{"failure":"validation","message_contains":"not JSON"}}

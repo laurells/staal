@@ -1,0 +1,5 @@
+// expect: E101
+// A header may hold a secret, so it cannot be sent to a model either.
+fn f(key: Secret) {
+    let s = propose(Text, data: [header("Authorization", key)], tokens: 10)
+}

@@ -1,0 +1,1 @@
+{"entry":"model","model":{"provider":"script","responses":[{"output":{"message_id":"9a","code":"ok","extra":1}}]},"expect":{"failure":"validation","message_contains":"no field 'extra'"}}

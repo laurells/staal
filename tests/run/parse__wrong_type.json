@@ -1,0 +1,1 @@
+{"entry":"read","inputs":{"body":"{\"message_id\":9,\"code\":\"ok\"}"},"model": { "provider": "script", "responses": [] },"expect":{"failure":"validation","message_contains":"expected a string"}}

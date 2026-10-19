@@ -1,0 +1,3 @@
+// expect: E101
+// A request spends no money the runtime can see, so a money limit would refuse everything.
+fn f(h: cap net.http.post(max: 5 USD)) {}

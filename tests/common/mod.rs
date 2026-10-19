@@ -2,6 +2,8 @@
 // See tests/run_test.rs for the expectation format.
 #![allow(dead_code)]
 
+pub mod server;
+
 use serde_json::Value as Json;
 use std::fs;
 use std::path::Path;

@@ -6,11 +6,13 @@ crash-safe execution.
 
 Status: the compiler, the interpreter, exact money, the capability broker,
 budgets, `try`, evidence and the crash-safe journal are built and tested.
-Roadmap phase 1, modules and reassignment, is complete. Not built yet: the
-general `net.http` and `fs` capabilities (phase 2), library-declared
-capabilities (phase 3), packages (phase 4), and the native-code backend and C
-interface (phase 5). Real model providers are not built either; only a
-scripted one exists.
+Roadmap phase 1 (modules and reassignment) is complete. Phase 2, the general
+`net.http` and `fs` capabilities, is built and tested against a local server
+and real files; sending through real services (`examples/`) is the step left,
+since it needs an account and network access. Not built yet:
+library-declared capabilities (phase 3), packages (phase 4), and the
+native-code backend and C interface (phase 5). Real model providers are not
+built either; only a scripted one exists.
 
 ## What it enforces today
 
@@ -36,8 +38,8 @@ scripted one exists.
 | E901 | Syntax error |
 
 All eight safety checks from the spec (E001-E008) are implemented. Phase 1's
-gate is met: every one is rejected by tests. 27 valid programs compile,
-including the two benchmark workflows (`workflow_*.int`), and 220 invalid ones
+gate is met: every one is rejected by tests. 29 valid programs compile,
+including the two benchmark workflows (`workflow_*.int`), and 244 invalid ones
 are each rejected with the expected code.
 
 Nothing in the compiler or runtime is specific to payments, email or any other
@@ -140,7 +142,7 @@ in which each name is qualified by its module (`send` in `sms/termii.int` is
 promises, budgets, trust, evidence and partial operations therefore hold
 across modules with no separate cross-module analysis. This is tested by
 splitting every test program in two (`tests/split_test.rs`): types and called
-functions move to a module, and every one of 131 splittable fixtures and 127
+functions move to a module, and every one of 135 splittable fixtures and 132
 runtime cases must give identical results. Mutations that hide one module's
 model calls, failures or costs from another are each caught.
 
@@ -477,10 +479,82 @@ adapter reports it. `"/contracts/../payroll"` starts with `/contracts/`, so
 an adapter for paths must report resolved paths, and the program refuses ids
 containing `/` or `..` before building one.
 
+## HTTP and files: `net.http` and `fs`
+
+    type Sms { to: Text, sms: Text, type: Text, api_key: Text }
+
+    fn send(to: Text, text: Text, key: Secret,
+            termii: cap net.http.post(only: ["https://api.ng.termii.com/api/sms/send"], uses: 1)) -> Text {
+        let body = fill_secret(json(Sms { to: to, sms: text, type: "plain", api_key: "{secret}" }), key)
+        let r = termii.post("https://api.ng.termii.com/api/sms/send", body, [header("Content-Type", "application/json")])
+        let reply: Reply = validate parse(Reply, r.body)
+        ...
+    }
+
+Two capability families belong to the runtime: `net.http.get/post/put/patch/delete`
+returning a `Response { status, body, complete }`, and `fs.read` / `fs.write`.
+Every existing limit applies to them, and every request and write goes through
+the journal. Libraries for real services are meant to be written on top of these
+(phase 3). The full rules are in `docs/RUNTIME.md` section 12. In short:
+
+- **Secrets** come only from environment variables named in the run config. A
+  `Secret` cannot become text, be compared, sit in a record, reach a model or go to
+  any other action: it can only be part of an HTTP request, as a header or a body
+  template (`fill_secret`). The journal and log record its variable name, never its
+  value, and the value is removed from every response before the program sees it.
+- **One spelling per target.** URLs are put into canonical form (WHATWG parsing,
+  then stricter rules: https only except localhost, no credentials in URLs, no
+  encoded slashes) and paths are normalised before `only` is checked, so
+  `/api/../admin` and `/api/%2e%2e/admin` cannot slip past `"https://x.org/api/*"`.
+  Patterns must be canonical, and a `*` cannot sit in the host.
+- **No surprises from HTTP.** Redirects are returned, never followed. Error
+  statuses are responses. The runtime owns `Host`, `Content-Length`,
+  `Idempotency-Key` and similar headers, and no header can smuggle in another.
+- **Files** are opened one directory at a time, never following a symbolic link,
+  so a folder swapped for a link mid-run cannot redirect a read or write. Reads
+  refuse special files and files with other hard links; writes are atomic.
+- **A request that may have happened is in doubt.** If a POST's connection breaks
+  after it was sent, the run stops `in_doubt` instead of failing, so the program
+  cannot retry and send twice, and an operator records what the server answered
+  (`intentc resolve --status 200 --body ...`). If the grant says the service
+  deduplicates (`"idempotency_key": true`), the runtime sends an
+  `Idempotency-Key` and retries safely instead.
+- **Data from services** is untrusted (never an instruction, E006) and unchecked
+  until validated (`parse` gives a `Proposed`, E001). Fields a type does not
+  declare are dropped; declared ones are checked exactly. Keywords such as `type`
+  can be field names, as JSON APIs need.
+
+How this is tested: 16 runtime tests against a local HTTP server check what the
+server received as well as what the program saw (secrets only in headers and
+bodies, never logs or journals; traversal and refused targets never sent; a
+`{secret}` smuggled into message text refused). `tests/http_crash_test.rs` kills a
+run at all 14 points of a program with a GET, a deduplicated POST, a plain POST and
+a file write, and checks each POST took effect exactly once. File access is tested
+against links in folders and files, loops, hard links, FIFOs, and a folder swapped
+for a link 11,000 times during 20,000 reads, with no leak. Twelve mutations of the
+guarantees are each caught: skipping URL normalisation, not removing secrets from
+responses, recording a secret's value in the journal, allowing a second
+`{secret}`, retrying every POST, not retrying a GET, dropping the
+Idempotency-Key, reporting "may have happened" as "not sent", following
+redirects, following a link in a folder, following a link as the file, and
+reading a file with other hard links.
+
+What these tests do not cover: real TLS servers (the tests use plain HTTP on
+localhost), and real services. `examples/` holds Termii SMS and Resend email
+programs with instructions to run them with your own keys.
+
 ## Requirements
 
 Rust 1.89 or newer (for `File::try_lock`), installed from https://rustup.rs.
-Developed with cargo 1.97.0. Dependencies: `serde_json`, `sha2` and `getrandom`.
+Developed with cargo 1.97.0. Dependencies: `serde_json`, `sha2`, `getrandom`,
+`libc` (safe file opening), `url` (WHATWG URL parsing) and `ureq` with `rustls`
+(HTTPS, with the ring provider and Mozilla's root certificates; no compression,
+cookies or proxies unless configured).
+
+`scripts/audit.sh` checks every dependency in `Cargo.lock` against the RustSec
+advisory database and fails on any advisory or warning (`cargo audit --deny
+warnings`). At this release: 84 crates, none flagged. It needs network access for
+the database, so it is run by hand or in CI, not by `cargo test`.
 
 ## Use
 
@@ -510,6 +584,9 @@ To add a rule, write the failing program first, then make the checker reject it.
     src/budget.rs   worst-case model cost (E004, E005)
     src/pattern.rs  `only` patterns: matching and containment
     src/modules.rs  loading module files, resolving names across them (E106, E107)
+    src/targets.rs  canonical URLs and paths for `only`
+    src/interp/http.rs  the HTTP client, and what is known about each request
+    src/interp/fsx.rs   safe file access: no links followed, atomic writes
     src/interp/     reference runtime: interpreter, money, broker, adapters,
                     model providers, journal
     src/main.rs     command-line interface

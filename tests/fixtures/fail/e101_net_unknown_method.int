@@ -1,0 +1,3 @@
+// expect: E101
+// Only the HTTP methods the runtime implements.
+fn f(h: cap net.http.fetch) {}

@@ -1,0 +1,9 @@
+// expect: E008 E008
+// try around an HTTP request holds a response, not a receipt.
+fn f(h: cap net.http.post) -> Done {
+    let r = try h.post("https://x.org/", "x")
+    if r.ok {
+        return done(evidence: [r])
+    }
+    return done(evidence: [r])
+}

@@ -1,0 +1,21 @@
+// Send one email through Resend (https://resend.com). How to run it: examples/README.md.
+//
+// The API key goes only into the Authorization header. Resend deduplicates requests by
+// Idempotency-Key, so run.json says so and the runtime sends one: a run interrupted
+// while sending can be resumed without sending twice (within Resend's 24 hours).
+
+type Email { from: Text, to: List<Text, 10>, subject: Text, text: Text }
+type Sent { id: Text }
+
+fn send(to: Text, subject: Text, text: Text, sender: Text, key: Secret,
+        resend: cap net.http.post(only: ["https://api.resend.com/emails"], uses: 1)) -> Text {
+    let email = Email { from: sender, to: [to], subject: subject, text: text }
+    let r = resend.post("https://api.resend.com/emails", json(email),
+                        [header("Authorization", fill_secret("Bearer {secret}", key)),
+                         header("Content-Type", "application/json")])
+    if r.status != 200 or not r.complete {
+        return "Resend answered " + json(r.status) + ": " + r.body
+    }
+    let sent: Sent = validate parse(Sent, r.body)
+    return "sent, email id " + sent.id
+}

@@ -1,0 +1,5 @@
+// expect: E101
+// A header value is Text or a Secret.
+fn f() -> Header {
+    return header("X-Count", 5)
+}

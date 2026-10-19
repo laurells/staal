@@ -3,7 +3,8 @@
 //   intentc check   <file.int>
 //   intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>]
 //   intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>]
-//   intentc resolve --journal <run.journal> (--performed <receipt> | --failed <reason> | --retry)
+//   intentc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
+//                                            | --failed <reason> | --retry)
 //
 // Exit codes:
 //   0  success
@@ -21,7 +22,8 @@ const USAGE: &str = "usage:
   intentc check   <file.int>
   intentc run     <file.int> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>]
   intentc resume  <file.int> --config <run.json> --journal <run.journal> [--log <run.jsonl>]
-  intentc resolve --journal <run.journal> (--performed <receipt> | --failed <reason> | --retry)";
+  intentc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
+                                           | --failed <reason> | --retry)";
 
 fn usage_error(msg: &str) -> ExitCode {
     eprintln!("intentc: {msg}\n{USAGE}");
@@ -56,7 +58,7 @@ fn main() -> ExitCode {
             Ok((None, _)) => usage_error("resume needs a program file"),
             Err(e) => usage_error(&e),
         },
-        "resolve" => match parse(rest, &["--journal", "--performed", "--failed", "--retry"], &["--journal"]) {
+        "resolve" => match parse(rest, &["--journal", "--performed", "--status", "--body", "--failed", "--retry"], &["--journal"]) {
             Ok((None, opts)) => resolve(&opts),
             Ok((Some(extra), _)) => usage_error(&format!("unexpected argument {extra}")),
             Err(e) => usage_error(&e),
@@ -205,11 +207,22 @@ fn run(file: &str, config: &str, durability: Durability, log: Option<&String>) -
 }
 
 fn resolve(opts: &HashMap<String, String>) -> ExitCode {
-    let resolution = match (opts.get("--performed"), opts.get("--failed"), opts.contains_key("--retry")) {
-        (Some(receipt), None, false) => journal::Resolution::Performed { receipt: receipt.clone() },
-        (None, Some(reason), false) => journal::Resolution::Failed { message: reason.clone() },
-        (None, None, true) => journal::Resolution::Retry,
-        _ => return usage_error("resolve needs exactly one of --performed <receipt>, --failed <reason> or --retry"),
+    let given = ["--performed", "--status", "--failed", "--retry"].iter().filter(|k| opts.contains_key(**k)).count();
+    if given != 1 {
+        return usage_error("resolve needs exactly one of --performed <receipt>, --status <code>, --failed <reason> or --retry");
+    }
+    if opts.contains_key("--body") && !opts.contains_key("--status") {
+        return usage_error("--body goes with --status");
+    }
+    let resolution = if let Some(receipt) = opts.get("--performed") {
+        journal::Resolution::Performed { receipt: receipt.clone() }
+    } else if let Some(code) = opts.get("--status") {
+        let Ok(status) = code.parse::<u16>() else { return usage_error("--status needs an HTTP status code such as 200") };
+        journal::Resolution::Responded { status, body: opts.get("--body").cloned().unwrap_or_default() }
+    } else if let Some(reason) = opts.get("--failed") {
+        journal::Resolution::Failed { message: reason.clone() }
+    } else {
+        journal::Resolution::Retry
     };
     match journal::Journal::resolve(Path::new(&opts["--journal"]), resolution) {
         Ok(summary) => {

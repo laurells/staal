@@ -1,0 +1,12 @@
+{
+  "entry": "send",
+  "inputs": {
+    "to": "2348012345678",
+    "text": "Hello from Intent.",
+    "sender": "YourSenderID",
+    "channel": "generic"
+  },
+  "secrets": { "key": { "env": "TERMII_API_KEY" } },
+  "grants": { "termii": { "cap": "net.http.post" } },
+  "model": { "provider": "script", "responses": [] }
+}

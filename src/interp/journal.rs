@@ -61,6 +61,9 @@ pub enum Step {
 pub enum Resolution {
     /// It happened; this is the service's receipt.
     Performed { receipt: String },
+    /// An HTTP request happened and was answered with this status and body (only for
+    /// `net.http` actions, whose result is a response rather than a receipt).
+    Responded { status: u16, body: String },
     /// Treat it as failed: the program sees an action failure.
     Failed { message: String },
     /// It did not happen: perform it on resume. The authorization covers one attempt;
@@ -105,7 +108,12 @@ impl Journal {
     /// Creates a new journal for a new run. Fails if the file already exists.
     pub fn create(path: &Path, program_sha256: &str, config_sha256: &str) -> Result<Journal, String> {
         let shown = path.display();
-        let file = OpenOptions::new().append(true).create_new(true).open(path).map_err(|e| {
+        let mut opts = OpenOptions::new();
+        opts.append(true).create_new(true);
+        // A journal holds what the run sent and received: readable by its owner only.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        let file = opts.open(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
                 format!("journal {shown} already exists; use `intentc resume` to continue that run")
             } else {
@@ -169,8 +177,26 @@ impl Journal {
             intent["body"]["capability"].as_str().unwrap_or("?"),
             intent["body"]["method"].as_str().unwrap_or("?")
         );
+        let http = intent["body"]["capability"].as_str().is_some_and(|c| c.starts_with("net.http."));
         let mut j = Journal::with(Some(file), String::new(), VecDeque::new(), None);
         let (result, summary) = match resolution {
+            Resolution::Performed { .. } if http => {
+                return Err(format!(
+                    "{what} is an HTTP request: record what the server answered with --status <code> [--body <text>]"
+                ))
+            }
+            Resolution::Responded { .. } if !http => {
+                return Err(format!("{what} is not an HTTP request: record it with --performed <receipt>"))
+            }
+            Resolution::Responded { status, body } => {
+                if !(100..=599).contains(&status) {
+                    return Err(format!("--status {status} is not an HTTP status code"));
+                }
+                (
+                    Ok(json!({ "status": status, "body": body, "complete": true })),
+                    format!("recorded {what} (operation {n}) as answered with status {status}"),
+                )
+            }
             Resolution::Retry => {
                 j.write(&json!({ "j": "retry", "n": n }))?;
                 return Ok(format!("authorized one more attempt at {what} (operation {n})"));
