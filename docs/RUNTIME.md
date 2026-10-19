@@ -750,7 +750,7 @@ is pinned to its exact text by hash, so it cannot change after it was reviewed.
 
 ## 14. Packages
 
-A project is the folder holding the entry file. Without an `staal.json` there, a
+A project is the folder holding the entry file. Without a `staal.json` there, a
 program has no packages and imports only its own files (section 11 and the README).
 
 ### Manifests
@@ -759,13 +759,13 @@ The project's `staal.json` names its dependencies, each by git location and full
 commit id:
 
     { "dependencies": {
-        "sms": { "git": "https://github.com/you/staal-sms", "commit": "<40 lowercase hex digits>" } } }
+        "sms": { "git": "https://github.com/laurells/staal-sms", "commit": "<40 lowercase hex digits>" } } }
 
 A location is `https://`, `ssh://`, `user@host:path`, `file://` or an absolute path.
 Plain `http://` and `git://` are refused. A branch or tag name is refused: they can
 move, and a dependency must name exactly one tree of files.
 
-A package is a git repository with an `staal.json` at its root:
+A package is a git repository with a `staal.json` at its root:
 
     { "package": "sms", "version": "0.1.0",
       "authority": { "net.http.post": ["https://api.ng.termii.com/api/sms/send"] },

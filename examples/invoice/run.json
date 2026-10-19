@@ -1,0 +1,10 @@
+{
+  "entry": "total",
+  "inputs": {
+    "lines": [
+      { "item": "Design", "price": { "amount": "150000.00", "currency": "NGN" }, "qty": 1 },
+      { "item": "Hosting (month)", "price": { "amount": "12500.50", "currency": "NGN" }, "qty": 3 }
+    ]
+  },
+  "model": { "provider": "script", "responses": [] }
+}

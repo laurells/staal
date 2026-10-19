@@ -7,6 +7,10 @@ server, but not against the real services: the machine they were built on cannot
 reach the internet. Running them is the remaining step of roadmap phases 2 and 3,
 and needs your own accounts and keys.
 
+For a first program that needs no account, see `invoice/`:
+
+    staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
+
 Build staalc first:
 
     cargo build --release

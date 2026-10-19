@@ -9,10 +9,14 @@ Four Staal packages, written as references for how a service becomes a library:
 | `email` | `email.resend.send(to @target, subject, text)` | Resend | POST `https://api.resend.com/emails` |
 | `chat` | `chat.slack.post(channel @target, text)` | Slack | POST `https://slack.com/api/chat.postMessage` |
 
-Each folder is one package: publish it as its own git repository (the folder's
-contents at the repository's root), then depend on it by URL and commit:
+Each folder is one package, also published as its own repository
+([staal-sms](https://github.com/laurells/staal-sms),
+[staal-payments](https://github.com/laurells/staal-payments),
+[staal-email](https://github.com/laurells/staal-email),
+[staal-chat](https://github.com/laurells/staal-chat)). Depend on one by URL and
+commit:
 
-    { "dependencies": { "sms": { "git": "https://github.com/you/staal-sms", "commit": "<full commit id>" } } }
+    { "dependencies": { "sms": { "git": "https://github.com/laurells/staal-sms", "commit": "<full commit id>" } } }
 
 and run `staalc fetch`. The grant for each capability supplies its `needs`
 (`docs/RUNTIME.md` section 13): the HTTP capability, the key from an environment

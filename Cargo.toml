@@ -2,6 +2,11 @@
 name = "staalc"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.89"
+description = "The Staal compiler and reference runtime"
+repository = "https://github.com/laurells/staal"
+readme = "README.md"
+publish = false
 
 [lib]
 # rlib for the command line and tests; cdylib for the C interface (src/capi.rs),

@@ -248,7 +248,7 @@ impl Lock {
         let v: Json = serde_json::from_str(text).map_err(|e| format!("{at}: not valid JSON: {e}"))?;
         let obj = v.as_object().ok_or(format!("{at}: expected an object"))?;
         if obj.get("staal_lock") != Some(&json!(1)) {
-            return Err(format!("{at}: not an staal.lock of version 1"));
+            return Err(format!("{at}: not a staal.lock of version 1"));
         }
         for k in obj.keys() {
             if k != "staal_lock" && k != "packages" {

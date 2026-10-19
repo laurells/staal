@@ -1,0 +1,31 @@
+// A support agent: a model reads a customer's complaint and proposes a refund.
+// The program checks the proposal, refunds within the operator's limits, and
+// texts the customer. The complaint is untrusted: it can inform the model, but
+// can never become an instruction, and the model's answer is checked before use.
+
+import stripe
+import termii
+
+type Decision { refund: Bool, cents: Int, reason: Text }
+
+fn handle(complaint: Text, payment: Text, phone: Text,
+          refunds: cap stripe.refunds.create(max: 100 USD, each: 50 USD),
+          texts: cap termii.sms.send(uses: 1)) -> Text {
+    let proposed = propose(Decision,
+        instruct: "Decide whether this complaint deserves a refund, and how many US cents, at most 5000.",
+        data: [complaint])
+    let d: Decision = validate proposed
+    if not d.refund or d.cents <= 0 or d.cents > 5000 {
+        return "no refund: " + d.reason
+    }
+    let amount = 0.01 USD * d.cents
+    let r = try refunds.create(payment, amount)
+    if not r.ok {
+        return "refund failed: " + r.error
+    }
+    let t = try texts.send(phone, "Your refund is on its way.")
+    if not t.ok {
+        return "refunded; the text failed: " + t.error
+    }
+    return "refunded and texted: " + d.reason
+}

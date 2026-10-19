@@ -1,0 +1,16 @@
+// A first Staal program: an invoice total in exact money.
+// Run it with: staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
+
+type Line { item: Text, price: Money, qty: Int }
+
+fn line_total(line: Line) -> Money {
+    return line.price * line.qty
+}
+
+fn total(lines: List<Line, 20>) -> Money {
+    let sum = 0.00 NGN
+    for line in lines {
+        set sum = sum + line_total(line)
+    }
+    return sum
+}

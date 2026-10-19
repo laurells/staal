@@ -265,7 +265,7 @@ pub unsafe extern "C" fn staal_resolve(journal_path: *const c_char, resolution_j
 /// Frees a string returned by this library. NULL is ignored.
 ///
 /// # Safety
-/// `s` must be NULL or a string returned by an `staal_*` function, freed only once.
+/// `s` must be NULL or a string returned by a `staal_*` function, freed only once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn staal_free(s: *mut c_char) {
     if !s.is_null() {
