@@ -213,12 +213,41 @@ pub fn run_engine(
     adapter: Box<dyn Adapter + Send>,
     engine: Engine,
 ) -> Result<RunResult, String> {
-    // Validate everything first: a bad config must not even create a journal.
-    let setup = Setup::from_config(prog, config)?;
     let native = match engine {
         Engine::Interpreter => None,
         Engine::Native => Some(compile_native(prog)?),
     };
+    run_impl(prog, source, config, durability, provider, adapter, native)
+}
+
+/// Runs a checked program with native code made before the run: the code linked into
+/// an executable by `intentc build`.
+#[cfg(feature = "native")]
+pub fn run_config_with_native(
+    prog: &Program,
+    source: &str,
+    config: &Json,
+    durability: Durability,
+    native: crate::native::Native,
+) -> Result<RunResult, String> {
+    let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
+    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
+    let provider = ScriptProvider::from_config(model)?;
+    let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
+    run_impl(prog, source, config, durability, Box::new(provider), Box::new(adapter), Some(native))
+}
+
+fn run_impl(
+    prog: &Program,
+    source: &str,
+    config: &Json,
+    durability: Durability,
+    provider: Box<dyn Provider + Send>,
+    adapter: Box<dyn Adapter + Send>,
+    native: Option<NativeCode>,
+) -> Result<RunResult, String> {
+    // Validate everything first: a bad config must not even create a journal.
+    let setup = Setup::from_config(prog, config)?;
     let program_sha = journal::sha256_hex(source.as_bytes());
     let config_sha = journal::sha256_hex(config.to_string().as_bytes());
     let journal = match durability {

@@ -5,8 +5,9 @@ edition = "2024"
 
 [lib]
 # rlib for the command line and tests; cdylib for the C interface (src/capi.rs),
-# which other languages load as libintentc.so / libintentc.dylib.
-crate-type = ["rlib", "cdylib"]
+# which other languages load as libintentc.so / libintentc.dylib;
+# staticlib: the runtime `intentc build` links into each executable.
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 getrandom = "0.4.3"
@@ -31,10 +32,12 @@ cranelift-frontend = { version = "=0.136.2", optional = true }
 cranelift-jit = { version = "=0.136.2", optional = true }
 cranelift-module = { version = "=0.136.2", optional = true }
 cranelift-native = { version = "=0.136.2", optional = true }
+# Object files for `intentc build` (ahead-of-time executables).
+cranelift-object = { version = "=0.136.2", optional = true }
 
 [features]
 default = ["native"]
-native = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-native"]
+native = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-native", "dep:cranelift-object"]
 # Test-only crash injection for the journal (src/interp/journal.rs). Never enable in
 # a production build.
 failpoints = []

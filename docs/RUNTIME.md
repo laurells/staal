@@ -915,3 +915,33 @@ panic inside the library, which is caught and never unwinds into the caller. Run
 share no state and may be made from several threads. Never use one journal for two
 runs at once: the journal's lock is tested between processes (section 11), not
 between threads of one process.
+
+## 17. Executables
+
+`intentc build <file.int> -o <executable> [--runtime <libintentc.a>]` makes a
+standalone executable (Linux only, for now; elsewhere it refuses):
+
+1. The program is checked as by `intentc check`, packages and authority included. A
+   program with errors is not built (exit 1).
+2. Every function that qualifies for native code (section 15) is compiled into an
+   object file. Code is generated for the baseline of the target processor family,
+   not for features of the build machine, so the executable runs on any machine of
+   that family.
+3. The object file also holds the program's source files (the entry file, every
+   module and every package module, with how each import was resolved), the SHA-256
+   of the program's fingerprint (section 11), the names of the compiled functions,
+   and the constants and record layouts their code uses.
+4. It is linked with the runtime, `libintentc.a` (found next to `intentc`, or given
+   with `--runtime`), using `cc`.
+
+The executable takes `run`, `resume` and `resolve` as `intentc` does, without the
+program file, with the same options (except `--engine`) and exit codes. When it
+starts, it loads and checks its program again from the sources it carries (package
+authority is not checked again: it needs the manifests, and was checked when it was
+built), and refuses to run (exit 2) unless the program's fingerprint matches the one
+recorded and its native functions are exactly the compiled ones. Functions without
+native code run on the interpreter.
+
+Its journals are bound to the program's fingerprint, as `intentc`'s are, and not to
+how it is run: a run started by the executable can be resumed by `intentc resume`
+with the same program, and the other way round.

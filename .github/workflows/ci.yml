@@ -1,0 +1,28 @@
+# Builds and tests intentc on Linux and macOS: macos-15 is Apple Silicon (arm64),
+# macos-15-intel is Intel (x86_64; GitHub supports it until the macOS 15 image retires).
+# Everything in `cargo test`, with crash injection, plus the build without native code.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup toolchain install 1.97.0 --profile minimal --component clippy && rustup default 1.97.0
+      - name: Versions
+        run: rustc --version && cargo --version && git --version && python3 --version
+      - name: Tests, with crash injection
+        run: cargo test --features failpoints --no-fail-fast
+      - name: Tests without native code
+        run: cargo test --no-default-features --no-fail-fast
+      - name: Clippy
+        run: cargo clippy --all-targets --features failpoints -- -D warnings

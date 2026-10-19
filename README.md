@@ -17,9 +17,10 @@ made by the tests; fetching from a public host, and a real SMS through a
 package, are left. Phase 5 is built: pure functions (Int, Bool, Text, Money,
 records and lists) compile to native code through Cranelift, and a C interface
 lets any language run programs (Python is tested). Functions that call models,
-act, or use `try`, `parse` or `validate` stay on the interpreter. Not built yet:
-ahead-of-time executables, macOS and Windows runs, and an installable Python
-package. Real model providers are not built; only a scripted one exists.
+act, or use `try`, `parse` or `validate` stay on the interpreter. `intentc build`
+makes a standalone executable (Linux). Not run yet: macOS (a CI workflow for it is
+ready) and Windows; not built: an installable Python package. Real model providers
+are not built; only a scripted one exists.
 
 ## What it enforces today
 
@@ -757,10 +758,37 @@ copying; record fields stored in the order written; a helper's failure ignored;
 swapped operands; and a field read that moves the record out of its variable. A
 Python script runs every clinic case through the shared library on both engines.
 
-What is not built: compiling ahead of time to an executable (native code is made in
-memory when a run starts); runs on macOS and Windows; an installable Python package;
-and calling C libraries from Intent, which the plan leaves for last because the
-broker could not check them.
+### Executables
+
+    intentc build clinic.int -o clinic
+    ./clinic run --config run.json --journal run.journal
+
+`intentc build` checks the program, compiles its native functions into an object
+file with Cranelift for the baseline of this processor family (so the executable
+runs on any x86-64 Linux machine, not only this one), and links it with the runtime
+(`libintentc.a`, built next to `intentc`) using `cc`. The executable carries the
+program's source files, modules and packages included: it checks them again when it
+starts, refuses to run if they are not exactly the program its code was made from,
+and runs functions without native code on the interpreter. Its journals are the same
+as `intentc`'s, so a run started by one can be resumed by the other. In a release
+build an executable is about 23 MB (13 MB stripped) and needs only the system's C
+library; the recursive Int program above runs in 0.015 s, against 0.018 s for
+`intentc --engine native`, which compiles when the run starts.
+
+How this is tested: every runtime case, run by its built executable, gives the same
+exit code, output, log and journal as `intentc run`; a program with modules runs as
+an executable; a run crashed at every journal point by the executable resumes under
+`intentc`, and the other way round, with the same result and world; an executable
+whose embedded program was changed by one character refuses to run; build errors are
+reported. Five mutations are each caught: the program check skipped, the native code
+table out of order, constants or record layouts lost, and running through the
+in-memory compiler instead of the linked code.
+
+What is not built: executables on macOS and Windows (`intentc build` refuses there
+for now); runs on macOS (`.github/workflows/ci.yml` runs every test on macOS, Apple
+Silicon and Intel, once the code is on GitHub); an installable Python package; and
+calling C libraries from Intent, which the plan leaves for last because the broker
+could not check them.
 
 ## Requirements
 
@@ -772,8 +800,8 @@ configured), `rustls` itself (named only to recognise handshake errors) and
 `webpki-root-certs` (Mozilla's root certificates), and Cranelift 0.136.2
 (`cranelift-codegen`, `-frontend`, `-jit`, `-module`, `-native`) for native code,
 behind the default `native` feature: `cargo build --no-default-features` builds
-without it. Tests also use `rcgen` to make certificates, and `python3` for the
-C-interface test.
+without it. `intentc build` also needs a C compiler (`cc`) to link executables. Tests
+also use `rcgen` to make certificates, and `python3` for the C-interface test.
 
 `scripts/audit.sh` checks every dependency in `Cargo.lock` against the RustSec
 advisory database and fails on any advisory or warning (`cargo audit --deny
@@ -788,7 +816,8 @@ the database, so it is run by hand or in CI, not by `cargo test`.
 
 `intentc check` exits 0 when the program is valid and 1 when it has errors.
 `intentc run ... --engine native` runs pure functions as native code (the default
-engine is the interpreter).
+engine is the interpreter). `intentc build program.int -o app` makes an executable
+that takes `run`, `resume` and `resolve` like `intentc`, without the program file.
 `intentc fetch [folder]` fetches the packages a project's `intent.json` names;
 it exits 2 if anything is wrong, and then changes nothing.
 
@@ -815,6 +844,7 @@ To add a rule, write the failing program first, then make the checker reject it.
     src/packages.rs manifests, intent.lock, fetching from git, authority (E108)
     src/native.rs   native code for pure Int and Bool functions (Cranelift)
     src/capi.rs     the C interface; include/intent.h declares it
+    src/cli.rs      the command line, `intentc build`, and built executables' entry
     python/intent/  the Python wrapper over the C interface
     src/targets.rs  canonical URLs and paths for `only`
     src/interp/http.rs  the HTTP client, and what is known about each request

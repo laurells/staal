@@ -34,7 +34,8 @@
 // 0; every caller checks `failed` after each call or fallible helper, and returns.
 
 use crate::ast::{ArithOp, Builtin, CmpOp, Expr, FnDecl, LogicOp, Program, Stmt, Ty};
-use crate::interp::value::Value;
+use crate::interp::value::{from_json, to_json, Value};
+use serde_json::{json, Value as Json};
 use crate::interp::{arith, arith_failure, builtin, compare, depth_limit, list_index, neg, step_limit, Failure, FailKind};
 use cranelift_codegen::ir::{
     self, condcodes::IntCC, types, AbiParam, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, UserFuncName,
@@ -121,6 +122,7 @@ const OFF_MAX_DEPTH: i32 = 24;
 const OFF_FAILED: i32 = 32;
 
 /// Constants and names the generated code refers to by number.
+#[derive(Default)]
 struct Tables {
     consts: Vec<Value>,
     /// Record type name and its field names in declaration order.
@@ -203,18 +205,24 @@ fn tables<'a>(c: &Ctx) -> Result<&'a Tables, Failure> {
     Ok(unsafe { &*c.tables })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_step_limit")]
 extern "C" fn rt_step_limit(c: *mut Ctx) {
     let c = ctx(c);
     let f = step_limit(c.max_steps);
     record(c, f);
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_depth_limit")]
 extern "C" fn rt_depth_limit(c: *mut Ctx) {
     let c = ctx(c);
     let f = depth_limit(c.max_depth);
     record(c, f);
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_arith")]
 extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
     let f = match arith_op(op) {
         Some(op) => arith_failure(op, a, b),
@@ -223,6 +231,8 @@ extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
     record(ctx(c), f);
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_neg")]
 extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
     let f = match neg(a) {
         Err(f) => f,
@@ -231,10 +241,14 @@ extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
     record(ctx(c), f);
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_no_return")]
 extern "C" fn rt_no_return(c: *mut Ctx) {
     record(ctx(c), internal("a native function finished without returning a value"));
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_const")]
 extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
     guard(c, |c| {
         let v = usize::try_from(idx).ok().and_then(|i| tables(c).ok()?.consts.get(i)).cloned();
@@ -243,6 +257,8 @@ extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
     })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_clone")]
 extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
     guard(c, |c| {
         let v = c.get(h)?.clone();
@@ -250,14 +266,20 @@ extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
     })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_drop")]
 extern "C" fn rt_drop(c: *mut Ctx, h: i64) {
     guard(c, |c| c.take(h).map(|_| 0));
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_box")]
 extern "C" fn rt_box(c: *mut Ctx, kind: i64, v: i64) -> i64 {
     guard(c, |c| Ok(c.put(if kind == 0 { Value::Int(v) } else { Value::Bool(v != 0) })))
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_unbox")]
 extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
     guard(c, |c| match c.take(h)? {
         Value::Int(n) => Ok(n),
@@ -266,6 +288,8 @@ extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
     })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_arith_val")]
 extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
     guard(c, |c| {
         let op = arith_op(op).ok_or_else(|| internal("native code: unknown operator"))?;
@@ -275,6 +299,8 @@ extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
     })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_cmp")]
 extern "C" fn rt_cmp(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
     guard(c, |c| {
         let op = usize::try_from(op).ok().and_then(|i| CMPS.get(i)).copied();
@@ -296,6 +322,8 @@ fn take_args(c: &mut Ctx, argv: *const i64, n: i64) -> Result<Vec<Value>, Failur
     Ok(out)
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_builtin")]
 extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
     guard(c, |c| {
         let f = usize::try_from(code).ok().and_then(|i| BUILTINS.get(i)).copied();
@@ -306,6 +334,8 @@ extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i6
     })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_record")]
 extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
     guard(c, |c| {
         let t = tables(c)?;
@@ -320,6 +350,8 @@ extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 
     })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_field")]
 extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
     guard(c, |c| {
         let t = tables(c)?;
@@ -337,6 +369,8 @@ extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 
 /// A copy of field `idx` of the record in `h`, which stays owned by the caller: a
 /// field read from a variable copies the field, not the whole record.
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_field_ref")]
 extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
     guard(c, |c| {
         let t = tables(c)?;
@@ -354,6 +388,8 @@ extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 }
 
 /// Item `i` of the list in `h`, which stays owned by the caller.
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_index_ref")]
 extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
     guard(c, |c| {
         let v = match c.get(list)? {
@@ -364,6 +400,8 @@ extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
     })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_list")]
 extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     guard(c, |c| {
         let vals = take_args(c, argv, n)?;
@@ -371,6 +409,8 @@ extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_index")]
 extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
     guard(c, |c| match c.take(list)? {
         Value::List(items) => {
@@ -382,6 +422,8 @@ extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
 }
 
 /// The length of a list, which stays owned by the caller.
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_list_len")]
 extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
     guard(c, |c| match c.get(list)? {
         Value::List(items) => Ok(items.len() as i64),
@@ -390,6 +432,8 @@ extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
 }
 
 /// A copy of item `i` of a list, which stays owned by the caller.
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_list_get")]
 extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
     guard(c, |c| {
         let v = match c.get(list)? {
@@ -401,6 +445,8 @@ extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
     })
 }
 
+// Exported so `intentc build` executables link to it by name.
+#[unsafe(export_name = "intent_rt_fail")]
 extern "C" fn rt_fail(c: *mut Ctx, h: i64) {
     guard(c, |c| {
         Err(match c.take(h)? {
@@ -737,162 +783,49 @@ impl Native {
     /// Compiles every eligible function. Nothing is compiled for a program with none.
     pub fn compile(prog: &Program) -> Result<Native, String> {
         let set = eligible(prog);
-        let mut tables = Box::new(Tables { consts: Vec::new(), records: Vec::new(), fields: Vec::new() });
         if set.is_empty() {
-            return Ok(Native { module: None, entries: HashMap::new(), tables });
+            return Ok(Native { module: None, entries: HashMap::new(), tables: Box::new(Tables::default()) });
         }
-        let env = Env::new(prog);
-        let mut flags = settings::builder();
-        flags.set("opt_level", "speed").map_err(|e| e.to_string())?;
-        flags.set("is_pic", "false").map_err(|e| e.to_string())?;
-        flags.set("use_colocated_libcalls", "false").map_err(|e| e.to_string())?;
-        let isa = cranelift_native::builder()
-            .map_err(|e| format!("native code is not available on this machine: {e}"))?
-            .finish(settings::Flags::new(flags))
-            .map_err(|e| e.to_string())?;
+        let isa = isa(true)?;
         let mut jb = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-        let syms: [(&str, *const u8); 22] = [
-            ("intent_rt_field_ref", rt_field_ref as *const u8),
-            ("intent_rt_index_ref", rt_index_ref as *const u8),
-            ("intent_rt_step_limit", rt_step_limit as *const u8),
-            ("intent_rt_depth_limit", rt_depth_limit as *const u8),
-            ("intent_rt_arith", rt_arith as *const u8),
-            ("intent_rt_neg", rt_neg as *const u8),
-            ("intent_rt_no_return", rt_no_return as *const u8),
-            ("intent_rt_const", rt_const as *const u8),
-            ("intent_rt_clone", rt_clone as *const u8),
-            ("intent_rt_drop", rt_drop as *const u8),
-            ("intent_rt_box", rt_box as *const u8),
-            ("intent_rt_unbox", rt_unbox as *const u8),
-            ("intent_rt_arith_val", rt_arith_val as *const u8),
-            ("intent_rt_cmp", rt_cmp as *const u8),
-            ("intent_rt_builtin", rt_builtin as *const u8),
-            ("intent_rt_record", rt_record as *const u8),
-            ("intent_rt_field", rt_field as *const u8),
-            ("intent_rt_list", rt_list as *const u8),
-            ("intent_rt_index", rt_index as *const u8),
-            ("intent_rt_list_len", rt_list_len as *const u8),
-            ("intent_rt_list_get", rt_list_get as *const u8),
-            ("intent_rt_fail", rt_fail as *const u8),
-        ];
-        for (n, p) in syms {
-            jb.symbol(n, p);
+        for (n, p) in HELPER_SYMBOLS {
+            jb.symbol(*n, *p);
         }
         let mut module = JITModule::new(jb);
-        if module.target_config().pointer_type() != types::I64 {
-            return Err("native code needs a 64-bit machine".into());
-        }
-        // A helper takes ctx and `extra` i64 values, and returns one if `ret`.
-        let helper = |m: &mut JITModule, name: &str, extra: usize, ret: bool| -> Result<FuncId, String> {
-            let mut sig = m.make_signature();
-            for _ in 0..=extra {
-                sig.params.push(AbiParam::new(types::I64));
-            }
-            if ret {
-                sig.returns.push(AbiParam::new(types::I64));
-            }
-            m.declare_function(name, Linkage::Import, &sig).map_err(|e| e.to_string())
-        };
-        let h = Helpers {
-            step: helper(&mut module, "intent_rt_step_limit", 0, false)?,
-            depth: helper(&mut module, "intent_rt_depth_limit", 0, false)?,
-            arith: helper(&mut module, "intent_rt_arith", 3, false)?,
-            neg: helper(&mut module, "intent_rt_neg", 1, false)?,
-            no_return: helper(&mut module, "intent_rt_no_return", 0, false)?,
-            konst: helper(&mut module, "intent_rt_const", 1, true)?,
-            clone: helper(&mut module, "intent_rt_clone", 1, true)?,
-            drop: helper(&mut module, "intent_rt_drop", 1, false)?,
-            boxv: helper(&mut module, "intent_rt_box", 2, true)?,
-            unbox: helper(&mut module, "intent_rt_unbox", 1, true)?,
-            arith_val: helper(&mut module, "intent_rt_arith_val", 3, true)?,
-            cmp: helper(&mut module, "intent_rt_cmp", 3, true)?,
-            builtin: helper(&mut module, "intent_rt_builtin", 3, true)?,
-            record: helper(&mut module, "intent_rt_record", 3, true)?,
-            field: helper(&mut module, "intent_rt_field", 2, true)?,
-            field_ref: helper(&mut module, "intent_rt_field_ref", 2, true)?,
-            index_ref: helper(&mut module, "intent_rt_index_ref", 2, true)?,
-            list: helper(&mut module, "intent_rt_list", 2, true)?,
-            index: helper(&mut module, "intent_rt_index", 2, true)?,
-            list_len: helper(&mut module, "intent_rt_list_len", 1, true)?,
-            list_get: helper(&mut module, "intent_rt_list_get", 2, true)?,
-            fail: helper(&mut module, "intent_rt_fail", 1, false)?,
-        };
-
-        let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
-        let mut ids: HashMap<String, FuncId> = HashMap::new();
-        let mut wrappers: HashMap<String, FuncId> = HashMap::new();
-        for (i, f) in fns.iter().enumerate() {
-            let mut sig = module.make_signature();
-            for _ in 0..=f.params.len() {
-                sig.params.push(AbiParam::new(types::I64));
-            }
-            sig.returns.push(AbiParam::new(types::I64));
-            let id = module.declare_function(&format!("f{i}"), Linkage::Local, &sig).map_err(|e| e.to_string())?;
-            let mut wsig = module.make_signature();
-            wsig.params.push(AbiParam::new(types::I64));
-            wsig.params.push(AbiParam::new(types::I64));
-            wsig.returns.push(AbiParam::new(types::I64));
-            let wid = module.declare_function(&format!("w{i}"), Linkage::Local, &wsig).map_err(|e| e.to_string())?;
-            ids.insert(f.name.clone(), id);
-            wrappers.insert(f.name.clone(), wid);
-        }
-
-        let mut ctx = module.make_context();
-        let mut fctx = FunctionBuilderContext::new();
-        for f in &fns {
-            let id = ids[&f.name];
-            ctx.func.signature = module.declarations().get_function_decl(id).signature.clone();
-            ctx.func.name = UserFuncName::user(0, id.as_u32());
-            {
-                let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
-                let g = Gen {
-                    b,
-                    module: &mut module,
-                    h: &h,
-                    ids: &ids,
-                    env: &env,
-                    tables: &mut tables,
-                    ctx: ir::Value::from_u32(0),
-                    scopes: Vec::new(),
-                    exits: Vec::new(),
-                };
-                g.function(f)?;
-            }
-            module.define_function(id, &mut ctx).map_err(|e| format!("native code for '{}': {e:?}", f.name))?;
-            module.clear_context(&mut ctx);
-
-            // The wrapper: (ctx, argv) -> the function's result, reading arguments from argv.
-            let wid = wrappers[&f.name];
-            ctx.func.signature = module.declarations().get_function_decl(wid).signature.clone();
-            ctx.func.name = UserFuncName::user(0, wid.as_u32());
-            {
-                let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
-                let entry = b.create_block();
-                b.append_block_params_for_function_params(entry);
-                b.switch_to_block(entry);
-                let (c, argv) = (b.block_params(entry)[0], b.block_params(entry)[1]);
-                let mut args = vec![c];
-                for i in 0..f.params.len() {
-                    args.push(b.ins().load(types::I64, MemFlagsData::trusted(), argv, (i * 8) as i32));
-                }
-                let callee = module.declare_func_in_func(id, b.func);
-                let call = b.ins().call(callee, &args);
-                let r = b.inst_results(call)[0];
-                b.ins().return_(&[r]);
-                b.seal_all_blocks();
-                b.finalize(module.target_config());
-            }
-            module.define_function(wid, &mut ctx).map_err(|e| format!("native entry for '{}': {e:?}", f.name))?;
-            module.clear_context(&mut ctx);
-        }
+        let (wrappers, tables) = codegen(prog, &mut module, &set)?;
         module.finalize_definitions().map_err(|e| e.to_string())?;
+        let env = Env::new(prog);
         let mut entries = HashMap::new();
-        for f in &fns {
-            let p = module.get_finalized_function(wrappers[&f.name]);
-            let (params, ret) = env.sigs[f.name.as_str()].clone();
-            entries.insert(f.name.clone(), (p as usize, params, ret));
+        for (name, wid) in wrappers {
+            let p = module.get_finalized_function(wid);
+            let (params, ret) = env.sigs[name.as_str()].clone();
+            entries.insert(name, (p as usize, params, ret));
         }
-        Ok(Native { module: Some(module), entries, tables })
+        Ok(Native { module: Some(module), entries, tables: Box::new(tables) })
+    }
+
+    /// Native code linked into an executable by `intentc build`: `fns` are the entry
+    /// wrappers, in the order `compiled` names them. The program must be the one the
+    /// code was made from; anything that does not match is refused.
+    pub fn from_linked(prog: &Program, compiled: &[String], fns: &[usize], tables: &Json) -> Result<Native, String> {
+        let set = eligible(prog);
+        let mut names: Vec<&String> = set.iter().collect();
+        names.sort();
+        let mut given: Vec<&String> = compiled.iter().collect();
+        given.sort();
+        if names != given || compiled.len() != fns.len() {
+            return Err("the executable's native code does not match its program".into());
+        }
+        let env = Env::new(prog);
+        let mut entries = HashMap::new();
+        for (name, p) in compiled.iter().zip(fns) {
+            if *p == 0 {
+                return Err(format!("the executable has no native code for '{name}'"));
+            }
+            let (params, ret) = env.sigs[name.as_str()].clone();
+            entries.insert(name.clone(), (*p, params, ret));
+        }
+        Ok(Native { module: None, entries, tables: Box::new(Tables::from_json(tables)?) })
     }
 
     pub fn has(&self, name: &str) -> bool {
@@ -948,6 +881,257 @@ impl Native {
     }
 }
 
+/// The helpers native code calls, by the symbol it calls them by.
+const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
+    ("intent_rt_step_limit", rt_step_limit as *const u8),
+    ("intent_rt_depth_limit", rt_depth_limit as *const u8),
+    ("intent_rt_arith", rt_arith as *const u8),
+    ("intent_rt_neg", rt_neg as *const u8),
+    ("intent_rt_no_return", rt_no_return as *const u8),
+    ("intent_rt_const", rt_const as *const u8),
+    ("intent_rt_clone", rt_clone as *const u8),
+    ("intent_rt_drop", rt_drop as *const u8),
+    ("intent_rt_box", rt_box as *const u8),
+    ("intent_rt_unbox", rt_unbox as *const u8),
+    ("intent_rt_arith_val", rt_arith_val as *const u8),
+    ("intent_rt_cmp", rt_cmp as *const u8),
+    ("intent_rt_builtin", rt_builtin as *const u8),
+    ("intent_rt_record", rt_record as *const u8),
+    ("intent_rt_field", rt_field as *const u8),
+    ("intent_rt_field_ref", rt_field_ref as *const u8),
+    ("intent_rt_index_ref", rt_index_ref as *const u8),
+    ("intent_rt_list", rt_list as *const u8),
+    ("intent_rt_index", rt_index as *const u8),
+    ("intent_rt_list_len", rt_list_len as *const u8),
+    ("intent_rt_list_get", rt_list_get as *const u8),
+    ("intent_rt_fail", rt_fail as *const u8),
+];
+
+/// The machine to generate code for: this one. `host_features`: use every feature
+/// this processor has (for code run here); without, only the baseline the target
+/// guarantees, so an executable runs on any processor of the same family.
+fn isa(host_features: bool) -> Result<cranelift_codegen::isa::OwnedTargetIsa, String> {
+    let mut flags = settings::builder();
+    flags.set("opt_level", "speed").map_err(|e| e.to_string())?;
+    flags.set("is_pic", if host_features { "false" } else { "true" }).map_err(|e| e.to_string())?;
+    flags.set("use_colocated_libcalls", "false").map_err(|e| e.to_string())?;
+    let builder = cranelift_native::builder_with_options(host_features)
+        .map_err(|e| format!("native code is not available on this machine: {e}"))?;
+    let isa = builder.finish(settings::Flags::new(flags)).map_err(|e| e.to_string())?;
+    if isa.pointer_type() != types::I64 {
+        return Err("native code needs a 64-bit machine".into());
+    }
+    Ok(isa)
+}
+
+/// Generates every function in `set` and its entry wrapper into `module`. Returns the
+/// wrappers by function name, in a fixed order, and the tables the code refers to.
+fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> Result<(Vec<(String, FuncId)>, Tables), String> {
+    let env = Env::new(prog);
+    let mut tables = Tables::default();
+    // A helper takes ctx and `extra` i64 values, and returns one if `ret`.
+    let helper = |m: &mut M, name: &str, extra: usize, ret: bool| -> Result<FuncId, String> {
+        let mut sig = m.make_signature();
+        for _ in 0..=extra {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        if ret {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        m.declare_function(name, Linkage::Import, &sig).map_err(|e| e.to_string())
+    };
+    let h = Helpers {
+        step: helper(module, "intent_rt_step_limit", 0, false)?,
+        depth: helper(module, "intent_rt_depth_limit", 0, false)?,
+        arith: helper(module, "intent_rt_arith", 3, false)?,
+        neg: helper(module, "intent_rt_neg", 1, false)?,
+        no_return: helper(module, "intent_rt_no_return", 0, false)?,
+        konst: helper(module, "intent_rt_const", 1, true)?,
+        clone: helper(module, "intent_rt_clone", 1, true)?,
+        drop: helper(module, "intent_rt_drop", 1, false)?,
+        boxv: helper(module, "intent_rt_box", 2, true)?,
+        unbox: helper(module, "intent_rt_unbox", 1, true)?,
+        arith_val: helper(module, "intent_rt_arith_val", 3, true)?,
+        cmp: helper(module, "intent_rt_cmp", 3, true)?,
+        builtin: helper(module, "intent_rt_builtin", 3, true)?,
+        record: helper(module, "intent_rt_record", 3, true)?,
+        field: helper(module, "intent_rt_field", 2, true)?,
+        field_ref: helper(module, "intent_rt_field_ref", 2, true)?,
+        index_ref: helper(module, "intent_rt_index_ref", 2, true)?,
+        list: helper(module, "intent_rt_list", 2, true)?,
+        index: helper(module, "intent_rt_index", 2, true)?,
+        list_len: helper(module, "intent_rt_list_len", 1, true)?,
+        list_get: helper(module, "intent_rt_list_get", 2, true)?,
+        fail: helper(module, "intent_rt_fail", 1, false)?,
+    };
+    // In program order, so the same program always gives the same code and tables.
+    let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
+    let mut ids: HashMap<String, FuncId> = HashMap::new();
+    let mut wrappers: Vec<(String, FuncId)> = Vec::new();
+    for (i, f) in fns.iter().enumerate() {
+        let mut sig = module.make_signature();
+        for _ in 0..=f.params.len() {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = module.declare_function(&format!("intent_f{i}"), Linkage::Local, &sig).map_err(|e| e.to_string())?;
+        let mut wsig = module.make_signature();
+        wsig.params.push(AbiParam::new(types::I64));
+        wsig.params.push(AbiParam::new(types::I64));
+        wsig.returns.push(AbiParam::new(types::I64));
+        let wid = module.declare_function(&format!("intent_w{i}"), Linkage::Local, &wsig).map_err(|e| e.to_string())?;
+        ids.insert(f.name.clone(), id);
+        wrappers.push((f.name.clone(), wid));
+    }
+    let mut ctx = module.make_context();
+    let mut fctx = FunctionBuilderContext::new();
+    for (f, (_, wid)) in fns.iter().zip(&wrappers) {
+        let id = ids[&f.name];
+        ctx.func.signature = module.declarations().get_function_decl(id).signature.clone();
+        ctx.func.name = UserFuncName::user(0, id.as_u32());
+        {
+            let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+            let g = Gen {
+                b,
+                module: &mut *module,
+                h: &h,
+                ids: &ids,
+                env: &env,
+                tables: &mut tables,
+                ctx: ir::Value::from_u32(0),
+                scopes: Vec::new(),
+                exits: Vec::new(),
+            };
+            g.function(f)?;
+        }
+        module.define_function(id, &mut ctx).map_err(|e| format!("native code for '{}': {e:?}", f.name))?;
+        module.clear_context(&mut ctx);
+
+        // The wrapper: (ctx, argv) -> the function's result, reading arguments from argv.
+        ctx.func.signature = module.declarations().get_function_decl(*wid).signature.clone();
+        ctx.func.name = UserFuncName::user(0, wid.as_u32());
+        {
+            let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let (c, argv) = (b.block_params(entry)[0], b.block_params(entry)[1]);
+            let mut args = vec![c];
+            for i in 0..f.params.len() {
+                args.push(b.ins().load(types::I64, MemFlagsData::trusted(), argv, (i * 8) as i32));
+            }
+            let callee = module.declare_func_in_func(id, b.func);
+            let call = b.ins().call(callee, &args);
+            let r = b.inst_results(call)[0];
+            b.ins().return_(&[r]);
+            b.seal_all_blocks();
+            b.finalize(module.target_config());
+        }
+        module.define_function(*wid, &mut ctx).map_err(|e| format!("native entry for '{}': {e:?}", f.name))?;
+        module.clear_context(&mut ctx);
+    }
+    Ok((wrappers, tables))
+}
+
+impl Tables {
+    fn to_json(&self) -> Result<Json, String> {
+        let consts: Vec<Json> = self
+            .consts
+            .iter()
+            .map(|v| match v {
+                Value::Text(t) => Ok(json!({ "text": t })),
+                Value::Money(_) => Ok(json!({ "money": to_json(v, false)? })),
+                _ => Err("native code: a constant that is neither Text nor Money".to_string()),
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(json!({ "consts": consts, "records": self.records, "fields": self.fields }))
+    }
+
+    fn from_json(j: &Json) -> Result<Tables, String> {
+        let bad = || "the executable's tables are damaged".to_string();
+        let mut consts = Vec::new();
+        for c in j["consts"].as_array().ok_or_else(bad)? {
+            consts.push(match (c.get("text"), c.get("money")) {
+                (Some(Json::String(t)), None) => Value::Text(t.clone()),
+                (None, Some(m)) => from_json(&named("Money"), m, &Default::default(), "constant").map_err(|e| format!("{}: {e}", bad()))?,
+                _ => return Err(bad()),
+            });
+        }
+        let records: Vec<(String, Vec<String>)> = serde_json::from_value(j["records"].clone()).map_err(|_| bad())?;
+        let fields: Vec<String> = serde_json::from_value(j["fields"].clone()).map_err(|_| bad())?;
+        Ok(Tables { consts, records, fields })
+    }
+}
+
+/// An object file for `intentc build`: the program's native code, its tables, and
+/// `main`, which hands everything to `intent_aot_main` in the runtime it is linked
+/// with. `bundle` builds the data the executable carries (its program and tables),
+/// given the tables and the compiled functions in table order.
+pub fn compile_object(prog: &Program, bundle: impl FnOnce(Json, &[String]) -> Vec<u8>) -> Result<Vec<u8>, String> {
+    use cranelift_module::DataDescription;
+    use cranelift_object::{ObjectBuilder, ObjectModule};
+    let set = eligible(prog);
+    let ob = ObjectBuilder::new(isa(false)?, "intent_program", cranelift_module::default_libcall_names()).map_err(|e| e.to_string())?;
+    let mut module = ObjectModule::new(ob);
+    let (wrappers, tables) = codegen(prog, &mut module, &set)?;
+    let names: Vec<String> = wrappers.iter().map(|(n, _)| n.clone()).collect();
+    let data = bundle(tables.to_json()?, &names);
+
+    // The bundle, and the table of entry wrappers in the same order as `names`.
+    let bundle_id = module.declare_data("intent_aot_bundle", Linkage::Local, false, false).map_err(|e| e.to_string())?;
+    let mut d = DataDescription::new();
+    d.define(data.clone().into_boxed_slice());
+    module.define_data(bundle_id, &d).map_err(|e| e.to_string())?;
+    let table_id = module.declare_data("intent_aot_table", Linkage::Local, false, false).map_err(|e| e.to_string())?;
+    let mut d = DataDescription::new();
+    d.define(vec![0u8; 8 * wrappers.len().max(1)].into_boxed_slice());
+    d.set_align(8);
+    for (i, (_, wid)) in wrappers.iter().enumerate() {
+        let fref = module.declare_func_in_data(*wid, &mut d);
+        d.write_function_addr((i * 8) as u32, fref);
+    }
+    module.define_data(table_id, &d).map_err(|e| e.to_string())?;
+
+    // int main(int argc, char **argv) { return intent_aot_main(argc, argv, bundle, len, table, n); }
+    let mut aot_sig = module.make_signature();
+    aot_sig.params.push(AbiParam::new(types::I32));
+    for _ in 0..5 {
+        aot_sig.params.push(AbiParam::new(types::I64));
+    }
+    aot_sig.returns.push(AbiParam::new(types::I32));
+    let aot_main = module.declare_function("intent_aot_main", Linkage::Import, &aot_sig).map_err(|e| e.to_string())?;
+    let mut main_sig = module.make_signature();
+    main_sig.params.push(AbiParam::new(types::I32));
+    main_sig.params.push(AbiParam::new(types::I64));
+    main_sig.returns.push(AbiParam::new(types::I32));
+    let main_id = module.declare_function("main", Linkage::Export, &main_sig).map_err(|e| e.to_string())?;
+    let mut ctx = module.make_context();
+    let mut fctx = FunctionBuilderContext::new();
+    ctx.func.signature = main_sig;
+    ctx.func.name = UserFuncName::user(0, main_id.as_u32());
+    {
+        let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+        let entry = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        b.switch_to_block(entry);
+        let (argc, argv) = (b.block_params(entry)[0], b.block_params(entry)[1]);
+        let gb = module.declare_data_in_func(bundle_id, b.func);
+        let gt = module.declare_data_in_func(table_id, b.func);
+        let pb = b.ins().symbol_value(types::I64, gb);
+        let pt = b.ins().symbol_value(types::I64, gt);
+        let len = b.ins().iconst(types::I64, data.len() as i64);
+        let n = b.ins().iconst(types::I64, wrappers.len() as i64);
+        let callee = module.declare_func_in_func(aot_main, b.func);
+        let call = b.ins().call(callee, &[argc, argv, pb, len, pt, n]);
+        let r = b.inst_results(call)[0];
+        b.ins().return_(&[r]);
+        b.seal_all_blocks();
+        b.finalize(module.target_config());
+    }
+    module.define_function(main_id, &mut ctx).map_err(|e| format!("main: {e:?}"))?;
+    module.finish().emit().map_err(|e| e.to_string())
+}
+
 impl Drop for Native {
     fn drop(&mut self) {
         if let Some(m) = self.module.take() {
@@ -963,9 +1147,9 @@ struct Var {
     ty: Ty,
 }
 
-struct Gen<'b, 'm, 'p> {
+struct Gen<'b, 'm, 'p, M: Module> {
     b: FunctionBuilder<'b>,
-    module: &'m mut JITModule,
+    module: &'m mut M,
     h: &'m Helpers,
     ids: &'m HashMap<String, FuncId>,
     env: &'m Env<'p>,
@@ -977,7 +1161,7 @@ struct Gen<'b, 'm, 'p> {
     exits: Vec<(ir::Block, usize)>,
 }
 
-impl Gen<'_, '_, '_> {
+impl<M: Module> Gen<'_, '_, '_, M> {
     fn function(mut self, f: &FnDecl) -> Result<(), String> {
         let entry = self.b.create_block();
         self.b.append_block_params_for_function_params(entry);
