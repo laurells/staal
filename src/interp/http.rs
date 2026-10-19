@@ -25,6 +25,9 @@ pub struct Settings {
     pub connect_timeout: Duration,
     pub max_response_bytes: u64,
     pub proxy_from_env: bool,
+    /// Root certificates (DER) trusted in addition to Mozilla's, for services signed by
+    /// an organisation's own authority. Never instead of them; verification is never off.
+    pub extra_roots: Vec<Vec<u8>>,
 }
 
 impl Default for Settings {
@@ -34,6 +37,7 @@ impl Default for Settings {
             connect_timeout: Duration::from_secs(10),
             max_response_bytes: 4 * 1024 * 1024,
             proxy_from_env: false,
+            extra_roots: Vec::new(),
         }
     }
 }
@@ -61,7 +65,12 @@ pub struct Client {
 
 impl Client {
     pub fn new(s: &Settings) -> Client {
-        let config = ureq::Agent::config_builder()
+        let mut builder = ureq::Agent::config_builder();
+        if !s.extra_roots.is_empty() {
+            use ureq::tls::{RootCerts, TlsConfig};
+            builder = builder.tls_config(TlsConfig::builder().root_certs(RootCerts::from(roots(&s.extra_roots))).build());
+        }
+        let config = builder
             .max_redirects(0)
             .max_redirects_will_error(false)
             .http_status_as_error(false)
@@ -103,11 +112,41 @@ impl Client {
     }
 }
 
+/// Mozilla's root certificates, then the operator's extra ones: added, never instead.
+fn roots(extra: &[Vec<u8>]) -> Vec<ureq::tls::Certificate<'static>> {
+    use ureq::tls::Certificate;
+    webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .map(|c| Certificate::from_der(c.as_ref()).to_owned())
+        .chain(extra.iter().map(|d| Certificate::from_der(d).to_owned()))
+        .collect()
+}
+
 fn with_headers<B>(mut rb: ureq::RequestBuilder<B>, headers: &[(String, String)]) -> ureq::RequestBuilder<B> {
     for (k, v) in headers {
         rb = rb.header(k.as_str(), v.as_str());
     }
     rb
+}
+
+/// Reads the certificates in a PEM file, for `extra_roots`. A file that holds a
+/// private key is refused: a key has no place in a run's configuration.
+pub fn read_root_certificates(path: &str) -> Result<Vec<Vec<u8>>, String> {
+    let pem = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let mut out = Vec::new();
+    for item in ureq::tls::parse_pem(&pem) {
+        match item.map_err(|e| format!("{path}: {e}"))? {
+            ureq::tls::PemItem::Certificate(c) => out.push(c.der().to_vec()),
+            ureq::tls::PemItem::PrivateKey(_) => {
+                return Err(format!("{path} contains a private key; give only the authority's certificate"))
+            }
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        return Err(format!("{path} contains no certificate"));
+    }
+    Ok(out)
 }
 
 /// Errors that are certain to have happened before any byte of the request left are
@@ -124,6 +163,21 @@ fn classify(e: ureq::Error) -> Outcome {
         | E::InvalidProxyUrl
         | E::Tls(_)
         | E::Timeout(T::Resolve | T::Connect) => Outcome::NotSent(text),
+        // TLS checks the server's certificate, and agrees on a protocol, before the
+        // client sends any request data (no early data is ever sent), so these errors
+        // mean nothing was sent. Other TLS errors, such as an alert, can come later.
+        E::Io(io)
+            if io.get_ref().and_then(|e| e.downcast_ref::<rustls::Error>()).is_some_and(|e| {
+                matches!(
+                    e,
+                    rustls::Error::InvalidCertificate(_)
+                        | rustls::Error::NoCertificatesPresented
+                        | rustls::Error::PeerIncompatible(_)
+                )
+            }) =>
+        {
+            Outcome::NotSent(text)
+        }
         // Only a connection attempt can be refused or find no route; a reset, a broken
         // pipe or a timeout can come after the request was sent.
         E::Io(io)
@@ -170,6 +224,19 @@ pub fn check_header(name: &str, value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_roots_are_added_to_mozillas_never_instead() {
+        let mozilla = webpki_root_certs::TLS_SERVER_ROOT_CERTS.len();
+        assert!(mozilla > 100, "{mozilla} Mozilla roots");
+        let extra = vec![vec![1u8, 2, 3]];
+        let all = roots(&extra);
+        assert_eq!(all.len(), mozilla + 1);
+        assert_eq!(all.last().unwrap().der(), &[1, 2, 3]);
+        for (a, b) in all.iter().zip(webpki_root_certs::TLS_SERVER_ROOT_CERTS) {
+            assert_eq!(a.der(), b.as_ref());
+        }
+    }
 
     #[test]
     fn headers_cannot_smuggle_or_override() {

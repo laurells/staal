@@ -281,6 +281,13 @@ fn runtime_settings(cfg: &Map<String, Json>) -> Result<RuntimeSettings, String> 
                     }
                     net.max_response_bytes = b;
                 }
+                "extra_root_certificates" => {
+                    let list = v.as_array().ok_or(format!("{at}: expected a list of PEM file paths"))?;
+                    for (i, p) in list.iter().enumerate() {
+                        let p = p.as_str().ok_or(format!("{at}[{i}]: expected a file path"))?;
+                        net.extra_roots.extend(http::read_root_certificates(p).map_err(|e| format!("{at}[{i}]: {e}"))?);
+                    }
+                }
                 "proxy" => {
                     net.proxy_from_env = match v.as_str() {
                         Some("none") => false,

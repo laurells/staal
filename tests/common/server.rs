@@ -10,12 +10,14 @@
 //   /error         500, body "boom"
 //   /binary        200, a body that is not UTF-8
 //   /hang          reads the request, then never answers (for timeouts)
+//   /garbage       over TLS: reads the request, then sends bytes that are not TLS, so
+//                  the client fails with a TLS error after its request was sent
 //   anything else  404
 // Every connection is closed after one answer.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
@@ -31,27 +33,56 @@ pub struct Req {
 pub struct Server {
     pub port: u16,
     pub log: Arc<Mutex<Vec<Req>>>,
+    base: String,
 }
 
 impl Server {
+    /// Plain HTTP on 127.0.0.1.
     pub fn start() -> Server {
+        Server::listen(None)
+    }
+
+    /// HTTPS with this server configuration (certificate and key), on localhost.
+    pub fn start_tls(cfg: Arc<rustls::ServerConfig>) -> Server {
+        Server::listen(Some(cfg))
+    }
+
+    fn listen(tls: Option<Arc<rustls::ServerConfig>>) -> Server {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let log: Arc<Mutex<Vec<Req>>> = Arc::new(Mutex::new(Vec::new()));
         let seen: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
         let l2 = log.clone();
+        let base = match tls {
+            Some(_) => format!("https://localhost:{port}"),
+            None => format!("http://127.0.0.1:{port}"),
+        };
         std::thread::spawn(move || {
             for conn in listener.incoming() {
                 let Ok(conn) = conn else { continue };
-                let (log, seen) = (l2.clone(), seen.clone());
-                std::thread::spawn(move || handle(conn, log, seen));
+                let (log, seen, tls) = (l2.clone(), seen.clone(), tls.clone());
+                std::thread::spawn(move || match tls {
+                    // A failed handshake never reaches `handle`: nothing is recorded.
+                    Some(cfg) => {
+                        let Ok(sc) = rustls::ServerConnection::new(cfg) else { return };
+                        let mut stream = rustls::StreamOwned::new(sc, conn);
+                        if handle(&mut stream, log, seen).as_deref() == Some("/garbage") {
+                            let _ = stream.sock.write_all(b"this is not a TLS record at all");
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                        }
+                    }
+                    None => {
+                        let mut conn = conn;
+                        handle(&mut conn, log, seen);
+                    }
+                });
             }
         });
-        Server { port, log }
+        Server { port, log, base }
     }
 
     pub fn url(&self, path: &str) -> String {
-        format!("http://127.0.0.1:{}{path}", self.port)
+        format!("{}{path}", self.base)
     }
 
     pub fn requests(&self) -> Vec<Req> {
@@ -64,12 +95,13 @@ impl Server {
     }
 }
 
-fn handle(mut conn: TcpStream, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mutex<HashMap<String, String>>>) {
+/// Serves one request; returns its path, or None if no request arrived.
+fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mutex<HashMap<String, String>>>) -> Option<String> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let head_end = loop {
         match conn.read(&mut chunk) {
-            Ok(0) | Err(_) => return,
+            Ok(0) | Err(_) => return None,
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
         }
         if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
@@ -125,7 +157,11 @@ fn handle(mut conn: TcpStream, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mutex<HashMa
         "/hang" => {
             log.lock().unwrap().push(Req { method, path, headers, body, effect });
             std::thread::sleep(std::time::Duration::from_secs(30));
-            return;
+            return None;
+        }
+        "/garbage" => {
+            log.lock().unwrap().push(Req { method, path: path.clone(), headers, body, effect });
+            return Some(path);
         }
         _ => (404, Vec::new()),
     };
@@ -137,4 +173,6 @@ fn handle(mut conn: TcpStream, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mutex<HashMa
     resp.push_str("\r\n");
     let _ = conn.write_all(resp.as_bytes());
     let _ = conn.write_all(&reply);
+    let _ = conn.flush();
+    Some(path)
 }

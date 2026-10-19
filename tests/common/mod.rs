@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod server;
+pub mod tls;
 
 use serde_json::Value as Json;
 use std::fs;

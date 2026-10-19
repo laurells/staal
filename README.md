@@ -7,9 +7,9 @@ crash-safe execution.
 Status: the compiler, the interpreter, exact money, the capability broker,
 budgets, `try`, evidence and the crash-safe journal are built and tested.
 Roadmap phase 1 (modules and reassignment) is complete. Phase 2, the general
-`net.http` and `fs` capabilities, is built and tested against a local server
-and real files; sending through real services (`examples/`) is the step left,
-since it needs an account and network access. Not built yet:
+`net.http` and `fs` capabilities, is built and tested against local HTTP and
+HTTPS servers and real files; sending through real services (`examples/`) is the
+step left, since it needs an account and network access. Not built yet:
 library-declared capabilities (phase 3), packages (phase 4), and the
 native-code backend and C interface (phase 5). Real model providers are not
 built either; only a scripted one exists.
@@ -531,29 +531,41 @@ bodies, never logs or journals; traversal and refused targets never sent; a
 run at all 14 points of a program with a GET, a deduplicated POST, a plain POST and
 a file write, and checks each POST took effect exactly once. File access is tested
 against links in folders and files, loops, hard links, FIFOs, and a folder swapped
-for a link 11,000 times during 20,000 reads, with no leak. Twelve mutations of the
+for a link 11,000 times during 20,000 reads, with no leak. Seventeen mutations of the
 guarantees are each caught: skipping URL normalisation, not removing secrets from
 responses, recording a secret's value in the journal, allowing a second
 `{secret}`, retrying every POST, not retrying a GET, dropping the
 Idempotency-Key, reporting "may have happened" as "not sent", following
-redirects, following a link in a folder, following a link as the file, and
-reading a file with other hard links.
+redirects, following a link in a folder, following a link as the file,
+reading a file with other hard links, treating every TLS error as "not sent",
+treating certificate errors as "may have been sent", replacing Mozilla's roots
+with the extra ones, ignoring the extra ones, and accepting a private key in a
+root file.
 
-What these tests do not cover: real TLS servers (the tests use plain HTTP on
-localhost), and real services. `examples/` holds Termii SMS and Resend email
-programs with instructions to run them with your own keys.
+HTTPS is tested against a local rustls server with certificates made by the
+tests: a trusted authority works; an unknown authority, a self-signed certificate,
+a certificate for another name, an expired one and one not yet valid are each
+refused before any request is sent, and reported as ordinary failures, not in
+doubt. A TLS error after the request was sent (the server answers with bytes that
+are not TLS) stays in doubt. An organisation's own authority can be added with
+`net.extra_root_certificates`, on top of Mozilla's roots, never instead.
+
+What these tests do not cover: real services. `examples/` holds Termii SMS and
+Resend email programs with instructions to run them with your own keys.
 
 ## Requirements
 
 Rust 1.89 or newer (for `File::try_lock`), installed from https://rustup.rs.
 Developed with cargo 1.97.0. Dependencies: `serde_json`, `sha2`, `getrandom`,
-`libc` (safe file opening), `url` (WHATWG URL parsing) and `ureq` with `rustls`
-(HTTPS, with the ring provider and Mozilla's root certificates; no compression,
-cookies or proxies unless configured).
+`libc` (safe file opening), `url` (WHATWG URL parsing), `ureq` with `rustls`
+(HTTPS, with the ring provider; no compression, cookies or proxies unless
+configured), `rustls` itself (named only to recognise handshake errors) and
+`webpki-root-certs` (Mozilla's root certificates). Tests also use `rcgen` to make
+certificates.
 
 `scripts/audit.sh` checks every dependency in `Cargo.lock` against the RustSec
 advisory database and fails on any advisory or warning (`cargo audit --deny
-warnings`). At this release: 84 crates, none flagged. It needs network access for
+warnings`). At this release: 114 crates (test-only ones included), none flagged. It needs network access for
 the database, so it is run by hand or in CI, not by `cargo test`.
 
 ## Use

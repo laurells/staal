@@ -559,13 +559,22 @@ run config asks for one.
 (These are the defaults. `proxy` is `"none"` or `"environment"`, which reads the
 usual `HTTPS_PROXY` and `NO_PROXY` variables.)
 
+Server certificates are verified against Mozilla's root certificates, the list
+browsers use. An organisation whose services are signed by its own authority adds
+it with `"net": { "extra_root_certificates": ["/etc/ourco/ca.pem"] }`: the
+certificates in those PEM files are trusted in addition to Mozilla's, never
+instead. A file with no certificate, or with a private key in it, is a config error.
+There is no way to turn verification off. A certificate that is expired, not yet
+valid, for another name, self-signed or from an authority not trusted is refused
+during the handshake, before any request data is sent.
+
 ### What is known about a request, and crashes
 
 | What happened | Example | Result |
 | --- | --- | --- |
 | The server answered | any status | a `Response` |
-| Failed before anything was sent | host not found, connection refused, TLS handshake, connect timeout | failure `action`, which `try` can catch |
-| Failed after it may have reached the server | timeout or broken connection while sending or waiting | see below |
+| Failed before anything was sent | host not found, connection refused, connect timeout, a certificate refused, no common TLS version | failure `action`, which `try` can catch |
+| Failed after it may have reached the server | timeout, broken connection, or any other TLS error while sending or waiting | see below |
 
 A request that may have reached the server is treated exactly like a crash in the
 middle of an action. For `get`, which HTTP defines as safe, it is a failure

@@ -12,8 +12,18 @@ sha2 = "0.11.1"
 # Mozilla root certificates (webpki-roots). No compression, cookies or proxies.
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 url = "2.5.8"
+# The TLS library ureq uses, named directly only to recognise handshake errors
+# (src/interp/http.rs); the same version, so the same error type.
+rustls = { version = "=0.23.46", default-features = false }
+# Mozilla root certificates as certificates, so an operator can add a root on top of
+# them (net.extra_root_certificates). The same 1.0.9 snapshot ureq uses by default.
+webpki-root-certs = "1.0.9"
 
 [features]
 # Test-only crash injection for the journal (src/interp/journal.rs). Never enable in
 # a production build.
 failpoints = []
+
+[dev-dependencies]
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem", "crypto"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
