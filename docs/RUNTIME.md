@@ -276,6 +276,14 @@ Evaluation is strictly left to right and statement by statement.
   each copy with its real types, and a copy for which one fails (comparing secrets,
   say) is an error. A type parameter cannot have the name of a type in scope. Calls
   that would need copies without end are E101.
+- An interface, `interface Priced { fn price(self) -> Money }`, names methods.
+  `fn total<T: Priced>(xs: List<T, 10>) -> Money` may call `x.price()` on a T; a
+  type given for T must have a method of each name with exactly the interface's
+  parameters, result and `fails` (and a trusted result where the interface says
+  `@trusted`), which the caller could call itself (it is `pub`, or in the caller's
+  file): otherwise E101. Calls through a bound are resolved in each copy to the
+  type's own method, so its costs and rules are the concrete method's. An interface
+  is not a type (E101 where one is used as a type); `pub interface` exports it.
 - A method, `fn Line.total(self) -> Money`, is a function of the record or enum
   `Line`, declared in the file that declares `Line`; its first parameter, `self`, is
   the value it is called on. `l.total()` (or `cart.lines[0].total()`, on any

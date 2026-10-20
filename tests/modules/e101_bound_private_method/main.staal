@@ -1,0 +1,7 @@
+// expect: E101
+// A caller cannot lend a generic function a method it could not call itself.
+import kit { Book, total }
+
+fn f(b: Book) -> Money {
+    return total(b)
+}

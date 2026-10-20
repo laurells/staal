@@ -1,0 +1,1 @@
+{"entry": "tickets", "inputs": {"xs": [{"show": "Opera", "seat": 3, "cost": {"amount": "20.00", "currency": "NGN"}}]}, "expect": {"result": "Opera seat 3 of 20.00 NGN"}, "model": {"provider": "script", "responses": []}}

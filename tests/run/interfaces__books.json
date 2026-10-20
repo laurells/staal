@@ -1,0 +1,1 @@
+{"entry": "books", "inputs": {"xs": [{"title": "A", "cost": {"amount": "5.00", "currency": "NGN"}}, {"title": "B", "cost": {"amount": "9.00", "currency": "NGN"}}, {"title": "C", "cost": {"amount": "2.00", "currency": "NGN"}}]}, "expect": {"result": "B of 16.00 NGN"}, "model": {"provider": "script", "responses": []}}

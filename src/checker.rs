@@ -68,8 +68,9 @@ struct Sig {
     /// its type, not by a name an import could check.
     public: bool,
     file: u32,
-    /// Its type parameters, if it is generic.
+    /// Its type parameters, if it is generic, and the interfaces they must satisfy.
     generics: Vec<String>,
+    bounds: Vec<(String, String)>,
 }
 
 /// While checking a capability action's body: the `@target` and `@amount` parameters
@@ -110,9 +111,12 @@ struct Ctx<'a> {
     /// Each call of a generic function with concrete types, likewise: the function and
     /// the types of its parameters there.
     instances: HashMap<(String, Pos), (String, Vec<Ty>)>,
-    /// The function being checked, and its type parameters.
+    /// The function being checked, its type parameters and the interfaces they satisfy.
     fn_name: String,
     generic_params: Vec<String>,
+    generic_bounds: Vec<(String, String)>,
+    /// Declared interfaces: their methods.
+    interfaces: HashMap<String, Vec<InterfaceMethod>>,
     /// Problems with method calls found while resolving them, which the plain calls
     /// they become no longer show (a method that is not `pub`).
     method_diags: Vec<Diagnostic>,
@@ -381,6 +385,7 @@ fn resolve(prog: &mut Program, res: &Resolutions) -> Result<(), Diagnostic> {
             let to: HashMap<String, Ty> = g.generics.iter().cloned().zip(tys.iter().cloned()).collect();
             crate::aliases::substitute(&mut copy, &to);
             copy.generics.clear();
+            copy.bounds.clear();
             copy.name = name.clone();
             made.push(copy);
             if prog.fns.len() + made.len() > MAX_INSTANCES + have.len() {
@@ -483,6 +488,8 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
         instances: HashMap::new(),
         fn_name: String::new(),
         generic_params: Vec::new(),
+        generic_bounds: Vec::new(),
+        interfaces: HashMap::new(),
         lib_actions: HashMap::new(),
         flow: None,
     };
@@ -564,6 +571,25 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
         }
         ctx.enums.insert(e.name.clone(), e.variants.iter().map(|v| (v.name.clone(), v.fields.clone())).collect());
     }
+    for i in &prog.interfaces {
+        let mut names = HashSet::new();
+        for m in &i.methods {
+            if !names.insert(m.name.as_str()) {
+                ctx.err("E101", m.pos, format!("interface '{}' declares method '{}' twice", i.name, m.name));
+            }
+        }
+        ctx.interfaces.insert(i.name.clone(), i.methods.clone());
+    }
+    for i in &prog.interfaces {
+        for m in &i.methods {
+            for (_, t) in &m.params {
+                check_ty_known(&mut ctx, t, m.pos);
+            }
+            for t in m.ret.iter().chain(m.fails.iter()) {
+                check_ty_known(&mut ctx, t, m.pos);
+            }
+        }
+    }
     for f in &prog.fns {
         // A library's `len` is `lib.len`: the name a call is written with is the last part.
         let base = f.name.rsplit('.').next().unwrap_or(&f.name);
@@ -589,6 +615,7 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
                 public: f.public,
                 file: f.pos.file,
                 generics: f.generics.clone(),
+                bounds: f.bounds.clone(),
             },
         );
     }
@@ -658,12 +685,19 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
         // nothing is known: no fields, no methods, no operations but equality.
         ctx.fn_name = f.name.clone();
         ctx.generic_params = f.generics.clone();
+        ctx.generic_bounds = f.bounds.clone();
+        for (g, iface) in &f.bounds {
+            if !ctx.interfaces.contains_key(iface) {
+                ctx.err("E102", f.pos, format!("the bound of {g}, '{iface}', is not an interface"));
+            }
+        }
         let fresh: Vec<String> = f.generics.iter().filter(|g| ctx.known.insert((*g).clone())).cloned().collect();
         check_fn(&mut ctx, f, prog);
         for g in fresh {
             ctx.known.remove(&g);
         }
         ctx.generic_params.clear();
+        ctx.generic_bounds.clear();
     }
     // A constant's value appears wherever it is used, so a problem inside it would be
     // reported once per use: report each exact diagnostic once, where first found.
@@ -981,6 +1015,11 @@ fn add_srcs(into: &mut Vec<Src>, from: Vec<Src>) {
 
 fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
     match ty {
+        Ty::Named(n) if ctx.interfaces.contains_key(n) => ctx.err(
+            "E101",
+            pos,
+            format!("'{n}' is an interface, not a type; use it to bound a type parameter, as in <T: {n}>"),
+        ),
         Ty::Named(n) if !ctx.known.contains(n) => ctx.err("E102", pos, format!("unknown type '{n}'")),
         Ty::Named(_) => {}
         Ty::Cap { path, limits } => {
@@ -2566,6 +2605,43 @@ fn bind_generics(gens: &[String], pattern: &Ty, actual: &Ty, bound: &mut HashMap
     }
 }
 
+/// Whether type `t` satisfies interface `iface`: a type parameter of the function
+/// being checked must be bounded by it; any other type must have, for each of its
+/// methods, a method of that name with exactly its parameters, result, trust and
+/// `fails`, which the caller in file `from` may call itself: a caller lends a generic
+/// function only methods it could call.
+fn satisfies(ctx: &Ctx, t: &Ty, iface: &str, from: u32) -> Result<(), String> {
+    let Some(methods) = ctx.interfaces.get(iface) else { return Err(format!("'{iface}' is not an interface")) };
+    if let Ty::Named(g) = t
+        && ctx.generic_params.contains(g)
+    {
+        return if ctx.generic_bounds.iter().any(|(p, i)| p == g && i == iface) {
+            Ok(())
+        } else {
+            Err(format!("{g} is not bounded by it; write <{g}: {iface}>"))
+        };
+    }
+    let Ty::Named(n) = t else { return Err(format!("{t} has no methods")) };
+    for m in methods {
+        let Some(s) = ctx.sigs.get(format!("{n}::{}", m.name).as_str()) else {
+            return Err(format!("it has no method '{}'", m.name));
+        };
+        let theirs: Vec<&Ty> = s.params.iter().skip(1).map(|(t, _, _)| t).collect();
+        let ours: Vec<&Ty> = m.params.iter().map(|(_, t)| t).collect();
+        let ret = m.ret.clone().unwrap_or_else(|| named("Unit"));
+        if theirs != ours || s.ret != ret || s.fails != m.fails {
+            return Err(format!("its method '{}' does not have the interface's parameters, result and `fails`", m.name));
+        }
+        if m.ret_trusted && !s.ret_trusted {
+            return Err(format!("its method '{}' does not promise a trusted result, as the interface does", m.name));
+        }
+        if !s.public && s.file != from {
+            return Err(format!("its method '{}' is not `pub`, so it cannot be lent from here", m.name));
+        }
+    }
+    Ok(())
+}
+
 /// `t` with each type parameter `to` knows replaced by its type.
 fn subst_generics(t: &Ty, to: &HashMap<String, Ty>) -> Ty {
     match t {
@@ -2598,6 +2674,36 @@ fn mentions(t: &Ty, names: &[String]) -> bool {
 /// on anything else with no such method it is still an attempt to act (E002).
 fn method_call(ctx: &mut Ctx, base: &Expr, method: &str, args: &[Expr], pos: Pos, env: &Env, on_variable: bool) -> Option<Typed> {
     let (bt, _) = type_of(ctx, base, env)?;
+    // On a type parameter: the method its bounds promise. Each copy of the function
+    // calls its type's own method, which is checked there; this only types the call.
+    if let Ty::Named(g) = &bt
+        && ctx.generic_params.contains(g)
+    {
+        let promised = ctx
+            .generic_bounds
+            .iter()
+            .filter(|(p, _)| p == g)
+            .find_map(|(_, i)| ctx.interfaces.get(i)?.iter().find(|m| m.name == method).cloned());
+        let Some(m) = promised else {
+            let bounds: Vec<&str> = ctx.generic_bounds.iter().filter(|(p, _)| p == g).map(|(_, i)| i.as_str()).collect();
+            let has = if bounds.is_empty() { "it has no bounds".to_string() } else { format!("its bounds are {}", bounds.join(" + ")) };
+            ctx.err("E104", pos, format!("{g} has no method '{method}': {has}"));
+            return None;
+        };
+        let tys: Vec<Option<Typed>> = args.iter().map(|a| type_of(ctx, a, env)).collect();
+        if tys.len() != m.params.len() {
+            ctx.err("E101", pos, format!("'{method}' takes {} argument(s) but {} were given", m.params.len(), tys.len()));
+            return None;
+        }
+        for (a, ((_, want), t)) in args.iter().zip(m.params.iter().zip(tys)) {
+            if let Some((t, _)) = t
+                && let Err((code, msg)) = assignable(&t, want)
+            {
+                ctx.err(code, a.pos(), format!("in call to '{g}.{method}': {msg}"));
+            }
+        }
+        return Some((m.ret.clone().unwrap_or_else(|| named("Unit")), m.ret_trusted));
+    }
     let found = match &bt {
         Ty::Named(n) => {
             let name = format!("{n}::{method}");
@@ -2622,7 +2728,11 @@ fn method_call(ctx: &mut Ctx, base: &Expr, method: &str, args: &[Expr], pos: Pos
         }
         return None;
     };
-    if !public && file != pos.file {
+    // In a copy of a generic function, a method called through a bound is the method
+    // of the type its caller gave it: that caller lends it, whatever its `pub`. (Every
+    // other call in the copy is also in the generic function, checked there.)
+    let in_copy = ctx.fn_name.contains('<');
+    if !public && file != pos.file && !in_copy {
         ctx.method_diags.push(Diagnostic { code: "E107", pos, msg: format!("method '{name}' is not `pub` in its module") });
     }
     ctx.methods.insert((ctx.fn_name.clone(), pos), name.clone());
@@ -3326,6 +3436,14 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                             );
                             return None;
                         }
+                    }
+                }
+                let bounds = ctx.sigs.get(name.as_str()).map(|s| s.bounds.clone()).unwrap_or_default();
+                for (g, iface) in &bounds {
+                    let Some(t) = bound.get(g) else { continue };
+                    if let Err(why) = satisfies(ctx, t, iface, pos.file) {
+                        ctx.err("E101", *pos, format!("in call to '{name}': {g} is {t}, which does not satisfy {iface}: {why}"));
+                        return None;
                     }
                 }
                 for (p, _, _) in &mut params {

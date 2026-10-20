@@ -1,0 +1,15 @@
+// expect: E101
+// message: in call to 'total': T is Note, which does not satisfy Priced: it has no method 'price'
+interface Priced {
+    fn price(self) -> Money
+}
+
+type Note { text: Text }
+
+fn total<T: Priced>(xs: List<T, 3>) -> Money {
+    return 0.00 NGN
+}
+
+fn f(xs: List<Note, 3>) -> Money {
+    return total(xs)
+}

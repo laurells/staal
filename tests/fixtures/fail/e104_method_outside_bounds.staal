@@ -1,0 +1,9 @@
+// expect: E104
+// message: T has no method 'name': its bounds are Priced
+interface Priced {
+    fn price(self) -> Money
+}
+
+fn label<T: Priced>(x: T) -> Text {
+    return x.name()
+}

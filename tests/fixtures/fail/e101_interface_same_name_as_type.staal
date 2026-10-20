@@ -1,0 +1,7 @@
+// expect: E101
+// message: type 'Priced' is already defined
+type Priced { n: Int }
+
+interface Priced {
+    fn price(self) -> Money
+}

@@ -1,0 +1,10 @@
+// expect: E006
+// An interface method's result is trusted only if the interface says so: checked in
+// the generic function itself, before any copy exists.
+interface Noted {
+    fn note(self) -> Text
+}
+
+fn ask<T: Noted>(x: T) -> Text budget(calls: 1, tokens: 10) {
+    return validate propose(Text, instruct: x.note(), tokens: 10)
+}

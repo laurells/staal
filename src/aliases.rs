@@ -57,6 +57,16 @@ pub fn expand(prog: &mut Program) -> Vec<Diagnostic> {
         }
         x.expr(&mut c.value);
     }
+    for i in &mut prog.interfaces {
+        for im in &mut i.methods {
+            for (_, t) in &mut im.params {
+                x.ty(t);
+            }
+            for t in im.ret.iter_mut().chain(im.fails.iter_mut()) {
+                x.ty(t);
+            }
+        }
+    }
     for f in &mut prog.fns {
         for p in &mut f.params {
             x.ty(&mut p.ty);

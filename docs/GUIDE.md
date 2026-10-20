@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 42 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 452 invalid ones
+rejecting the programs it should. 43 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 466 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -148,6 +148,24 @@ parameter is a type of which nothing is known, so code that compiles there works
 every type. Each set of types it is used with becomes a copy, compiled and checked
 like a hand-written function: a value passed through `first` keeps its trust and its
 blinding, and a copy's model calls count against its caller's budget.
+
+### Interfaces
+
+    interface Priced {
+        fn price(self) -> Money
+    }
+
+    fn total<T: Priced>(xs: List<T, 100>) -> Money {
+        let sum = 0.00 NGN
+        for x in xs { set sum = sum + x.price() }
+        return sum
+    }
+
+An interface lists methods; a bound `T: Priced` lets a generic function call them,
+and a caller may give it any type that has them. Nothing is declared on the type:
+having the methods is enough. Each copy calls the type's own method directly, so a
+method that asks a model still counts against the caller's budget, and blinding and
+trust follow its real parameters. Bounds combine: `<T: Priced + Named>`.
 
 ### Methods
 

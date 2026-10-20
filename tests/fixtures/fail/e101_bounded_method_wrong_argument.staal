@@ -1,0 +1,9 @@
+// expect: E101
+// message: in call to 'T.scaled': expected Int, found Text
+interface Scaled {
+    fn scaled(self, by: Int) -> Money
+}
+
+fn f<T: Scaled>(x: T) -> Money {
+    return x.scaled("two")
+}

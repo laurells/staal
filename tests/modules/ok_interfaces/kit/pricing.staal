@@ -1,0 +1,11 @@
+pub interface Priced {
+    fn price(self) -> Money
+}
+
+pub fn total<T: Priced>(xs: List<T, 5>) -> Money {
+    let sum = 0.00 NGN
+    for x in xs {
+        set sum = sum + x.price()
+    }
+    return sum
+}

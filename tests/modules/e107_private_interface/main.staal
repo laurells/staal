@@ -1,0 +1,7 @@
+// expect: E107
+// An interface without `pub` stays inside its module.
+import kit as k
+
+fn f<T: k.Hidden>(x: T) -> Int {
+    return 1
+}

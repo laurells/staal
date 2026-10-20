@@ -1,0 +1,19 @@
+// expect: E101
+// message: does not promise a trusted result, as the interface does
+interface Rule {
+    fn text(self) -> Text @trusted
+}
+
+type Note { body: Text }
+
+fn Note.text(self) -> Text {
+    return self.body
+}
+
+fn ask<T: Rule>(r: T) -> Text budget(calls: 1, tokens: 10) {
+    return validate propose(Text, instruct: r.text(), tokens: 10)
+}
+
+fn f(n: Note) -> Text budget(calls: 1, tokens: 10) {
+    return ask(n)
+}

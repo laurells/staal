@@ -251,6 +251,8 @@ pub struct FnDecl {
     /// known, and run as one copy per set of types it is called with (`first<Int>`),
     /// which the compiler makes and checks like any function.
     pub generics: Vec<String>,
+    /// `<T: Priced + Named>`: each type parameter and an interface it must satisfy.
+    pub bounds: Vec<(String, String)>,
     /// `fn Charge.total(self) -> Money`: a method of the record or enum `Charge`,
     /// called as `c.total()`. Its first parameter, `self`, is the value it is called
     /// on. Its name is `Charge::total` (qualified by its module like any name).
@@ -730,6 +732,30 @@ impl CapDecl {
     }
 }
 
+/// `interface Priced { fn price(self) -> Money }`: methods a type must have to be
+/// given for a type parameter bounded by it, `<T: Priced>`. A type satisfies it when
+/// it has a method of each name with exactly these parameters (after `self`), result
+/// and `fails`. Interfaces are only bounds: calls through them are resolved, in each
+/// copy of a generic function, to the concrete type's own method.
+#[derive(Debug, Clone)]
+pub struct InterfaceDecl {
+    pub public: bool,
+    pub name: String,
+    pub methods: Vec<InterfaceMethod>,
+    pub pos: Pos,
+}
+
+#[derive(Debug, Clone)]
+pub struct InterfaceMethod {
+    pub name: String,
+    /// The parameters after `self`.
+    pub params: Vec<(String, Ty)>,
+    pub ret: Option<Ty>,
+    pub ret_trusted: bool,
+    pub fails: Option<Ty>,
+    pub pos: Pos,
+}
+
 /// `type Name = T`: another name for type T. Before the checker runs, every use is
 /// replaced by T (`crate::aliases`), so an alias is exactly the type it names.
 #[derive(Debug, Clone)]
@@ -753,4 +779,5 @@ pub struct Program {
     /// Type aliases; after modules are resolved, each holds its type with every alias
     /// in it replaced, and no other part of the program names an alias.
     pub aliases: Vec<AliasDecl>,
+    pub interfaces: Vec<InterfaceDecl>,
 }

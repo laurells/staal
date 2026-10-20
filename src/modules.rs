@@ -235,6 +235,10 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             for a in &m.prog.aliases {
                 e.types.entry(a.name.clone()).or_insert((format!("{p}{}", a.name), a.public));
             }
+            // An interface is named and imported like a type, though it is not one.
+            for i in &m.prog.interfaces {
+                e.types.entry(i.name.clone()).or_insert((format!("{p}{}", i.name), i.public));
+            }
             for f in &m.prog.fns {
                 e.fns.entry(f.name.clone()).or_insert((format!("{p}{}", f.name), f.public));
             }
@@ -315,6 +319,9 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 }
             }
             r.generics = f.generics.clone();
+            for (_, iface) in &mut f.bounds {
+                *iface = r.type_name(iface, f.pos);
+            }
             for p in &mut f.params {
                 r.binder(&p.name, f.pos);
                 r.ty(&mut p.ty, f.pos);
@@ -350,6 +357,17 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             a.name = format!("{}{}", scope.prefix, a.name);
             r.ty(&mut a.ty, a.pos);
         }
+        for i in &mut m.prog.interfaces {
+            i.name = format!("{}{}", scope.prefix, i.name);
+            for im in &mut i.methods {
+                for (_, t) in &mut im.params {
+                    r.ty(t, im.pos);
+                }
+                for t in im.ret.iter_mut().chain(im.fails.iter_mut()) {
+                    r.ty(t, im.pos);
+                }
+            }
+        }
         for c in &mut m.prog.consts {
             c.name = format!("{}{}", scope.prefix, c.name);
             if let Some(t) = &mut c.ty {
@@ -368,6 +386,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
         out.consts.extend(m.prog.consts);
         out.enums.extend(m.prog.enums);
         out.aliases.extend(m.prog.aliases);
+        out.interfaces.extend(m.prog.interfaces);
     }
     let diags = crate::aliases::expand(&mut out);
     if !diags.is_empty() {
@@ -432,6 +451,13 @@ fn scope_of<'a>(
     // An alias shares the type names of its file with records and enums.
     let mut declared: HashSet<&str> =
         m.prog.types.iter().map(|t| t.name.as_str()).chain(m.prog.enums.iter().map(|e| e.name.as_str())).collect();
+    for i in &m.prog.interfaces {
+        if BUILTIN_TYPES.contains(&i.name.as_str()) {
+            diags.push(err("E101", i.pos, format!("'{}' is a built-in type and cannot be an interface", i.name)));
+        } else if !declared.insert(i.name.as_str()) {
+            diags.push(err("E101", i.pos, format!("type '{}' is already defined", i.name)));
+        }
+    }
     for a in &m.prog.aliases {
         if BUILTIN_TYPES.contains(&a.name.as_str()) {
             diags.push(err("E101", a.pos, format!("type '{}' is built in and cannot be declared", a.name)));

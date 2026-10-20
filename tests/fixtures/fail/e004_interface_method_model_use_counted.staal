@@ -1,0 +1,19 @@
+// expect: E004
+// A method called through an interface costs what the concrete method costs.
+interface Described {
+    fn describe(self) -> Text
+}
+
+type Ticket { body: Text }
+
+fn Ticket.describe(self) -> Text budget(calls: 1, tokens: 500) {
+    return validate propose(Text, instruct: "Describe.", data: [self.body], tokens: 500)
+}
+
+fn all<T: Described>(x: T) -> Text {
+    return x.describe()
+}
+
+fn f(t: Ticket) -> Text budget(calls: 1, tokens: 100) {
+    return all(t)
+}

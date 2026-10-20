@@ -1,0 +1,1 @@
+{"entry": "fees", "inputs": {"xs": [{"kind": "Flat", "amount": {"amount": "1.50", "currency": "NGN"}}, {"kind": "Free"}, {"kind": "Flat", "amount": {"amount": "2.00", "currency": "NGN"}}]}, "expect": {"result": {"amount": "3.50", "currency": "NGN"}}, "model": {"provider": "script", "responses": []}}

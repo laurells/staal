@@ -1,0 +1,14 @@
+pub interface Priced {
+    fn price(self) -> Money
+}
+
+pub type Book { cost: Money }
+
+// Private: only this module may call it, or lend it to a generic function.
+fn Book.price(self) -> Money {
+    return self.cost
+}
+
+pub fn total<T: Priced>(x: T) -> Money {
+    return x.price()
+}

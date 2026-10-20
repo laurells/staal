@@ -1,0 +1,19 @@
+// expect: E101
+// message: its method 'price' does not have the interface's parameters, result and `fails`
+interface Priced {
+    fn price(self) -> Money
+}
+
+type Note { cents: Int }
+
+fn Note.price(self) -> Int {
+    return self.cents
+}
+
+fn total<T: Priced>(xs: List<T, 3>) -> Money {
+    return 0.00 NGN
+}
+
+fn f(xs: List<Note, 3>) -> Money {
+    return total(xs)
+}

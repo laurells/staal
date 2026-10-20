@@ -214,6 +214,19 @@ fn the_generic_cases_really_run_native_code() {
     assert_eq!(got, want);
 }
 
+#[test]
+fn the_interface_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/interfaces.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    let want = [
+        "Book::name", "Book::price", "Fee::price", "Ticket::name", "Ticket::price", "books", "dearest<Book>", "dearest<Ticket>", "fees",
+        "summary<Book>", "summary<Ticket>", "tickets", "total<Book>", "total<Fee>", "total<Ticket>",
+    ];
+    assert_eq!(got, want);
+}
+
 // ---------------------------------------------------------------------------------
 // Generated programs
 

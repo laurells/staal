@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Interfaces, `interface Priced { fn price(self) -> Money }`, as bounds on type
+  parameters, `<T: Priced + Named>`. A type satisfies one by having its methods,
+  with the same parameters, result, `fails` and trust, which the caller could call
+  itself; calls through a bound resolve in each copy to the type's own method.
 - Generic functions, `fn first<T>(xs: List<T, 10>) -> Optional<T>`. Type
   parameters are inferred from the arguments; the body is checked with each as an
   unknown type, and each set of types used becomes a copy (`first<Text>`) that is

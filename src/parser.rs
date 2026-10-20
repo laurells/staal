@@ -292,6 +292,7 @@ impl Parser {
                 }
                 Tok::Type => p.types.push(self.typedecl(public)?),
                 Tok::Ident(w) if w == "enum" => p.enums.push(self.enumdecl(public)?),
+                Tok::Ident(w) if w == "interface" => p.interfaces.push(self.interfacedecl(public)?),
                 Tok::Fn => p.fns.push(self.fndecl(public)?),
                 Tok::Ident(w) if w == "capability" => {
                     let (cap, fns) = self.capdecl()?;
@@ -469,6 +470,52 @@ impl Parser {
         Ok(TypeDecl { public, name, fields, pos })
     }
 
+    /// `interface Name { fn m(self, x: T) -> R  ... }`
+    fn interfacedecl(&mut self, public: bool) -> PResult<InterfaceDecl> {
+        let pos = self.pos();
+        self.bump(); // `interface`
+        let name = self.ident()?;
+        self.expect(Tok::LBrace, "'{'")?;
+        let mut methods = Vec::new();
+        while *self.peek() != Tok::RBrace {
+            let mpos = self.pos();
+            self.expect(Tok::Fn, "'fn'")?;
+            let mname = self.ident()?;
+            self.expect(Tok::LParen, "'('")?;
+            let spos = self.pos();
+            if self.ident()? != "self" {
+                return Err((spos, "an interface's method takes `self` first".into()));
+            }
+            let mut params = Vec::new();
+            while *self.peek() == Tok::Comma {
+                self.bump();
+                if *self.peek() == Tok::RParen {
+                    break;
+                }
+                let pname = self.ident()?;
+                self.expect(Tok::Colon, "':'")?;
+                params.push((pname, self.ty()?));
+            }
+            self.expect(Tok::RParen, "')'")?;
+            let (ret, ret_trusted) = if *self.peek() == Tok::Arrow {
+                self.bump();
+                let t = self.ty()?;
+                (Some(t), self.trust_mark()?)
+            } else {
+                (None, false)
+            };
+            let fails = if matches!(self.peek(), Tok::Ident(w) if w == "fails") {
+                self.bump();
+                Some(self.ty()?)
+            } else {
+                None
+            };
+            methods.push(InterfaceMethod { name: mname, params, ret, ret_trusted, fails, pos: mpos });
+        }
+        self.expect(Tok::RBrace, "'}'")?;
+        Ok(InterfaceDecl { public, name, methods, pos })
+    }
+
     fn fndecl(&mut self, public: bool) -> PResult<FnDecl> {
         let pos = self.pos();
         self.expect(Tok::Fn, "'fn'")?;
@@ -566,6 +613,7 @@ impl Parser {
     fn fn_rest(&mut self, public: bool, name: String, pos: Pos) -> PResult<FnDecl> {
         // `<T, U>`: type parameters.
         let mut generics = Vec::new();
+        let mut bounds = Vec::new();
         if *self.peek() == Tok::Lt {
             self.bump();
             loop {
@@ -573,6 +621,23 @@ impl Parser {
                 let g = self.ident()?;
                 if generics.contains(&g) {
                     return Err((gpos, format!("type parameter '{g}' is declared twice")));
+                }
+                // `T: A + B`: interfaces T must satisfy.
+                if *self.peek() == Tok::Colon {
+                    self.bump();
+                    loop {
+                        let mut iface = self.ident()?;
+                        if *self.peek() == Tok::Dot {
+                            self.bump();
+                            iface = format!("{iface}.{}", self.ident()?);
+                        }
+                        bounds.push((g.clone(), iface));
+                        if *self.peek() == Tok::Plus {
+                            self.bump();
+                        } else {
+                            break;
+                        }
+                    }
                 }
                 generics.push(g);
                 if *self.peek() == Tok::Comma {
@@ -653,7 +718,7 @@ impl Parser {
         };
         let budget = if *self.peek() == Tok::Budget { Some(self.budget()?) } else { None };
         let body = self.block()?;
-        Ok(FnDecl { public, name, params, ret, ret_trusted, budget, fails, generics, method_of: None, body, pos })
+        Ok(FnDecl { public, name, params, ret, ret_trusted, budget, fails, generics, bounds, method_of: None, body, pos })
     }
 
     fn ty(&mut self) -> PResult<Ty> {

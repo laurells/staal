@@ -1,0 +1,33 @@
+// Interfaces with arguments, fails, @trusted results and two bounds.
+interface Charged {
+    fn charge(self, times: Int) -> Money fails ChargeError
+}
+
+interface Rule {
+    fn text(self) -> Text @trusted
+}
+
+enum ChargeError {
+    Declined,
+}
+
+type Plan { fee: Money, rule: Text }
+
+fn Plan.charge(self, times: Int) -> Money fails ChargeError {
+    if times < 0 {
+        fail(ChargeError.Declined)
+    }
+    return self.fee * times
+}
+
+fn Plan.text(self) -> Text @trusted {
+    return "Be brief."
+}
+
+fn bill<T: Charged + Rule>(x: T) -> Money fails ChargeError {
+    return x.charge(3)
+}
+
+fn f(p: Plan) -> Money fails ChargeError {
+    return bill(p)
+}

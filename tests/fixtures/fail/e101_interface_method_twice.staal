@@ -1,0 +1,6 @@
+// expect: E101
+// message: interface 'Priced' declares method 'price' twice
+interface Priced {
+    fn price(self) -> Money
+    fn price(self) -> Money
+}

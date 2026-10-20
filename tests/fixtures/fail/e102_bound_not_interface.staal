@@ -1,0 +1,7 @@
+// expect: E102
+// message: the bound of T, 'Line', is not an interface
+type Line { n: Int }
+
+fn f<T: Line>(x: T) -> Int {
+    return 1
+}

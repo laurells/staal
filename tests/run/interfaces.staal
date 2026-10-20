@@ -1,0 +1,81 @@
+// Interfaces: bounds on type parameters, satisfied by the methods a type has, and
+// resolved in each copy to that type's own method.
+interface Priced {
+    fn price(self) -> Money
+}
+
+interface Named {
+    fn name(self) -> Text
+}
+
+type Book { title: Text, cost: Money }
+type Ticket { show: Text, seat: Int, cost: Money }
+
+enum Fee {
+    Flat { amount: Money },
+    Free,
+}
+
+fn Book.price(self) -> Money {
+    return self.cost
+}
+
+fn Book.name(self) -> Text {
+    return self.title
+}
+
+fn Ticket.price(self) -> Money {
+    return self.cost * 1
+}
+
+fn Ticket.name(self) -> Text {
+    return "\(self.show) seat \(self.seat)"
+}
+
+fn Fee.price(self) -> Money {
+    match self {
+        Flat { amount } => {
+            return amount
+        }
+        Free => {
+            return 0.00 NGN
+        }
+    }
+}
+
+fn total<T: Priced>(xs: List<T, 10>) -> Money {
+    let sum = 0.00 NGN
+    for x in xs {
+        set sum = sum + x.price()
+    }
+    return sum
+}
+
+fn dearest<T: Priced + Named>(xs: List<T, 10>) -> Text {
+    let best = ""
+    let top = 0.00 NGN
+    for x in xs {
+        if x.price() > top {
+            set top = x.price()
+            set best = x.name()
+        }
+    }
+    return best
+}
+
+// A bounded function calling another with its own parameter.
+fn summary<T: Priced + Named>(xs: List<T, 10>) -> Text {
+    return "\(dearest(xs)) of \(total(xs))"
+}
+
+fn books(xs: List<Book, 10>) -> Text {
+    return summary(xs)
+}
+
+fn tickets(xs: List<Ticket, 10>) -> Text {
+    return summary(xs)
+}
+
+fn fees(xs: List<Fee, 10>) -> Money {
+    return total(xs)
+}

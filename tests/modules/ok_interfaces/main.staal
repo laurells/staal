@@ -1,0 +1,17 @@
+// expect: ok
+// An interface from one module, satisfied by a type from another, through a bound.
+import kit.pricing as p { Priced }
+
+type Book { cost: Money }
+
+fn Book.price(self) -> Money {
+    return self.cost
+}
+
+fn all<T: Priced>(xs: List<T, 5>) -> Money {
+    return p.total(xs)
+}
+
+fn books(xs: List<Book, 5>) -> Money {
+    return all(xs) + p.total(xs)
+}

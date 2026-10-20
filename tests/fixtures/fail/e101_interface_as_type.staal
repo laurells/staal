@@ -1,0 +1,7 @@
+// expect: E101
+// message: 'Priced' is an interface, not a type; use it to bound a type parameter, as in <T: Priced>
+interface Priced {
+    fn price(self) -> Money
+}
+
+fn f(x: Priced) {}

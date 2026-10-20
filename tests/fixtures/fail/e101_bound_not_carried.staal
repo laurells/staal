@@ -1,0 +1,13 @@
+// expect: E101
+// message: U is not bounded by it; write <U: Priced>
+interface Priced {
+    fn price(self) -> Money
+}
+
+fn total<T: Priced>(xs: List<T, 3>) -> Money {
+    return 0.00 NGN
+}
+
+fn outer<U>(xs: List<U, 3>) -> Money {
+    return total(xs)
+}

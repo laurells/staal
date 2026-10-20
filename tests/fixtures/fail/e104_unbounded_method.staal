@@ -1,0 +1,5 @@
+// expect: E104
+// message: T has no method 'price': it has no bounds
+fn total<T>(x: T) -> Money {
+    return x.price()
+}
