@@ -1,0 +1,1 @@
+{"entry": "out_of_range", "inputs": {"a": 0, "b": 5}, "model": {"provider": "script", "responses": []}, "expect": {"result": "hello"}}

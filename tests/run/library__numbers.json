@@ -1,0 +1,1 @@
+{"entry": "numbers", "inputs": {"a": -7, "b": 3}, "model": {"provider": "script", "responses": []}, "expect": {"result": 6329}}

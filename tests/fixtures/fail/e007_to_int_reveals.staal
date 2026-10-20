@@ -1,0 +1,8 @@
+// expect: E007
+// `to_int` cannot fail, but what it gives still reveals its text.
+type Customer { name: Text, phone: Text }
+
+fn f(c: Customer @blind(phone)) -> Text budget(calls: 1, tokens: 100) {
+    let n = to_int(c.phone)
+    return validate propose(Text, instruct: "Describe.", data: [n], tokens: 100)
+}

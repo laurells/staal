@@ -1,0 +1,5 @@
+// expect: E101
+// message: `slice` needs (Text or a list, start: Int, end: Int)
+fn f(t: Text) -> Text {
+    return slice(t, "1", 2)
+}

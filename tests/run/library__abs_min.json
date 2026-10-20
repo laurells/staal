@@ -1,0 +1,1 @@
+{"entry": "abs_min", "inputs": {}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "value", "message_contains": "integer overflow: abs(-9223372036854775808)"}}

@@ -1,0 +1,6 @@
+// expect: E101
+// message: `split` takes the most parts as a whole number of at least 1, written as it is
+// The most parts is part of the result's type, so it is written as a number.
+fn f(t: Text, n: Int) -> Int {
+    return len(split(t, ",", n))
+}

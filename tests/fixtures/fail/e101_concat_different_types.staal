@@ -1,0 +1,5 @@
+// expect: E101
+// message: `concat` needs two lists of the same element type
+fn f(a: List<Int, 3>, b: List<Text, 3>) -> Int {
+    return len(concat(a, b))
+}

@@ -1,0 +1,5 @@
+// expect: E101
+// message: `min` needs two Ints or two Money values, found (Int, Money)
+fn f(a: Int, b: Money) -> Int {
+    return min(a, b)
+}

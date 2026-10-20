@@ -1,0 +1,1 @@
+{"entry": "texts", "inputs": {"t": "a,b,c"}, "model": {"provider": "script", "responses": []}, "expect": {"result": "C-B-A ,b, 2"}}

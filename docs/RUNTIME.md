@@ -349,8 +349,41 @@ Evaluation is strictly left to right and statement by statement.
 - `xs[i]` is the element at position i, counting from 0.
 - Built-in functions: `len(text)` (characters, not bytes), `len(list)`,
   `contains(text, part)`, `contains(list, value)`, `starts_with(text, prefix)`,
-  `ends_with(text, suffix)`, and those for maps and sets (section 2). Their names
-  are reserved.
+  `ends_with(text, suffix)`, those for maps and sets (section 2), and the standard
+  library's below. Their names are reserved: a function cannot have one, and a
+  variable that has one cannot be called.
+- Text functions. Positions count characters, from 0, as `len` does.
+  `upper(t)` and `lower(t)` change case by Unicode's rules (`ß` becomes `SS`), and
+  fail if the result would be too long. `slice(t, start, end)` is the characters
+  from `start` up to but not including `end`; it fails unless 0 <= start <= end <=
+  len(t). `index_of(t, part)` is `some` of the position of the first `part` in `t`
+  (`some(0)` for an empty `part`), or `none`. `split(t, sep, N)` is the parts of `t`
+  between each `sep`, in order (`"a,,b"` gives `["a", "", "b"]`, `""` gives
+  `[""]`), as a `List<Text, N>`, where N is a whole number of at least 1 written in
+  the call; it fails for an empty `sep` or more than N parts. `join(xs, sep)` is the
+  texts of `xs` with `sep` between them, and fails if too long. `to_int(t)` is `some`
+  of the Int `t` writes in decimal (digits after an optional `-`, nothing else, in
+  range), or `none`.
+- Number functions. `abs(n)` fails for the most negative Int, which has no positive
+  Int. `min(a, b)` and `max(a, b)` take two Ints or two Money values, and fail for
+  money in different currencies. `rem(a, b)` is the remainder of `a / b`, with the
+  sign of `a` (`rem(-7, 2)` is -1); it fails when `b` is 0, and `rem(MIN, -1)` is 0.
+- List functions. None changes its argument; each returns a new list. `append(xs,
+  x)` adds `x` at the end, and fails when `xs` already holds its type's maximum (the
+  compiler gives it that maximum, as for `put`). `concat(a, b)` is `a`'s items then
+  `b`'s, as a list whose maximum is the sum of theirs. `reverse(xs)`;
+  `slice(xs, start, end)` and `index_of(xs, x)` as for text. `sort(xs)` orders a
+  list of Int, Text or Money, ascending: Ints and money by value (failing for money
+  in different currencies), text by its bytes, as map keys are, so `"B"` comes
+  before `"a"`; equal items keep their order. `sum(xs)` adds a list of Int, failing
+  on overflow; the sum of an empty list is 0.
+- What a standard library function gives is trusted only if everything it is given
+  is, and reveals everything it is given (E006, E007). Those that can fail make
+  whether later code runs depend on their arguments, as other failing operations
+  do: `upper`, `slice`, `split`, `join`, `abs`, `rem`, `append` and `sum`, and also
+  `min`, `max` and `sort`, which the compiler counts as able to fail whatever their
+  arguments (they fail only for money in different currencies). A constant may use
+  them, except `append`.
 
 ### Arithmetic
 

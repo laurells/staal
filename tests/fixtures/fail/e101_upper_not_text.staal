@@ -1,0 +1,5 @@
+// expect: E101
+// message: `upper` needs Text, found (Int)
+fn f(n: Int) -> Text {
+    return upper(n)
+}

@@ -1,0 +1,8 @@
+// expect: E006
+// What a library function gives is as trusted as what it is given: model output
+// that went through `upper` and `join` is still not an instruction.
+fn f() -> Text budget(calls: 2, tokens: 200) {
+    let said: Text = validate propose(Text, instruct: "Name a task.", tokens: 100)
+    let task = join([upper(said), "now"], " ")
+    return validate propose(Text, instruct: task, tokens: 100)
+}

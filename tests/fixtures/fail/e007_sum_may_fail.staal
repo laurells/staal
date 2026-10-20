@@ -1,0 +1,9 @@
+// expect: E007
+// `sum` can fail (on overflow), so whether the model call after it happens depends
+// on the blinded value it is given.
+type Customer { name: Text, email: Text, age: Int }
+
+fn f(c: Customer @blind(email, age)) {
+    let x = sum([c.age, 1])
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

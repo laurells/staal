@@ -1,0 +1,5 @@
+// expect: E001
+// message: unvalidated Proposed<Text> given to `upper`
+fn f() -> Text budget(calls: 1, tokens: 100) {
+    return upper(propose(Text, instruct: "Say hi.", tokens: 100))
+}

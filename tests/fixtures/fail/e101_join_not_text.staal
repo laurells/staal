@@ -1,0 +1,5 @@
+// expect: E101
+// message: `join` needs (a list of Text, separator: Text), found (List<Int, 3>, Text)
+fn f(xs: List<Int, 3>) -> Text {
+    return join(xs, ",")
+}

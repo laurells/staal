@@ -2253,8 +2253,141 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             }
             Ok(Value::Text(text))
         }
+        (Builtin::Upper, [Value::Text(t)]) => {
+            // Uppercasing can lengthen a text (`ß` becomes `SS`).
+            let upper = t.to_uppercase();
+            if upper.len() > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("upper would give a text longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            Ok(Value::Text(upper))
+        }
+        (Builtin::Slice, [Value::Text(t), Value::Int(start), Value::Int(end)]) => {
+            let n = t.chars().count();
+            let (a, b) = slice_bounds(*start, *end, n, "a text", "characters")?;
+            Ok(Value::Text(t.chars().skip(a).take(b - a).collect()))
+        }
+        (Builtin::Slice, [Value::List(xs), Value::Int(start), Value::Int(end)]) => {
+            let (a, b) = slice_bounds(*start, *end, xs.len(), "a list", "items")?;
+            Ok(Value::List(xs[a..b].to_vec()))
+        }
+        (Builtin::IndexOf, [Value::Text(t), Value::Text(part)]) => match t.find(part.as_str()) {
+            Some(byte) => Ok(Value::Opt(Some(Box::new(count(t[..byte].chars().count())?)))),
+            None => Ok(Value::Opt(None)),
+        },
+        (Builtin::IndexOf, [Value::List(xs), v]) => match xs.iter().position(|x| x == v) {
+            Some(i) => Ok(Value::Opt(Some(Box::new(count(i)?)))),
+            None => Ok(Value::Opt(None)),
+        },
+        (Builtin::Split, [Value::Text(t), Value::Text(sep), Value::Int(most)]) => {
+            if sep.is_empty() {
+                return fail(FailKind::Value, "`split` needs a separator that is not empty");
+            }
+            let parts: Vec<Value> = t.split(sep.as_str()).map(|p| Value::Text(p.to_string())).collect();
+            if parts.len() as u64 > u64::try_from(*most).unwrap_or(0) {
+                return fail(FailKind::Value, format!("split gives {} parts, more than the {most} allowed", parts.len()));
+            }
+            Ok(Value::List(parts))
+        }
+        (Builtin::Join, [Value::List(xs), Value::Text(sep)]) => {
+            let mut out = String::new();
+            for (i, x) in xs.iter().enumerate() {
+                let Value::Text(x) = x else { return internal("`join` of a list that is not Text") };
+                let extra = if i == 0 { 0 } else { sep.len() };
+                if out.len().saturating_add(extra).saturating_add(x.len()) > MAX_TEXT_BYTES {
+                    return fail(FailKind::Value, format!("join would give a text longer than {MAX_TEXT_BYTES} bytes"));
+                }
+                if i > 0 {
+                    out.push_str(sep);
+                }
+                out.push_str(x);
+            }
+            Ok(Value::Text(out))
+        }
+        (Builtin::ToInt, [Value::Text(t)]) => Ok(Value::Opt(parse_int(t).map(|n| Box::new(Value::Int(n))))),
+        (Builtin::Abs, [Value::Int(n)]) => match n.checked_abs() {
+            Some(a) => Ok(Value::Int(a)),
+            None => fail(FailKind::Value, format!("integer overflow: abs({n})")),
+        },
+        (Builtin::Min | Builtin::Max, [a, b]) => {
+            if let (Value::Money(x), Value::Money(y)) = (a, b)
+                && x.currency != y.currency
+            {
+                return fail(
+                    FailKind::Value,
+                    format!("`{}` of money in different currencies ({} and {})", f.name(), x.currency.code, y.currency.code),
+                );
+            }
+            // Equal values are the same value, whichever is given back.
+            let a_first = compare(CmpOp::Le, a, b)?;
+            Ok(if a_first == (f == Builtin::Min) { a.clone() } else { b.clone() })
+        }
+        (Builtin::Rem, [Value::Int(a), Value::Int(b)]) => {
+            if *b == 0 {
+                return fail(FailKind::Value, format!("division by zero: rem({a}, 0)"));
+            }
+            // The remainder of `/`, so it has the sign of `a`; rem(MIN, -1) is 0.
+            Ok(Value::Int(a.wrapping_rem(*b)))
+        }
+        (Builtin::Append, [Value::List(xs), v, Value::Int(cap)]) => {
+            if xs.len() as i64 >= *cap {
+                return fail(FailKind::Value, format!("the list is full: it holds at most {cap} items, so {} cannot be added", shown(v)));
+            }
+            let mut xs = xs.clone();
+            xs.push(v.clone());
+            Ok(Value::List(xs))
+        }
+        (Builtin::Reverse, [Value::List(xs)]) => Ok(Value::List(xs.iter().rev().cloned().collect())),
+        (Builtin::Sort, [Value::List(xs)]) => {
+            if let Some(Value::Money(first)) = xs.first()
+                && let Some(Value::Money(other)) = xs.iter().find(|x| !matches!(x, Value::Money(m) if m.currency == first.currency))
+            {
+                return fail(
+                    FailKind::Value,
+                    format!("`sort` of money in different currencies ({} and {})", first.currency.code, other.currency.code),
+                );
+            }
+            let mut xs = xs.clone();
+            // Stable, in the order maps and sets keep: Ints and money by value, text by its bytes.
+            xs.sort_by(|a, b| match (a, b) {
+                (Value::Money(x), Value::Money(y)) => x.minor.cmp(&y.minor),
+                _ => key_order(a, b),
+            });
+            Ok(Value::List(xs))
+        }
+        (Builtin::Sum, [Value::List(xs)]) => {
+            let mut total: i64 = 0;
+            for x in xs {
+                let Value::Int(n) = x else { return internal("`sum` of a list that is not Int") };
+                total = match total.checked_add(*n) {
+                    Some(t) => t,
+                    None => return fail(FailKind::Value, format!("integer overflow: {total} + {n} in sum")),
+                };
+            }
+            Ok(Value::Int(total))
+        }
+        (Builtin::Concat, [Value::List(a), Value::List(b)]) => Ok(Value::List(a.iter().chain(b.iter()).cloned().collect())),
         _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
     }
+}
+
+/// `start` and `end` as positions in something of `n` parts, or why they are not.
+fn slice_bounds(start: i64, end: i64, n: usize, what: &str, parts: &str) -> Result<(usize, usize), Failure> {
+    if start > end {
+        return fail(FailKind::Value, format!("slice from {start} to {end}: the start is after the end"));
+    }
+    match (usize::try_from(start), usize::try_from(end)) {
+        (Ok(a), Ok(b)) if b <= n => Ok((a, b)),
+        _ => fail(FailKind::Value, format!("slice from {start} to {end} is outside {what} of {n} {parts}")),
+    }
+}
+
+/// An Int written in decimal: digits, after an optional `-`, and nothing else.
+fn parse_int(t: &str) -> Option<i64> {
+    let digits = t.strip_prefix('-').unwrap_or(t);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    t.parse::<i64>().ok()
 }
 
 /// A map literal from its keys and values, alternating, in the order written. A key

@@ -1,0 +1,6 @@
+// expect: E101
+// message: `sum` needs a list of Int
+// An empty list of money has no currency, so `sum` is for Int only.
+fn f(xs: List<Money, 3>) -> Int {
+    return sum(xs)
+}

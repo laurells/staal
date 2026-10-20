@@ -1,0 +1,1 @@
+{"entry": "full", "inputs": {}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "value", "message_contains": "the list is full: it holds at most 2 items, so 3 cannot be added"}}

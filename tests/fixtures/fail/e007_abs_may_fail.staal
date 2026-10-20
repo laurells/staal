@@ -1,0 +1,9 @@
+// expect: E007
+// `abs` can fail (for the most negative Int), so whether the model call after it happens depends
+// on the blinded value it is given.
+type Customer { name: Text, email: Text, age: Int }
+
+fn f(c: Customer @blind(email, age)) {
+    let x = abs(c.age)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

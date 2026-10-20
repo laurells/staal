@@ -1,0 +1,1 @@
+{"entry": "roomy", "inputs": {}, "expect": {"result": "dcba"}, "model": {"provider": "script", "responses": []}}

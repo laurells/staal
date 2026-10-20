@@ -1,0 +1,133 @@
+// The standard library's text, number and list functions, on both engines.
+type Line { name: Text, qty: Int }
+
+fn texts(t: Text) -> Text {
+    let parts = split(t, ",", 5)
+    let found = "none"
+    match index_of(t, "b") {
+        some(i) => {
+            set found = to_text(i)
+        }
+        none => {}
+    }
+    return upper(join(reverse(parts), "-")) + " " + slice(t, 1, 4) + " " + found
+}
+
+fn unicode() -> Text {
+    let t = "naïve straße"
+    let at = 0
+    match index_of(t, "s") {
+        some(i) => {
+            set at = i
+        }
+        none => {}
+    }
+    return upper(t) + "|" + slice(t, 2, 5) + "|" + to_text(at)
+}
+
+fn split_limit(t: Text) -> Int {
+    return len(split(t, ";", 3))
+}
+
+fn split_empty() -> Int {
+    return len(split("abc", "", 3))
+}
+
+fn numbers(a: Int, b: Int) -> Int {
+    return abs(a) * 1000 + min(a, b) * 100 + max(a, b) * 10 + rem(a, b)
+}
+
+fn abs_min() -> Int {
+    return abs(-9223372036854775807 - 1)
+}
+
+fn rem_zero(a: Int) -> Int {
+    return rem(a, 0)
+}
+
+fn rem_edge() -> Int {
+    return rem(-9223372036854775807 - 1, -1) + rem(-7, 2) * 10 + rem(7, -2) * 100
+}
+
+fn money(a: Money, b: Money) -> Money {
+    return max(a, b) - min(a, b)
+}
+
+fn number(t: Text) -> Int {
+    match to_int(t) {
+        some(n) => {
+            return n
+        }
+        none => {
+            return -1
+        }
+    }
+}
+
+fn lists(n: Int) -> Int {
+    let xs: List<Int, 6> = [5, 3]
+    set xs = append(xs, n)
+    set xs = append(xs, 1)
+    let sorted = sort(xs)
+    let both = concat(sorted, [10, 20])
+    let pos = 0
+    match index_of(both, 10) {
+        some(i) => {
+            set pos = i
+        }
+        none => {
+            set pos = -1
+        }
+    }
+    return sum(slice(both, 1, 4)) * 100 + pos * 10 + len(both) - 6 + sorted[0]
+}
+
+fn full() -> Int {
+    let xs: List<Int, 2> = [1, 2]
+    return len(append(xs, 3))
+}
+
+fn out_of_range(a: Int, b: Int) -> Text {
+    return slice("hello", a, b)
+}
+
+fn sum_overflow() -> Int {
+    return sum([9223372036854775807, 1])
+}
+
+fn words() -> Text {
+    let ws = sort(["pear", "Apple", "fig", "apple"])
+    return join(ws, " ")
+}
+
+fn sort_money(a: Money, b: Money) -> Money {
+    let xs = sort([a, b, a])
+    return xs[0]
+}
+
+fn records() -> Text {
+    let ls = [Line { name: "a", qty: 1 }, Line { name: "b", qty: 2 }]
+    let more = append(concat(ls, [Line { name: "c", qty: 3 }]), Line { name: "d", qty: 4 })
+    let names: List<Text, 4> = []
+    for l in reverse(more) {
+        set names = append(names, l.name)
+    }
+    return join(names, "")
+}
+
+// `concat` gives room for both lists and no more; a typed `let` gives more.
+fn roomy() -> Text {
+    let ls = [Line { name: "a", qty: 1 }, Line { name: "b", qty: 2 }]
+    let more: List<Line, 5> = concat(ls, [Line { name: "c", qty: 3 }])
+    set more = append(more, Line { name: "d", qty: 4 })
+    let names: List<Text, 5> = []
+    for l in reverse(more) {
+        set names = append(names, l.name)
+    }
+    return join(names, "")
+}
+
+// The result of `concat` has room for exactly both lists.
+fn both(a: List<Int, 2>, b: List<Int, 3>) -> List<Int, 5> {
+    return concat(a, b)
+}

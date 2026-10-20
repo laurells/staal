@@ -13,7 +13,7 @@ fn small() -> Map<Text, Int, 5> {
     return ["a": 1]
 }
 
-fn sum(m: Map<Text, Int, 20>) -> Int {
+fn total(m: Map<Text, Int, 20>) -> Int {
     let s = 0
     for (k, v) in entries(m) {
         if contains(m, k) {

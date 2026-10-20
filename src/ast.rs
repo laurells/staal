@@ -370,6 +370,28 @@ pub enum Builtin {
     Add,
     Items,
     ToSet,
+    /// Text: `upper(t)`; `slice(t, start, end)` (characters, also on lists);
+    /// `index_of(t, part)` (an `Optional<Int>`, also on lists); `split(t, sep, N)` (a
+    /// `List<Text, N>`, N a literal); `join(xs, sep)`; `to_int(t)` (an `Optional<Int>`).
+    Upper,
+    Slice,
+    IndexOf,
+    Split,
+    Join,
+    ToInt,
+    /// Numbers: `abs(n)`, `min(a, b)`, `max(a, b)` (Int or Money), `rem(a, b)`.
+    Abs,
+    Min,
+    Max,
+    Rem,
+    /// Lists: `append(xs, x)`, which takes the list's capacity as a last argument (the
+    /// compiler supplies it, as for `put`); `reverse(xs)`; `sort(xs)` (of Int, Text or
+    /// Money); `sum(xs)` (of Int); `concat(a, b)`.
+    Append,
+    Reverse,
+    Sort,
+    Sum,
+    Concat,
 }
 
 impl Builtin {
@@ -399,6 +421,21 @@ impl Builtin {
             "add" => Some(Builtin::Add),
             "items" => Some(Builtin::Items),
             "to_set" => Some(Builtin::ToSet),
+            "upper" => Some(Builtin::Upper),
+            "slice" => Some(Builtin::Slice),
+            "index_of" => Some(Builtin::IndexOf),
+            "split" => Some(Builtin::Split),
+            "join" => Some(Builtin::Join),
+            "to_int" => Some(Builtin::ToInt),
+            "abs" => Some(Builtin::Abs),
+            "min" => Some(Builtin::Min),
+            "max" => Some(Builtin::Max),
+            "rem" => Some(Builtin::Rem),
+            "append" => Some(Builtin::Append),
+            "reverse" => Some(Builtin::Reverse),
+            "sort" => Some(Builtin::Sort),
+            "sum" => Some(Builtin::Sum),
+            "concat" => Some(Builtin::Concat),
             _ => None,
         }
     }
@@ -429,6 +466,21 @@ impl Builtin {
             Builtin::Add => "add",
             Builtin::Items => "items",
             Builtin::ToSet => "to_set",
+            Builtin::Upper => "upper",
+            Builtin::Slice => "slice",
+            Builtin::IndexOf => "index_of",
+            Builtin::Split => "split",
+            Builtin::Join => "join",
+            Builtin::ToInt => "to_int",
+            Builtin::Abs => "abs",
+            Builtin::Min => "min",
+            Builtin::Max => "max",
+            Builtin::Rem => "rem",
+            Builtin::Append => "append",
+            Builtin::Reverse => "reverse",
+            Builtin::Sort => "sort",
+            Builtin::Sum => "sum",
+            Builtin::Concat => "concat",
         }
     }
 
@@ -448,7 +500,13 @@ impl Builtin {
             | Builtin::Values
             | Builtin::Entries
             | Builtin::Items
-            | Builtin::ToSet => 1,
+            | Builtin::ToSet
+            | Builtin::Upper
+            | Builtin::ToInt
+            | Builtin::Abs
+            | Builtin::Reverse
+            | Builtin::Sort
+            | Builtin::Sum => 1,
             Builtin::Contains
             | Builtin::StartsWith
             | Builtin::EndsWith
@@ -456,8 +514,15 @@ impl Builtin {
             | Builtin::FillSecret
             | Builtin::Get
             | Builtin::Remove
-            | Builtin::Add => 2,
-            Builtin::Replace | Builtin::Put => 3,
+            | Builtin::Add
+            | Builtin::IndexOf
+            | Builtin::Join
+            | Builtin::Min
+            | Builtin::Max
+            | Builtin::Rem
+            | Builtin::Append
+            | Builtin::Concat => 2,
+            Builtin::Replace | Builtin::Put | Builtin::Slice | Builtin::Split => 3,
         }
     }
 }

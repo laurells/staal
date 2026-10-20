@@ -1,0 +1,1 @@
+{"entry": "sort_money", "inputs": {"a": {"amount": "3.00", "currency": "NGN"}, "b": {"amount": "1.00", "currency": "USD"}}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "value", "message_contains": "`sort` of money in different currencies"}}

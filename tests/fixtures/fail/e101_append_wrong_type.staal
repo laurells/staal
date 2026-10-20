@@ -1,0 +1,5 @@
+// expect: E101
+// message: `append` needs (a list, a value of its element type), found (List<Int, 3>, Text)
+fn f(xs: List<Int, 3>) -> List<Int, 3> {
+    return append(xs, "four")
+}

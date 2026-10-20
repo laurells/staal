@@ -1,0 +1,5 @@
+// expect: E101
+// message: 'sum' is a built-in function and cannot be redefined
+fn sum(xs: List<Int, 3>) -> Int {
+    return 0
+}

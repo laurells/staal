@@ -1,0 +1,8 @@
+// expect: E007 E007
+// What a library function gives reveals what it was given.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email)) -> Text budget(calls: 1, tokens: 100) {
+    let parts = split(c.email, "@", 2)
+    return validate propose(Text, instruct: "Describe the domain.", data: [parts[1]], tokens: 100)
+}

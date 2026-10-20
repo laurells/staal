@@ -1,0 +1,1 @@
+{"entry": "out_of_range", "inputs": {"a": 2, "b": 9}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "value", "message_contains": "slice from 2 to 9 is outside a text of 5 characters"}}

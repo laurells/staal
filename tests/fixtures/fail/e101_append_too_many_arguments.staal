@@ -1,0 +1,6 @@
+// expect: E101
+// message: `append` takes 2 argument(s) but 3 were given
+// The capacity is the list type's; a program never passes it.
+fn f(xs: List<Int, 3>) -> List<Int, 3> {
+    return append(xs, 1, 3)
+}

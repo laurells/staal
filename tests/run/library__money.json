@@ -1,0 +1,1 @@
+{"entry": "money", "inputs": {"a": {"amount": "2.50", "currency": "NGN"}, "b": {"amount": "10.00", "currency": "NGN"}}, "model": {"provider": "script", "responses": []}, "expect": {"result": {"amount": "7.50", "currency": "NGN"}}}

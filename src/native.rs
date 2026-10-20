@@ -140,7 +140,7 @@ struct Tables {
 }
 
 /// The built-in functions by the number generated code passes for them.
-const BUILTINS: [Builtin; 24] = [
+const BUILTINS: [Builtin; 39] = [
     Builtin::Len,
     Builtin::Contains,
     Builtin::StartsWith,
@@ -165,6 +165,21 @@ const BUILTINS: [Builtin; 24] = [
     Builtin::Add,
     Builtin::Items,
     Builtin::ToSet,
+    Builtin::Upper,
+    Builtin::Slice,
+    Builtin::IndexOf,
+    Builtin::Split,
+    Builtin::Join,
+    Builtin::ToInt,
+    Builtin::Abs,
+    Builtin::Min,
+    Builtin::Max,
+    Builtin::Rem,
+    Builtin::Append,
+    Builtin::Reverse,
+    Builtin::Sort,
+    Builtin::Sum,
+    Builtin::Concat,
 ];
 
 const CMPS: [CmpOp; 6] = [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt, CmpOp::Le, CmpOp::Gt, CmpOp::Ge];
@@ -904,6 +919,19 @@ impl<'p> Env<'p> {
                     | Builtin::Text => named("Text"),
                     // Headers and secrets belong to requests, which native code never makes.
                     Builtin::Header | Builtin::FillSecret => return None,
+                    Builtin::Upper | Builtin::Join => named("Text"),
+                    Builtin::Slice | Builtin::Append | Builtin::Reverse | Builtin::Sort | Builtin::Min | Builtin::Max => first?.clone(),
+                    Builtin::IndexOf | Builtin::ToInt => Ty::Optional(Box::new(named("Int"))),
+                    Builtin::Abs | Builtin::Rem | Builtin::Sum => named("Int"),
+                    // The most parts is the literal the checker required.
+                    Builtin::Split => match args.get(2) {
+                        Some(Expr::Int(n, _)) => Ty::List(Box::new(named("Text")), *n),
+                        _ => return None,
+                    },
+                    Builtin::Concat => match (first?, tys.get(1)?) {
+                        (Ty::List(a, n), Ty::List(b, m)) => Ty::List(Box::new(a.unify(b)?), n.checked_add(*m)?),
+                        _ => return None,
+                    },
                 }
             }
             Expr::Call { name, args, slots, .. } => {
@@ -2630,7 +2658,7 @@ fn maybe(i: Int) -> Optional<Box> {
     return some(Box { label: "b", n: i })
 }
 
-fn sum(n: Int) -> Int {
+fn total(n: Int) -> Int {
     let total = 0
     let last: Optional<Int> = none
     let i = 0
@@ -2661,14 +2689,14 @@ fn sum(n: Int) -> Int {
 "#;
         let prog = crate::check_program(src).unwrap();
         let native = Native::compile(&prog).unwrap();
-        assert_eq!(native.compiled(), ["maybe", "sum"]);
+        assert_eq!(native.compiled(), ["maybe", "total"]);
         let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
         assert_eq!(native.call("maybe", &mut ctx, &[Value::Int(2)]).unwrap().unwrap(), Value::Opt(None));
         let odd: i64 = (1..=3000).filter(|i| i % 2 == 1).map(|i| i + 1).sum();
         let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
-        assert_eq!(native.call("sum", &mut ctx, &[Value::Int(3000)]).unwrap().unwrap(), Value::Int(odd * 10));
+        assert_eq!(native.call("total", &mut ctx, &[Value::Int(3000)]).unwrap().unwrap(), Value::Int(odd * 10));
         assert!(ctx.peak <= 8, "at most {} values were alive at once", ctx.peak);
         let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
-        assert_eq!(native.call("sum", &mut ctx, &[Value::Int(0)]).unwrap().unwrap(), Value::Int(-1));
+        assert_eq!(native.call("total", &mut ctx, &[Value::Int(0)]).unwrap().unwrap(), Value::Int(-1));
     }
 }

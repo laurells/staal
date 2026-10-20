@@ -1,0 +1,9 @@
+// expect: E007
+// `slice` fails outside the text, so whether the model call after it happens
+// depends on how long the email is.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email)) {
+    let first = slice(c.email, 0, 5)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

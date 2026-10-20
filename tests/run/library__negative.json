@@ -1,0 +1,1 @@
+{"entry": "out_of_range", "inputs": {"a": -1, "b": 2}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "value", "message_contains": "slice from -1 to 2 is outside"}}

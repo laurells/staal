@@ -1,0 +1,9 @@
+// expect: E007
+// `sort` fails for money in different currencies, and is counted as able to fail
+// whatever it is given, so the model call after it depends on the blinded value.
+type Customer { name: Text, email: Text, age: Int }
+
+fn f(c: Customer @blind(email, age)) {
+    let x = sort([c.email, "a"])
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

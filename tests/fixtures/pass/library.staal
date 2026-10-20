@@ -1,0 +1,19 @@
+// The standard library's text, number and list functions together: none of them
+// can fail here, so whether a model call happens never depends on blinded data, and
+// what they give is as trusted as their arguments.
+type Customer { name: Text, email: Text }
+
+fn tidy(c: Customer @blind(email)) -> Text budget(calls: 1, tokens: 100) {
+    let n = len(c.email)
+    let found = index_of(c.email, "@")
+    let words: List<Text, 4> = ["b", "a"]
+    let names = reverse(sort(concat(words, [c.name])))
+    let parsed = to_int("12")
+    let task = upper("describe ") + join(["the", "customer"], " ")
+    return validate propose(Text, instruct: task, data: [names], tokens: 100)
+}
+
+fn numbers(a: Int, b: Int, x: Money, y: Money) -> Money {
+    let n = abs(min(a, b)) + max(a, b)
+    return min(x, y)
+}

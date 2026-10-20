@@ -1,0 +1,9 @@
+// expect: E007
+// `split` can fail (more parts than allowed), so whether the model call after it happens depends
+// on the blinded value it is given.
+type Customer { name: Text, email: Text, age: Int }
+
+fn f(c: Customer @blind(email, age)) {
+    let x = split(c.email, "@", 2)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

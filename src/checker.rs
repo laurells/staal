@@ -1046,9 +1046,22 @@ fn expr_can_fail_itself(e: &Expr) -> bool {
                     | Builtin::Form
                     | Builtin::Lower
                     | Builtin::UrlSegment
-                    // A map or set that is full refuses another entry.
+                    // A map, set or list that is full refuses another entry.
                     | Builtin::Put
-                    | Builtin::Add,
+                    | Builtin::Add
+                    | Builtin::Append
+                    // Outside the text or list; a text grown too long; an Int overflow;
+                    // money in different currencies.
+                    | Builtin::Upper
+                    | Builtin::Slice
+                    | Builtin::Split
+                    | Builtin::Join
+                    | Builtin::Abs
+                    | Builtin::Min
+                    | Builtin::Max
+                    | Builtin::Rem
+                    | Builtin::Sort
+                    | Builtin::Sum,
                 ..
             }
     )
@@ -1484,6 +1497,114 @@ fn collection_builtin(ctx: &mut Ctx, f: Builtin, tys: &[(Ty, bool)], trusted: bo
     }
 }
 
+/// The text, number and list functions of the standard library (RUNTIME.md section
+/// 4): their argument types and what they give. Each gives a value as trusted as its
+/// arguments, and reveals what they reveal.
+fn library_builtin(ctx: &mut Ctx, f: Builtin, args: &[Expr], tys: &[(Ty, bool)], trusted: bool, pos: Pos) -> Option<Typed> {
+    let shown: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();
+    let (text, int, money) = (named("Text"), named("Int"), named("Money"));
+    let arg = |i: usize| &tys[i].0;
+    let result = match f {
+        Builtin::Upper if *arg(0) == text => Some(text),
+        Builtin::Upper => None,
+        Builtin::Slice if *arg(1) == int && *arg(2) == int => match arg(0) {
+            t if *t == text => Some(text),
+            l @ Ty::List(..) => Some(l.clone()),
+            _ => None,
+        },
+        Builtin::Slice => None,
+        Builtin::IndexOf => match (arg(0), arg(1)) {
+            (a, b) if *a == text && *b == text => Some(Ty::Optional(Box::new(int))),
+            (Ty::List(el, _), x) if x.fits(el) => {
+                // Finding an item compares it with each one, which would reveal a secret.
+                if secret_inside(ctx, el, &mut HashSet::new()).is_some() {
+                    ctx.err("E101", pos, "`index_of` cannot search secrets or headers: comparing them would reveal them".into());
+                    return None;
+                }
+                Some(Ty::Optional(Box::new(int)))
+            }
+            _ => None,
+        },
+        // The most parts is the type's: a literal, as in `List<Text, N>`.
+        Builtin::Split if *arg(0) == text && *arg(1) == text => match &args[2] {
+            Expr::Int(n, _) if *n >= 1 => Some(Ty::List(Box::new(text), *n)),
+            _ => {
+                ctx.err("E101", pos, "`split` takes the most parts as a whole number of at least 1, written as it is: split(t, \",\", 10)".into());
+                return None;
+            }
+        },
+        Builtin::Split => None,
+        Builtin::Join => match (arg(0), arg(1)) {
+            (Ty::List(el, _), s) if **el == text && *s == text => Some(text),
+            _ => None,
+        },
+        Builtin::ToInt if *arg(0) == text => Some(Ty::Optional(Box::new(int))),
+        Builtin::ToInt => None,
+        Builtin::Abs if *arg(0) == int => Some(int),
+        Builtin::Abs => None,
+        Builtin::Min | Builtin::Max if arg(0) == arg(1) && (*arg(0) == int || *arg(0) == money) => Some(arg(0).clone()),
+        Builtin::Min | Builtin::Max => None,
+        Builtin::Rem if *arg(0) == int && *arg(1) == int => Some(int),
+        Builtin::Rem => None,
+        Builtin::Append => match (arg(0), arg(1)) {
+            (l @ Ty::List(el, n), x) if x.fits(el) => {
+                let (l, n) = (l.clone(), *n);
+                ctx.capacities.insert(pos, n);
+                Some(l)
+            }
+            _ => None,
+        },
+        Builtin::Reverse => match arg(0) {
+            l @ Ty::List(..) => Some(l.clone()),
+            _ => None,
+        },
+        Builtin::Sort => match arg(0) {
+            l @ Ty::List(el, _) if **el == int || **el == text || **el == money => Some(l.clone()),
+            _ => None,
+        },
+        Builtin::Sum => match arg(0) {
+            Ty::List(el, _) if **el == int => Some(int),
+            _ => None,
+        },
+        Builtin::Concat => match (arg(0), arg(1)) {
+            (Ty::List(a, n), Ty::List(b, m)) => match (a.unify(b), n.checked_add(*m)) {
+                (Some(el), Some(nm)) => Some(Ty::List(Box::new(el), nm)),
+                (Some(_), None) => {
+                    ctx.err("E101", pos, format!("`concat` of {} and {} would hold more items than any list can", arg(0), arg(1)));
+                    return None;
+                }
+                (None, _) => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    match result {
+        Some(t) => Some((t, trusted)),
+        None => {
+            let want = match f {
+                Builtin::Upper => "Text",
+                Builtin::Slice => "(Text or a list, start: Int, end: Int)",
+                Builtin::IndexOf => "(Text, Text) or (a list, a value of its element type)",
+                Builtin::Split => "(Text, separator: Text, most parts)",
+                Builtin::Join => "(a list of Text, separator: Text)",
+                Builtin::ToInt => "Text",
+                Builtin::Abs => "an Int",
+                Builtin::Min | Builtin::Max => "two Ints or two Money values",
+                Builtin::Rem => "two Ints",
+                Builtin::Append => "(a list, a value of its element type)",
+                Builtin::Reverse => "a list",
+                Builtin::Sort => "a list of Int, Text or Money",
+                Builtin::Sum => "a list of Int",
+                Builtin::Concat => "two lists of the same element type",
+                _ => "",
+            };
+            ctx.err("E101", pos, format!("`{}` needs {want}, found ({})", f.name(), shown.join(", ")));
+            None
+        }
+    }
+}
+
 /// Passes `put` and `add` the capacity of the map or set they grow, as a last
 /// argument: the capacity is the type's, which only the compiler knows.
 pub fn supply_capacities(prog: &mut Program, capacities: &HashMap<Pos, u64>) {
@@ -1494,7 +1615,7 @@ pub fn supply_capacities(prog: &mut Program, capacities: &HashMap<Pos, u64>) {
             expr(c, caps);
         }
         // Once: a call already given its capacity has one argument more than it takes.
-        if let Expr::Builtin { f: f @ (Builtin::Put | Builtin::Add), args, pos } = e
+        if let Expr::Builtin { f: f @ (Builtin::Put | Builtin::Add | Builtin::Append), args, pos } = e
             && let Some(&n) = caps.get(pos)
             && args.len() == f.arity()
         {
@@ -3486,6 +3607,21 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Add
                 | Builtin::Items
                 | Builtin::ToSet => return collection_builtin(ctx, *f, &tys, trusted, *pos),
+                Builtin::Upper
+                | Builtin::Slice
+                | Builtin::IndexOf
+                | Builtin::Split
+                | Builtin::Join
+                | Builtin::ToInt
+                | Builtin::Abs
+                | Builtin::Min
+                | Builtin::Max
+                | Builtin::Rem
+                | Builtin::Append
+                | Builtin::Reverse
+                | Builtin::Sort
+                | Builtin::Sum
+                | Builtin::Concat => return library_builtin(ctx, *f, args, &tys, trusted, *pos),
                 _ => {}
             }
             if *f == Builtin::Contains && secret_inside(ctx, &tys[0].0, &mut HashSet::new()).is_some() {
@@ -3521,7 +3657,22 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Entries
                 | Builtin::Add
                 | Builtin::Items
-                | Builtin::ToSet => true,
+                | Builtin::ToSet
+                | Builtin::Upper
+                | Builtin::Slice
+                | Builtin::IndexOf
+                | Builtin::Split
+                | Builtin::Join
+                | Builtin::ToInt
+                | Builtin::Abs
+                | Builtin::Min
+                | Builtin::Max
+                | Builtin::Rem
+                | Builtin::Append
+                | Builtin::Reverse
+                | Builtin::Sort
+                | Builtin::Sum
+                | Builtin::Concat => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();

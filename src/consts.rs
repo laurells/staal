@@ -168,6 +168,7 @@ pub(crate) fn form(e: &Expr, index: &HashMap<String, usize>, diags: &mut Vec<Dia
         }
         // They need a capacity only known from a type; write the literal instead.
         Expr::Builtin { f: Builtin::Put | Builtin::Add, .. } => Some("a constant cannot grow a map or set; write it as a literal".to_string()),
+        Expr::Builtin { f: Builtin::Append, .. } => Some("a constant cannot grow a list; write it as a literal".to_string()),
         _ => None,
     };
     if let Some(msg) = bad {

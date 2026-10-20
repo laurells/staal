@@ -1,0 +1,7 @@
+// expect: E101
+// message: `sort` needs a list of Int, Text or Money
+type Line { qty: Int }
+
+fn f(xs: List<Line, 3>) -> List<Line, 3> {
+    return sort(xs)
+}

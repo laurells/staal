@@ -1,0 +1,8 @@
+// expect: E007
+// Likewise `append` to a list that may be full.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email), seen: List<Text, 3>) {
+    let more = append(seen, c.email)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

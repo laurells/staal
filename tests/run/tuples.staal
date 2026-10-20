@@ -2,7 +2,7 @@
 // JSON and back, compared.
 type Range { bounds: (Int, Int), label: Text }
 
-fn split(total: Money, people: Int) -> (Money, Money) {
+fn split_bill(total: Money, people: Int) -> (Money, Money) {
     let share = total * 1
     let i = 1
     loop {

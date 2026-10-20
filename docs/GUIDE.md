@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 44 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 519 invalid ones
+rejecting the programs it should. 45 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 549 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -207,6 +207,26 @@ list, record, map, tuple or optional value), compared, encoded or sent anywhere.
 What one returns is untrusted, and reveals everything it captured and was given.
 Generic functions take function values like any other type (`fn twice<T>(f: fn(T)
 -> T, x: T) -> T`). Both engines run them.
+
+### The standard library
+
+    let parts = split("a,b,c", ",", 10)          // ["a", "b", "c"], at most 10 parts
+    let shout = upper(join(reverse(parts), "-")) // "C-B-A"
+    let middle = slice("hello", 1, 4)            // "ell"
+    let n = to_int("42")                          // some(42)
+    let xs: List<Int, 10> = [3, 1]
+    set xs = append(sort(xs), 7)                  // [1, 3, 7]
+    let total = sum(xs) + abs(-2) + max(1, rem(9, 4))
+
+Text, number and list functions are built in, on both engines: `upper`, `lower`,
+`trim`, `slice`, `index_of`, `split`, `join`, `replace`, `to_int`, `to_text`; `abs`,
+`min`, `max`, `rem`; `append`, `concat`, `reverse`, `sort`, `sum`, `len`,
+`contains`. Every list keeps its maximum: `append` to a full list fails, `split`
+takes the most parts it may give, and `concat` gives room for both lists. Positions
+count characters, so text in any language slices the same way. A result is as
+trusted as its arguments and reveals what they reveal; a function that can fail
+(`slice` out of range, `append` to a full list) makes what follows depend on its
+arguments, as any failing operation does.
 
 ### Default values and named arguments
 

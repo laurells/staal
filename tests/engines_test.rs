@@ -161,7 +161,7 @@ fn the_tuple_cases_really_run_native_code() {
     let prog = staalc::check_program(&src).unwrap();
     let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
     got.sort();
-    let want = ["first", "make", "maybe", "min_max", "nested", "overflow", "pairs", "same", "split", "spread", "width"];
+    let want = ["first", "make", "maybe", "min_max", "nested", "overflow", "pairs", "same", "split_bill", "spread", "width"];
     assert_eq!(got, want);
 }
 
@@ -230,6 +230,20 @@ fn the_function_value_cases_really_run_native_code() {
         "filters::fn@95:31", "half", "lines", "lines::fn@86:25", "nested", "nested::fn@75:17", "nested::fn@75:17::fn@76:21", "priced", "texts",
         "texts::fn@113:17", "texts::fn@116:17", "total_by", "total_of<Line>", "total_with<Line>", "total_with<Line>::fn@151:16", "twice<Int>",
         "twice<Text>",
+    ];
+    assert_eq!(got, want);
+}
+
+#[test]
+fn the_library_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/library.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    // Every one: the library's functions are the interpreter's own, called from native code.
+    let want = [
+        "abs_min", "both", "full", "lists", "money", "number", "numbers", "out_of_range", "records", "rem_edge", "rem_zero", "roomy", "sort_money",
+        "split_empty", "split_limit", "sum_overflow", "texts", "unicode", "words",
     ];
     assert_eq!(got, want);
 }

@@ -7,6 +7,11 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- The standard library's text, number and list functions, on both engines: `upper`,
+  `slice`, `index_of`, `split`, `join` and `to_int`; `abs`, `min`, `max` and `rem`;
+  `append`, `concat`, `reverse`, `sort` and `sum`. Lists keep their maximum size:
+  `append` fails on a full list, `split` takes the most parts in the call, and
+  `concat`'s result has room for both. Positions count characters.
 - Function values, of type `fn(Int) -> Int`: a named function used as a value,
   or `fn(x: Int) -> Int { return x + k }` written in place, which copies the
   variables it reads. They are passed, returned, held in variables and called as
@@ -94,6 +99,8 @@ the language or its file formats.
   a separate statement.
 - A variable that has the name of a built-in function (`add`, `get`, ...) cannot be
   called: `add(x)` is the built-in, so with such a variable in scope it is E101.
+- The standard library's names are reserved: a function named `split`, `sum`,
+  `min`, `max` or any other of them must be renamed.
 
 ### Fixed
 - `put` and `add` were not counted as operations that can fail, so whether code
