@@ -1,0 +1,6 @@
+// expect: E101
+// message: `for` needs a list, found Map<Text, Int, 3>; use keys(m), values(m) or entries(m)
+fn f(m: Map<Text, Int, 3>) {
+    for x in m {
+    }
+}

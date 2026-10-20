@@ -1,0 +1,8 @@
+// expect: E101
+// message: it holds a set
+type Tags { tags: Set<Text, 5> }
+
+fn f() -> Int budget(calls: 1, tokens: 100) {
+    let t = validate propose(Tags, instruct: "Tag.", tokens: 100)
+    return len(t.tags)
+}

@@ -1,0 +1,1 @@
+{"entry": "tags", "inputs": {"xs": ["a", "b", "c", "d", "e", "f"]}, "expect": {"failure": "value", "message_contains": "the set is full: it holds at most 6 items, so \"new\" cannot be added"}, "model": {"provider": "script", "responses": []}}

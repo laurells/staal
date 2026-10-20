@@ -7,6 +7,14 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Maps, `Map<Text, Int, 100>`, and sets, `Set<Text, 100>`, bounded like lists,
+  with Text or Int keys kept in order. `["a": 1]` and `[:]` build maps; `get`,
+  `put`, `remove`, `keys`, `values`, `entries`, `add`, `items` and `to_set` work on
+  them, and `len` and `contains` take them. `put` and `add` fail past the maximum
+  size. In JSON a map is an object and a set an array of distinct items. A model is
+  never asked for one. `for (k, v) in entries(m)` unpacks any list of tuples.
+- On the native engine, lists, maps and sets may go where a larger one is allowed,
+  and empty typed literals compile, so more functions run as native code.
 - Tuples, `(Int, Text)`, built as `(1, "a")`, read as `t.0` and unpacked with
   `let (n, s) = t`. In JSON a tuple is an array of exactly its length. A model is
   never asked for one. Blind paths name positions (`@blind(pair.1)`). Both engines

@@ -1,0 +1,1 @@
+{"entry": "stock", "expect": {"result": {"apple": 7, "fig": 1, "pear": 3}}, "model": {"provider": "script", "responses": []}, "inputs": {}}

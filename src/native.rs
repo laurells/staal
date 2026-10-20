@@ -137,7 +137,7 @@ struct Tables {
 }
 
 /// The built-in functions by the number generated code passes for them.
-const BUILTINS: [Builtin; 15] = [
+const BUILTINS: [Builtin; 24] = [
     Builtin::Len,
     Builtin::Contains,
     Builtin::StartsWith,
@@ -153,6 +153,15 @@ const BUILTINS: [Builtin; 15] = [
     Builtin::Currency,
     Builtin::UrlSegment,
     Builtin::Text,
+    Builtin::Get,
+    Builtin::Put,
+    Builtin::Remove,
+    Builtin::Keys,
+    Builtin::Values,
+    Builtin::Entries,
+    Builtin::Add,
+    Builtin::Items,
+    Builtin::ToSet,
 ];
 
 const CMPS: [CmpOp; 6] = [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt, CmpOp::Le, CmpOp::Gt, CmpOp::Ge];
@@ -521,6 +530,31 @@ extern "C" fn rt_tuple(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     })
 }
 
+/// An empty list (0), set (1) or map (2).
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_empty")]
+extern "C" fn rt_empty(c: *mut Ctx, kind: i64) -> i64 {
+    guard(c, |c| {
+        let v = match kind {
+            0 => Value::List(Vec::new()),
+            1 => Value::Set(Vec::new()),
+            2 => Value::Map(Vec::new()),
+            _ => return Err(internal(format!("native code: no empty collection of kind {kind}"))),
+        };
+        Ok(c.put(v))
+    })
+}
+
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_map")]
+extern "C" fn rt_map(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
+    guard(c, |c| {
+        let vals = take_args(c, argv, n)?;
+        let m = crate::interp::map_literal(vals)?;
+        Ok(c.put(m))
+    })
+}
+
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_index")]
 extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
@@ -640,6 +674,8 @@ impl<'p> Env<'p> {
             Ty::Optional(_) if *t == Ty::none() => true,
             Ty::Optional(inner) => self.allowed(inner, depth + 1),
             Ty::Tuple(items) => items.iter().all(|t| self.allowed(t, depth + 1)),
+            Ty::Map(k, v, _) => self.allowed(k, depth + 1) && self.allowed(v, depth + 1),
+            Ty::Set(t, _) => self.allowed(t, depth + 1),
             Ty::Proposed(_) | Ty::Cap { .. } => false,
         }
     }
@@ -712,7 +748,7 @@ impl<'p> Env<'p> {
                 }
                 for (name, fe) in fields {
                     let want = &decl.iter().find(|(f, _)| f == name)?.1;
-                    if !self.ty(fe, var)?.fits(want) {
+                    if !self.ty(fe, var)?.widens(want) {
                         return None;
                     }
                 }
@@ -725,7 +761,7 @@ impl<'p> Env<'p> {
                 }
                 for (name, fe) in fields {
                     let want = &decl.iter().find(|(f, _)| f == name)?.1;
-                    if !self.ty(fe, var)?.fits(want) {
+                    if !self.ty(fe, var)?.widens(want) {
                         return None;
                     }
                 }
@@ -740,6 +776,18 @@ impl<'p> Env<'p> {
             }
             Expr::NoneLit(_) => Ty::none(),
             Expr::Tuple(items, _) => Ty::Tuple(items.iter().map(|i| self.ty(i, var)).collect::<Option<Vec<_>>>()?),
+            Expr::MapLit(entries, _) => {
+                let (k0, v0) = entries.first()?;
+                let kt = self.ty(k0, var)?;
+                let mut vt = self.ty(v0, var)?;
+                for (k, v) in &entries[1..] {
+                    if self.ty(k, var)? != kt {
+                        return None;
+                    }
+                    vt = vt.unify(&self.ty(v, var)?)?;
+                }
+                Ty::Map(Box::new(kt), Box::new(vt), entries.len() as u64)
+            }
             Expr::SomeOf(inner, _) => Ty::Optional(Box::new(self.ty(inner, var)?)),
             Expr::Index { base, index, .. } => {
                 let Ty::List(inner, _) = self.ty(base, var)? else { return None };
@@ -749,10 +797,35 @@ impl<'p> Env<'p> {
                 *inner
             }
             Expr::Builtin { f, args, .. } => {
-                for a in args {
-                    self.ty(a, var)?;
-                }
+                let tys: Vec<Ty> = args.iter().map(|a| self.ty(a, var)).collect::<Option<_>>()?;
+                let first = tys.first();
                 match f {
+                    // The checker typed these; their results follow from the first argument.
+                    Builtin::Get => match first? {
+                        Ty::Map(_, v, _) => Ty::Optional(v.clone()),
+                        _ => return None,
+                    },
+                    Builtin::Put | Builtin::Remove | Builtin::Add => first?.clone(),
+                    Builtin::Keys => match first? {
+                        Ty::Map(k, _, n) => Ty::List(k.clone(), *n),
+                        _ => return None,
+                    },
+                    Builtin::Values => match first? {
+                        Ty::Map(_, v, n) => Ty::List(v.clone(), *n),
+                        _ => return None,
+                    },
+                    Builtin::Entries => match first? {
+                        Ty::Map(k, v, n) => Ty::List(Box::new(Ty::Tuple(vec![(**k).clone(), (**v).clone()])), *n),
+                        _ => return None,
+                    },
+                    Builtin::Items => match first? {
+                        Ty::Set(t, n) => Ty::List(t.clone(), *n),
+                        _ => return None,
+                    },
+                    Builtin::ToSet => match first? {
+                        Ty::List(t, n) => Ty::Set(t.clone(), *n),
+                        _ => return None,
+                    },
                     Builtin::Len | Builtin::MinorUnits => named("Int"),
                     Builtin::Contains | Builtin::StartsWith | Builtin::EndsWith => named("Bool"),
                     Builtin::Json
@@ -774,7 +847,7 @@ impl<'p> Env<'p> {
                 }
                 for (i, a) in args.iter().enumerate() {
                     let p = params.get(slots.get(i).copied().unwrap_or(i))?;
-                    if !self.ty(a, var)?.fits(p) {
+                    if !self.ty(a, var)?.widens(p) {
                         return None;
                     }
                 }
@@ -812,10 +885,20 @@ impl Check<'_, '_> {
     fn stmt(&mut self, s: &Stmt) -> bool {
         match s {
             Stmt::Let { name, ty, value, .. } => {
+                // `[]` and `[:]` take their declared list, set or map type.
+                if let Some(d @ (Ty::List(..) | Ty::Set(..) | Ty::Map(..))) = ty
+                    && empty_literal(value, d)
+                {
+                    if !self.env.allowed(d, 0) {
+                        return false;
+                    }
+                    self.scopes.last_mut().expect("a scope").insert(name.clone(), d.clone());
+                    return true;
+                }
                 let Some(t) = self.ty(value) else { return false };
                 // A typed `let` holds its declared type (`let x: Optional<Int> = none`).
                 let t = match ty {
-                    Some(d) if t.fits(d) && self.env.allowed(d, 0) => d.clone(),
+                    Some(d) if t.widens(d) && self.env.allowed(d, 0) => d.clone(),
                     Some(_) => return false,
                     None => t,
                 };
@@ -823,11 +906,11 @@ impl Check<'_, '_> {
                 true
             }
             Stmt::Set { name, value, .. } => match (self.ty(value), self.lookup(name)) {
-                (Some(v), Some(t)) => v.fits(&t),
+                (Some(v), Some(t)) => v.widens(&t),
                 _ => false,
             },
             Stmt::Expr(e) => self.ty(e).is_some(),
-            Stmt::Return(Some(e), _) => self.ty(e).is_some_and(|t| t.fits(&self.ret)),
+            Stmt::Return(Some(e), _) => self.ty(e).is_some_and(|t| t.widens(&self.ret)),
             Stmt::Fail(e, _) => self.ty(e).is_some_and(|t| is(&t, "Text")),
             Stmt::If { cond, then, els, .. } => self.ty(cond).is_some_and(|t| is(&t, "Bool")) && self.block(then) && self.block(els),
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => self.block(body),
@@ -874,6 +957,15 @@ impl Check<'_, '_> {
             Stmt::Break(_) | Stmt::Continue(_) => true,
             Stmt::Return(None, _) => false,
         }
+    }
+}
+
+/// Whether `value` is `[]` declared as a list or set, or `[:]` declared as a map.
+fn empty_literal(value: &Expr, declared: &Ty) -> bool {
+    match (value, declared) {
+        (Expr::List(items, _), Ty::List(..) | Ty::Set(..)) => items.is_empty(),
+        (Expr::MapLit(entries, _), Ty::Map(..)) => entries.is_empty(),
+        _ => false,
     }
 }
 
@@ -972,6 +1064,8 @@ struct Helpers {
     opt_get_ref: FuncId,
     opt_no_arm: FuncId,
     tuple: FuncId,
+    map: FuncId,
+    empty: FuncId,
 }
 
 impl Native {
@@ -1109,6 +1203,8 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("staal_rt_opt_get_ref", rt_opt_get_ref as *const u8),
     ("staal_rt_opt_no_arm", rt_opt_no_arm as *const u8),
     ("staal_rt_tuple", rt_tuple as *const u8),
+    ("staal_rt_map", rt_map as *const u8),
+    ("staal_rt_empty", rt_empty as *const u8),
 ];
 
 /// The machine to generate code for: this one. `host_features`: use every feature
@@ -1176,6 +1272,8 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
         opt_get_ref: helper(module, "staal_rt_opt_get_ref", 1, true)?,
         opt_no_arm: helper(module, "staal_rt_opt_no_arm", 0, false)?,
         tuple: helper(module, "staal_rt_tuple", 2, true)?,
+        map: helper(module, "staal_rt_map", 2, true)?,
+        empty: helper(module, "staal_rt_empty", 1, true)?,
     };
     // In program order, so the same program always gives the same code and tables.
     let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
@@ -1511,6 +1609,17 @@ impl<M: Module> Gen<'_, '_, '_, M> {
     fn stmt(&mut self, s: &Stmt) -> Result<bool, String> {
         self.tick();
         match s {
+            Stmt::Let { name, ty: Some(d @ (Ty::List(..) | Ty::Set(..) | Ty::Map(..))), value, .. } if empty_literal(value, d) => {
+                let kind = match d {
+                    Ty::List(..) => 0,
+                    Ty::Set(..) => 1,
+                    _ => 2,
+                };
+                let k = self.b.ins().iconst(types::I64, kind);
+                let v = self.call_checked(self.h.empty, &[k]);
+                self.declare(name, v, d.clone());
+                Ok(true)
+            }
             Stmt::Let { name, ty, value, .. } => {
                 // A typed `let` holds its declared type, which the value fits.
                 let t = match ty {
@@ -2049,6 +2158,20 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 let argv = self.argv(&hs);
                 let n = self.b.ins().iconst(types::I64, hs.len() as i64);
                 Ok(self.call_checked(self.h.tuple, &[argv, n]))
+            }
+            // Keys and values alternate, evaluated in the order written.
+            Expr::MapLit(entries, _) => {
+                let mut hs = Vec::with_capacity(entries.len() * 2);
+                for (k, v) in entries {
+                    for e in [k, v] {
+                        let t = self.ty(e)?;
+                        let x = self.expr(e)?;
+                        hs.push(self.as_handle(x, &t));
+                    }
+                }
+                let argv = self.argv(&hs);
+                let n = self.b.ins().iconst(types::I64, hs.len() as i64);
+                Ok(self.call_checked(self.h.map, &[argv, n]))
             }
             Expr::SomeOf(inner, _) => {
                 let t = self.ty(inner)?;

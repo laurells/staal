@@ -630,6 +630,11 @@ fn check_ty(t: &Ty, pos: Pos, p: &Package, diags: &mut Vec<Diagnostic>) {
         }
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => check_ty(inner, pos, p, diags),
         Ty::Tuple(items) => items.iter().for_each(|i| check_ty(i, pos, p, diags)),
+        Ty::Map(k, v, _) => {
+            check_ty(k, pos, p, diags);
+            check_ty(v, pos, p, diags);
+        }
+        Ty::Set(t, _) => check_ty(t, pos, p, diags),
         Ty::Named(_) => {}
     }
 }

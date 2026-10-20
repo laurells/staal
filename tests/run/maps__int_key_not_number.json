@@ -1,0 +1,1 @@
+{"entry": "amounts", "inputs": {"m": {"x": {"amount": "1.00", "currency": "NGN"}}}, "expect": {"config_error_contains": "'x' is not a Int key"}, "model": {"provider": "script", "responses": []}}

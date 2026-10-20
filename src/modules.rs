@@ -548,6 +548,11 @@ impl Resolver<'_, '_, '_> {
                     self.ty(i, pos);
                 }
             }
+            Ty::Map(k, v, _) => {
+                self.ty(k, pos);
+                self.ty(v, pos);
+            }
+            Ty::Set(t, _) => self.ty(t, pos),
             Ty::Cap { .. } => {}
         }
     }
@@ -704,6 +709,12 @@ impl Resolver<'_, '_, '_> {
             | Expr::Not(inner, _)
             | Expr::SomeOf(inner, _) => self.expr(inner),
             Expr::Named { value, .. } => self.expr(value),
+            Expr::MapLit(entries, _) => {
+                for (k, v) in entries {
+                    self.expr(k);
+                    self.expr(v);
+                }
+            }
             Expr::Parse { text, .. } => self.expr(text),
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 self.expr(left);

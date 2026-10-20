@@ -1,0 +1,1 @@
+{"entry": "twice", "inputs": {"k": "x"}, "expect": {"failure": "value", "message_contains": "key \"x\" appears twice in a map literal"}, "model": {"provider": "script", "responses": []}}

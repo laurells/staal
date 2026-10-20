@@ -1,0 +1,1 @@
+{"entry": "drop", "inputs": {"m": {"1": {"amount": "1.00", "currency": "NGN"}}, "k": 7}, "expect": {"result": {"1": {"amount": "1.00", "currency": "NGN"}}}, "model": {"provider": "script", "responses": []}}

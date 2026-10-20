@@ -165,6 +165,16 @@ fn the_tuple_cases_really_run_native_code() {
     assert_eq!(got, want);
 }
 
+#[test]
+fn the_map_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/maps.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    let want = ["amounts", "count", "drop", "full", "has", "names", "same", "seen", "sorted", "stock", "tags", "total", "twice"];
+    assert_eq!(got, want);
+}
+
 // ---------------------------------------------------------------------------------
 // Generated programs
 

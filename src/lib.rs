@@ -36,10 +36,14 @@ pub struct Checked {
 pub fn check_files(entry: SourceFile, fetch: impl FnMut(&[String]) -> Result<SourceFile, String>) -> Checked {
     let loaded = modules::load(entry, fetch);
     let fingerprint = loaded.fingerprint();
-    let result = loaded.program.and_then(|prog| {
-        let (mut diags, for_bounds) = checker::check_with_bounds(&prog);
+    let result = loaded.program.and_then(|mut prog| {
+        let (mut diags, for_bounds, capacities) = checker::check_with_bounds(&prog);
         diags.extend(budget::check(&prog, &for_bounds));
-        if diags.is_empty() { Ok(prog) } else { Err(diags) }
+        if !diags.is_empty() {
+            return Err(diags);
+        }
+        checker::supply_capacities(&mut prog, &capacities);
+        Ok(prog)
     });
     Checked { files: loaded.files, fingerprint, result }
 }
@@ -156,13 +160,17 @@ pub fn check_path_recorded(path: &Path) -> Result<(Checked, Recorded), String> {
     }
     let fingerprint = loaded.fingerprint() + &packages_part;
     rec.borrow_mut().packages = packages_part;
-    let result = loaded.program.and_then(|prog| {
-        let (mut diags, for_bounds) = checker::check_with_bounds(&prog);
+    let result = loaded.program.and_then(|mut prog| {
+        let (mut diags, for_bounds, capacities) = checker::check_with_bounds(&prog);
         diags.extend(budget::check(&prog, &for_bounds));
         if let Some(p) = &project {
             diags.extend(packages::check_authority(&prog, &loaded.paths, p));
         }
-        if diags.is_empty() { Ok(prog) } else { Err(diags) }
+        if !diags.is_empty() {
+            return Err(diags);
+        }
+        checker::supply_capacities(&mut prog, &capacities);
+        Ok(prog)
     });
     let recorded = rec.borrow().clone();
     Ok((Checked { files: loaded.files, fingerprint, result }, recorded))
@@ -175,10 +183,14 @@ pub fn check_recorded(rec: &Recorded) -> Checked {
     let entry = SourceFile { name: rec.entry.0.clone(), text: rec.entry.1.clone() };
     let loaded = modules::load_from(entry, Replay(rec));
     let fingerprint = loaded.fingerprint() + &rec.packages;
-    let result = loaded.program.and_then(|prog| {
-        let (mut diags, for_bounds) = checker::check_with_bounds(&prog);
+    let result = loaded.program.and_then(|mut prog| {
+        let (mut diags, for_bounds, capacities) = checker::check_with_bounds(&prog);
         diags.extend(budget::check(&prog, &for_bounds));
-        if diags.is_empty() { Ok(prog) } else { Err(diags) }
+        if !diags.is_empty() {
+            return Err(diags);
+        }
+        checker::supply_capacities(&mut prog, &capacities);
+        Ok(prog)
     });
     Checked { files: loaded.files, fingerprint, result }
 }

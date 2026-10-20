@@ -75,6 +75,8 @@ capability need cannot have the name of a constant in scope (E101).
 | `List<T, N>` | at most N values of type T, in order |
 | `Optional<T>` | a value of type T (`some(x)`), or nothing (`none`) |
 | `(A, B, ...)` | a tuple: two or more values, of these types, in this order |
+| `Map<K, V, N>` | at most N values of type V, each under a different key of type K, in key order |
+| `Set<T, N>` | at most N different values of type T, in order |
 | `Proposed<T>` | raw model output (JSON), not yet checked against T |
 | `Receipt` | proof of one completed action: id, capability, method |
 | `Outcome` | `ok`, `error`, and (hidden) what succeeded |
@@ -125,6 +127,24 @@ equal when every element is. A tuple cannot hold a `Secret`, `Header`, `Receipt`
 output schema cannot fix each position for every provider: use a record. `@blind`
 paths name positions as fields: `@blind(1)`, `@blind(range.0)`. Both engines run
 tuples.
+
+**Maps and sets.** A map's keys, and a set's items, are `Text` or `Int`; they are
+kept in order (Ints by value, Texts by their bytes), so everything that lists them
+lists them the same way on every engine. Like a list, every map and set has a
+maximum size in its type. `["a": 1, "b": 2]` builds a map; `[:]` and `[]` are an
+empty map and an empty list or set, which take their type from a typed `let`.
+The built-in functions are `get(m, k)` (an `Optional` value), `put(m, k, v)` (a map
+with that entry added or replaced), `remove(m, k)`, `keys(m)`, `values(m)`,
+`entries(m)` (a list of `(key, value)` tuples), and for sets `add(s, x)`,
+`remove(s, x)`, `items(s)` and `to_set(xs)`; `len` and `contains` take maps (by
+key) and sets too. None of them changes its argument: each returns a new value.
+`put` and `add` fail (kind `value`) when the new entry or item would exceed the
+maximum size, and a map literal fails when a computed key appears twice (a literal
+key given twice is E101). Two maps or sets are equal when they hold the same
+entries or items. A map or set cannot hold a `Secret`, `Header`, `Receipt`,
+`Outcome`, `Done` or capability, and a model is never asked for one (E101): use a
+list of records. `for (k, v) in entries(m)` unpacks each entry, and works for any
+list of tuples. Both engines run maps and sets.
 
 **Type aliases.** `type Amount = Money` gives a type another name. An alias is
 exactly the type it names: before checking, every use is replaced by that type, so
@@ -190,6 +210,10 @@ declared type by the same strict rules:
 - A `List<T, N>` must be a JSON array of at most N items, each valid as T. A
   model's JSON schema for it carries `maxItems: N`, but the bound is enforced
   here whatever the model returns.
+- A map is a JSON object of at most its maximum size; an Int key is written as
+  the whole number in decimal (`"-3"`, `"10"`), and only that form is read (not
+  `"03"` or `"+3"`). A set is a JSON array of at most its maximum size in which no
+  item appears twice. Results are written the same way, in key order.
 - A tuple `(A, B)` is a JSON array of exactly its length, each item valid as its
   type: `["ada", 3]`. Results are written the same way.
 - An `Optional<T>` is `null` for `none`, or anything valid as T. A record field of
@@ -267,7 +291,8 @@ Evaluation is strictly left to right and statement by statement.
 - `xs[i]` is the element at position i, counting from 0.
 - Built-in functions: `len(text)` (characters, not bytes), `len(list)`,
   `contains(text, part)`, `contains(list, value)`, `starts_with(text, prefix)`,
-  `ends_with(text, suffix)`. Their names are reserved.
+  `ends_with(text, suffix)`, and those for maps and sets (section 2). Their names
+  are reserved.
 
 ### Arithmetic
 
@@ -1043,12 +1068,12 @@ line, `engine` in the C interface), never in the run config.
 
 A function qualifies when its parameters and result are `Int`, `Bool`, `Text`,
 `Money`, records whose fields are all of these, enums whose variants' fields are all
-of these, optional values or tuples of these, or lists of these, and its body uses only
+of these, optional values, tuples, maps or sets of these, or lists of these, and its body uses only
 `let`, `set`, `if`, `match`,
 `repeat`, `loop`, `for`, `break`, `continue`, `return` with a value,
 `fail`, literals (an integer must fit an Int; a list must not be empty), arithmetic,
 unary `-`, comparisons, `and`, `or`, `not`, field reads, record and variant literals,
-`some(...)`, `none`, tuples, indexing,
+`some(...)`, `none`, tuples, map literals, empty typed literals, indexing,
 the built-in functions other than `header` and `fill_secret`, and calls to other
 qualifying functions. A function that calls one that does not qualify does not
 qualify. Native code is entered only from the interpreter, when it calls a compiled

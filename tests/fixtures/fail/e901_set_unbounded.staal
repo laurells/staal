@@ -1,0 +1,3 @@
+// expect: E901
+// message: a set type needs a maximum size
+fn f(s: Set<Text>) {}

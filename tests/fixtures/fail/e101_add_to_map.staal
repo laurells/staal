@@ -1,0 +1,5 @@
+// expect: E101
+// message: `add` needs (a set, an item)
+fn f(m: Map<Text, Int, 3>) -> Map<Text, Int, 3> {
+    return add(m, "a")
+}

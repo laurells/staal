@@ -1,0 +1,10 @@
+// expect: E006
+// What a map holds from untrusted data is untrusted.
+fn f(m: Map<Text, Text, 3>) {
+    match get(m, "rule") {
+        some(r) => {
+            let s = propose(Text, instruct: r, tokens: 10)
+        }
+        none => {}
+    }
+}

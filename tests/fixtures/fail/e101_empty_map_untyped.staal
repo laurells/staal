@@ -1,0 +1,6 @@
+// expect: E101
+// message: an empty map has no key or value type
+fn f() -> Int {
+    let m = [:]
+    return 0
+}

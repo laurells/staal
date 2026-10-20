@@ -153,6 +153,8 @@ pub(crate) fn form(e: &Expr, index: &HashMap<String, usize>, diags: &mut Vec<Dia
         Expr::Validate(..) | Expr::Parse { .. } => Some("a constant cannot hold or check outside data".to_string()),
         Expr::Try(..) => Some("`try` has nothing to catch in a constant".to_string()),
         Expr::Done { .. } => Some("a constant cannot be evidence of work".to_string()),
+        // They need a capacity only known from a type; write the literal instead.
+        Expr::Builtin { f: Builtin::Put | Builtin::Add, .. } => Some("a constant cannot grow a map or set; write it as a literal".to_string()),
         _ => None,
     };
     if let Some(msg) = bad {

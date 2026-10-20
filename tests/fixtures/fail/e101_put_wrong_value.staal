@@ -1,0 +1,5 @@
+// expect: E101
+// message: `put` needs (a map, a key, a value)
+fn f(m: Map<Text, Int, 3>) -> Map<Text, Int, 3> {
+    return put(m, "a", "b")
+}

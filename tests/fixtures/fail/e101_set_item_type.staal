@@ -1,0 +1,3 @@
+// expect: E101
+// message: a set's items are Text or Int, not Bool
+fn f(s: Set<Bool, 3>) {}

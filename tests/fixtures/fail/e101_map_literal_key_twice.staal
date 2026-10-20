@@ -1,0 +1,5 @@
+// expect: E101
+// message: key "a" appears twice in this map
+fn f() -> Map<Text, Int, 2> {
+    return ["a": 1, "a": 2]
+}

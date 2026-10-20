@@ -1,0 +1,5 @@
+// expect: E101
+// message: a map of up to 10 entries cannot go where at most 2 are allowed
+fn f(m: Map<Text, Int, 10>) -> Map<Text, Int, 2> {
+    return m
+}

@@ -28,7 +28,7 @@ use serde_json::{json, Map, Value as Json};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
-use value::{from_json, from_json_lenient, schema, to_json, HeaderValue, Receipt, Secret, Types, Value};
+use value::{from_json, from_json_lenient, key_order, schema, to_json, HeaderValue, Receipt, Secret, Types, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailKind {
@@ -1105,6 +1105,10 @@ impl<'p> Interp<'p> {
         match s {
             Stmt::Let { name, ty, value, .. } => {
                 let mut v = self.eval(frame, value)?;
+                // `[]` takes its declared type, which may be a set.
+                if matches!(ty, Some(Ty::Set(..))) && matches!(value, Expr::List(items, _) if items.is_empty()) {
+                    v = Value::Set(Vec::new());
+                }
                 if let Some(Ty::Cap { limits, .. }) = ty {
                     v = self.narrow(v, limits)?;
                 }
@@ -1348,6 +1352,14 @@ impl<'p> Interp<'p> {
                     vals.push(self.eval(frame, i)?);
                 }
                 Ok(Value::Tuple(vals))
+            }
+            Expr::MapLit(entries, _) => {
+                let mut vals = Vec::with_capacity(entries.len() * 2);
+                for (k, v) in entries {
+                    vals.push(self.eval(frame, k)?);
+                    vals.push(self.eval(frame, v)?);
+                }
+                map_literal(vals)
             }
             Expr::Action { receiver, method, args, .. } => {
                 let Value::Cap(h) = frame.get(receiver)? else {
@@ -2048,8 +2060,50 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
     match (f, args) {
         (Builtin::Len, [Value::Text(t)]) => count(t.chars().count()),
         (Builtin::Len, [Value::List(xs)]) => count(xs.len()),
+        (Builtin::Len, [Value::Map(es)]) => count(es.len()),
+        (Builtin::Len, [Value::Set(xs)]) => count(xs.len()),
         (Builtin::Contains, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.contains(b.as_str()))),
         (Builtin::Contains, [Value::List(xs), v]) => Ok(Value::Bool(xs.contains(v))),
+        (Builtin::Contains, [Value::Map(es), k]) => Ok(Value::Bool(es.iter().any(|(x, _)| x == k))),
+        (Builtin::Contains, [Value::Set(xs), v]) => Ok(Value::Bool(xs.contains(v))),
+        (Builtin::Get, [Value::Map(es), k]) => Ok(Value::Opt(es.iter().find(|(x, _)| x == k).map(|(_, v)| Box::new(v.clone())))),
+        (Builtin::Put, [Value::Map(es), k, v, Value::Int(cap)]) => {
+            let mut es = es.clone();
+            match es.binary_search_by(|(x, _)| key_order(x, k)) {
+                Ok(i) => es[i].1 = v.clone(),
+                Err(i) => {
+                    if es.len() as i64 >= *cap {
+                        return fail(FailKind::Value, format!("the map is full: it holds at most {cap} entries, so {} cannot be added", shown(k)));
+                    }
+                    es.insert(i, (k.clone(), v.clone()));
+                }
+            }
+            Ok(Value::Map(es))
+        }
+        (Builtin::Remove, [Value::Map(es), k]) => Ok(Value::Map(es.iter().filter(|(x, _)| x != k).cloned().collect())),
+        (Builtin::Remove, [Value::Set(xs), v]) => Ok(Value::Set(xs.iter().filter(|x| *x != v).cloned().collect())),
+        (Builtin::Keys, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(k, _)| k.clone()).collect())),
+        (Builtin::Values, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(_, v)| v.clone()).collect())),
+        (Builtin::Entries, [Value::Map(es)]) => {
+            Ok(Value::List(es.iter().map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()])).collect()))
+        }
+        (Builtin::Add, [Value::Set(xs), v, Value::Int(cap)]) => {
+            let mut xs = xs.clone();
+            if let Err(i) = xs.binary_search_by(|x| key_order(x, v)) {
+                if xs.len() as i64 >= *cap {
+                    return fail(FailKind::Value, format!("the set is full: it holds at most {cap} items, so {} cannot be added", shown(v)));
+                }
+                xs.insert(i, v.clone());
+            }
+            Ok(Value::Set(xs))
+        }
+        (Builtin::Items, [Value::Set(xs)]) => Ok(Value::List(xs.clone())),
+        (Builtin::ToSet, [Value::List(xs)]) => {
+            let mut xs = xs.clone();
+            xs.sort_by(key_order);
+            xs.dedup();
+            Ok(Value::Set(xs))
+        }
         (Builtin::StartsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.starts_with(b.as_str()))),
         (Builtin::EndsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.ends_with(b.as_str()))),
         (Builtin::Header, [Value::Text(name), v]) => {
@@ -2154,6 +2208,25 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         }
         _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
     }
+}
+
+/// A map literal from its keys and values, alternating, in the order written. A key
+/// given twice is a failure: which value was meant cannot be known.
+pub(crate) fn map_literal(vals: Vec<Value>) -> Result<Value, Failure> {
+    let mut es: Vec<(Value, Value)> = Vec::with_capacity(vals.len() / 2);
+    let mut it = vals.into_iter();
+    while let (Some(k), Some(v)) = (it.next(), it.next()) {
+        match es.binary_search_by(|(x, _)| key_order(x, &k)) {
+            Ok(_) => return fail(FailKind::Value, format!("key {} appears twice in a map literal", shown(&k))),
+            Err(i) => es.insert(i, (k, v)),
+        }
+    }
+    Ok(Value::Map(es))
+}
+
+/// A map key or set item as a message shows it: as JSON, so text is quoted.
+fn shown(v: &Value) -> String {
+    to_json(v, false).map(|j| j.to_string()).unwrap_or_else(|_| "this value".into())
 }
 
 /// Percent-encodes for application/x-www-form-urlencoded: only unreserved characters
@@ -2266,6 +2339,14 @@ fn eval_pure(e: &Expr, types: &Types) -> Result<Value, Failure> {
             _ => internal(format!("cannot read '.{field}' of this value")),
         },
         Expr::Tuple(items, _) => Ok(Value::Tuple(items.iter().map(ev).collect::<Result<_, _>>()?)),
+        Expr::MapLit(entries, _) => {
+            let mut vals = Vec::with_capacity(entries.len() * 2);
+            for (k, v) in entries {
+                vals.push(ev(k)?);
+                vals.push(ev(v)?);
+            }
+            map_literal(vals)
+        }
         _ => internal("this is not something a constant can hold"),
     }
 }

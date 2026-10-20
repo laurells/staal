@@ -1,0 +1,3 @@
+// expect: E101
+// message: a map cannot hold a Receipt
+fn f(m: Map<Text, Receipt, 3>) {}

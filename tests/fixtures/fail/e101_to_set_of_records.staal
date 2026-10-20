@@ -1,0 +1,7 @@
+// expect: E101
+// message: a set's items are Text or Int, not P
+type P { n: Int }
+
+fn f(xs: List<P, 3>) -> Int {
+    return len(to_set(xs))
+}

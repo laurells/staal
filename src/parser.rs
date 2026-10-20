@@ -681,6 +681,26 @@ impl Parser {
                     self.expect(Tok::Gt, "'>'")?;
                     Ok(Ty::Optional(Box::new(inner)))
                 }
+                "Map" => {
+                    self.expect(Tok::Comma, "',' and the value type: Map<Text, Int, 100>")?;
+                    let value = self.ty()?;
+                    if *self.peek() != Tok::Comma {
+                        return Err((self.pos(), "a map type needs a maximum size, e.g. Map<Text, Int, 100>: every map in Staal is bounded".into()));
+                    }
+                    self.bump();
+                    let max = self.num()?;
+                    self.expect(Tok::Gt, "'>'")?;
+                    Ok(Ty::Map(Box::new(inner), Box::new(value), max))
+                }
+                "Set" => {
+                    if *self.peek() != Tok::Comma {
+                        return Err((self.pos(), "a set type needs a maximum size, e.g. Set<Text, 100>: every set in Staal is bounded".into()));
+                    }
+                    self.bump();
+                    let max = self.num()?;
+                    self.expect(Tok::Gt, "'>'")?;
+                    Ok(Ty::Set(Box::new(inner), max))
+                }
                 _ => Err((npos, format!("unknown generic type '{name}'"))),
             };
         }
@@ -822,6 +842,34 @@ impl Parser {
             }
             Tok::For => {
                 self.bump();
+                // `for (k, v) in xs`: each item, a tuple, unpacked as `let (k, v)` would.
+                if *self.peek() == Tok::LParen {
+                    self.bump();
+                    let mut names = Vec::new();
+                    loop {
+                        names.push((self.pos(), self.ident()?));
+                        if *self.peek() == Tok::Comma {
+                            self.bump();
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(Tok::RParen, "')'")?;
+                    if names.len() < 2 {
+                        return Err((pos, "`for (...)` unpacks tuples of two or more values; for one, write `for x in ...`".into()));
+                    }
+                    self.expect(Tok::In, "'in'")?;
+                    let list = self.head_expr()?;
+                    let mut body = self.block()?;
+                    self.unpacked += 1;
+                    let holder = format!("(tuple {})", self.unpacked);
+                    let lets = names.into_iter().enumerate().map(|(i, (npos, name))| {
+                        let base = Box::new(Expr::Var(holder.clone(), npos));
+                        Stmt::Let { name, ty: None, value: Expr::Field { base, field: i.to_string(), pos: npos }, pos: npos }
+                    });
+                    body.splice(0..0, lets);
+                    return Ok(Stmt::For { var: holder, list, body, pos });
+                }
                 let var = self.ident()?;
                 self.expect(Tok::In, "'in'")?;
                 let list = self.head_expr()?;
@@ -1021,6 +1069,46 @@ impl Parser {
         Ok(items)
     }
 
+    /// `[a, b]` a list, `[k: v, ...]` a map, `[:]` an empty map.
+    fn list_or_map(&mut self, pos: Pos) -> PResult<Expr> {
+        self.expect(Tok::LBracket, "'['")?;
+        if *self.peek() == Tok::Colon {
+            self.bump();
+            self.expect(Tok::RBracket, "']'")?;
+            return Ok(Expr::MapLit(Vec::new(), pos));
+        }
+        if *self.peek() == Tok::RBracket {
+            self.bump();
+            return Ok(Expr::List(Vec::new(), pos));
+        }
+        let first = self.expr()?;
+        if *self.peek() == Tok::Colon {
+            self.bump();
+            let mut entries = vec![(first, self.expr()?)];
+            while *self.peek() == Tok::Comma {
+                self.bump();
+                if *self.peek() == Tok::RBracket {
+                    break;
+                }
+                let k = self.expr()?;
+                self.expect(Tok::Colon, "':' between a key and its value")?;
+                entries.push((k, self.expr()?));
+            }
+            self.expect(Tok::RBracket, "']'")?;
+            return Ok(Expr::MapLit(entries, pos));
+        }
+        let mut items = vec![first];
+        while *self.peek() == Tok::Comma {
+            self.bump();
+            if *self.peek() == Tok::RBracket {
+                break;
+            }
+            items.push(self.expr()?);
+        }
+        self.expect(Tok::RBracket, "']'")?;
+        Ok(Expr::List(items, pos))
+    }
+
     /// An atom followed by any number of `.field` accesses and `[index]`es.
     fn primary(&mut self) -> PResult<Expr> {
         let mut e = self.atom()?;
@@ -1113,7 +1201,7 @@ impl Parser {
                 self.expect(Tok::RParen, "')'")?;
                 Ok(Expr::Tuple(items, pos))
             }
-            Tok::LBracket => Ok(Expr::List(self.list()?, pos)),
+            Tok::LBracket => self.with_records(true, |p| p.list_or_map(pos)),
             Tok::Propose => self.propose(),
             Tok::Validate => {
                 self.bump();

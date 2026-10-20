@@ -94,6 +94,8 @@ struct Ctx<'a> {
     params: HashSet<String>,
     /// The maximum iteration count of each `for` loop, by position, for the cost analysis.
     for_bounds: HashMap<Pos, u64>,
+    /// The capacity of the map or set each `put` and `add` grows, by its position.
+    capacities: HashMap<Pos, u64>,
     /// Actions of library capabilities, by the path programs use (`termii.sms.send`):
     /// the types of the parameters a program passes.
     lib_actions: HashMap<String, Vec<Ty>>,
@@ -188,6 +190,7 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
         | Expr::List(args, _) => inexact(args.iter().flat_map(|a| reveals(a, env)).collect()),
         // Conservative: every element of a tuple literal counts as revealing all of them.
         Expr::Tuple(items, _) => inexact(items.iter().flat_map(|a| reveals(a, env)).collect()),
+        Expr::MapLit(entries, _) => inexact(entries.iter().flat_map(|(k, v)| reveals(k, env).into_iter().chain(reveals(v, env))).collect()),
         // Conservative: every field of a record literal counts as revealing all of them.
         Expr::Record { fields, .. } | Expr::Variant { fields, .. } => {
             inexact(fields.iter().flat_map(|(_, v)| reveals(v, env)).collect())
@@ -227,6 +230,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Variant { ty, variant, .. } => format!("{ty}.{variant}"),
         Expr::List(..) => "[...]".into(),
         Expr::Tuple(..) => "(...)".into(),
+        Expr::MapLit(..) => "[...: ...]".into(),
         Expr::Index { base, .. } => format!("{}[...]", expr_text(base)),
         Expr::SomeOf(inner, _) => format!("some({})", expr_text(inner)),
         Expr::NoneLit(_) => "none".into(),
@@ -253,9 +257,13 @@ pub fn check(prog: &Program) -> Vec<Diagnostic> {
     check_with_bounds(prog).0
 }
 
+/// What checking found beyond diagnostics: the bound of each `for` (for the budget
+/// check) and the capacity each `put` and `add` needs (`supply_capacities`).
+pub type Found = (Vec<Diagnostic>, HashMap<Pos, u64>, HashMap<Pos, u64>);
+
 /// Checks a program. Also returns the maximum iteration count of every `for` loop,
 /// keyed by the loop's position, which the cost analysis needs.
-pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>) {
+pub fn check_with_bounds(prog: &Program) -> Found {
     let mut ctx = Ctx {
         known: ["Text", "Int", "Bool", "Money", "Unit", "Receipt"].iter().map(|s| s.to_string()).collect(),
         fields: HashMap::new(),
@@ -269,6 +277,7 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
         diverge_fns: HashSet::new(),
         params: HashSet::new(),
         for_bounds: HashMap::new(),
+        capacities: HashMap::new(),
         lib_actions: HashMap::new(),
         flow: None,
     };
@@ -442,7 +451,7 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
     // reported once per use: report each exact diagnostic once, where first found.
     let mut seen = HashSet::new();
     ctx.diags.retain(|d| seen.insert((d.code, d.pos, d.msg.clone())));
-    (ctx.diags, ctx.for_bounds)
+    (ctx.diags, ctx.for_bounds, ctx.capacities)
 }
 
 /// Calls `f` on every expression in `body`, nested blocks included, outermost first.
@@ -546,6 +555,8 @@ fn secret_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<&'sta
         }
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => secret_inside(ctx, inner, seen),
         Ty::Tuple(items) => items.iter().find_map(|t| secret_inside(ctx, t, seen)),
+        Ty::Map(k, v, _) => secret_inside(ctx, k, seen).or_else(|| secret_inside(ctx, v, seen)),
+        Ty::Set(t, _) => secret_inside(ctx, t, seen),
         Ty::Cap { .. } => None,
     }
 }
@@ -560,13 +571,21 @@ fn inner_types(ctx: &Ctx, n: &str) -> Option<Vec<Ty>> {
     Some(vs.iter().flat_map(|(_, fs)| fs.iter().map(|(_, t)| t.clone())).collect())
 }
 
-/// Whether a tuple appears anywhere inside `ty`, following records and enums.
-fn tuple_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> bool {
+/// A tuple, map or set anywhere inside `ty`, following records and enums: shapes a
+/// model's output schema cannot state exactly for every provider.
+fn no_schema_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<&'static str> {
     match ty {
-        Ty::Tuple(_) => true,
-        Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => tuple_inside(ctx, inner, seen),
-        Ty::Named(n) => seen.insert(n.clone()) && inner_types(ctx, n).is_some_and(|ts| ts.iter().any(|t| tuple_inside(ctx, t, seen))),
-        Ty::Cap { .. } => false,
+        Ty::Tuple(_) => Some("a tuple, whose positions"),
+        Ty::Map(..) => Some("a map, whose keys"),
+        Ty::Set(..) => Some("a set, whose items"),
+        Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => no_schema_inside(ctx, inner, seen),
+        Ty::Named(n) => {
+            if !seen.insert(n.clone()) {
+                return None;
+            }
+            inner_types(ctx, n)?.iter().find_map(|t| no_schema_inside(ctx, t, seen))
+        }
+        Ty::Cap { .. } => None,
     }
 }
 
@@ -576,6 +595,8 @@ fn cap_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> bool {
         Ty::Cap { .. } => true,
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => cap_inside(ctx, inner, seen),
         Ty::Tuple(items) => items.iter().any(|t| cap_inside(ctx, t, seen)),
+        Ty::Map(k, v, _) => cap_inside(ctx, k, seen) || cap_inside(ctx, v, seen),
+        Ty::Set(t, _) => cap_inside(ctx, t, seen),
         Ty::Named(n) => {
             seen.insert(n.clone())
                 && inner_types(ctx, n).is_some_and(|ts| ts.iter().any(|t| cap_inside(ctx, t, seen)))
@@ -804,6 +825,16 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
             }
             check_ty_known(ctx, inner, pos);
         }
+        Ty::Map(k, v, _) => {
+            check_key(ctx, k, "a map's keys", pos);
+            if let Some(bad) = proof_or_authority(v) {
+                ctx.err("E101", pos, format!("a map cannot hold a {bad}"));
+            } else if matches!(&**v, Ty::Named(n) if n == "Secret" || n == "Header") {
+                ctx.err("E101", pos, format!("a map cannot hold a {v}: secrets never travel inside data"));
+            }
+            check_ty_known(ctx, v, pos);
+        }
+        Ty::Set(t, _) => check_key(ctx, t, "a set's items", pos),
         Ty::Tuple(items) => {
             for t in items {
                 if let Some(bad) = proof_or_authority(t) {
@@ -814,6 +845,120 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                 check_ty_known(ctx, t, pos);
             }
         }
+    }
+}
+
+/// Whether two expressions are the same Text or Int literal.
+fn literal_eq(a: &Expr, b: &Expr) -> bool {
+    match (a, b) {
+        (Expr::Str(x, _), Expr::Str(y, _)) => x == y,
+        (Expr::Int(x, _), Expr::Int(y, _)) => x == y,
+        _ => false,
+    }
+}
+
+fn expr_text_literal(e: &Expr) -> String {
+    match e {
+        Expr::Str(s, _) => format!("{s:?}"),
+        Expr::Int(n, _) => n.to_string(),
+        _ => expr_text(e),
+    }
+}
+
+/// The type of a map or set operation. `put` and `add` record the capacity of the
+/// collection they grow, which the compiler then passes to them (`supply_capacities`).
+fn collection_builtin(ctx: &mut Ctx, f: Builtin, tys: &[(Ty, bool)], trusted: bool, pos: Pos) -> Option<(Ty, bool)> {
+    let shown: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();
+    let mut wrong = |want: &str| {
+        ctx.err("E101", pos, format!("`{}` needs {want}, found ({})", f.name(), shown.join(", ")));
+        None
+    };
+    let arg = |i: usize| &tys[i].0;
+    match (f, arg(0)) {
+        (Builtin::Get, Ty::Map(k, v, _)) if arg(1) == &**k => Some((Ty::Optional(v.clone()), trusted)),
+        (Builtin::Get, _) => wrong("(a map, a key)"),
+        (Builtin::Put, m @ Ty::Map(k, v, n)) if arg(1) == &**k && arg(2).fits(v) => {
+            let (m, n) = (m.clone(), *n);
+            ctx.capacities.insert(pos, n);
+            Some((m, trusted))
+        }
+        (Builtin::Put, _) => wrong("(a map, a key, a value)"),
+        (Builtin::Remove, m @ Ty::Map(k, _, _)) if arg(1) == &**k => Some((m.clone(), trusted)),
+        (Builtin::Remove, s @ Ty::Set(t, _)) if arg(1) == &**t => Some((s.clone(), trusted)),
+        (Builtin::Remove, _) => wrong("(a map, a key) or (a set, an item)"),
+        (Builtin::Keys, Ty::Map(k, _, n)) => Some((Ty::List(k.clone(), *n), trusted)),
+        (Builtin::Values, Ty::Map(_, v, n)) => Some((Ty::List(v.clone(), *n), trusted)),
+        (Builtin::Entries, Ty::Map(k, v, n)) => Some((Ty::List(Box::new(Ty::Tuple(vec![(**k).clone(), (**v).clone()])), *n), trusted)),
+        (Builtin::Keys | Builtin::Values | Builtin::Entries, _) => wrong("a map"),
+        (Builtin::Add, s @ Ty::Set(t, n)) if arg(1) == &**t => {
+            let (s, n) = (s.clone(), *n);
+            ctx.capacities.insert(pos, n);
+            Some((s, trusted))
+        }
+        (Builtin::Add, _) => wrong("(a set, an item)"),
+        (Builtin::Items, Ty::Set(t, n)) => Some((Ty::List(t.clone(), *n), trusted)),
+        (Builtin::Items, _) => wrong("a set"),
+        (Builtin::ToSet, Ty::List(t, n)) => {
+            let s = Ty::Set(t.clone(), *n);
+            check_ty_known(ctx, &s, pos);
+            Some((s, trusted))
+        }
+        (Builtin::ToSet, _) => wrong("a list of Text or Int"),
+        _ => wrong("a map or a set"),
+    }
+}
+
+/// Passes `put` and `add` the capacity of the map or set they grow, as a last
+/// argument: the capacity is the type's, which only the compiler knows.
+pub fn supply_capacities(prog: &mut Program, capacities: &HashMap<Pos, u64>) {
+    fn expr(e: &mut Expr, caps: &HashMap<Pos, u64>) {
+        for c in e.children_mut() {
+            expr(c, caps);
+        }
+        // Once: a call already given its capacity has one argument more than it takes.
+        if let Expr::Builtin { f: f @ (Builtin::Put | Builtin::Add), args, pos } = e
+            && let Some(&n) = caps.get(pos)
+            && args.len() == f.arity()
+        {
+            args.push(Expr::Int(n, *pos));
+        }
+    }
+    fn block(body: &mut [Stmt], caps: &HashMap<Pos, u64>) {
+        for s in body {
+            match s {
+                Stmt::Let { value, .. } | Stmt::Set { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value), _) | Stmt::Fail(value, _) => {
+                    expr(value, caps)
+                }
+                Stmt::Return(None, _) | Stmt::Break(_) | Stmt::Continue(_) => {}
+                Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => block(body, caps),
+                Stmt::For { list, body, .. } => {
+                    expr(list, caps);
+                    block(body, caps);
+                }
+                Stmt::If { cond, then, els, .. } => {
+                    expr(cond, caps);
+                    block(then, caps);
+                    block(els, caps);
+                }
+                Stmt::Match { value, arms, .. } => {
+                    expr(value, caps);
+                    for a in arms {
+                        block(&mut a.body, caps);
+                    }
+                }
+            }
+        }
+    }
+    for f in &mut prog.fns {
+        block(&mut f.body, capacities);
+    }
+}
+
+/// Map keys and set items are Text or Int: kept in an order every engine agrees on,
+/// and written as JSON keys exactly.
+fn check_key(ctx: &mut Ctx, t: &Ty, what: &str, pos: Pos) {
+    if *t != named("Text") && *t != named("Int") {
+        ctx.err("E101", pos, format!("{what} are Text or Int, not {t}"));
     }
 }
 
@@ -828,6 +973,8 @@ fn proof_or_authority(ty: &Ty) -> Option<&'static str> {
         Ty::Named(_) => None,
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => proof_or_authority(inner),
         Ty::Tuple(items) => items.iter().find_map(proof_or_authority),
+        Ty::Map(k, v, _) => proof_or_authority(k).or_else(|| proof_or_authority(v)),
+        Ty::Set(t, _) => proof_or_authority(t),
     }
 }
 
@@ -845,6 +992,18 @@ fn assignable(from: &Ty, to: &Ty) -> Result<(), (&'static str, String)> {
                     "E101",
                     format!("a list of up to {fmax} cannot go where at most {tmax} are allowed ({from} into {to})"),
                 ));
+            }
+            Ok(())
+        }
+        (Ty::Map(fk, fv, fmax), Ty::Map(tk, tv, tmax)) if fk == tk && fv.fits(tv) => {
+            if fmax > tmax {
+                return Err(("E101", format!("a map of up to {fmax} entries cannot go where at most {tmax} are allowed ({from} into {to})")));
+            }
+            Ok(())
+        }
+        (Ty::Set(ft, fmax), Ty::Set(tt, tmax)) if ft == tt => {
+            if fmax > tmax {
+                return Err(("E101", format!("a set of up to {fmax} items cannot go where at most {tmax} are allowed ({from} into {to})")));
             }
             Ok(())
         }
@@ -1339,9 +1498,15 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
         }
         match stmt {
             Stmt::Let { name, ty, value, pos } => {
-                // `[]` has no element type of its own: it takes the declared list type.
-                if let (Expr::List(items, _), Some(decl @ Ty::List(..))) = (value, ty)
-                    && items.is_empty()
+                // `[]` and `[:]` have no element type of their own: they take the declared
+                // list, set or map type.
+                let empty = match (value, ty) {
+                    (Expr::List(items, _), Some(Ty::List(..) | Ty::Set(..))) => items.is_empty(),
+                    (Expr::MapLit(entries, _), Some(Ty::Map(..))) => entries.is_empty(),
+                    _ => false,
+                };
+                if let Some(decl) = ty
+                    && empty
                 {
                     check_ty_known(ctx, decl, *pos);
                     let mut reveals = Vec::new();
@@ -1480,10 +1645,21 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 let Some((lty, ltrusted)) = type_of(ctx, list, &env) else { continue };
                 let Ty::List(el, max) = &lty else {
                     let code = if matches!(lty, Ty::Proposed(_)) { "E001" } else { "E101" };
-                    ctx.err(code, list.pos(), format!("`for` needs a list, found {lty}"));
+                    let hint = match lty {
+                        Ty::Map(..) => "; use keys(m), values(m) or entries(m)",
+                        Ty::Set(..) => "; use items(s)",
+                        _ => "",
+                    };
+                    ctx.err(code, list.pos(), format!("`for` needs a list, found {lty}{hint}"));
                     continue;
                 };
                 ctx.for_bounds.insert(*pos, *max);
+                // `for (a, b) in xs`: the parser names each item `(tuple N)` and unpacks it.
+                let unpacks = var.starts_with("(tuple ");
+                if unpacks && !matches!(&**el, Ty::Tuple(_)) {
+                    ctx.err("E101", list.pos(), format!("`for (...)` unpacks tuples, but the items of {lty} are {el}"));
+                    continue;
+                }
                 // Each element is part of the list: it reveals what the list does, exactly.
                 let list_srcs = reveals(list, &env);
                 let mut body_env = env.clone();
@@ -1993,6 +2169,8 @@ fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option
         Ty::Cap { .. } => Some("capability".into()),
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => runtime_only_inside(ctx, inner, seen),
         Ty::Tuple(items) => items.iter().find_map(|t| runtime_only_inside(ctx, t, seen)),
+        Ty::Map(k, v, _) => runtime_only_inside(ctx, k, seen).or_else(|| runtime_only_inside(ctx, v, seen)),
+        Ty::Set(t, _) => runtime_only_inside(ctx, t, seen),
         Ty::Named(n) if n == "Receipt" || n == "Outcome" || n == "Done" => Some(n.clone()),
         Ty::Named(n) => {
             if !seen.insert(n.clone()) {
@@ -2312,6 +2490,15 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     }
                     return Some((text, trusted));
                 }
+                Builtin::Get
+                | Builtin::Put
+                | Builtin::Remove
+                | Builtin::Keys
+                | Builtin::Values
+                | Builtin::Entries
+                | Builtin::Add
+                | Builtin::Items
+                | Builtin::ToSet => return collection_builtin(ctx, *f, &tys, trusted, *pos),
                 _ => {}
             }
             if *f == Builtin::Contains && secret_inside(ctx, &tys[0].0, &mut HashSet::new()).is_some() {
@@ -2319,10 +2506,12 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 return None;
             }
             let ok = match f {
-                Builtin::Len => matches!(&tys[0].0, Ty::List(..)) || tys[0].0 == text,
+                Builtin::Len => matches!(&tys[0].0, Ty::List(..) | Ty::Map(..) | Ty::Set(..)) || tys[0].0 == text,
                 Builtin::Contains => match (&tys[0].0, &tys[1].0) {
                     (a, b) if *a == text && *b == text => true,
                     (Ty::List(el, _), b) => b.fits(el),
+                    // A map: whether it has the key. A set: whether it has the item.
+                    (Ty::Map(k, _, _), b) | (Ty::Set(k, _), b) => b == &**k,
                     _ => false,
                 },
                 Builtin::StartsWith | Builtin::EndsWith => tys[0].0 == text && tys[1].0 == text,
@@ -2336,13 +2525,22 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::MinorUnits
                 | Builtin::Currency
                 | Builtin::UrlSegment
-                | Builtin::Text => true,
+                | Builtin::Text
+                | Builtin::Get
+                | Builtin::Put
+                | Builtin::Remove
+                | Builtin::Keys
+                | Builtin::Values
+                | Builtin::Entries
+                | Builtin::Add
+                | Builtin::Items
+                | Builtin::ToSet => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();
                 let want = match f {
-                    Builtin::Len => "Text or a list",
-                    Builtin::Contains => "(Text, Text) or (a list, a value of its element type)",
+                    Builtin::Len => "Text, a list, a map or a set",
+                    Builtin::Contains => "(Text, Text), (a list, a value of its element type), (a map, a key) or (a set, an item)",
                     Builtin::StartsWith | Builtin::EndsWith => "(Text, Text)",
                     _ => "",
                 };
@@ -2388,6 +2586,47 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             Some((named(ty), trusted))
         }
         Expr::NoneLit(_) => Some((Ty::none(), true)),
+        Expr::MapLit(entries, pos) => {
+            if entries.is_empty() {
+                ctx.err("E101", *pos, "an empty map has no key or value type; give it one in a typed let: let m: Map<Text, Int, 10> = [:]".into());
+                return None;
+            }
+            let mut trusted = true;
+            let (mut kt, mut vt): (Option<Ty>, Option<Ty>) = (None, None);
+            for (k, v) in entries {
+                let (Some((k_ty, ktr)), Some((v_ty, vtr))) = (type_of(ctx, k, env), type_of(ctx, v, env)) else { return None };
+                trusted &= ktr && vtr;
+                match &kt {
+                    None => kt = Some(k_ty),
+                    Some(t) if *t == k_ty => {}
+                    Some(t) => {
+                        ctx.err("E101", k.pos(), format!("map keys must all have one type: {t} and {k_ty}"));
+                        return None;
+                    }
+                }
+                vt = match vt {
+                    None => Some(v_ty),
+                    Some(t) => match t.unify(&v_ty) {
+                        Some(u) => Some(u),
+                        None => {
+                            ctx.err("E101", v.pos(), format!("map values must all have one type: {t} and {v_ty}"));
+                            return None;
+                        }
+                    },
+                };
+            }
+            let (kt, vt) = (kt.expect("an entry"), vt.expect("an entry"));
+            // The same literal key twice is a mistake the compiler can see.
+            for (i, (k, _)) in entries.iter().enumerate() {
+                if entries[..i].iter().any(|(e, _)| literal_eq(e, k)) {
+                    ctx.err("E101", k.pos(), format!("key {} appears twice in this map", expr_text_literal(k)));
+                    return None;
+                }
+            }
+            let t = Ty::Map(Box::new(kt), Box::new(vt), entries.len() as u64);
+            check_ty_known(ctx, &t, *pos);
+            Some((t, trusted))
+        }
         Expr::Tuple(items, pos) => {
             let tys: Vec<Option<(Ty, bool)>> = items.iter().map(|i| type_of(ctx, i, env)).collect();
             let tys: Vec<(Ty, bool)> = tys.into_iter().collect::<Option<Vec<_>>>()?;
@@ -2525,6 +2764,10 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     );
                     None
                 }
+                Ty::Map(..) | Ty::Set(..) => {
+                    ctx.err("E104", *pos, format!("{bty} has no fields; cannot read '.{field}' (use get(m, key), contains, keys or items)"));
+                    None
+                }
                 Ty::Tuple(items) => match field.parse::<usize>().ok().and_then(|i| items.get(i)) {
                     Some(t) => Some((t.clone(), trusted)),
                     None => {
@@ -2571,11 +2814,11 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     ),
                 );
             }
-            if tuple_inside(ctx, ty, &mut HashSet::new()) {
+            if let Some(what) = no_schema_inside(ctx, ty, &mut HashSet::new()) {
                 ctx.err(
                     "E101",
                     *pos,
-                    format!("a model cannot be asked for {ty}: it holds a tuple, whose positions a model's output schema cannot fix; use a record"),
+                    format!("a model cannot be asked for {ty}: it holds {what} a model's output schema cannot fix; use records and lists"),
                 );
             }
             check_blind(ctx, instruct.as_deref(), data, blind_to, env, *pos);

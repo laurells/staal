@@ -1,0 +1,6 @@
+// expect: E101
+// message: it holds a map, whose keys a model's output schema cannot fix
+fn f() -> Int budget(calls: 1, tokens: 100) {
+    let m = validate propose(Map<Text, Int, 5>, instruct: "Count.", tokens: 100)
+    return len(m)
+}

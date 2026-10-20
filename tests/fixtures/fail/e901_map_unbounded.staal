@@ -1,0 +1,3 @@
+// expect: E901
+// message: a map type needs a maximum size
+fn f(m: Map<Text, Int>) {}

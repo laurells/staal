@@ -1,0 +1,1 @@
+{"entry": "has", "inputs": {"m": {"a": 1}, "k": "b"}, "expect": {"result": false}, "model": {"provider": "script", "responses": []}}

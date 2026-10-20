@@ -55,6 +55,10 @@ pub enum Value {
     Opt(Option<Box<Value>>),
     /// A tuple: its elements, in order.
     Tuple(Vec<Value>),
+    /// A map: its entries, each key once, in key order (`key_order`).
+    Map(Vec<(Value, Value)>),
+    /// A set: its items, each once, in order (`key_order`).
+    Set(Vec<Value>),
     /// Raw output from outside (a model, or text given to `parse`), not yet checked
     /// against `ty`. `lenient`: fields the type does not declare are dropped when it is
     /// validated, as services add fields over time. Model output is strict.
@@ -144,6 +148,42 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
             }
             Ok(Value::Tuple(out))
         }
+        // A map is a JSON object; Int keys are written as whole numbers in decimal.
+        Ty::Map(kt, vt, max) => {
+            let obj = json.as_object().ok_or_else(|| expected("an object"))?;
+            // Checked before looking at any entry, as for lists: the bound is the type's.
+            if obj.len() as u64 > *max {
+                return Err(format!("{path}: at most {max} entries allowed, found {}", obj.len()));
+            }
+            let mut out: Vec<(Value, Value)> = Vec::with_capacity(obj.len());
+            for (k, v) in obj {
+                let key = key_from_json(kt, k).ok_or_else(|| format!("{path}: '{k}' is not a {kt} key"))?;
+                let val = from_json_at(vt, v, types, &format!("{path}[{}]", serde_json::to_string(k).unwrap_or_default()), depth + 1, lenient)?;
+                out.push((key, val));
+            }
+            out.sort_by(|a, b| key_order(&a.0, &b.0));
+            // `"1"` and `"01"` would be the same Int key; only the canonical form is read.
+            if out.windows(2).any(|w| w[0].0 == w[1].0) {
+                return Err(format!("{path}: a key appears twice"));
+            }
+            Ok(Value::Map(out))
+        }
+        Ty::Set(t, max) => {
+            let items = json.as_array().ok_or_else(|| expected("a list"))?;
+            if items.len() as u64 > *max {
+                return Err(format!("{path}: at most {max} items allowed, found {}", items.len()));
+            }
+            let mut out = Vec::with_capacity(items.len());
+            for (i, item) in items.iter().enumerate() {
+                out.push(from_json_at(t, item, types, &format!("{path}[{i}]"), depth + 1, lenient)?);
+            }
+            out.sort_by(key_order);
+            if let Some(w) = out.windows(2).find(|w| w[0] == w[1]) {
+                let shown = to_json(&w[0], false).map(|j| j.to_string()).unwrap_or_default();
+                return Err(format!("{path}: {shown} appears twice; a set holds each item once"));
+            }
+            Ok(Value::Set(out))
+        }
         Ty::List(inner, max) => {
             let items = json.as_array().ok_or_else(|| expected("a list"))?;
             // Checked before looking at any element: a program's budget is computed
@@ -221,6 +261,31 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
     }
 }
 
+/// The order of map keys and set items: Ints by value, Texts by their bytes (which
+/// is the order of their Unicode code points).
+pub fn key_order(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Text(x), Value::Text(y)) => x.cmp(y),
+        // Never mixed: keys of one map, or items of one set, have one type.
+        (Value::Int(_), _) => std::cmp::Ordering::Less,
+        _ => std::cmp::Ordering::Greater,
+    }
+}
+
+/// A map key from its JSON object key: the text itself, or an Int written exactly as
+/// `to_json` writes it (no sign for positive numbers, no leading zeros, no `-0`).
+fn key_from_json(kt: &Ty, k: &str) -> Option<Value> {
+    match kt {
+        Ty::Named(n) if n == "Text" => Some(Value::Text(k.to_string())),
+        Ty::Named(n) if n == "Int" => {
+            let v: i64 = k.parse().ok()?;
+            (v.to_string() == k).then_some(Value::Int(v))
+        }
+        _ => None,
+    }
+}
+
 fn money_from_json(json: &Json, path: &str) -> Result<Money, String> {
     let obj = json
         .as_object()
@@ -282,6 +347,19 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
         }
         Value::List(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
         Value::Tuple(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
+        Value::Map(entries) => {
+            let mut obj = Map::new();
+            for (k, v) in entries {
+                let key = match k {
+                    Value::Text(t) => t.clone(),
+                    Value::Int(n) => n.to_string(),
+                    _ => return Err("a map key that is neither Text nor Int".into()),
+                };
+                obj.insert(key, to_json(v, for_model)?);
+            }
+            Json::Object(obj)
+        }
+        Value::Set(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
         Value::Opt(None) => Json::Null,
         Value::Opt(Some(inner)) => to_json(inner, for_model)?,
         Value::Proposed { raw, .. } => raw.clone(),
@@ -314,6 +392,9 @@ fn schema_at(ty: &Ty, types: &Types, seen: &mut HashSet<String>) -> Json {
         Ty::Cap { .. } => json!({}),
         Ty::List(inner, max) => json!({ "type": "array", "items": schema_at(inner, types, seen), "maxItems": max }),
         Ty::Optional(inner) => json!({ "anyOf": [schema_at(inner, types, seen), { "type": "null" }] }),
+        // The compiler never asks a model for a map or a set; these are exact all the same.
+        Ty::Map(_, v, max) => json!({ "type": "object", "additionalProperties": schema_at(v, types, seen), "maxProperties": max }),
+        Ty::Set(t, max) => json!({ "type": "array", "items": schema_at(t, types, seen), "maxItems": max, "uniqueItems": true }),
         // The compiler never asks a model for a tuple (a schema could not fix each
         // position for every provider); this is the exact JSON Schema all the same.
         Ty::Tuple(tys) => json!({

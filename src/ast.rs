@@ -15,6 +15,11 @@ pub enum Ty {
     Optional(Box<Ty>),
     /// `(A, B, ...)`: a fixed number of values, of these types, in this order.
     Tuple(Vec<Ty>),
+    /// `Map<K, V, N>`: at most N values of type V, each under a different key of type
+    /// K (Text or Int), in key order.
+    Map(Box<Ty>, Box<Ty>, u64),
+    /// `Set<T, N>`: at most N different values of type T (Text or Int), in order.
+    Set(Box<Ty>, u64),
     /// A capability, e.g. `cap payments.refund(max: 500 USD)`, with its limits.
     Cap { path: Vec<String>, limits: CapLimits },
 }
@@ -37,6 +42,8 @@ impl Ty {
             Ty::Named(n) => n.is_empty(),
             Ty::Proposed(t) | Ty::List(t, _) | Ty::Optional(t) => t.has_unknown(),
             Ty::Tuple(ts) => ts.iter().any(Ty::has_unknown),
+            Ty::Map(k, v, _) => k.has_unknown() || v.has_unknown(),
+            Ty::Set(t, _) => t.has_unknown(),
             Ty::Cap { .. } => false,
         }
     }
@@ -50,6 +57,7 @@ impl Ty {
             (Ty::Optional(a), Ty::Optional(b)) => Some(Ty::Optional(Box::new(a.unify(b)?))),
             (Ty::List(a, n), Ty::List(b, m)) if n == m => Some(Ty::List(Box::new(a.unify(b)?), *n)),
             (Ty::Proposed(a), Ty::Proposed(b)) => Some(Ty::Proposed(Box::new(a.unify(b)?))),
+            (Ty::Map(ka, va, n), Ty::Map(kb, vb, m)) if n == m && ka == kb => Some(Ty::Map(ka.clone(), Box::new(va.unify(vb)?), *n)),
             (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
                 Some(Ty::Tuple(a.iter().zip(b).map(|(x, y)| x.unify(y)).collect::<Option<Vec<_>>>()?))
             }
@@ -61,6 +69,18 @@ impl Ty {
     /// `none`'s type where `to` has an optional type.
     pub fn fits(&self, to: &Ty) -> bool {
         self.unify(to).as_ref() == Some(to)
+    }
+
+    /// Like `fits`, and a list, map or set may also go where a larger one is allowed:
+    /// a value of `List<T, 3>` is a value of `List<T, 10>`.
+    pub fn widens(&self, to: &Ty) -> bool {
+        match (self, to) {
+            (Ty::List(a, n), Ty::List(b, m)) | (Ty::Set(a, n), Ty::Set(b, m)) => n <= m && a.widens(b),
+            (Ty::Map(ka, va, n), Ty::Map(kb, vb, m)) => n <= m && ka == kb && va.widens(vb),
+            (Ty::Optional(a), Ty::Optional(b)) if !a.is_unknown() => a.widens(b),
+            (Ty::Tuple(a), Ty::Tuple(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.widens(y)),
+            _ => self.fits(to),
+        }
     }
 }
 
@@ -129,6 +149,8 @@ impl std::fmt::Display for Ty {
             Ty::Optional(t) if t.is_unknown() => write!(f, "none"),
             Ty::Optional(t) => write!(f, "Optional<{t}>"),
             Ty::Tuple(ts) => write!(f, "({})", ts.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")),
+            Ty::Map(k, v, n) => write!(f, "Map<{k}, {v}, {n}>"),
+            Ty::Set(t, n) => write!(f, "Set<{t}, {n}>"),
             Ty::Cap { path, limits } => write!(f, "cap {}{limits}", path.join(".")),
         }
     }
@@ -316,6 +338,19 @@ pub enum Builtin {
     /// `to_text(x)`: a Text, Int, Bool or Money as text (`12.50 USD`). Interpolation,
     /// `"\(x)"`, is `"" + to_text(x)`.
     Text,
+    /// Maps: `get(m, k)` (an Optional), `put(m, k, v)`, `remove(m, k)`, `keys(m)`,
+    /// `values(m)`, `entries(m)` (a list of (key, value) tuples). Sets: `add(s, x)`,
+    /// `remove(s, x)`, `items(s)`, and `to_set(xs)` from a list. `put` and `add` take
+    /// the collection's capacity as a last argument, which the compiler supplies.
+    Get,
+    Put,
+    Remove,
+    Keys,
+    Values,
+    Entries,
+    Add,
+    Items,
+    ToSet,
 }
 
 impl Builtin {
@@ -336,6 +371,15 @@ impl Builtin {
             "currency" => Some(Builtin::Currency),
             "url_segment" => Some(Builtin::UrlSegment),
             "to_text" => Some(Builtin::Text),
+            "get" => Some(Builtin::Get),
+            "put" => Some(Builtin::Put),
+            "remove" => Some(Builtin::Remove),
+            "keys" => Some(Builtin::Keys),
+            "values" => Some(Builtin::Values),
+            "entries" => Some(Builtin::Entries),
+            "add" => Some(Builtin::Add),
+            "items" => Some(Builtin::Items),
+            "to_set" => Some(Builtin::ToSet),
             _ => None,
         }
     }
@@ -357,6 +401,15 @@ impl Builtin {
             Builtin::Currency => "currency",
             Builtin::UrlSegment => "url_segment",
             Builtin::Text => "to_text",
+            Builtin::Get => "get",
+            Builtin::Put => "put",
+            Builtin::Remove => "remove",
+            Builtin::Keys => "keys",
+            Builtin::Values => "values",
+            Builtin::Entries => "entries",
+            Builtin::Add => "add",
+            Builtin::Items => "items",
+            Builtin::ToSet => "to_set",
         }
     }
 
@@ -371,9 +424,21 @@ impl Builtin {
             | Builtin::MinorUnits
             | Builtin::Currency
             | Builtin::UrlSegment
-            | Builtin::Text => 1,
-            Builtin::Contains | Builtin::StartsWith | Builtin::EndsWith | Builtin::Header | Builtin::FillSecret => 2,
-            Builtin::Replace => 3,
+            | Builtin::Text
+            | Builtin::Keys
+            | Builtin::Values
+            | Builtin::Entries
+            | Builtin::Items
+            | Builtin::ToSet => 1,
+            Builtin::Contains
+            | Builtin::StartsWith
+            | Builtin::EndsWith
+            | Builtin::Header
+            | Builtin::FillSecret
+            | Builtin::Get
+            | Builtin::Remove
+            | Builtin::Add => 2,
+            Builtin::Replace | Builtin::Put => 3,
         }
     }
 }
@@ -460,6 +525,9 @@ pub enum Expr {
     Record { ty: String, fields: Vec<(String, Expr)>, pos: Pos },
     /// `[a, b, c]`
     List(Vec<Expr>, Pos),
+    /// `[k: v, ...]`: a map, or `[:]`, an empty one (which takes its type from a
+    /// typed `let`).
+    MapLit(Vec<(Expr, Expr)>, Pos),
     /// `(a, b)`: a tuple. Its elements are read as `t.0`, `t.1`, ... (a `Field` whose
     /// name is the position), or by `let (x, y) = t`.
     Tuple(Vec<Expr>, Pos),
@@ -519,6 +587,7 @@ impl Expr {
             | Expr::Not(inner, _)
             | Expr::SomeOf(inner, _) => vec![inner],
             Expr::Named { value, .. } => vec![value],
+            Expr::MapLit(entries, _) => entries.iter().flat_map(|(k, v)| [k, v]).collect(),
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -547,6 +616,7 @@ impl Expr {
             | Expr::Not(inner, _)
             | Expr::SomeOf(inner, _) => vec![inner],
             Expr::Named { value, .. } => vec![value],
+            Expr::MapLit(entries, _) => entries.iter_mut().flat_map(|(k, v)| [k, v]).collect(),
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -579,6 +649,7 @@ impl Expr {
             | Expr::SomeOf(_, p)
             | Expr::NoneLit(p)
             | Expr::Tuple(_, p)
+            | Expr::MapLit(_, p)
             | Expr::List(_, p) => *p,
             Expr::Arith { pos, .. }
             | Expr::Logic { pos, .. }

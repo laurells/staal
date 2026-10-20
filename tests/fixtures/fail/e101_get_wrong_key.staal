@@ -1,0 +1,5 @@
+// expect: E101
+// message: `get` needs (a map, a key), found (Map<Text, Int, 3>, Int)
+fn f(m: Map<Text, Int, 3>) -> Optional<Int> {
+    return get(m, 1)
+}

@@ -1,0 +1,5 @@
+// expect: E104
+// message: Map<Text, Int, 3> has no fields
+fn f(m: Map<Text, Int, 3>) -> Int {
+    return m.a
+}

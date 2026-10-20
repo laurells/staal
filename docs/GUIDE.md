@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 38 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 394 invalid ones
+rejecting the programs it should. 39 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 418 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -159,6 +159,29 @@ A tuple groups a fixed number of values without naming them: `(Int, Int)`, read 
 position (`.0`, `.1`) or unpacked with `let (a, b) = ...`. In JSON it is an array of
 exactly that length. For anything a model produces, or anything whose parts deserve
 names, use a record: a model is never asked for a tuple.
+
+### Maps and sets
+
+    fn count(words: List<Text, 500>) -> Map<Text, Int, 500> {
+        let m: Map<Text, Int, 500> = [:]
+        for w in words {
+            match get(m, w) {
+                some(n) => { set m = put(m, w, n + 1) }
+                none => { set m = put(m, w, 1) }
+            }
+        }
+        return m
+    }
+
+    for (word, n) in entries(count(words)) { ... }
+    let tags = add(to_set(names), "new")
+
+Keys and set items are Text or Int, kept in order. Every map and set has a maximum
+size, like a list, so loops over them are bounded and their cost is known; `put` and
+`add` fail if they would go over it. Operations return new values and never change
+the one they are given. In JSON a map is an object and a set an array of distinct
+items. A model is never asked for a map or a set: ask for a list of records instead,
+which a model's output schema can describe exactly.
 
 ### Type aliases
 
@@ -831,9 +854,9 @@ compares both with git. `git` must be installed to fetch.
 
 On the native engine, every pure function is compiled to machine code when the run
 starts (Cranelift, in memory): its parameters and result are Int, Bool, Text, Money,
-records, enums, optional values, tuples or lists of these, and its body uses `let`, `set`, `if`, `match`,
+records, enums, optional values, tuples, maps, sets or lists of these, and its body uses `let`, `set`, `if`, `match`,
 `repeat`, `loop`, `for`, `break`, `continue`, `return`, `fail`, arithmetic,
-comparisons, field reads, record, variant, tuple and list literals, `some` and `none`, indexing, the pure built-in functions, and calls to other such
+comparisons, field reads, record, variant, tuple, list and map literals, `some` and `none`, indexing, the pure built-in functions, and calls to other such
 functions. Everything else runs on the interpreter, which stays the reference.
 Model calls, actions, `try`, `parse`, `validate`, HTTP, files and the journal never
 run in native code. The full rules are in [RUNTIME.md](RUNTIME.md) section 15. In short:

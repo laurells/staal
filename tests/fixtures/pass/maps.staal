@@ -1,0 +1,32 @@
+// Maps and sets: typed empties, widening, unpacking loops and contains.
+fn index(words: List<Text, 20>) -> Map<Text, Int, 20> {
+    let m: Map<Text, Int, 20> = [:]
+    let i = 0
+    for w in words {
+        set m = put(m, w, i)
+        set i = i + 1
+    }
+    return m
+}
+
+fn small() -> Map<Text, Int, 5> {
+    return ["a": 1]
+}
+
+fn sum(m: Map<Text, Int, 20>) -> Int {
+    let s = 0
+    for (k, v) in entries(m) {
+        if contains(m, k) {
+            set s = s + v
+        }
+    }
+    return s
+}
+
+fn uniq(xs: List<Int, 9>) -> Set<Int, 9> {
+    let s: Set<Int, 9> = []
+    for x in xs {
+        set s = add(s, x)
+    }
+    return s
+}

@@ -1,0 +1,3 @@
+// expect: E101
+// message: a map's keys are Text or Int, not Money
+fn f(m: Map<Money, Int, 3>) {}

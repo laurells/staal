@@ -110,6 +110,11 @@ fn replace_in(t: &mut Ty, with: &mut dyn FnMut(&str) -> Result<Option<Ty>, Diagn
         }
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => replace_in(inner, with),
         Ty::Tuple(items) => items.iter_mut().try_for_each(|i| replace_in(i, with)),
+        Ty::Map(k, v, _) => {
+            replace_in(k, with)?;
+            replace_in(v, with)
+        }
+        Ty::Set(t, _) => replace_in(t, with),
         Ty::Cap { .. } => Ok(()),
     }
 }

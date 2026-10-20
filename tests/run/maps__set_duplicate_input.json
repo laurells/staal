@@ -1,0 +1,1 @@
+{"entry": "sorted", "inputs": {"s": [5, 5]}, "expect": {"config_error_contains": "inputs.s: 5 appears twice; a set holds each item once"}, "model": {"provider": "script", "responses": []}}

@@ -1,0 +1,11 @@
+// expect: E006
+// A map built from untrusted text is untrusted, and so is what is looked up in it.
+fn f(ticket: Text) {
+    let m = ["rule": ticket]
+    match get(m, "rule") {
+        some(r) => {
+            let s = propose(Text, instruct: r, tokens: 10)
+        }
+        none => {}
+    }
+}

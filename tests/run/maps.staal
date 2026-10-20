@@ -1,0 +1,82 @@
+// Maps and sets: literals, get, put, remove, keys, values, entries, contains, len,
+// add, items and to_set; bounded, in key order, from JSON and back.
+fn stock() -> Map<Text, Int, 10> {
+    let m: Map<Text, Int, 10> = ["pear": 3, "apple": 5]
+    set m = put(m, "fig", 1)
+    set m = put(m, "apple", 7)
+    return m
+}
+
+fn count(words: List<Text, 8>) -> Map<Text, Int, 8> {
+    let m: Map<Text, Int, 8> = [:]
+    for w in words {
+        match get(m, w) {
+            some(n) => {
+                set m = put(m, w, n + 1)
+            }
+            none => {
+                set m = put(m, w, 1)
+            }
+        }
+    }
+    return m
+}
+
+fn total(m: Map<Text, Int, 10>) -> Int {
+    let sum = 0
+    for (name, n) in entries(m) {
+        if len(name) > 0 {
+            set sum = sum + n
+        }
+    }
+    return sum
+}
+
+fn names(m: Map<Text, Int, 10>) -> List<Text, 10> {
+    return keys(m)
+}
+
+fn amounts(m: Map<Int, Money, 5>) -> List<Money, 5> {
+    return values(m)
+}
+
+fn drop(m: Map<Int, Money, 5>, k: Int) -> Map<Int, Money, 5> {
+    return remove(m, k)
+}
+
+fn has(m: Map<Text, Int, 10>, k: Text) -> Bool {
+    return contains(m, k)
+}
+
+fn full() -> Map<Text, Int, 2> {
+    let m: Map<Text, Int, 2> = ["a": 1]
+    set m = put(m, "b", 2)
+    set m = put(m, "c", 3)
+    return m
+}
+
+fn twice(k: Text) -> Map<Text, Int, 2> {
+    return [k: 1, "x": 2]
+}
+
+fn tags(xs: List<Text, 6>) -> Set<Text, 6> {
+    let s = to_set(xs)
+    set s = add(s, "new")
+    return remove(s, "old")
+}
+
+fn seen(xs: List<Int, 5>) -> Int {
+    let s: Set<Int, 5> = []
+    for x in xs {
+        set s = add(s, x)
+    }
+    return len(s)
+}
+
+fn sorted(s: Set<Int, 5>) -> List<Int, 5> {
+    return items(s)
+}
+
+fn same(a: Map<Text, Int, 10>, b: Map<Text, Int, 10>) -> Bool {
+    return a == b
+}

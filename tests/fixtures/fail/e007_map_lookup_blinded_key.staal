@@ -1,0 +1,8 @@
+// expect: E007
+// Looking up a blinded key reveals it, through whether and what is found.
+type Order { email: Text }
+
+fn f(order: Order @blind(email), m: Map<Text, Text, 5>) {
+    let found = get(m, order.email)
+    let s = propose(Text, instruct: "Greet.", data: [found], tokens: 10)
+}

@@ -1,0 +1,6 @@
+// expect: E101
+// message: `for (...)` unpacks tuples, but the items of List<Int, 3> are Int
+fn f(xs: List<Int, 3>) {
+    for (a, b) in xs {
+    }
+}

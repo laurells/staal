@@ -1,0 +1,8 @@
+// expect: E007
+// A map built from blinded data still holds it.
+type Order { email: Text }
+
+fn f(order: Order @blind(email)) {
+    let m = ["to": order.email]
+    let s = propose(Text, instruct: "Greet.", data: [m], tokens: 10)
+}
