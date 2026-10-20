@@ -30,7 +30,7 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
 rejecting the programs it should. 49 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 583 invalid ones
+including the two benchmark workflows (`workflow_*.staal`), and 584 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -272,7 +272,7 @@ names, use a record: a model is never asked for a tuple.
 
 ### Maps and sets
 
-    fn count(words: List<Text, 500>) -> Map<Text, Int, 500> {
+    fn tally(words: List<Text, 500>) -> Map<Text, Int, 500> {
         let m: Map<Text, Int, 500> = [:]
         for w in words {
             match get(m, w) {
@@ -283,7 +283,7 @@ names, use a record: a model is never asked for a tuple.
         return m
     }
 
-    for (word, n) in entries(count(words)) { ... }
+    for (word, n) in entries(tally(words)) { ... }
     let tags = add(to_set(names), "new")
 
 Keys and set items are Text or Int, kept in order. Every map and set has a maximum
@@ -398,8 +398,8 @@ in which each name is qualified by its module (`send` in `sms/termii.staal` is
 promises, budgets, trust, evidence and partial operations therefore hold
 across modules with no separate cross-module analysis. This is tested by
 splitting every test program in two (`tests/split_test.rs`): types and called
-functions move to a module (capability declarations too), and every one of 310
-splittable fixtures and 274 runtime cases must give identical results. Mutations that hide one module's
+functions move to a module (capability declarations too), and every one of 352
+splittable fixtures and 355 runtime cases must give identical results. Mutations that hide one module's
 model calls, failures or costs from another are each caught.
 
 The program's hash, which a journal records, covers each module's path and
@@ -1022,8 +1022,8 @@ Python.
     lib = staal.Library("target/release/libstaalc.so")
     out = lib.run("clinic.staal", config, journal="run.journal", engine="native")
 
-How this is tested: all 132 runtime cases run on both engines with a journal, and
-their results, logs and journals are identical (295 functions compile across them).
+How this is tested: all 419 runtime cases run on both engines with a journal, and
+their results, logs and journals are identical (3,935 functions compile across them).
 2,500 generated programs using Int, Bool, Text, money, records and lists, compiled
 entirely to native code and run under tight step and depth limits with values at
 their edges, end identically on both engines; across them, runs finish, fail with

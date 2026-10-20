@@ -1,0 +1,14 @@
+// expect: E101
+// message: action a.b.go may never finish (`loop`, recursion, or a call through a function value)
+// A function value may be any function, so an action that calls one (here through
+// `map`) is not known to finish.
+capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let parts = map([t], fn(x: Text) -> Text {
+            return upper(x)
+        })
+        let r = http.post("https://x.example/", parts[0])
+        return r.body
+    }
+}

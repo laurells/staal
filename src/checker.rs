@@ -127,7 +127,8 @@ struct Ctx<'a> {
     flow: Option<ActionFlow>,
     /// Functions that may fail: an action, or a call to a failing function, not under `try`.
     fail_fns: HashSet<String>,
-    /// Functions that may never finish: `loop` or recursion, directly or through any call.
+    /// Functions that may never finish: `loop`, recursion, or a call through a function
+    /// value (which may be any function), directly or through any call.
     diverge_fns: HashSet<String>,
     /// Functions that only compute: no action, model call or `done`, directly or
     /// through any call. Only these can be function values.
@@ -1892,7 +1893,7 @@ fn check_caps(ctx: &mut Ctx, prog: &Program) {
                 ctx.err("E101", f.pos, format!("capability {p}: `canonical` takes one Text and returns Text"));
             }
             if ctx.model_fns.contains(&f.name) || ctx.diverge_fns.contains(&f.name) {
-                ctx.err("E101", f.pos, format!("capability {p}: `canonical` must be pure: no model calls, `loop` or recursion"));
+                ctx.err("E101", f.pos, format!("capability {p}: `canonical` must be pure: no model calls, `loop`, recursion or call through a function value"));
             }
         }
         let mut names = HashSet::new();
@@ -1945,7 +1946,7 @@ fn check_caps(ctx: &mut Ctx, prog: &Program) {
                 );
             }
             if ctx.diverge_fns.contains(&f.name) {
-                ctx.err("E101", a.pos, format!("action {} may never finish (`loop` or recursion)", cap.action_path(&a.name)));
+                ctx.err("E101", a.pos, format!("action {} may never finish (`loop`, recursion, or a call through a function value)", cap.action_path(&a.name)));
             }
             let declared: Vec<Ty> = f.params[..a.declared].iter().map(|q| q.ty.clone()).collect();
             ctx.lib_actions.insert(cap.action_path(&a.name), declared);

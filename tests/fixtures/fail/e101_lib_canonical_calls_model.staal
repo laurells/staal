@@ -1,5 +1,5 @@
 // expect: E101
-// message: capability a.b: `canonical` must be pure: no model calls, `loop` or recursion
+// message: capability a.b: `canonical` must be pure: no model calls, `loop`, recursion or call through a function value
 capability a.b {
     needs http: cap net.http.post
     canonical(x: Text) -> Text {

@@ -1043,7 +1043,8 @@ through `needs`). At most one is marked `@target` (Text) and at most one `@amoun
 - the `@target` value, and the `@amount` value, reach some request (its URL,
   body or headers), so a program's `only` and money limits are checked against
   values the action really uses;
-- it calls no model, and has no `loop` or recursion, so it finishes.
+- it calls no model, and has no `loop`, no recursion and no call through a function
+  value (including `map` and the others that take one), so it finishes.
 
 `fail(message)` ends an action (or any function) with an `action` failure carrying
 the message, which a caller's `try` can catch. Library code also has `replace(t,
@@ -1239,15 +1240,18 @@ of these, optional values, tuples, maps or sets of these, or lists of these, and
 `fail`, literals (an integer must fit an Int; a list must not be empty), arithmetic,
 unary `-`, comparisons, `and`, `or`, `not`, field reads, record and variant literals,
 `some(...)`, `none`, tuples, map literals, empty typed literals, indexing,
-the built-in functions other than `header` and `fill_secret`, calls to other
-qualifying functions, function values of qualifying functions (whose types are
+the built-in functions other than `header`, `fill_secret`, `print`, `now` and
+`random_int` (the standard library's included: `map` and the others that take a
+function value call it as native code), calls to other qualifying functions, function values of qualifying functions (whose types are
 `fn(...)` of the types above), and calls of function values. A function that calls
 one that does not qualify, or makes one that does not qualify into a value, does
 not qualify. A function value given to native code from the interpreter whose
 function (or that of any function value it captured) does not qualify makes that
-call run on the interpreter, so native code only ever calls compiled functions. Native code is entered only from the interpreter, when it calls a compiled
-function; model calls, actions, `try`, `parse`, `validate`, HTTP, files, budgets and
-the journal therefore never run in native code.
+call run on the interpreter, so native code only ever calls compiled functions.
+Native code is entered only from the interpreter, when it calls a compiled
+function; model calls, actions, `try`, `parse`, `validate`, HTTP, files, budgets,
+printing, the clock, random numbers and the journal therefore never run in native
+code.
 
 Both engines give the same results, failures (kind and message), logs and
 journals. Native code:

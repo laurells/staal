@@ -117,7 +117,11 @@ the compiler and all eight safety rules, the reference runtime, Claude as a
 model provider, exact money, the capability broker, budgets, the crash-safe
 journal, modules, HTTP and file capabilities, capabilities declared by
 libraries, packages fetched from git and locked by hash, native code,
-executables and the C interface.
+executables and the C interface; enums and `match`, optional values, tuples, maps
+and sets, typed errors, methods, generic functions, interfaces, function values and
+closures; and a standard library of text, number, list, hashing, encoding and date
+functions, with printing, the clock and random numbers journaled so a resumed run
+replays them.
 
 Not yet done: runs against the live services (Claude, Termii, Stripe, Resend,
 Slack) with real keys, which so far are tested against local stand-ins; other

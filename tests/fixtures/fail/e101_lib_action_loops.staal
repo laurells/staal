@@ -1,5 +1,5 @@
 // expect: E101
-// message: action a.b.go may never finish (`loop` or recursion)
+// message: action a.b.go may never finish (`loop`, recursion, or a call through a function value)
 capability a.b {
     needs http: cap net.http.post
     action go(t: Text) -> Text {
