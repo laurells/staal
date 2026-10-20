@@ -1,0 +1,1 @@
+{"entry": "deep", "inputs": {"n": 100}, "limits": {"max_depth": 40}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "depth_limit", "message_contains": "40 deep"}}

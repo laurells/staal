@@ -10,10 +10,10 @@ fn Ticket.describe(self) -> Text budget(calls: 1, tokens: 500) {
     return validate propose(Text, instruct: "Describe.", data: [self.body], tokens: 500)
 }
 
-fn all<T: Described>(x: T) -> Text {
+fn describe_one<T: Described>(x: T) -> Text {
     return x.describe()
 }
 
 fn f(t: Ticket) -> Text budget(calls: 1, tokens: 100) {
-    return all(t)
+    return describe_one(t)
 }

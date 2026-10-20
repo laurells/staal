@@ -392,9 +392,23 @@ pub enum Builtin {
     Sort,
     Sum,
     Concat,
+    /// Lists with a function value, called on each item in order: `map(xs, f)`,
+    /// `filter(xs, keep)`, `any(xs, test)` and `all(xs, test)` (which stop at the first
+    /// item that decides), `count(xs, test)`, and `fold(xs, start, f)`.
+    Map,
+    Filter,
+    Any,
+    All,
+    Count,
+    Fold,
 }
 
 impl Builtin {
+    /// Whether it calls a function value it is given.
+    pub fn calls_function(self) -> bool {
+        matches!(self, Builtin::Map | Builtin::Filter | Builtin::Any | Builtin::All | Builtin::Count | Builtin::Fold)
+    }
+
     pub fn from_name(n: &str) -> Option<Builtin> {
         match n {
             "len" => Some(Builtin::Len),
@@ -436,6 +450,12 @@ impl Builtin {
             "sort" => Some(Builtin::Sort),
             "sum" => Some(Builtin::Sum),
             "concat" => Some(Builtin::Concat),
+            "map" => Some(Builtin::Map),
+            "filter" => Some(Builtin::Filter),
+            "any" => Some(Builtin::Any),
+            "all" => Some(Builtin::All),
+            "count" => Some(Builtin::Count),
+            "fold" => Some(Builtin::Fold),
             _ => None,
         }
     }
@@ -481,6 +501,12 @@ impl Builtin {
             Builtin::Sort => "sort",
             Builtin::Sum => "sum",
             Builtin::Concat => "concat",
+            Builtin::Map => "map",
+            Builtin::Filter => "filter",
+            Builtin::Any => "any",
+            Builtin::All => "all",
+            Builtin::Count => "count",
+            Builtin::Fold => "fold",
         }
     }
 
@@ -521,8 +547,13 @@ impl Builtin {
             | Builtin::Max
             | Builtin::Rem
             | Builtin::Append
-            | Builtin::Concat => 2,
-            Builtin::Replace | Builtin::Put | Builtin::Slice | Builtin::Split => 3,
+            | Builtin::Concat
+            | Builtin::Map
+            | Builtin::Filter
+            | Builtin::Any
+            | Builtin::All
+            | Builtin::Count => 2,
+            Builtin::Replace | Builtin::Put | Builtin::Slice | Builtin::Split | Builtin::Fold => 3,
         }
     }
 }

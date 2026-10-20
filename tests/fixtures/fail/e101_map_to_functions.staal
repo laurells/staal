@@ -1,0 +1,12 @@
+// expect: E101
+// message: holds a function value, which is never kept inside data
+fn adder(k: Int) -> fn(Int) -> Int {
+    return fn(x: Int) -> Int {
+        return x + k
+    }
+}
+
+fn f(xs: List<Int, 3>) -> Int {
+    let fs = map(xs, adder)
+    return 0
+}

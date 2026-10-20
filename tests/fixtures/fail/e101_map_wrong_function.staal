@@ -1,0 +1,9 @@
+// expect: E101
+// message: `map` needs (a list of T, fn(T) -> U), found (List<Int, 3>, fn(Text) -> Int)
+fn size(t: Text) -> Int {
+    return len(t)
+}
+
+fn f(xs: List<Int, 3>) -> List<Int, 3> {
+    return map(xs, size)
+}

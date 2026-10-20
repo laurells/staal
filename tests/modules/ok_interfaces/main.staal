@@ -8,10 +8,10 @@ fn Book.price(self) -> Money {
     return self.cost
 }
 
-fn all<T: Priced>(xs: List<T, 5>) -> Money {
+fn total_all<T: Priced>(xs: List<T, 5>) -> Money {
     return p.total(xs)
 }
 
 fn books(xs: List<Book, 5>) -> Money {
-    return all(xs) + p.total(xs)
+    return total_all(xs) + p.total(xs)
 }

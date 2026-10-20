@@ -1,0 +1,10 @@
+// expect: E007 E007
+// What `map` gives reveals the list it was given.
+type Customer { name: Text, email: Text }
+
+fn f(cs: List<Customer, 3> @blind) -> Text budget(calls: 1, tokens: 100) {
+    let emails = map(cs, fn(c: Customer) -> Text {
+        return c.email
+    })
+    return validate propose(Text, instruct: "Describe.", data: [emails], tokens: 100)
+}

@@ -1,0 +1,13 @@
+// expect: E007
+// A function that maps a function value may fail, since the value may: whether the
+// model call after it happens depends on what it was given.
+type Customer { name: Text, email: Text }
+
+fn lengths(xs: List<Text, 3>, f: fn(Text) -> Int) -> Int {
+    return len(map(xs, f))
+}
+
+fn greet(c: Customer @blind(email), size: fn(Text) -> Int) {
+    let n = lengths([c.email], size)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

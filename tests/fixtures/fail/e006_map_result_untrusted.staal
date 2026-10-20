@@ -1,0 +1,8 @@
+// expect: E006
+// What `map` gives comes from a function value, so it is untrusted.
+fn f() -> Text budget(calls: 1, tokens: 100) {
+    let tasks = map(["Summarise."], fn(t: Text) -> Text {
+        return t
+    })
+    return validate propose(Text, instruct: tasks[0], tokens: 100)
+}

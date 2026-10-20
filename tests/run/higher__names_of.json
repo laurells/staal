@@ -1,0 +1,1 @@
+{"entry": "names_of", "inputs": {"xs": [{"name": "pen", "price": {"amount": "1.00", "currency": "NGN"}, "qty": 1}]}, "model": {"provider": "script", "responses": []}, "expect": {"result": ["pen"]}}

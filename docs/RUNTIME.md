@@ -377,6 +377,19 @@ Evaluation is strictly left to right and statement by statement.
   in different currencies), text by its bytes, as map keys are, so `"B"` comes
   before `"a"`; equal items keep their order. `sum(xs)` adds a list of Int, failing
   on overflow; the sum of an empty list is 0.
+- List functions with a function value, which call it on each item in order, as
+  `f(x)` would: `map(xs, f)` is the list of what it gives (`fn(T) -> U` makes a
+  `List<U, N>` of a `List<T, N>`); `filter(xs, keep)` the items for which `keep`
+  gives true, in order; `count(xs, test)` how many give true; `any(xs, test)` and
+  `all(xs, test)` whether one or every item does, stopping at the first item that
+  decides, as `or` and `and` do (so `any` of an empty list is false, `all` true);
+  `fold(xs, start, f)` is `start` given to `f` with each item in turn
+  (`fn(A, T) -> A`). Each call is a call: it counts against the depth limit, and a
+  failure inside it stops the function at once. What `map`, `count`, `any`, `all`
+  and `fold` give is untrusted, like what any function value gives; `filter` gives
+  the list's own items, so it is as trusted as the list and the function value.
+  Since a function value may fail or never finish, these do too, for the analyses
+  that ask (E007).
 - What a standard library function gives is trusted only if everything it is given
   is, and reveals everything it is given (E006, E007). Those that can fail make
   whether later code runs depend on their arguments, as other failing operations

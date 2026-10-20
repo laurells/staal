@@ -1,0 +1,10 @@
+// expect: E006
+// `filter` gives the list's own items, so they stay as untrusted as the list:
+// model output it keeps is still not an instruction.
+fn f() -> Text budget(calls: 2, tokens: 200) {
+    let said: List<Text, 3> = validate propose(List<Text, 3>, instruct: "List three tasks.", tokens: 100)
+    let short = filter(said, fn(t: Text) -> Bool {
+        return len(t) < 40
+    })
+    return validate propose(Text, instruct: short[0], tokens: 100)
+}

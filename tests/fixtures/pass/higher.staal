@@ -1,0 +1,12 @@
+// Function-taking list functions: `filter` keeps the list's trust, since it gives
+// the list's own items, chosen by a function of trusted values.
+fn f(limit: Int @trusted) -> Text budget(calls: 1, tokens: 100) {
+    let tasks = ["Summarise the notes.", "Translate them."]
+    let short = filter(tasks, fn(t: Text) -> Bool {
+        return len(t) < limit
+    })
+    let n = count(tasks, fn(t: Text) -> Bool {
+        return starts_with(t, "S")
+    })
+    return validate propose(Text, instruct: short[0], data: [n], tokens: 100)
+}

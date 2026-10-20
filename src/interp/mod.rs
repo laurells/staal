@@ -1100,6 +1100,72 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// `map`, `filter`, `any`, `all`, `count` and `fold`: the function value called on
+    /// each item in order, as `f(x)` would call it.
+    fn with_function(&mut self, f: Builtin, vals: Vec<Value>) -> Result<Value, Failure> {
+        let mut it = vals.into_iter();
+        let (Some(Value::List(xs)), start) = (it.next(), if f == Builtin::Fold { it.next() } else { None }) else {
+            return internal(format!("`{}` of a value that is not a list", f.name()));
+        };
+        let Some(Value::Func { name, captured }) = it.next() else {
+            return internal(format!("`{}` with a value that is not a function", f.name()));
+        };
+        let call = |this: &mut Self, args: Vec<Value>| -> Result<Value, Failure> {
+            let mut all = captured.clone();
+            all.extend(args);
+            this.call(&name, all)
+        };
+        let test = |v: Value| match v {
+            Value::Bool(b) => Ok(b),
+            _ => internal(format!("`{}` given a function that did not give a Bool", f.name())),
+        };
+        match f {
+            Builtin::Map => {
+                let mut out = Vec::with_capacity(xs.len());
+                for x in xs {
+                    out.push(call(self, vec![x])?);
+                }
+                Ok(Value::List(out))
+            }
+            Builtin::Filter => {
+                let mut out = Vec::new();
+                for x in xs {
+                    if test(call(self, vec![x.clone()])?)? {
+                        out.push(x);
+                    }
+                }
+                Ok(Value::List(out))
+            }
+            Builtin::Any | Builtin::All => {
+                // Stops at the first item that decides, as `or` and `and` do.
+                let want = f == Builtin::Any;
+                for x in xs {
+                    if test(call(self, vec![x])?)? == want {
+                        return Ok(Value::Bool(want));
+                    }
+                }
+                Ok(Value::Bool(!want))
+            }
+            Builtin::Count => {
+                let mut n: i64 = 0;
+                for x in xs {
+                    if test(call(self, vec![x])?)? {
+                        n += 1;
+                    }
+                }
+                Ok(Value::Int(n))
+            }
+            Builtin::Fold => {
+                let Some(mut acc) = start else { return internal("`fold` without a start") };
+                for x in xs {
+                    acc = call(self, vec![acc, x])?;
+                }
+                Ok(acc)
+            }
+            _ => internal(format!("`{}` does not call a function", f.name())),
+        }
+    }
+
     fn exec_block(&mut self, frame: &mut Frame, body: &[Stmt]) -> Result<Flow, Failure> {
         frame.scopes.push(HashMap::new());
         let mut result = Ok(Flow::Next);
@@ -1297,6 +1363,9 @@ impl<'p> Interp<'p> {
                 let mut vals = Vec::with_capacity(args.len());
                 for a in args {
                     vals.push(self.eval(frame, a)?);
+                }
+                if f.calls_function() {
+                    return self.with_function(*f, vals);
                 }
                 builtin(*f, &vals)
             }

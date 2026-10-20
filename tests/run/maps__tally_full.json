@@ -1,0 +1,1 @@
+{"entry": "tally", "inputs": {"words": ["a", "b", "c", "d", "e", "f", "g", "h", "i"]}, "expect": {"config_error_contains": "at most 8 items allowed"}, "model": {"provider": "script", "responses": []}}

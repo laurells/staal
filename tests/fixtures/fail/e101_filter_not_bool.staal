@@ -1,0 +1,9 @@
+// expect: E101
+// message: `filter` needs (a list of T, fn(T) -> Bool), found (List<Int, 3>, fn(Int) -> Int)
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn f(xs: List<Int, 3>) -> List<Int, 3> {
+    return filter(xs, double)
+}

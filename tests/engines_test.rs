@@ -171,7 +171,7 @@ fn the_map_cases_really_run_native_code() {
     let prog = staalc::check_program(&src).unwrap();
     let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
     got.sort();
-    let want = ["amounts", "count", "drop", "full", "has", "names", "same", "seen", "sorted", "stock", "tags", "total", "twice"];
+    let want = ["amounts", "drop", "full", "has", "names", "same", "seen", "sorted", "stock", "tags", "tally", "total", "twice"];
     assert_eq!(got, want);
 }
 
@@ -244,6 +244,23 @@ fn the_library_cases_really_run_native_code() {
     let want = [
         "abs_min", "both", "full", "lists", "money", "number", "numbers", "out_of_range", "records", "rem_edge", "rem_zero", "roomy", "sort_money",
         "split_empty", "split_limit", "sum_overflow", "texts", "unicode", "words",
+    ];
+    assert_eq!(got, want);
+}
+
+#[test]
+fn the_higher_order_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/higher.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    // Every one but `tried` and its function value, which use `try`: `map` and the
+    // rest call compiled function values from native code.
+    let want = [
+        "apply_all", "costs", "costs::fn@12:35", "costs::fn@9:31", "deep", "double", "empty", "empty::fn@69:21", "empty::fn@72:25", "even",
+        "first_failure", "first_failure::fn@154:44", "guards", "guards::fn@130:19", "half", "lines", "named", "names", "names::fn@18:35",
+        "names::fn@21:30", "names_of", "names_of::fn@162:20", "nest", "nest::fn@100:18", "overflow", "overflow::fn@90:46", "stops",
+        "stops::fn@54:19", "tests", "tests::fn@28:15",
     ];
     assert_eq!(got, want);
 }

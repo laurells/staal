@@ -1175,6 +1175,10 @@ fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
                 i.fails = true;
                 i.diverges = true;
             }
+            Expr::Builtin { f, .. } if f.calls_function() => {
+                i.fails = true;
+                i.diverges = true;
+            }
             Expr::Call { name, .. } => {
                 if tried {
                     i.calls_tried.insert(name.clone());
@@ -1255,6 +1259,7 @@ fn op_is_partial(ctx: &Ctx, e: &Expr, tried: bool) -> bool {
         Expr::Action { .. } => !tried,
         Expr::Call { name, .. } => ctx.diverge_fns.contains(name) || (!tried && ctx.fail_fns.contains(name)),
         Expr::CallValue { .. } => true,
+        Expr::Builtin { f, .. } if f.calls_function() => true,
         _ => expr_can_fail_itself(e),
     }
 }
@@ -1603,6 +1608,44 @@ fn library_builtin(ctx: &mut Ctx, f: Builtin, args: &[Expr], tys: &[(Ty, bool)],
             None
         }
     }
+}
+
+/// `map`, `filter`, `any`, `all`, `count` and `fold`: a list and a function value of
+/// the right type for its items. What a function value gives is untrusted, so what
+/// these give is too, except `filter`, which gives items of the list itself and is as
+/// trusted as the list and the function value.
+fn function_builtin(ctx: &mut Ctx, f: Builtin, tys: &[(Ty, bool)], pos: Pos) -> Option<Typed> {
+    let shown: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();
+    let (int, boolean) = (named("Int"), named("Bool"));
+    let (list, func) = (&tys[0].0, &tys[tys.len() - 1].0);
+    let result = match (list, func) {
+        (Ty::List(el, n), Ty::Func(ps, r)) => match f {
+            Builtin::Map if ps.len() == 1 && el.fits(&ps[0]) => {
+                let out = Ty::List(r.clone(), *n);
+                let before = ctx.diags.len();
+                check_ty_known(ctx, &out, pos);
+                if ctx.diags.len() > before {
+                    return None;
+                }
+                Some((out, false))
+            }
+            Builtin::Filter if ps.len() == 1 && el.fits(&ps[0]) && **r == boolean => Some((list.clone(), tys[0].1 && tys[1].1)),
+            Builtin::Any | Builtin::All if ps.len() == 1 && el.fits(&ps[0]) && **r == boolean => Some((boolean, false)),
+            Builtin::Count if ps.len() == 1 && el.fits(&ps[0]) && **r == boolean => Some((int, false)),
+            Builtin::Fold if ps.len() == 2 && el.fits(&ps[1]) && tys[1].0.fits(&ps[0]) && **r == ps[0] => Some(((**r).clone(), false)),
+            _ => None,
+        },
+        _ => None,
+    };
+    if result.is_none() {
+        let want = match f {
+            Builtin::Map => "(a list of T, fn(T) -> U)",
+            Builtin::Fold => "(a list of T, start: A, fn(A, T) -> A)",
+            _ => "(a list of T, fn(T) -> Bool)",
+        };
+        ctx.err("E101", pos, format!("`{}` needs {want}, found ({})", f.name(), shown.join(", ")));
+    }
+    result
 }
 
 /// Passes `put` and `add` the capacity of the map or set they grow, as a last
@@ -3622,6 +3665,9 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Sort
                 | Builtin::Sum
                 | Builtin::Concat => return library_builtin(ctx, *f, args, &tys, trusted, *pos),
+                Builtin::Map | Builtin::Filter | Builtin::Any | Builtin::All | Builtin::Count | Builtin::Fold => {
+                    return function_builtin(ctx, *f, &tys, *pos);
+                }
                 _ => {}
             }
             if *f == Builtin::Contains && secret_inside(ctx, &tys[0].0, &mut HashSet::new()).is_some() {
@@ -3672,7 +3718,13 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Reverse
                 | Builtin::Sort
                 | Builtin::Sum
-                | Builtin::Concat => true,
+                | Builtin::Concat
+                | Builtin::Map
+                | Builtin::Filter
+                | Builtin::Any
+                | Builtin::All
+                | Builtin::Count
+                | Builtin::Fold => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();

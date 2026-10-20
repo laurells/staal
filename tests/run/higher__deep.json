@@ -1,0 +1,1 @@
+{"entry": "deep", "inputs": {"n": 5}, "model": {"provider": "script", "responses": []}, "expect": {"result": 0}}

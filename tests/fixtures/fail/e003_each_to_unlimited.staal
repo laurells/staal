@@ -1,6 +1,6 @@
 // expect: E003
-fn any(p: cap payments.refund(max: 500 USD)) {
+fn use_any(p: cap payments.refund(max: 500 USD)) {
 }
 fn f(p: cap payments.refund(max: 500 USD, each: 50 USD)) {
-    any(p)
+    use_any(p)
 }

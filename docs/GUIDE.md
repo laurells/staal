@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 45 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 549 invalid ones
+rejecting the programs it should. 46 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 562 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -218,10 +218,15 @@ Generic functions take function values like any other type (`fn twice<T>(f: fn(T
     set xs = append(sort(xs), 7)                  // [1, 3, 7]
     let total = sum(xs) + abs(-2) + max(1, rem(9, 4))
 
+    let totals = map(lines, fn(l: Line) -> Money { return l.price * l.qty })
+    let stocked = filter(lines, fn(l: Line) -> Bool { return l.qty > 0 })
+    let sum_all = fold(totals, 0.00 NGN, fn(a: Money, m: Money) -> Money { return a + m })
+
 Text, number and list functions are built in, on both engines: `upper`, `lower`,
 `trim`, `slice`, `index_of`, `split`, `join`, `replace`, `to_int`, `to_text`; `abs`,
 `min`, `max`, `rem`; `append`, `concat`, `reverse`, `sort`, `sum`, `len`,
-`contains`. Every list keeps its maximum: `append` to a full list fails, `split`
+`contains`; and with a function value, `map`, `filter`, `count`, `any`, `all` and
+`fold`, which call it on each item in order. Every list keeps its maximum: `append` to a full list fails, `split`
 takes the most parts it may give, and `concat` gives room for both lists. Positions
 count characters, so text in any language slices the same way. A result is as
 trusted as its arguments and reveals what they reveal; a function that can fail

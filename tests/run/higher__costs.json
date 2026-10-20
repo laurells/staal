@@ -1,0 +1,1 @@
+{"entry": "costs", "inputs": {"fee": {"amount": "1.00", "currency": "NGN"}}, "model": {"provider": "script", "responses": []}, "expect": {"result": {"amount": "14.00", "currency": "NGN"}}}

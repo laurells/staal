@@ -1,6 +1,6 @@
 // expect: E003
-fn any(d: cap building.lock.open) {
+fn use_any(d: cap building.lock.open) {
 }
 fn f(d: cap building.lock.open(only: ["north-door"])) {
-    any(d)
+    use_any(d)
 }

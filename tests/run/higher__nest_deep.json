@@ -1,0 +1,1 @@
+{"entry": "nest", "inputs": {"n": 100}, "model": {"provider": "script", "responses": []}, "limits": {"max_depth": 40}, "expect": {"failure": "depth_limit", "message_contains": "40 deep"}}

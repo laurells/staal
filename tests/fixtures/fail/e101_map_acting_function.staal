@@ -1,0 +1,11 @@
+// expect: E101
+// message: 'notify' cannot be a function value
+// `map` takes a function value, so a function that acts can never be mapped.
+fn notify(sms: cap sms.send, to: Text) -> Receipt {
+    return sms.send(to)
+}
+
+fn f(sms: cap sms.send, to: List<Text, 3>) -> Int {
+    let g = notify
+    return 0
+}

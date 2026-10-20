@@ -1,0 +1,165 @@
+// List functions that take a function value, on both engines: each item in order.
+type Line { name: Text, price: Money, qty: Int }
+
+fn lines() -> List<Line, 5> {
+    return [Line { name: "pen", price: 2.00 NGN, qty: 3 }, Line { name: "ink", price: 5.50 NGN, qty: 0 }, Line { name: "pad", price: 1.25 NGN, qty: 4 }]
+}
+
+fn costs(fee: Money) -> Money {
+    let totals = map(lines(), fn(l: Line) -> Money {
+        return l.price * l.qty + fee
+    })
+    return fold(totals, 0.00 NGN, fn(acc: Money, m: Money) -> Money {
+        return acc + m
+    })
+}
+
+fn names() -> Text {
+    let stocked = filter(lines(), fn(l: Line) -> Bool {
+        return l.qty > 0
+    })
+    return join(map(stocked, fn(l: Line) -> Text {
+        return upper(l.name)
+    }), ",")
+}
+
+fn tests(limit: Int) -> Int {
+    let xs = [4, 8, 15, 16, 23, 42]
+    let big = fn(x: Int) -> Bool {
+        return x > limit
+    }
+    let n = count(xs, big)
+    let a = 0
+    if any(xs, big) {
+        set a = 10
+    }
+    if all(xs, big) {
+        set a = a + 100
+    }
+    return n + a
+}
+
+fn even(x: Int) -> Bool {
+    return rem(x, 2) == 0
+}
+
+fn named(xs: List<Int, 6>) -> Int {
+    return count(xs, even) * 10 + len(filter(xs, even))
+}
+
+// The function value fails on 0. `any` stops at the first true, before reaching it;
+// `all` stops at the first false, so it reaches it when the false comes later.
+fn stops(d: Int) -> Int {
+    let xs = [5, d, 2]
+    let divides = fn(x: Int) -> Bool {
+        return 10 / x == 2
+    }
+    let n = 0
+    if any(xs, divides) {
+        set n = 1
+    }
+    if all(xs, divides) {
+        set n = n + 2
+    }
+    return n
+}
+
+fn empty() -> Int {
+    let xs: List<Int, 3> = []
+    let none_true = fn(x: Int) -> Bool {
+        return true
+    }
+    let r = fold(xs, 7, fn(acc: Int, x: Int) -> Int {
+        return acc * x
+    })
+    let flags = 0
+    if not any(xs, none_true) {
+        set flags = 1
+    }
+    if all(xs, none_true) {
+        set flags = flags + 2
+    }
+    return r * 10 + flags + count(xs, none_true) + len(map(xs, double))
+}
+
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn overflow() -> Int {
+    return fold([9223372036854775807, 1], 0, fn(acc: Int, x: Int) -> Int {
+        return acc + x
+    })
+}
+
+// Each call through `map` is a call: it counts against the depth limit.
+fn nest(n: Int) -> Int {
+    if n <= 0 {
+        return 0
+    }
+    let deeper = fn(x: Int) -> Int {
+        return nest(x - 1)
+    }
+    return sum(map([n], deeper))
+}
+
+fn apply_all(xs: List<Int, 5>, f: fn(Int) -> Int) -> List<Int, 5> {
+    return map(xs, f)
+}
+
+fn half(x: Int, d: Int) -> Int {
+    return x / d
+}
+
+// A function value that cannot be native code (it uses `try`), given to one that can:
+// that call runs on the interpreter, with the same result.
+fn tried(d: Int) -> Int {
+    let safe = fn(x: Int) -> Int {
+        let o = try half(x, d)
+        if o.ok {
+            return half(x, d)
+        }
+        return -1
+    }
+    return sum(apply_all([10, 20], safe))
+}
+
+// Stopping early is the only way these succeed for d = 0: `any` decides at 5 and
+// `all` at 2, before the function value would divide by zero.
+fn guards(d: Int) -> Int {
+    let divides = fn(x: Int) -> Bool {
+        return 10 / x == 2
+    }
+    let n = 0
+    if any([5, d], divides) {
+        set n = 1
+    }
+    if not all([2, d], divides) {
+        set n = n + 2
+    }
+    return n
+}
+
+// Recursion only through `map`: its calls alone must keep to the depth limit.
+fn deep(n: Int) -> Int {
+    if n <= 0 {
+        return 0
+    }
+    return sum(map([n - 1], deep))
+}
+
+// The first failure stops `map`: the later item, which would fail differently, is
+// never reached.
+fn first_failure() -> Int {
+    let xs = map([0, 9223372036854775807], fn(x: Int) -> Int {
+        return 10 / x + x * 2
+    })
+    return len(xs)
+}
+
+// What `map` gives has the function's result type, which a declared result checks.
+fn names_of(xs: List<Line, 5>) -> List<Text, 5> {
+    return map(xs, fn(l: Line) -> Text {
+        return l.name
+    })
+}

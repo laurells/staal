@@ -1,0 +1,12 @@
+// expect: E007
+// And it may never finish, which `try` does not catch.
+type Customer { name: Text, email: Text }
+
+fn lengths(xs: List<Text, 3>, f: fn(Text) -> Int) -> Int {
+    return len(map(xs, f))
+}
+
+fn greet(c: Customer @blind(email), size: fn(Text) -> Int) {
+    let n = try lengths([c.email], size)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

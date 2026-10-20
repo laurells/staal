@@ -1,0 +1,1 @@
+{"entry": "first_failure", "inputs": {}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "value", "message_contains": "division by zero: 10 / 0"}}

@@ -1,0 +1,11 @@
+// expect: E007
+// A function value may fail, so whether what follows `filter` runs depends on the
+// items it was called on.
+type Customer { name: Text, email: Text }
+
+fn f(cs: List<Customer, 3> @blind) {
+    let picked = filter(cs, fn(c: Customer) -> Bool {
+        return len(c.email) > 3
+    })
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

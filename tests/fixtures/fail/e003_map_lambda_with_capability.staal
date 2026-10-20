@@ -1,0 +1,11 @@
+// expect: E003
+// message: this function value reads 'sms', which holds a capability
+// Nor can a function value written for `map` carry one: acting on each item takes
+// a loop around the action, where every rule sees it.
+fn f(sms: cap sms.send(uses: 3), to: List<Text, 3>) -> Int {
+    let sent = map(to, fn(t: Text) -> Int {
+        let r = sms.send(t)
+        return 1
+    })
+    return sum(sent)
+}

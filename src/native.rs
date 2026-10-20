@@ -135,12 +135,13 @@ struct Tables {
     /// Enum type name and its variant names in declaration order, for `match`.
     enums: Vec<(String, Vec<String>)>,
     /// Every compiled function, for calls of function values: its entry wrapper's
-    /// address and its parameter types. Filled in once the code is in place.
-    funcs: HashMap<String, (usize, Vec<Ty>)>,
+    /// address, its parameter types and its result type. Filled in once the code is in
+    /// place.
+    funcs: HashMap<String, (usize, Vec<Ty>, Ty)>,
 }
 
 /// The built-in functions by the number generated code passes for them.
-const BUILTINS: [Builtin; 39] = [
+const BUILTINS: [Builtin; 45] = [
     Builtin::Len,
     Builtin::Contains,
     Builtin::StartsWith,
@@ -180,6 +181,12 @@ const BUILTINS: [Builtin; 39] = [
     Builtin::Sort,
     Builtin::Sum,
     Builtin::Concat,
+    Builtin::Map,
+    Builtin::Filter,
+    Builtin::Any,
+    Builtin::All,
+    Builtin::Count,
+    Builtin::Fold,
 ];
 
 const CMPS: [CmpOp; 6] = [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt, CmpOp::Le, CmpOp::Gt, CmpOp::Ge];
@@ -366,7 +373,7 @@ extern "C" fn rt_call_value(c: *mut Ctx, fh: i64, argv: *const i64, n: i64) -> i
         let Value::Func { name, captured } = cx.take(fh)? else {
             return Err(internal("native code: calling a value that is not a function"));
         };
-        let (ptr, params) = tables(cx)?
+        let (ptr, params, _) = tables(cx)?
             .funcs
             .get(&name)
             .cloned()
@@ -402,6 +409,128 @@ extern "C" fn rt_call_value(c: *mut Ctx, fh: i64, argv: *const i64, n: i64) -> i
             let f = unsafe { std::mem::transmute::<usize, extern "C" fn(*mut Ctx, *const i64) -> i64>(ptr) };
             f(c, all.as_ptr())
         }
+    }
+}
+
+/// Calls function value `func` with `args` after what it captured, as a call in
+/// generated code does: the depth check, then depth + 1 around the call. Err(None)
+/// when the function failed, which it has recorded in the Ctx itself.
+fn call_function(c: *mut Ctx, func: &Value, args: Vec<Value>) -> Result<Value, Option<Failure>> {
+    let Value::Func { name, captured } = func else {
+        return Err(Some(internal("native code: calling a value that is not a function")));
+    };
+    let (ptr, params, ret) = {
+        let cx = ctx(c);
+        let found = tables(cx).map_err(Some)?.funcs.get(name).cloned();
+        let found = found.ok_or_else(|| Some(internal(format!("native code: the function value '{name}' is not compiled"))))?;
+        if cx.depth >= cx.max_depth {
+            return Err(Some(depth_limit(cx.max_depth)));
+        }
+        found
+    };
+    if params.len() != captured.len() + args.len() {
+        return Err(Some(internal(format!("native code: '{name}' called with {} arguments, expects {}", captured.len() + args.len(), params.len()))));
+    }
+    let mut all = Vec::with_capacity(params.len());
+    {
+        let cx = ctx(c);
+        for (v, t) in captured.iter().cloned().chain(args).zip(&params) {
+            match (v, rep(t)) {
+                (Value::Int(i), Rep::Raw) if is(t, "Int") => all.push(i),
+                (Value::Bool(b), Rep::Raw) if is(t, "Bool") => all.push(b as i64),
+                (_, Rep::Raw) => return Err(Some(internal(format!("native code: an argument of '{name}' is not a {t}")))),
+                (v, Rep::Handle) => all.push(cx.put(v)),
+            }
+        }
+        cx.depth += 1;
+    }
+    // SAFETY: `ptr` is the entry wrapper of a compiled function, with signature
+    // (ctx, argv) -> i64, from the tables of the code running now; `all` holds exactly
+    // as many i64 as it takes. No reference to the Ctx is held across the call.
+    let f = unsafe { std::mem::transmute::<usize, extern "C" fn(*mut Ctx, *const i64) -> i64>(ptr) };
+    let r = f(c, all.as_ptr());
+    let cx = ctx(c);
+    cx.depth -= 1;
+    if cx.failed != 0 {
+        return Err(None);
+    }
+    match rep(&ret) {
+        Rep::Raw if is(&ret, "Int") => Ok(Value::Int(r)),
+        Rep::Raw => Ok(Value::Bool(r != 0)),
+        Rep::Handle => cx.take(r).map_err(Some),
+    }
+}
+
+/// `map`, `filter`, `any`, `all`, `count` and `fold` (built-in `code`), with the list,
+/// the start for `fold`, and the function value in `argv`: as the interpreter does.
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_with_function")]
+extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
+    let run = || -> Result<Value, Option<Failure>> {
+        let f = usize::try_from(code).ok().and_then(|i| BUILTINS.get(i)).copied();
+        let f = f.ok_or_else(|| Some(internal("native code: unknown built-in")))?;
+        let mut it = take_args(ctx(c), argv, n).map_err(Some)?.into_iter();
+        let (Some(Value::List(xs)), start) = (it.next(), if f == Builtin::Fold { it.next() } else { None }) else {
+            return Err(Some(internal(format!("native code: `{}` of a value that is not a list", f.name()))));
+        };
+        let Some(func) = it.next() else { return Err(Some(internal("native code: no function value"))) };
+        let test = |v: Value| match v {
+            Value::Bool(b) => Ok(b),
+            _ => Err(Some(internal(format!("native code: `{}` given a function that did not give a Bool", f.name())))),
+        };
+        match f {
+            Builtin::Map => {
+                let mut out = Vec::with_capacity(xs.len());
+                for x in xs {
+                    out.push(call_function(c, &func, vec![x])?);
+                }
+                Ok(Value::List(out))
+            }
+            Builtin::Filter => {
+                let mut out = Vec::new();
+                for x in xs {
+                    if test(call_function(c, &func, vec![x.clone()])?)? {
+                        out.push(x);
+                    }
+                }
+                Ok(Value::List(out))
+            }
+            Builtin::Any | Builtin::All => {
+                let want = f == Builtin::Any;
+                for x in xs {
+                    if test(call_function(c, &func, vec![x])?)? == want {
+                        return Ok(Value::Bool(want));
+                    }
+                }
+                Ok(Value::Bool(!want))
+            }
+            Builtin::Count => {
+                let mut k: i64 = 0;
+                for x in xs {
+                    if test(call_function(c, &func, vec![x])?)? {
+                        k += 1;
+                    }
+                }
+                Ok(Value::Int(k))
+            }
+            Builtin::Fold => {
+                let Some(mut acc) = start else { return Err(Some(internal("native code: `fold` without a start"))) };
+                for x in xs {
+                    acc = call_function(c, &func, vec![acc, x])?;
+                }
+                Ok(acc)
+            }
+            _ => Err(Some(internal(format!("native code: `{}` does not call a function", f.name())))),
+        }
+    };
+    match run() {
+        Ok(v) => ctx(c).put(v),
+        Err(Some(e)) => {
+            record(ctx(c), e);
+            0
+        }
+        // The function failed and recorded why.
+        Err(None) => 0,
     }
 }
 
@@ -928,6 +1057,17 @@ impl<'p> Env<'p> {
                         Some(Expr::Int(n, _)) => Ty::List(Box::new(named("Text")), *n),
                         _ => return None,
                     },
+                    Builtin::Map => match (first?, tys.get(1)?) {
+                        (Ty::List(_, n), Ty::Func(_, r)) => Ty::List(r.clone(), *n),
+                        _ => return None,
+                    },
+                    Builtin::Filter => first?.clone(),
+                    Builtin::Any | Builtin::All => named("Bool"),
+                    Builtin::Count => named("Int"),
+                    Builtin::Fold => match tys.get(2)? {
+                        Ty::Func(_, r) => (**r).clone(),
+                        _ => return None,
+                    },
                     Builtin::Concat => match (first?, tys.get(1)?) {
                         (Ty::List(a, n), Ty::List(b, m)) => Ty::List(Box::new(a.unify(b)?), n.checked_add(*m)?),
                         _ => return None,
@@ -1190,6 +1330,7 @@ struct Helpers {
     empty: FuncId,
     closure: FuncId,
     call_value: FuncId,
+    with_function: FuncId,
 }
 
 impl Native {
@@ -1215,7 +1356,7 @@ impl Native {
             entries.insert(name, (p as usize, params, ret));
         }
         let mut tables = Box::new(tables);
-        tables.funcs = entries.iter().map(|(n, (p, params, _))| (n.clone(), (*p, params.clone()))).collect();
+        tables.funcs = entries.iter().map(|(n, (p, params, ret))| (n.clone(), (*p, params.clone(), ret.clone()))).collect();
         Ok(Native { module: Some(module), entries, tables })
     }
 
@@ -1241,7 +1382,7 @@ impl Native {
             entries.insert(name.clone(), (*p, params, ret));
         }
         let mut tables = Box::new(Tables::from_json(tables)?);
-        tables.funcs = entries.iter().map(|(n, (p, params, _))| (n.clone(), (*p, params.clone()))).collect();
+        tables.funcs = entries.iter().map(|(n, (p, params, ret))| (n.clone(), (*p, params.clone(), ret.clone()))).collect();
         Ok(Native { module: None, entries, tables })
     }
 
@@ -1346,6 +1487,7 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("staal_rt_empty", rt_empty as *const u8),
     ("staal_rt_closure", rt_closure as *const u8),
     ("staal_rt_call_value", rt_call_value as *const u8),
+    ("staal_rt_with_function", rt_with_function as *const u8),
 ];
 
 /// The machine to generate code for: this one. `host_features`: use every feature
@@ -1417,6 +1559,7 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
         empty: helper(module, "staal_rt_empty", 1, true)?,
         closure: helper(module, "staal_rt_closure", 3, true)?,
         call_value: helper(module, "staal_rt_call_value", 3, true)?,
+        with_function: helper(module, "staal_rt_with_function", 3, true)?,
     };
     // In program order, so the same program always gives the same code and tables.
     let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
@@ -2245,7 +2388,8 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 let code = BUILTINS.iter().position(|b| b == f).expect("every built-in") as i64;
                 let code = self.b.ins().iconst(types::I64, code);
                 let n = self.b.ins().iconst(types::I64, hs.len() as i64);
-                let h = self.call_checked(self.h.builtin, &[code, argv, n]);
+                let helper = if f.calls_function() { self.h.with_function } else { self.h.builtin };
+                let h = self.call_checked(helper, &[code, argv, n]);
                 Ok(self.unhandle(h, &ret))
             }
             Expr::Record { ty, fields, .. } => {

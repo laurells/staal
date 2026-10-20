@@ -7,7 +7,7 @@ fn stock() -> Map<Text, Int, 10> {
     return m
 }
 
-fn count(words: List<Text, 8>) -> Map<Text, Int, 8> {
+fn tally(words: List<Text, 8>) -> Map<Text, Int, 8> {
     let m: Map<Text, Int, 8> = [:]
     for w in words {
         match get(m, w) {
