@@ -1,0 +1,9 @@
+// expect: E007
+// `date_parts` fails outside the years 0000 to 9999, so whether the model call
+// after it happens depends on the blinded birth time.
+type Customer { name: Text, born: Int }
+
+fn f(c: Customer @blind(born)) {
+    let (y, m, d) = date_parts(c.born)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

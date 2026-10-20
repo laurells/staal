@@ -16,6 +16,7 @@ pub mod journal;
 pub mod money;
 pub mod anthropic;
 pub mod provider;
+pub mod time;
 pub mod value;
 
 use crate::ast::*;
@@ -2458,6 +2459,20 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             }
             Ok(Value::Text(hex(t.as_bytes())))
         }
+        (Builtin::FormatTime, [Value::Int(t)]) => time::format(*t).map(Value::Text).or_else(|e| fail(FailKind::Value, e)),
+        (Builtin::ParseTime, [Value::Text(t)]) => Ok(Value::Opt(time::parse(t).map(|ms| Box::new(Value::Int(ms))))),
+        (Builtin::MakeTime, [Value::Int(y), Value::Int(mo), Value::Int(d), Value::Int(h), Value::Int(mi), Value::Int(s)]) => {
+            time::make(*y, *mo, *d, *h, *mi, *s).map(Value::Int).or_else(|e| fail(FailKind::Value, e))
+        }
+        (Builtin::DateParts, [Value::Int(t)]) => match time::date_parts(*t) {
+            Ok((y, m, d)) => Ok(Value::Tuple(vec![Value::Int(y), Value::Int(m), Value::Int(d)])),
+            Err(e) => fail(FailKind::Value, e),
+        },
+        (Builtin::TimeParts, [Value::Int(t)]) => match time::time_parts(*t) {
+            Ok((h, m, s, ms)) => Ok(Value::Tuple(vec![Value::Int(h), Value::Int(m), Value::Int(s), Value::Int(ms)])),
+            Err(e) => fail(FailKind::Value, e),
+        },
+        (Builtin::Weekday, [Value::Int(t)]) => time::weekday(*t).map(Value::Int).or_else(|e| fail(FailKind::Value, e)),
         (Builtin::HexDecode, [Value::Text(t)]) => Ok(Value::Opt(unhex(t).and_then(|b| String::from_utf8(b).ok()).map(|s| Box::new(Value::Text(s))))),
         _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
     }

@@ -1,0 +1,1 @@
+{"entry": "read", "inputs": {"text": "2026-10-20T13:15Z"}, "model": {"provider": "script", "responses": []}, "expect": {"result": -1}}

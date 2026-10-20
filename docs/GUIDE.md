@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 47 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 568 invalid ones
+rejecting the programs it should. 48 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 573 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -228,7 +228,9 @@ Text, number and list functions are built in, on both engines: `upper`, `lower`,
 `contains`; and with a function value, `map`, `filter`, `count`, `any`, `all` and
 `fold`, which call it on each item in order; and for hashing and encoding,
 `sha256`, `base64_encode`, `base64_decode`, `hex_encode` and `hex_decode` (the
-decoders give an optional value, since not every text decodes). Every list keeps its maximum: `append` to a full list fails, `split`
+decoders give an optional value, since not every text decodes); and for dates and
+times, on a time written as an Int of milliseconds since 1970 in UTC, `format_time`,
+`parse_time`, `make_time`, `date_parts`, `time_parts` and `weekday`. Every list keeps its maximum: `append` to a full list fails, `split`
 takes the most parts it may give, and `concat` gives room for both lists. Positions
 count characters, so text in any language slices the same way. A result is as
 trusted as its arguments and reveals what they reveal; a function that can fail

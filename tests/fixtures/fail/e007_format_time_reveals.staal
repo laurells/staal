@@ -1,0 +1,7 @@
+// expect: E007 E007
+// A formatted time reveals the time.
+type Customer { name: Text, born: Int }
+
+fn f(c: Customer @blind(born)) -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: "Describe.", data: [format_time(c.born)], tokens: 100)
+}

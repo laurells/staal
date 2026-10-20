@@ -410,6 +410,17 @@ pub enum Builtin {
     Base64Decode,
     HexEncode,
     HexDecode,
+    /// Dates and times, on an instant written as an Int of milliseconds since
+    /// 1970-01-01T00:00:00Z: `format_time(t)`, `parse_time(text)` (an `Optional<Int>`),
+    /// `make_time(year, month, day, hour, minute, second)`, `date_parts(t)` (year,
+    /// month, day), `time_parts(t)` (hour, minute, second, millisecond), `weekday(t)`
+    /// (1 Monday to 7 Sunday).
+    FormatTime,
+    ParseTime,
+    MakeTime,
+    DateParts,
+    TimeParts,
+    Weekday,
 }
 
 impl Builtin {
@@ -470,6 +481,12 @@ impl Builtin {
             "base64_decode" => Some(Builtin::Base64Decode),
             "hex_encode" => Some(Builtin::HexEncode),
             "hex_decode" => Some(Builtin::HexDecode),
+            "format_time" => Some(Builtin::FormatTime),
+            "parse_time" => Some(Builtin::ParseTime),
+            "make_time" => Some(Builtin::MakeTime),
+            "date_parts" => Some(Builtin::DateParts),
+            "time_parts" => Some(Builtin::TimeParts),
+            "weekday" => Some(Builtin::Weekday),
             _ => None,
         }
     }
@@ -526,6 +543,12 @@ impl Builtin {
             Builtin::Base64Decode => "base64_decode",
             Builtin::HexEncode => "hex_encode",
             Builtin::HexDecode => "hex_decode",
+            Builtin::FormatTime => "format_time",
+            Builtin::ParseTime => "parse_time",
+            Builtin::MakeTime => "make_time",
+            Builtin::DateParts => "date_parts",
+            Builtin::TimeParts => "time_parts",
+            Builtin::Weekday => "weekday",
         }
     }
 
@@ -556,7 +579,12 @@ impl Builtin {
             | Builtin::Base64Encode
             | Builtin::Base64Decode
             | Builtin::HexEncode
-            | Builtin::HexDecode => 1,
+            | Builtin::HexDecode
+            | Builtin::FormatTime
+            | Builtin::ParseTime
+            | Builtin::DateParts
+            | Builtin::TimeParts
+            | Builtin::Weekday => 1,
             Builtin::Contains
             | Builtin::StartsWith
             | Builtin::EndsWith
@@ -578,6 +606,7 @@ impl Builtin {
             | Builtin::All
             | Builtin::Count => 2,
             Builtin::Replace | Builtin::Put | Builtin::Slice | Builtin::Split | Builtin::Fold => 3,
+            Builtin::MakeTime => 6,
         }
     }
 }

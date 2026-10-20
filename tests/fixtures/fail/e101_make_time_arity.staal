@@ -1,0 +1,5 @@
+// expect: E101
+// message: `make_time` takes 6 argument(s) but 3 were given
+fn f() -> Int {
+    return make_time(2026, 10, 20)
+}

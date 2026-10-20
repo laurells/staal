@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Dates and times, on both engines: a time is an Int of milliseconds since
+  1970-01-01T00:00:00Z (UTC), for the years 0000 to 9999. `format_time`,
+  `parse_time` (strict RFC 3339, an optional value), `make_time`, `date_parts`,
+  `time_parts` and `weekday`. Every day of the range is tested to round-trip.
 - Hashing and encoding, on both engines: `sha256` (lowercase hex), `base64_encode`
   and `base64_decode` (standard alphabet, padded, strict), `hex_encode` and
   `hex_decode`. The decoders give an optional value. Checked against the published

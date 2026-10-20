@@ -1,0 +1,1 @@
+{"entry": "build", "inputs": {"y": 2026, "mo": 2, "d": 3, "h": 24, "mi": 0, "s": 0}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "value", "message_contains": "24:0:0 is not a time of day"}}

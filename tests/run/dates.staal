@@ -1,0 +1,33 @@
+// Dates and times, on both engines, checked against Python's datetime.
+fn show(t: Int) -> Text {
+    let (y, mo, d) = date_parts(t)
+    let (h, mi, s, ms) = time_parts(t)
+    return format_time(t) + " " + to_text(y) + "/" + to_text(mo) + "/" + to_text(d) + " " + to_text(h) + ":" + to_text(mi) + ":" + to_text(s) + "." + to_text(ms) + " w" + to_text(weekday(t))
+}
+
+fn read(text: Text) -> Int {
+    match parse_time(text) {
+        some(t) => {
+            return t
+        }
+        none => {
+            return -1
+        }
+    }
+}
+
+fn build(y: Int, mo: Int, d: Int, h: Int, mi: Int, s: Int) -> Int {
+    return make_time(y, mo, d, h, mi, s)
+}
+
+// A day later, by arithmetic on the Int.
+fn tomorrow(text: Text) -> Text {
+    match parse_time(text) {
+        some(t) => {
+            return format_time(t + 86400000)
+        }
+        none => {
+            return "not a time"
+        }
+    }
+}

@@ -1,0 +1,8 @@
+// Parsing a time cannot fail (it gives an optional value), so it does not make what
+// follows depend on blinded data.
+type Booking { guest: Text, starts: Text }
+
+fn f(b: Booking @blind(starts)) -> Text budget(calls: 1, tokens: 100) {
+    let parsed = parse_time(b.starts)
+    return validate propose(Text, instruct: "Greet the guest.", data: [b.guest], tokens: 100)
+}

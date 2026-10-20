@@ -401,11 +401,26 @@ Evaluation is strictly left to right and statement by statement.
   result would be too long. A hash or an encoding of blinded data reveals that data
   (E007): a hash of an email identifies the person as the email does. A secret is not
   text, so none of these takes one (E101).
+- Dates and times. A time is an Int: the milliseconds since
+  1970-01-01T00:00:00Z, in UTC, from the first moment of the year 0000
+  (-62167219200000) to the last of 9999 (253402300799999), in the proleptic
+  Gregorian calendar without leap seconds. Durations are Ints of milliseconds too, so
+  `t + 86400000` is a day later. `format_time(t)` writes `YYYY-MM-DDTHH:MM:SS.mmmZ`.
+  `parse_time(text)` is `some` of the time RFC 3339 writes as
+  `YYYY-MM-DDTHH:MM:SS`, then optionally `.` and one to three digits of a second,
+  then `Z` or an offset `+HH:MM` or `-HH:MM`, and `none` for anything else (a
+  space, a missing offset, a lowercase `z`, a 60th second, a day the month does not
+  have, a time outside the range). `make_time(year, month, day, hour, minute,
+  second)` is the time of that UTC date and time of day. `date_parts(t)` is
+  `(year, month, day)`, `time_parts(t)` is `(hour, minute, second, millisecond)`,
+  and `weekday(t)` is 1 for Monday to 7 for Sunday. Each fails for a time outside
+  the range, and `make_time` for a date or time of day that does not exist.
 - What a standard library function gives is trusted only if everything it is given
   is, and reveals everything it is given (E006, E007). Those that can fail make
   whether later code runs depend on their arguments, as other failing operations
   do: `upper`, `slice`, `split`, `join`, `abs`, `rem`, `append`, `sum`,
-  `base64_encode` and `hex_encode`, and also
+  `base64_encode`, `hex_encode`, `format_time`, `make_time`, `date_parts`,
+  `time_parts` and `weekday`, and also
   `min`, `max` and `sort`, which the compiler counts as able to fail whatever their
   arguments (they fail only for money in different currencies). A constant may use
   them, except `append`.

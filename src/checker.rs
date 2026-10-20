@@ -1064,7 +1064,13 @@ fn expr_can_fail_itself(e: &Expr) -> bool {
                     | Builtin::Sum
                     // A result too long.
                     | Builtin::Base64Encode
-                    | Builtin::HexEncode,
+                    | Builtin::HexEncode
+                    // Outside the years 0000 to 9999, or not a date.
+                    | Builtin::FormatTime
+                    | Builtin::MakeTime
+                    | Builtin::DateParts
+                    | Builtin::TimeParts
+                    | Builtin::Weekday,
                 ..
             }
     )
@@ -1549,6 +1555,13 @@ fn library_builtin(ctx: &mut Ctx, f: Builtin, args: &[Expr], tys: &[(Ty, bool)],
         Builtin::Sha256 | Builtin::Base64Encode | Builtin::HexEncode if *arg(0) == text => Some(text),
         Builtin::Base64Decode | Builtin::HexDecode if *arg(0) == text => Some(Ty::Optional(Box::new(text))),
         Builtin::Sha256 | Builtin::Base64Encode | Builtin::HexEncode | Builtin::Base64Decode | Builtin::HexDecode => None,
+        Builtin::FormatTime if *arg(0) == int => Some(text),
+        Builtin::ParseTime if *arg(0) == text => Some(Ty::Optional(Box::new(int))),
+        Builtin::MakeTime if tys.iter().all(|(t, _)| *t == int) => Some(int),
+        Builtin::DateParts if *arg(0) == int => Some(Ty::Tuple(vec![int.clone(), int.clone(), int])),
+        Builtin::TimeParts if *arg(0) == int => Some(Ty::Tuple(vec![int.clone(), int.clone(), int.clone(), int])),
+        Builtin::Weekday if *arg(0) == int => Some(int),
+        Builtin::FormatTime | Builtin::ParseTime | Builtin::MakeTime | Builtin::DateParts | Builtin::TimeParts | Builtin::Weekday => None,
         Builtin::ToInt if *arg(0) == text => Some(Ty::Optional(Box::new(int))),
         Builtin::ToInt => None,
         Builtin::Abs if *arg(0) == int => Some(int),
@@ -1599,7 +1612,10 @@ fn library_builtin(ctx: &mut Ctx, f: Builtin, args: &[Expr], tys: &[(Ty, bool)],
                 Builtin::IndexOf => "(Text, Text) or (a list, a value of its element type)",
                 Builtin::Split => "(Text, separator: Text, most parts)",
                 Builtin::Join => "(a list of Text, separator: Text)",
+                Builtin::FormatTime | Builtin::DateParts | Builtin::TimeParts | Builtin::Weekday => "a time (an Int of milliseconds)",
+                Builtin::MakeTime => "(year, month, day, hour, minute, second), all Int",
                 Builtin::ToInt
+                | Builtin::ParseTime
                 | Builtin::Sha256
                 | Builtin::Base64Encode
                 | Builtin::Base64Decode
@@ -3680,7 +3696,13 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Base64Encode
                 | Builtin::Base64Decode
                 | Builtin::HexEncode
-                | Builtin::HexDecode => return library_builtin(ctx, *f, args, &tys, trusted, *pos),
+                | Builtin::HexDecode
+                | Builtin::FormatTime
+                | Builtin::ParseTime
+                | Builtin::MakeTime
+                | Builtin::DateParts
+                | Builtin::TimeParts
+                | Builtin::Weekday => return library_builtin(ctx, *f, args, &tys, trusted, *pos),
                 Builtin::Map | Builtin::Filter | Builtin::Any | Builtin::All | Builtin::Count | Builtin::Fold => {
                     return function_builtin(ctx, *f, &tys, *pos);
                 }
@@ -3745,7 +3767,13 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Base64Encode
                 | Builtin::Base64Decode
                 | Builtin::HexEncode
-                | Builtin::HexDecode => true,
+                | Builtin::HexDecode
+                | Builtin::FormatTime
+                | Builtin::ParseTime
+                | Builtin::MakeTime
+                | Builtin::DateParts
+                | Builtin::TimeParts
+                | Builtin::Weekday => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();

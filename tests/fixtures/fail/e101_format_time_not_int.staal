@@ -1,0 +1,5 @@
+// expect: E101
+// message: `format_time` needs a time (an Int of milliseconds), found (Text)
+fn f(t: Text) -> Text {
+    return format_time(t)
+}

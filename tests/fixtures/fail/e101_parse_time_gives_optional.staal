@@ -1,0 +1,6 @@
+// expect: E101
+// message: expected Int, found Optional<Int>
+// Not every text is a time, so parsing gives an optional value.
+fn f(t: Text) -> Int {
+    return parse_time(t)
+}

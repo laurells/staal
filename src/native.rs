@@ -141,7 +141,7 @@ struct Tables {
 }
 
 /// The built-in functions by the number generated code passes for them.
-const BUILTINS: [Builtin; 50] = [
+const BUILTINS: [Builtin; 56] = [
     Builtin::Len,
     Builtin::Contains,
     Builtin::StartsWith,
@@ -192,6 +192,12 @@ const BUILTINS: [Builtin; 50] = [
     Builtin::Base64Decode,
     Builtin::HexEncode,
     Builtin::HexDecode,
+    Builtin::FormatTime,
+    Builtin::ParseTime,
+    Builtin::MakeTime,
+    Builtin::DateParts,
+    Builtin::TimeParts,
+    Builtin::Weekday,
 ];
 
 const CMPS: [CmpOp; 6] = [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt, CmpOp::Le, CmpOp::Gt, CmpOp::Ge];
@@ -1055,6 +1061,11 @@ impl<'p> Env<'p> {
                     Builtin::Header | Builtin::FillSecret => return None,
                     Builtin::Upper | Builtin::Join | Builtin::Sha256 | Builtin::Base64Encode | Builtin::HexEncode => named("Text"),
                     Builtin::Base64Decode | Builtin::HexDecode => Ty::Optional(Box::new(named("Text"))),
+                    Builtin::FormatTime => named("Text"),
+                    Builtin::ParseTime => Ty::Optional(Box::new(named("Int"))),
+                    Builtin::MakeTime | Builtin::Weekday => named("Int"),
+                    Builtin::DateParts => Ty::Tuple(vec![named("Int"); 3]),
+                    Builtin::TimeParts => Ty::Tuple(vec![named("Int"); 4]),
                     Builtin::Slice | Builtin::Append | Builtin::Reverse | Builtin::Sort | Builtin::Min | Builtin::Max => first?.clone(),
                     Builtin::IndexOf | Builtin::ToInt => Ty::Optional(Box::new(named("Int"))),
                     Builtin::Abs | Builtin::Rem | Builtin::Sum => named("Int"),
