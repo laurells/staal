@@ -141,7 +141,7 @@ struct Tables {
 }
 
 /// The built-in functions by the number generated code passes for them.
-const BUILTINS: [Builtin; 45] = [
+const BUILTINS: [Builtin; 50] = [
     Builtin::Len,
     Builtin::Contains,
     Builtin::StartsWith,
@@ -187,6 +187,11 @@ const BUILTINS: [Builtin; 45] = [
     Builtin::All,
     Builtin::Count,
     Builtin::Fold,
+    Builtin::Sha256,
+    Builtin::Base64Encode,
+    Builtin::Base64Decode,
+    Builtin::HexEncode,
+    Builtin::HexDecode,
 ];
 
 const CMPS: [CmpOp; 6] = [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt, CmpOp::Le, CmpOp::Gt, CmpOp::Ge];
@@ -1048,7 +1053,8 @@ impl<'p> Env<'p> {
                     | Builtin::Text => named("Text"),
                     // Headers and secrets belong to requests, which native code never makes.
                     Builtin::Header | Builtin::FillSecret => return None,
-                    Builtin::Upper | Builtin::Join => named("Text"),
+                    Builtin::Upper | Builtin::Join | Builtin::Sha256 | Builtin::Base64Encode | Builtin::HexEncode => named("Text"),
+                    Builtin::Base64Decode | Builtin::HexDecode => Ty::Optional(Box::new(named("Text"))),
                     Builtin::Slice | Builtin::Append | Builtin::Reverse | Builtin::Sort | Builtin::Min | Builtin::Max => first?.clone(),
                     Builtin::IndexOf | Builtin::ToInt => Ty::Optional(Box::new(named("Int"))),
                     Builtin::Abs | Builtin::Rem | Builtin::Sum => named("Int"),

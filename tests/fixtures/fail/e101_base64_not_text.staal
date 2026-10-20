@@ -1,0 +1,5 @@
+// expect: E101
+// message: `base64_encode` needs Text, found (Int)
+fn f(n: Int) -> Text {
+    return base64_encode(n)
+}

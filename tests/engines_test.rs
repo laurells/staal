@@ -266,6 +266,15 @@ fn the_higher_order_cases_really_run_native_code() {
 }
 
 #[test]
+fn the_encoding_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/encoding.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    assert_eq!(got, ["decode16", "decode64", "encode", "hash", "round_trip", "round_trip::fn@35:23"]);
+}
+
+#[test]
 fn function_values_never_cross_the_edge_of_a_run() {
     let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/functions.staal")).unwrap();
     let prog = staalc::check_program(&src).unwrap();

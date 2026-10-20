@@ -1,0 +1,1 @@
+{"entry": "encode", "inputs": {"t": "foobar"}, "model": {"provider": "script", "responses": []}, "expect": {"result": "Zm9vYmFy|666f6f626172"}}

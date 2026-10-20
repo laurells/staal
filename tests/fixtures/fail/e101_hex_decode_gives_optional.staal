@@ -1,0 +1,6 @@
+// expect: E101
+// message: expected Text, found Optional<Text>
+// Decoding can fail, so it gives an optional value.
+fn f(t: Text) -> Text {
+    return hex_decode(t)
+}

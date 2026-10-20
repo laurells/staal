@@ -1,0 +1,1 @@
+{"entry": "decode16", "inputs": {"t": "666f6f"}, "model": {"provider": "script", "responses": []}, "expect": {"result": "some:foo"}}

@@ -390,10 +390,22 @@ Evaluation is strictly left to right and statement by statement.
   the list's own items, so it is as trusted as the list and the function value.
   Since a function value may fail or never finish, these do too, for the analyses
   that ask (E007).
+- Hashing and encoding, on a text's UTF-8 bytes. `sha256(t)` is the SHA-256 of
+  `t` as 64 lowercase hexadecimal digits. `base64_encode(t)` is base64 with the
+  standard alphabet and padding (RFC 4648 section 4); `base64_decode(t)` is `some`
+  of the text it encodes, or `none` if `t` is not exactly that form (no missing or
+  extra padding, no other characters, no line breaks, no bits left over) or what it
+  encodes is not UTF-8 text. `hex_encode(t)` writes each byte as two lowercase
+  digits; `hex_decode(t)` takes digits in either case, an even number of them, and
+  gives `none` otherwise or if the bytes are not UTF-8 text. The encoders fail if the
+  result would be too long. A hash or an encoding of blinded data reveals that data
+  (E007): a hash of an email identifies the person as the email does. A secret is not
+  text, so none of these takes one (E101).
 - What a standard library function gives is trusted only if everything it is given
   is, and reveals everything it is given (E006, E007). Those that can fail make
   whether later code runs depend on their arguments, as other failing operations
-  do: `upper`, `slice`, `split`, `join`, `abs`, `rem`, `append` and `sum`, and also
+  do: `upper`, `slice`, `split`, `join`, `abs`, `rem`, `append`, `sum`,
+  `base64_encode` and `hex_encode`, and also
   `min`, `max` and `sort`, which the compiler counts as able to fail whatever their
   arguments (they fail only for money in different currencies). A constant may use
   them, except `append`.

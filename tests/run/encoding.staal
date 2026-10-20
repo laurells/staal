@@ -1,0 +1,38 @@
+// Hashing and encoding, on both engines, checked against published test vectors.
+fn hash(t: Text) -> Text {
+    return sha256(t)
+}
+
+fn encode(t: Text) -> Text {
+    return base64_encode(t) + "|" + hex_encode(t)
+}
+
+fn decode64(t: Text) -> Text {
+    match base64_decode(t) {
+        some(s) => {
+            return "some:" + s
+        }
+        none => {
+            return "none"
+        }
+    }
+}
+
+fn decode16(t: Text) -> Text {
+    match hex_decode(t) {
+        some(s) => {
+            return "some:" + s
+        }
+        none => {
+            return "none"
+        }
+    }
+}
+
+// Every RFC 4648 vector, encoded and decoded back.
+fn round_trip() -> Bool {
+    let words = ["", "f", "fo", "foo", "foob", "fooba", "foobar", "naïve straße"]
+    return all(words, fn(w: Text) -> Bool {
+        return decode64(base64_encode(w)) == "some:" + w and decode16(hex_encode(w)) == "some:" + w
+    })
+}

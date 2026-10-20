@@ -401,6 +401,15 @@ pub enum Builtin {
     All,
     Count,
     Fold,
+    /// Hashing and encoding: `sha256(t)` (lowercase hex of the SHA-256 of t's UTF-8
+    /// bytes); `base64_encode(t)`, `base64_decode(t)` (standard alphabet, padded; an
+    /// `Optional<Text>`); `hex_encode(t)`, `hex_decode(t)` (lowercase; an
+    /// `Optional<Text>`).
+    Sha256,
+    Base64Encode,
+    Base64Decode,
+    HexEncode,
+    HexDecode,
 }
 
 impl Builtin {
@@ -456,6 +465,11 @@ impl Builtin {
             "all" => Some(Builtin::All),
             "count" => Some(Builtin::Count),
             "fold" => Some(Builtin::Fold),
+            "sha256" => Some(Builtin::Sha256),
+            "base64_encode" => Some(Builtin::Base64Encode),
+            "base64_decode" => Some(Builtin::Base64Decode),
+            "hex_encode" => Some(Builtin::HexEncode),
+            "hex_decode" => Some(Builtin::HexDecode),
             _ => None,
         }
     }
@@ -507,6 +521,11 @@ impl Builtin {
             Builtin::All => "all",
             Builtin::Count => "count",
             Builtin::Fold => "fold",
+            Builtin::Sha256 => "sha256",
+            Builtin::Base64Encode => "base64_encode",
+            Builtin::Base64Decode => "base64_decode",
+            Builtin::HexEncode => "hex_encode",
+            Builtin::HexDecode => "hex_decode",
         }
     }
 
@@ -532,7 +551,12 @@ impl Builtin {
             | Builtin::Abs
             | Builtin::Reverse
             | Builtin::Sort
-            | Builtin::Sum => 1,
+            | Builtin::Sum
+            | Builtin::Sha256
+            | Builtin::Base64Encode
+            | Builtin::Base64Decode
+            | Builtin::HexEncode
+            | Builtin::HexDecode => 1,
             Builtin::Contains
             | Builtin::StartsWith
             | Builtin::EndsWith

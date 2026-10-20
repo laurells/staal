@@ -1,0 +1,7 @@
+// expect: E007 E007
+// So does an encoding of it, which anyone can decode.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email)) -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: "Describe.", data: [base64_encode(c.email)], tokens: 100)
+}

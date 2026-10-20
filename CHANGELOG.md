@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Hashing and encoding, on both engines: `sha256` (lowercase hex), `base64_encode`
+  and `base64_decode` (standard alphabet, padded, strict), `hex_encode` and
+  `hex_decode`. The decoders give an optional value. Checked against the published
+  SHA-256 and RFC 4648 test vectors. A hash of blinded data still reveals it (E007).
 - `map`, `filter`, `count`, `any`, `all` and `fold`: list functions that call a
   function value on each item in order, on both engines; native code calls the
   compiled function directly. `any` and `all` stop at the first item that decides.

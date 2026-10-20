@@ -1,0 +1,9 @@
+// Hashing a trusted value gives a trusted value; hashing cannot fail, so it does not
+// make what follows depend on blinded data.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email), key: Text @trusted) -> Text budget(calls: 1, tokens: 100) {
+    let digest = sha256(c.email)
+    let tag = sha256(key)
+    return validate propose(Text, instruct: "Describe " + tag, data: [c.name], tokens: 100)
+}

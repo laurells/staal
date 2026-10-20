@@ -2435,8 +2435,59 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             Ok(Value::Int(total))
         }
         (Builtin::Concat, [Value::List(a), Value::List(b)]) => Ok(Value::List(a.iter().chain(b.iter()).cloned().collect())),
+        (Builtin::Sha256, [Value::Text(t)]) => {
+            use sha2::Digest;
+            Ok(Value::Text(hex(&sha2::Sha256::digest(t.as_bytes()))))
+        }
+        (Builtin::Base64Encode, [Value::Text(t)]) => {
+            use base64::Engine;
+            // Four characters for every three bytes, rounded up.
+            if t.len().div_ceil(3).saturating_mul(4) > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("base64_encode would give a text longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            Ok(Value::Text(base64::engine::general_purpose::STANDARD.encode(t.as_bytes())))
+        }
+        (Builtin::Base64Decode, [Value::Text(t)]) => {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(t.as_bytes()).ok();
+            Ok(Value::Opt(bytes.and_then(|b| String::from_utf8(b).ok()).map(|s| Box::new(Value::Text(s)))))
+        }
+        (Builtin::HexEncode, [Value::Text(t)]) => {
+            if t.len().saturating_mul(2) > MAX_TEXT_BYTES {
+                return fail(FailKind::Value, format!("hex_encode would give a text longer than {MAX_TEXT_BYTES} bytes"));
+            }
+            Ok(Value::Text(hex(t.as_bytes())))
+        }
+        (Builtin::HexDecode, [Value::Text(t)]) => Ok(Value::Opt(unhex(t).and_then(|b| String::from_utf8(b).ok()).map(|s| Box::new(Value::Text(s))))),
         _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
     }
+}
+
+/// Bytes as lowercase hexadecimal, two digits each.
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(DIGITS[(b >> 4) as usize] as char);
+        out.push(DIGITS[(b & 15) as usize] as char);
+    }
+    out
+}
+
+/// The bytes that hexadecimal text writes: an even number of digits, upper or lower
+/// case, and nothing else.
+fn unhex(t: &str) -> Option<Vec<u8>> {
+    let digit = |c: u8| match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    };
+    let b = t.as_bytes();
+    if !b.len().is_multiple_of(2) {
+        return None;
+    }
+    b.chunks(2).map(|p| Some(digit(p[0])? << 4 | digit(p[1])?)).collect()
 }
 
 /// `start` and `end` as positions in something of `n` parts, or why they are not.
@@ -2667,6 +2718,30 @@ fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every library function that can lengthen a text refuses past the limit, and
+    /// only past it: each is tried at the longest result allowed and one byte beyond.
+    #[test]
+    fn library_functions_keep_text_within_its_limit() {
+        let text = |s: String| Value::Text(s);
+        let too_long = |r: Result<Value, Failure>| matches!(r, Err(f) if f.kind == FailKind::Value && f.message.contains("longer than"));
+        // base64: four characters for every three bytes, rounded up.
+        let most = MAX_TEXT_BYTES / 4 * 3;
+        assert!(builtin(Builtin::Base64Encode, &[text("a".repeat(most))]).is_ok());
+        assert!(too_long(builtin(Builtin::Base64Encode, &[text("a".repeat(most + 1))])));
+        // hex: two digits a byte.
+        assert!(builtin(Builtin::HexEncode, &[text("a".repeat(MAX_TEXT_BYTES / 2))]).is_ok());
+        assert!(too_long(builtin(Builtin::HexEncode, &[text("a".repeat(MAX_TEXT_BYTES / 2 + 1))])));
+        // upper: "ŉ" (2 bytes) becomes "ʼN" (3 bytes).
+        let k = MAX_TEXT_BYTES / 3;
+        assert!(builtin(Builtin::Upper, &[text("ŉ".repeat(k))]).is_ok());
+        assert!(too_long(builtin(Builtin::Upper, &[text("ŉ".repeat(k + 1))])));
+        // join: the separator counts too.
+        let half = || text("a".repeat(MAX_TEXT_BYTES / 2));
+        let parts = Value::List(vec![half(), half()]);
+        assert!(builtin(Builtin::Join, &[parts.clone(), text(String::new())]).is_ok());
+        assert!(too_long(builtin(Builtin::Join, &[parts, text(",".into())])));
+    }
 
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;

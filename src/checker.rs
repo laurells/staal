@@ -1061,7 +1061,10 @@ fn expr_can_fail_itself(e: &Expr) -> bool {
                     | Builtin::Max
                     | Builtin::Rem
                     | Builtin::Sort
-                    | Builtin::Sum,
+                    | Builtin::Sum
+                    // A result too long.
+                    | Builtin::Base64Encode
+                    | Builtin::HexEncode,
                 ..
             }
     )
@@ -1543,6 +1546,9 @@ fn library_builtin(ctx: &mut Ctx, f: Builtin, args: &[Expr], tys: &[(Ty, bool)],
             (Ty::List(el, _), s) if **el == text && *s == text => Some(text),
             _ => None,
         },
+        Builtin::Sha256 | Builtin::Base64Encode | Builtin::HexEncode if *arg(0) == text => Some(text),
+        Builtin::Base64Decode | Builtin::HexDecode if *arg(0) == text => Some(Ty::Optional(Box::new(text))),
+        Builtin::Sha256 | Builtin::Base64Encode | Builtin::HexEncode | Builtin::Base64Decode | Builtin::HexDecode => None,
         Builtin::ToInt if *arg(0) == text => Some(Ty::Optional(Box::new(int))),
         Builtin::ToInt => None,
         Builtin::Abs if *arg(0) == int => Some(int),
@@ -1593,7 +1599,12 @@ fn library_builtin(ctx: &mut Ctx, f: Builtin, args: &[Expr], tys: &[(Ty, bool)],
                 Builtin::IndexOf => "(Text, Text) or (a list, a value of its element type)",
                 Builtin::Split => "(Text, separator: Text, most parts)",
                 Builtin::Join => "(a list of Text, separator: Text)",
-                Builtin::ToInt => "Text",
+                Builtin::ToInt
+                | Builtin::Sha256
+                | Builtin::Base64Encode
+                | Builtin::Base64Decode
+                | Builtin::HexEncode
+                | Builtin::HexDecode => "Text",
                 Builtin::Abs => "an Int",
                 Builtin::Min | Builtin::Max => "two Ints or two Money values",
                 Builtin::Rem => "two Ints",
@@ -3664,7 +3675,12 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Reverse
                 | Builtin::Sort
                 | Builtin::Sum
-                | Builtin::Concat => return library_builtin(ctx, *f, args, &tys, trusted, *pos),
+                | Builtin::Concat
+                | Builtin::Sha256
+                | Builtin::Base64Encode
+                | Builtin::Base64Decode
+                | Builtin::HexEncode
+                | Builtin::HexDecode => return library_builtin(ctx, *f, args, &tys, trusted, *pos),
                 Builtin::Map | Builtin::Filter | Builtin::Any | Builtin::All | Builtin::Count | Builtin::Fold => {
                     return function_builtin(ctx, *f, &tys, *pos);
                 }
@@ -3724,7 +3740,12 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Any
                 | Builtin::All
                 | Builtin::Count
-                | Builtin::Fold => true,
+                | Builtin::Fold
+                | Builtin::Sha256
+                | Builtin::Base64Encode
+                | Builtin::Base64Decode
+                | Builtin::HexEncode
+                | Builtin::HexDecode => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();

@@ -1,0 +1,8 @@
+// expect: E007
+// A hash of blinded data still reveals it: the hash of an email identifies the
+// person as well as the email does.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email)) -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: "Describe.", data: [sha256(c.email)], tokens: 100)
+}

@@ -1,0 +1,13 @@
+// expect: E006
+// Decoding untrusted text gives untrusted text: an instruction hidden in base64 is
+// still not an instruction.
+fn f(note: Text) -> Text budget(calls: 1, tokens: 100) {
+    match base64_decode(note) {
+        some(t) => {
+            return validate propose(Text, instruct: t, tokens: 100)
+        }
+        none => {
+            return ""
+        }
+    }
+}
