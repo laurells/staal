@@ -1,0 +1,11 @@
+// expect: E101
+// message: function 'Line::total' is defined twice
+type Line { price: Money }
+
+fn Line.total(self) -> Money {
+    return self.price
+}
+
+fn Line.total(self) -> Money {
+    return self.price
+}

@@ -1,0 +1,11 @@
+// expect: E006
+// A method's other parameters keep their rules: @trusted here.
+type Note { text: Text }
+
+fn Note.ask(self, rule: Text @trusted) -> Text budget(calls: 1, tokens: 10) {
+    return validate propose(Text, instruct: rule, data: [self.text], tokens: 10)
+}
+
+fn f(n: Note, ticket: Text) -> Text budget(calls: 1, tokens: 10) {
+    return n.ask(ticket)
+}

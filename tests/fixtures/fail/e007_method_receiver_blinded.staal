@@ -1,0 +1,11 @@
+// expect: E007
+// The value a method is called on is its first argument: blinding follows it.
+type Order { email: Text }
+
+fn Order.greeting(self) -> Text budget(calls: 1, tokens: 10) {
+    return validate propose(Text, instruct: "Greet.", data: [self.email], tokens: 10)
+}
+
+fn f(order: Order @blind(email)) -> Text budget(calls: 1, tokens: 10) {
+    return order.greeting()
+}

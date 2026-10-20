@@ -1,0 +1,7 @@
+// expect: E901
+// message: a method's first parameter is `self`, the Line it is called on
+type Line { price: Money }
+
+fn Line.total(l: Line) -> Money {
+    return l.price
+}

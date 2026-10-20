@@ -19,8 +19,11 @@ fn err(pos: Pos, msg: String) -> Diagnostic {
 /// A function's parameters: names and defaults.
 type Params = Vec<(String, Option<Expr>)>;
 
-/// Checks every default and puts every call in its final form.
-pub fn complete(prog: &mut Program) -> Vec<Diagnostic> {
+/// Checks every default and puts every call in its final form. Method calls are
+/// calls only once the checker has resolved them by type, so until `last` their
+/// named arguments are left as they are; then a named argument anywhere but a call to
+/// a function is an error.
+pub fn complete(prog: &mut Program, last: bool) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     let consts: HashMap<String, usize> = prog.consts.iter().enumerate().map(|(i, c)| (c.name.clone(), i)).collect();
     for f in &prog.fns {
@@ -55,7 +58,7 @@ pub fn complete(prog: &mut Program) -> Vec<Diagnostic> {
         .filter(|f| !f.name.contains(' '))
         .map(|f| (f.name.clone(), f.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect()))
         .collect();
-    let mut c = Completer { sigs: &sigs, diags: &mut diags };
+    let mut c = Completer { sigs: &sigs, diags: &mut diags, last };
     for f in &mut prog.fns {
         c.block(&mut f.body);
         for p in &mut f.params {
@@ -73,6 +76,7 @@ pub fn complete(prog: &mut Program) -> Vec<Diagnostic> {
 struct Completer<'a, 'd> {
     sigs: &'a HashMap<String, Params>,
     diags: &'d mut Vec<Diagnostic>,
+    last: bool,
 }
 
 impl Completer<'_, '_> {
@@ -110,6 +114,15 @@ impl Completer<'_, '_> {
             self.call(name, args, slots, *pos);
         }
         match e {
+            // `x.m(a: 1)` may be a method call: decided once its type is known.
+            Expr::Action { .. } | Expr::Method { .. } if !self.last => {
+                for c in e.children_mut() {
+                    match c {
+                        Expr::Named { value, .. } => self.expr(value),
+                        c => self.expr(c),
+                    }
+                }
+            }
             // A named argument outside a call to a function has nothing to name.
             Expr::Named { name, value, pos } => {
                 self.diags.push(err(

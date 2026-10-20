@@ -1,0 +1,7 @@
+// expect: E104
+// message: type Line has no method 'cost'
+type Line { price: Money }
+
+fn f(items: List<Line, 3>) -> Money {
+    return items[0].cost()
+}

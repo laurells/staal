@@ -37,7 +37,7 @@ pub fn check_files(entry: SourceFile, fetch: impl FnMut(&[String]) -> Result<Sou
     let loaded = modules::load(entry, fetch);
     let fingerprint = loaded.fingerprint();
     let result = loaded.program.and_then(|mut prog| {
-        let (mut diags, for_bounds, capacities) = checker::check_with_bounds(&prog);
+        let (mut diags, for_bounds, capacities) = checker::check_and_resolve(&mut prog);
         diags.extend(budget::check(&prog, &for_bounds));
         if !diags.is_empty() {
             return Err(diags);
@@ -161,7 +161,7 @@ pub fn check_path_recorded(path: &Path) -> Result<(Checked, Recorded), String> {
     let fingerprint = loaded.fingerprint() + &packages_part;
     rec.borrow_mut().packages = packages_part;
     let result = loaded.program.and_then(|mut prog| {
-        let (mut diags, for_bounds, capacities) = checker::check_with_bounds(&prog);
+        let (mut diags, for_bounds, capacities) = checker::check_and_resolve(&mut prog);
         diags.extend(budget::check(&prog, &for_bounds));
         if let Some(p) = &project {
             diags.extend(packages::check_authority(&prog, &loaded.paths, p));
@@ -184,7 +184,7 @@ pub fn check_recorded(rec: &Recorded) -> Checked {
     let loaded = modules::load_from(entry, Replay(rec));
     let fingerprint = loaded.fingerprint() + &rec.packages;
     let result = loaded.program.and_then(|mut prog| {
-        let (mut diags, for_bounds, capacities) = checker::check_with_bounds(&prog);
+        let (mut diags, for_bounds, capacities) = checker::check_and_resolve(&mut prog);
         diags.extend(budget::check(&prog, &for_bounds));
         if !diags.is_empty() {
             return Err(diags);

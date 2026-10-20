@@ -1365,6 +1365,7 @@ impl<'p> Interp<'p> {
                 self.call(name, in_slots(vals, slots)?)
             }
             Expr::Named { .. } => internal("a named argument outside a call"),
+            Expr::Method { .. } => internal("a method call the compiler did not resolve"),
             Expr::Tuple(items, _) => {
                 let mut vals = Vec::with_capacity(items.len());
                 for i in items {

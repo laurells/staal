@@ -50,7 +50,7 @@ use crate::ast::*;
 use crate::lexer::Pos;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
     pub code: &'static str,
     pub pos: Pos,
@@ -64,6 +64,10 @@ struct Sig {
     ret_trusted: bool,
     /// `fails E`: what its `fail(...)` raises.
     fails: Option<Ty>,
+    /// Whether other modules may call it, and the file it is in: a method is called by
+    /// its type, not by a name an import could check.
+    public: bool,
+    file: u32,
 }
 
 /// While checking a capability action's body: the `@target` and `@amount` parameters
@@ -98,6 +102,11 @@ struct Ctx<'a> {
     for_bounds: HashMap<Pos, u64>,
     /// The capacity of the map or set each `put` and `add` grows, by its position.
     capacities: HashMap<Pos, u64>,
+    /// Each method call found, by its position: the method it calls.
+    methods: HashMap<Pos, String>,
+    /// Problems with method calls found while resolving them, which the plain calls
+    /// they become no longer show (a method that is not `pub`).
+    method_diags: Vec<Diagnostic>,
     /// Actions of library capabilities, by the path programs use (`termii.sms.send`):
     /// the types of the parameters a program passes.
     lib_actions: HashMap<String, Vec<Ty>>,
@@ -188,6 +197,9 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
             v.extend(reveals(right, env));
             inexact(v)
         }
+        Expr::Method { base, args, .. } => {
+            inexact(std::iter::once(base.as_ref()).chain(args.iter()).flat_map(|a| reveals(a, env)).collect())
+        }
         Expr::Call { args, .. }
         | Expr::Action { args, .. }
         | Expr::Done { evidence: args, .. }
@@ -216,6 +228,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Var(n, _) => n.clone(),
         Expr::Field { base, field, .. } => format!("{}.{field}", expr_text(base)),
         Expr::Call { name, .. } => format!("{name}(...)"),
+        Expr::Method { base, method, .. } => format!("{}.{method}(...)", expr_text(base)),
         Expr::Action { receiver, method, .. } => format!("{receiver}.{method}(...)"),
         Expr::Validate(inner, _) => format!("validate {}", expr_text(inner)),
         Expr::Try(inner, _) => format!("try {}", expr_text(inner)),
@@ -269,6 +282,102 @@ pub type Found = (Vec<Diagnostic>, HashMap<Pos, u64>, HashMap<Pos, u64>);
 /// Checks a program. Also returns the maximum iteration count of every `for` loop,
 /// keyed by the loop's position, which the cost analysis needs.
 pub fn check_with_bounds(prog: &Program) -> Found {
+    check_once(prog).0
+}
+
+/// Checks a program whose method calls may not be resolved yet. Resolving one needs
+/// the type of what it is called on, which only checking finds: so the program is
+/// checked, each method call found is rewritten into a plain call of that method
+/// (`c.total()` into `Charge::total(c)`), and the result is checked again, until
+/// nothing is left to resolve. The last check sees only plain calls, so every rule
+/// applies to a method exactly as to any function.
+pub fn check_and_resolve(prog: &mut Program) -> Found {
+    let mut resolving: Vec<Diagnostic> = Vec::new();
+    let finish = |mut found: Found, resolving: Vec<Diagnostic>| {
+        for d in resolving {
+            if !found.0.contains(&d) {
+                found.0.push(d);
+            }
+        }
+        found
+    };
+    for _ in 0..8 {
+        let (found, methods) = check_once(prog);
+        if methods.is_empty() {
+            return finish(found, resolving);
+        }
+        resolving.extend(found.0.into_iter().filter(|d| d.code == "E107" && d.msg.starts_with("method '")));
+        resolve_methods(prog, &methods);
+        // Arguments of method calls are completed (named, defaults) now they are calls.
+        let diags = crate::calls::complete(prog, true);
+        if !diags.is_empty() {
+            return (diags, HashMap::new(), HashMap::new());
+        }
+    }
+    let (mut found, methods) = check_once(prog);
+    for pos in methods.keys() {
+        found.0.push(Diagnostic { code: "E101", pos: *pos, msg: "this method call could not be resolved".into() });
+    }
+    finish(found, resolving)
+}
+
+/// Rewrites each method call `methods` names into a call of that method, with what
+/// it is called on as the first argument.
+fn resolve_methods(prog: &mut Program, methods: &HashMap<Pos, String>) {
+    fn expr(e: &mut Expr, m: &HashMap<Pos, String>) {
+        for c in e.children_mut() {
+            expr(c, m);
+        }
+        let call = match e {
+            Expr::Action { receiver, args, pos, .. } => m.get(pos).map(|name| {
+                let mut all = vec![Expr::Var(receiver.clone(), *pos)];
+                all.append(args);
+                Expr::Call { name: name.clone(), args: all, slots: Vec::new(), pos: *pos }
+            }),
+            Expr::Method { base, args, pos, .. } => m.get(pos).map(|name| {
+                let pos = *pos;
+                let mut all = vec![std::mem::replace(base.as_mut(), Expr::Bool(false, pos))];
+                all.append(args);
+                Expr::Call { name: name.clone(), args: all, slots: Vec::new(), pos }
+            }),
+            _ => None,
+        };
+        if let Some(c) = call {
+            *e = c;
+        }
+    }
+    fn block(body: &mut [Stmt], m: &HashMap<Pos, String>) {
+        for s in body {
+            match s {
+                Stmt::Let { value, .. } | Stmt::Set { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value), _) | Stmt::Fail(value, _) => {
+                    expr(value, m)
+                }
+                Stmt::Return(None, _) | Stmt::Break(_) | Stmt::Continue(_) => {}
+                Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => block(body, m),
+                Stmt::For { list, body, .. } => {
+                    expr(list, m);
+                    block(body, m);
+                }
+                Stmt::If { cond, then, els, .. } => {
+                    expr(cond, m);
+                    block(then, m);
+                    block(els, m);
+                }
+                Stmt::Match { value, arms, .. } => {
+                    expr(value, m);
+                    for a in arms {
+                        block(&mut a.body, m);
+                    }
+                }
+            }
+        }
+    }
+    for f in &mut prog.fns {
+        block(&mut f.body, methods);
+    }
+}
+
+fn check_once(prog: &Program) -> (Found, HashMap<Pos, String>) {
     let mut ctx = Ctx {
         known: ["Text", "Int", "Bool", "Money", "Unit", "Receipt"].iter().map(|s| s.to_string()).collect(),
         fields: HashMap::new(),
@@ -283,6 +392,8 @@ pub fn check_with_bounds(prog: &Program) -> Found {
         params: HashSet::new(),
         for_bounds: HashMap::new(),
         capacities: HashMap::new(),
+        methods: HashMap::new(),
+        method_diags: Vec::new(),
         lib_actions: HashMap::new(),
         flow: None,
     };
@@ -386,6 +497,8 @@ pub fn check_with_bounds(prog: &Program) -> Found {
                 ret: f.ret.clone().unwrap_or_else(|| named("Unit")),
                 ret_trusted: f.ret_trusted,
                 fails: f.fails.clone(),
+                public: f.public,
+                file: f.pos.file,
             },
         );
     }
@@ -457,7 +570,9 @@ pub fn check_with_bounds(prog: &Program) -> Found {
     // reported once per use: report each exact diagnostic once, where first found.
     let mut seen = HashSet::new();
     ctx.diags.retain(|d| seen.insert((d.code, d.pos, d.msg.clone())));
-    (ctx.diags, ctx.for_bounds, ctx.capacities)
+    let mut diags = ctx.diags;
+    diags.extend(ctx.method_diags);
+    ((diags, ctx.for_bounds, ctx.capacities), ctx.methods)
 }
 
 /// Calls `f` on every expression in `body`, nested blocks included, outermost first.
@@ -2316,6 +2431,46 @@ fn record_fields(ctx: &mut Ctx, env: &Env, ty: &str, decl: &[(String, Ty)], fiel
 /// An expression's type and whether its value is trusted.
 type Typed = (Ty, bool);
 
+/// `base.method(args)`: a call of the method of `base`'s type, `T::method(base, args)`.
+/// It is recorded, so the call can be rewritten into exactly that (see
+/// `check_and_resolve`), and typed as that call.
+/// `on_variable`: written `x.method(...)`, which is an action when `x` is a capability;
+/// on anything else with no such method it is still an attempt to act (E002).
+fn method_call(ctx: &mut Ctx, base: &Expr, method: &str, args: &[Expr], pos: Pos, env: &Env, on_variable: bool) -> Option<Typed> {
+    let (bt, _) = type_of(ctx, base, env)?;
+    let found = match &bt {
+        Ty::Named(n) => {
+            let name = format!("{n}::{method}");
+            ctx.sigs.get(name.as_str()).map(|s| (name, s.public, s.file))
+        }
+        _ => None,
+    };
+    let Some((name, public, file)) = found else {
+        let what = match &bt {
+            Ty::Proposed(_) => {
+                ctx.err("E001", pos, format!("cannot call '.{method}()' on unvalidated {bt}; use `validate` first"));
+                return None;
+            }
+            Ty::Named(_) => format!("type {bt} has no method '{method}'"),
+            _ => format!("{bt} has no methods; cannot call '.{method}()'"),
+        };
+        if on_variable {
+            let r = expr_text(base);
+            ctx.err("E002", pos, format!("'{r}.{method}' acts on the world but '{r}' is not a capability in scope, and {what}"));
+        } else {
+            ctx.err("E104", pos, what);
+        }
+        return None;
+    };
+    if !public && file != pos.file {
+        ctx.method_diags.push(Diagnostic { code: "E107", pos, msg: format!("method '{name}' is not `pub` in its module") });
+    }
+    ctx.methods.insert(pos, name.clone());
+    let mut all = vec![base.clone()];
+    all.extend(args.iter().cloned());
+    type_of(ctx, &Expr::Call { name, args: all, slots: Vec::new(), pos }, env)
+}
+
 /// Returns the expression's type and whether its value is trusted.
 fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
     match e {
@@ -3010,6 +3165,14 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             }
             Some((ret, ret_trusted))
         }
+        // `x.total()` on a record or enum `x`: a call of its type's method.
+        Expr::Action { receiver, method, args, pos }
+            if env.get(receiver).is_some_and(|b| !matches!(b.ty, Ty::Cap { .. })) =>
+        {
+            let base = Expr::Var(receiver.clone(), *pos);
+            method_call(ctx, &base, method, args, *pos, env, true)
+        }
+        Expr::Method { base, method, args, pos } => method_call(ctx, base, method, args, *pos, env, false),
         Expr::Action { receiver, method, args, pos } => {
             // Inside a capability action: note requests, and whether the @target and
             // @amount parameters reach one.

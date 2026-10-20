@@ -246,6 +246,10 @@ pub struct FnDecl {
     /// `fails E`: the record or enum type its `fail(...)` raises, which a caller's
     /// `try` can read back as `outcome.failure`.
     pub fails: Option<Ty>,
+    /// `fn Charge.total(self) -> Money`: a method of the record or enum `Charge`,
+    /// called as `c.total()`. Its first parameter, `self`, is the value it is called
+    /// on. Its name is `Charge::total` (qualified by its module like any name).
+    pub method_of: Option<String>,
     pub body: Vec<Stmt>,
     pub pos: Pos,
 }
@@ -549,6 +553,10 @@ pub enum Expr {
     /// parameter each one is for; empty means in order (`crate::calls` fills it in for
     /// named arguments and defaults).
     Call { name: String, args: Vec<Expr>, slots: Vec<usize>, pos: Pos },
+    /// `base.method(args)` where `base` is not a plain variable (a plain variable's is
+    /// parsed as an `Action`). The checker resolves it by `base`'s type to a call of
+    /// that type's method, before any other analysis sees it.
+    Method { base: Box<Expr>, method: String, args: Vec<Expr>, pos: Pos },
     /// `name: value` among a call's arguments. Only the parser makes one, and
     /// `crate::calls` replaces every one before checking.
     Named { name: String, value: Box<Expr>, pos: Pos },
@@ -591,6 +599,7 @@ impl Expr {
             | Expr::SomeOf(inner, _) => vec![inner],
             Expr::Named { value, .. } => vec![value],
             Expr::MapLit(entries, _) => entries.iter().flat_map(|(k, v)| [k, v]).collect(),
+            Expr::Method { base, args, .. } => std::iter::once(base.as_ref()).chain(args.iter()).collect(),
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -620,6 +629,7 @@ impl Expr {
             | Expr::SomeOf(inner, _) => vec![inner],
             Expr::Named { value, .. } => vec![value],
             Expr::MapLit(entries, _) => entries.iter_mut().flat_map(|(k, v)| [k, v]).collect(),
+            Expr::Method { base, args, .. } => std::iter::once(base.as_mut()).chain(args.iter_mut()).collect(),
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -662,7 +672,7 @@ impl Expr {
             | Expr::Index { pos, .. } => *pos,
             Expr::Cmp { pos, .. } | Expr::Field { pos, .. } | Expr::Done { pos, .. } => *pos,
             Expr::Propose { pos, .. } | Expr::Parse { pos, .. } => *pos,
-            Expr::Action { pos, .. } | Expr::Call { pos, .. } | Expr::Named { pos, .. } => *pos,
+            Expr::Action { pos, .. } | Expr::Call { pos, .. } | Expr::Named { pos, .. } | Expr::Method { pos, .. } => *pos,
         }
     }
 }

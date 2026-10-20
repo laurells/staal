@@ -1,0 +1,7 @@
+// expect: E002
+// message: 'l.cost' acts on the world but 'l' is not a capability in scope, and type Line has no method 'cost'
+type Line { price: Money }
+
+fn f(l: Line) -> Money {
+    return l.cost()
+}

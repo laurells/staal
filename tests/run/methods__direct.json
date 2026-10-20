@@ -1,0 +1,1 @@
+{"entry": "direct", "inputs": {"l": {"name": "x", "price": {"amount": "5.00", "currency": "NGN"}, "qty": 2}}, "expect": {"result": {"amount": "15.00", "currency": "NGN"}}, "model": {"provider": "script", "responses": []}}

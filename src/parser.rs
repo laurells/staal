@@ -68,13 +68,15 @@ pub struct Parser {
     no_record: bool,
     /// How many tuples `let (a, b) = ...` has unpacked, to name each one's holder.
     unpacked: usize,
+    /// While parsing a method's parameters: the type its `self` is.
+    method_of: Option<String>,
 }
 
 type PResult<T> = Result<T, (Pos, String)>;
 
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
-        Parser { toks, i: 0, no_record: false, unpacked: 0 }
+        Parser { toks, i: 0, no_record: false, unpacked: 0, method_of: None }
     }
 
     fn peek(&self) -> &Tok {
@@ -471,6 +473,17 @@ impl Parser {
         let pos = self.pos();
         self.expect(Tok::Fn, "'fn'")?;
         let name = self.ident()?;
+        // `fn Type.method(self, ...)`: a method.
+        if *self.peek() == Tok::Dot {
+            self.bump();
+            let method = self.ident()?;
+            self.method_of = Some(name.clone());
+            let f = self.fn_rest(public, format!("{name}::{method}"), pos);
+            self.method_of = None;
+            let mut f = f?;
+            f.method_of = Some(name);
+            return Ok(f);
+        }
         self.fn_rest(public, name, pos)
     }
 
@@ -553,6 +566,26 @@ impl Parser {
     fn fn_rest(&mut self, public: bool, name: String, pos: Pos) -> PResult<FnDecl> {
         self.expect(Tok::LParen, "'('")?;
         let mut params = Vec::new();
+        // A method's first parameter is `self`, the value it is called on.
+        if let Some(t) = self.method_of.take() {
+            let spos = self.pos();
+            let first = self.ident()?;
+            if first != "self" {
+                return Err((spos, format!("a method's first parameter is `self`, the {t} it is called on")));
+            }
+            params.push(Param {
+                name: "self".into(),
+                ty: Ty::Named(t),
+                trusted: false,
+                target: false,
+                amount: false,
+                blind: self.param_marks()?.blind,
+                default: None,
+            });
+            if *self.peek() == Tok::Comma {
+                self.bump();
+            }
+        }
         if *self.peek() != Tok::RParen {
             loop {
                 let pname = self.ident()?;
@@ -601,7 +634,7 @@ impl Parser {
         };
         let budget = if *self.peek() == Tok::Budget { Some(self.budget()?) } else { None };
         let body = self.block()?;
-        Ok(FnDecl { public, name, params, ret, ret_trusted, budget, fails, body, pos })
+        Ok(FnDecl { public, name, params, ret, ret_trusted, budget, fails, method_of: None, body, pos })
     }
 
     fn ty(&mut self) -> PResult<Ty> {
@@ -1142,13 +1175,11 @@ impl Parser {
                         _ => {}
                     }
                     let field = self.field_name()?;
+                    // `x.a.method(...)`: a method of whatever `x.a` is.
                     if *self.peek() == Tok::LParen {
-                        return Err((
-                            pos,
-                            format!(
-                                "'{field}(...)' is not allowed here: actions must be called directly on a capability variable"
-                            ),
-                        ));
+                        let args = self.args()?;
+                        e = Expr::Method { base: Box::new(e), method: field, args, pos };
+                        continue;
                     }
                     e = Expr::Field { base: Box::new(e), field, pos };
                 }

@@ -1,0 +1,1 @@
+{"entry": "label", "inputs": {"s": {"kind": "Paid", "reference": "R1"}}, "expect": {"result": "paid R1"}, "model": {"provider": "script", "responses": []}}

@@ -1,0 +1,8 @@
+// expect: E101
+// message: a method is declared beside its type: 'Line' is not a record or enum declared in this file
+type Item { price: Money }
+type Line = Item
+
+fn Line.total(self) -> Money {
+    return self.price
+}

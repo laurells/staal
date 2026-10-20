@@ -1,0 +1,1 @@
+{"entry": "discounted", "inputs": {"c": {"lines": [{"name": "a", "price": {"amount": "2.00", "currency": "NGN"}, "qty": 3}, {"name": "b", "price": {"amount": "1.50", "currency": "NGN"}, "qty": 2}], "owner": "ada"}}, "expect": {"result": {"amount": "8.00", "currency": "NGN"}}, "model": {"provider": "script", "responses": []}}

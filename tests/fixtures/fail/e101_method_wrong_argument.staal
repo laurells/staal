@@ -1,0 +1,11 @@
+// expect: E101
+// message: in call to 'Line::with_qty': expected Int, found Text
+type Line { price: Money, qty: Int }
+
+fn Line.with_qty(self, qty: Int) -> Line {
+    return Line { price: self.price, qty: qty }
+}
+
+fn f(l: Line) -> Line {
+    return l.with_qty("two")
+}

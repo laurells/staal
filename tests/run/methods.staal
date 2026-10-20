@@ -1,0 +1,65 @@
+// Methods: declared beside their type, called on values and on any expression,
+// chained, with named arguments and defaults, on records and enums.
+type Line { name: Text, price: Money, qty: Int }
+type Cart { lines: List<Line, 10>, owner: Text }
+
+enum Status {
+    Open,
+    Paid { reference: Text },
+}
+
+fn Line.total(self) -> Money {
+    return self.price * self.qty
+}
+
+fn Line.with_qty(self, qty: Int) -> Line {
+    return Line { name: self.name, price: self.price, qty: qty }
+}
+
+fn Cart.total(self, discount: Money = 0.00 NGN) -> Money {
+    let sum = 0.00 NGN
+    for l in self.lines {
+        set sum = sum + l.total()
+    }
+    return sum - discount
+}
+
+fn Cart.first(self) -> Line {
+    return self.lines[0]
+}
+
+fn Status.label(self) -> Text {
+    match self {
+        Open => {
+            return "open"
+        }
+        Paid { reference } => {
+            return "paid \(reference)"
+        }
+    }
+}
+
+fn cart_total(c: Cart) -> Money {
+    return c.total()
+}
+
+fn discounted(c: Cart) -> Money {
+    return c.total(discount: 1.00 NGN)
+}
+
+fn chained(c: Cart) -> Money {
+    return c.first().with_qty(10).total()
+}
+
+fn on_field(c: Cart) -> Money {
+    return c.lines[1].total()
+}
+
+fn label(s: Status) -> Text {
+    return s.label()
+}
+
+// Methods of a value and of a value a method returned.
+fn direct(l: Line) -> Money {
+    return l.total() + l.with_qty(1).total()
+}

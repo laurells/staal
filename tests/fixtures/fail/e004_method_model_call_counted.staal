@@ -1,0 +1,11 @@
+// expect: E004
+// A method that asks a model costs what it costs, wherever it is called from.
+type Ticket { body: Text }
+
+fn Ticket.summary(self) -> Text budget(calls: 1, tokens: 500) {
+    return validate propose(Text, instruct: "Summarise.", data: [self.body], tokens: 500)
+}
+
+fn f(t: Ticket) -> Text budget(calls: 1, tokens: 100) {
+    return t.summary()
+}

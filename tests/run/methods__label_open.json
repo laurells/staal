@@ -1,0 +1,1 @@
+{"entry": "label", "inputs": {"s": {"kind": "Open"}}, "expect": {"result": "open"}, "model": {"provider": "script", "responses": []}}

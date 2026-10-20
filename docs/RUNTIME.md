@@ -266,6 +266,15 @@ Evaluation is strictly left to right and statement by statement.
 - `break` leaves the innermost loop; `continue` goes on to its next iteration
   (for `repeat` and `for`, the next count or element). Each iteration costs one
   step either way. `return` leaves the function.
+- A method, `fn Line.total(self) -> Money`, is a function of the record or enum
+  `Line`, declared in the file that declares `Line`; its first parameter, `self`, is
+  the value it is called on. `l.total()` (or `cart.lines[0].total()`, on any
+  expression) calls it: the compiler resolves the call by the value's type and
+  rewrites it into a plain call with `l` as the first argument before any rule is
+  checked, so a method is checked, costed and run exactly as a function. A method
+  without `pub` is called only in its own file (E107). On a variable that is a
+  capability, `x.m(...)` is always an action, never a method; on any other variable
+  with no such method it is E002, as before.
 - A function call evaluates its arguments left to right, in the order written,
   then runs the callee with a fresh scope containing only its parameters.
   `name: value` passes an argument to the parameter it names; arguments without

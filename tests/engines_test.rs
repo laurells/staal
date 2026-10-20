@@ -185,6 +185,19 @@ fn the_error_cases_really_run_native_code() {
     assert_eq!(got, ["charge", "charge_twice", "overflow"]);
 }
 
+#[test]
+fn the_method_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/methods.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    let want = [
+        "Cart::first", "Cart::total", "Line::total", "Line::with_qty", "Status::label", "cart_total", "chained", "direct",
+        "discounted", "label", "on_field",
+    ];
+    assert_eq!(got, want);
+}
+
 // ---------------------------------------------------------------------------------
 // Generated programs
 

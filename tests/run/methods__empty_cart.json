@@ -1,0 +1,1 @@
+{"entry": "chained", "inputs": {"c": {"lines": [], "owner": "x"}}, "expect": {"failure": "value", "message_contains": "index 0"}, "model": {"provider": "script", "responses": []}}

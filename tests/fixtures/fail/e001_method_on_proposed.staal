@@ -1,0 +1,12 @@
+// expect: E001
+// message: cannot call '.total()' on unvalidated Proposed<Line>
+type Line { price: Money }
+
+fn Line.total(self) -> Money {
+    return self.price
+}
+
+fn f() -> Money budget(calls: 1, tokens: 100) {
+    let p = propose(Line, instruct: "Price it.", tokens: 100)
+    return p.total()
+}

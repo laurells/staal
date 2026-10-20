@@ -1,0 +1,9 @@
+// expect: E104
+// message: type Text has no method 'send'
+// `order.id.send(...)` is a method call on a Text, never an action: only a capability
+// variable acts.
+type Order { id: Text }
+
+fn f(order: Order) {
+    order.id.send("x")
+}

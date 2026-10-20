@@ -1,0 +1,5 @@
+pub type Line { price: Money }
+
+fn Line.secret(self) -> Money {
+    return self.price
+}

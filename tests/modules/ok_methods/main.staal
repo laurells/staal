@@ -1,0 +1,11 @@
+// expect: ok
+// A method crosses modules with its type: called on a value, whatever its name here.
+import shop.cart as c { Line }
+
+fn total(l: Line) -> Money {
+    return l.total()
+}
+
+fn both(l: c.Line) -> Money {
+    return l.total() + l.total()
+}

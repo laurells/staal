@@ -7,6 +7,11 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Methods, `fn Line.total(self) -> Money`, declared beside a record or enum and
+  called as `line.total()` on any expression, with named arguments and defaults.
+  The compiler resolves each call by type and rewrites it into a plain call before
+  checking, so every rule applies unchanged. On a capability, `x.m()` is always an
+  action.
 - Typed errors: `fn f(...) -> T fails E` with E a record or enum, `fail(e)` with a
   value of E, and `outcome.failure`, an `Optional<E>`, after `try f(...)`. A
   declared failure that is not caught must be declared by the caller too, so

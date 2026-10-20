@@ -1,0 +1,10 @@
+pub type Line { price: Money, qty: Int }
+
+pub fn Line.total(self) -> Money {
+    return self.price * self.qty + self.fee()
+}
+
+// Private: callable here, not from other modules.
+fn Line.fee(self) -> Money {
+    return 0.00 NGN
+}

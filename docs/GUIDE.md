@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 40 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 427 invalid ones
+rejecting the programs it should. 41 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 438 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -130,6 +130,22 @@ is, so with `order: Order @blind(payment.reference)` an arm may still ask a mode
 about the amount, but binding `reference` there and passing it on is E007, and
 with the whole `payment` blinded, deciding a model call by the variant is E007
 too.
+
+### Methods
+
+    type Line { price: Money, qty: Int }
+
+    fn Line.total(self) -> Money {
+        return self.price * self.qty
+    }
+
+    let sum = cart.lines[0].total() + line.total()
+
+A method is a function declared beside its type, with `self` as its first
+parameter. It is called on a value of that type, and is checked exactly as the
+function it is: its model calls count against its caller's budget, `@blind` and
+`@trusted` on its parameters (`self` included) apply, and a capability's actions
+are never methods.
 
 ### Default values and named arguments
 

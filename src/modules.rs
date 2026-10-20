@@ -289,6 +289,19 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 r.ty(fty, t.pos);
             }
         }
+        for f in &m.prog.fns {
+            // Types are already qualified here (enums are not yet).
+            if let Some(t) = &f.method_of
+                && !m.prog.types.iter().any(|d| d.name == format!("{}{t}", scope.prefix))
+                && !m.prog.enums.iter().any(|d| &d.name == t)
+            {
+                r.diags.push(err(
+                    "E101",
+                    f.pos,
+                    format!("a method is declared beside its type: '{t}' is not a record or enum declared in this file"),
+                ));
+            }
+        }
         for f in &mut m.prog.fns {
             // Capability actions keep their names (`action termii.sms.send`): capability
             // paths are global, and the names cannot be written in a program anyway.
@@ -352,7 +365,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
     if !diags.is_empty() {
         return Err(diags);
     }
-    let diags = crate::calls::complete(&mut out);
+    let diags = crate::calls::complete(&mut out, false);
     if !diags.is_empty() {
         return Err(diags);
     }
@@ -712,6 +725,12 @@ impl Resolver<'_, '_, '_> {
             | Expr::Not(inner, _)
             | Expr::SomeOf(inner, _) => self.expr(inner),
             Expr::Named { value, .. } => self.expr(value),
+            Expr::Method { base, args, .. } => {
+                self.expr(base);
+                for a in args {
+                    self.expr(a);
+                }
+            }
             Expr::MapLit(entries, _) => {
                 for (k, v) in entries {
                     self.expr(k);

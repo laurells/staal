@@ -1,0 +1,6 @@
+// expect: E002
+// message: capability 'mail' is `cap email.send` and does not permit 'refund'
+// A capability's action is never a method: the capability rules apply unchanged.
+fn f(mail: cap email.send) {
+    mail.refund("x")
+}

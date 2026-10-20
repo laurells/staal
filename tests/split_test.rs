@@ -58,7 +58,9 @@ fn split(src: &str) -> Option<Split> {
     let prog: Program = staalc::parser::Parser::new(toks).program().ok()?;
     assert!(prog.imports.is_empty(), "test programs are single files");
     // Every function called by some function, and everything those call.
-    let mut moved: HashSet<String> = prog.fns.iter().flat_map(calls_in).collect();
+    // Methods move with their types, which always move.
+    let mut moved: HashSet<String> =
+        prog.fns.iter().flat_map(calls_in).chain(prog.fns.iter().filter(|f| f.method_of.is_some()).map(|f| f.name.clone())).collect();
     loop {
         let more: Vec<String> =
             prog.fns.iter().filter(|f| moved.contains(&f.name)).flat_map(calls_in).filter(|c| !moved.contains(c)).collect();
@@ -94,7 +96,9 @@ fn split(src: &str) -> Option<Split> {
     }
     let first = decls[0].0 - 1;
     let mut main = lines[..first].join("\n");
-    let names: BTreeSet<String> = decls.iter().filter(|d| d.2 && !d.3.contains(' ')).map(|d| d.3.clone()).collect();
+    // A method is reached through its type, never imported by name.
+    let names: BTreeSet<String> =
+        decls.iter().filter(|d| d.2 && !d.3.contains(' ') && !d.3.contains("::")).map(|d| d.3.clone()).collect();
     if names.is_empty() {
         main.push_str(&format!("\nimport {LIB}\n"));
     } else {
