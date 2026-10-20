@@ -381,6 +381,11 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
             }
         }
     }
+    // Every use of an alias is already its type; the type is checked here once, so an
+    // alias that names nothing is an error even where it is never used.
+    for a in &prog.aliases {
+        check_ty_known(&mut ctx, &a.ty, a.pos);
+    }
     // Constants (`crate::consts`): every use is already replaced by the value, so here
     // each is checked once: its type, and that computing it succeeds.
     for c in &prog.consts {

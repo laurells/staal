@@ -1,0 +1,10 @@
+// expect: E101
+// message: 'State' is an enum here; choose another name
+enum Status {
+    Open,
+}
+type State = Status
+
+fn f(State: Int) -> Int {
+    return 1
+}

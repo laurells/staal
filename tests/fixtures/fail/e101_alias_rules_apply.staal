@@ -1,0 +1,4 @@
+// expect: E101
+// message: an optional value cannot hold a Receipt
+// The rules for a type apply to it through an alias.
+type Proof = Optional<Receipt>

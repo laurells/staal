@@ -1,0 +1,4 @@
+// expect: E101
+// message: type 'P' is already defined
+type P { n: Int }
+type P = Int

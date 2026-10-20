@@ -1,0 +1,1 @@
+{"entry": "capped", "inputs": {"a": {"amount": "9.00", "currency": "NGN"}}, "expect": {"result": {"amount": "5.00", "currency": "NGN"}}, "model": {"provider": "script", "responses": []}}

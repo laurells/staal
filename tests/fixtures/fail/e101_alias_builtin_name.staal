@@ -1,0 +1,3 @@
+// expect: E101
+// message: type 'Text' is built in and cannot be declared
+type Text = Int

@@ -1,0 +1,1 @@
+{"entry": "open_count", "inputs": {"xs": [{"kind": "Open"}, {"kind": "Closed", "reason": "x"}, {"kind": "Open"}]}, "expect": {"result": 2}, "model": {"provider": "script", "responses": []}}

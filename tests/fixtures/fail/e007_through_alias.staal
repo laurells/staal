@@ -1,0 +1,9 @@
+// expect: E007
+// Blinding reaches through an alias: the type is the same.
+type Contact { email: Text }
+type Who = Contact
+type Order { who: Who }
+
+fn f(order: Order @blind(who.email)) {
+    let s = propose(Text, instruct: "Greet.", data: [order.who.email], tokens: 10)
+}

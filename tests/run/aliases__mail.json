@@ -1,0 +1,1 @@
+{"entry": "mail", "inputs": {"p": {"name": "Ada", "email": "a@b.org", "owed": {"amount": "3.00", "currency": "NGN"}}}, "expect": {"result": "a@b.org"}, "model": {"provider": "script", "responses": []}}

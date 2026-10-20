@@ -213,8 +213,8 @@ struct Scope<'a> {
     /// Import alias -> what that module exports.
     aliases: HashMap<String, &'a Exports>,
     alias_prefix: HashMap<String, String>,
-    /// The qualified names of every enum in the program.
-    enums: &'a HashSet<String>,
+    /// Every enum, and every alias of one, by qualified name: the enum it names.
+    enums: &'a HashMap<String, String>,
 }
 
 fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Result<Program, Vec<Diagnostic>> {
@@ -227,9 +227,13 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             for t in &m.prog.types {
                 e.types.entry(t.name.clone()).or_insert((format!("{p}{}", t.name), t.public));
             }
-            // An enum is a type: it is named, exported and imported like one.
+            // An enum is a type: it is named, exported and imported like one. So is an
+            // alias.
             for en in &m.prog.enums {
                 e.types.entry(en.name.clone()).or_insert((format!("{p}{}", en.name), en.public));
+            }
+            for a in &m.prog.aliases {
+                e.types.entry(a.name.clone()).or_insert((format!("{p}{}", a.name), a.public));
             }
             for f in &m.prog.fns {
                 e.fns.entry(f.name.clone()).or_insert((format!("{p}{}", f.name), f.public));
@@ -241,111 +245,43 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
         })
         .collect();
 
-    let enums: HashSet<String> =
-        modules.iter().flat_map(|m| m.prog.enums.iter().map(move |e| format!("{}{}", m.prefix(), e.name))).collect();
+    // Every enum by qualified name, to itself; aliases of enums are added below.
+    let enums: HashMap<String, String> = modules
+        .iter()
+        .flat_map(|m| m.prog.enums.iter().map(move |e| format!("{}{}", m.prefix(), e.name)))
+        .map(|q| (q.clone(), q))
+        .collect();
     let mut out = Program::default();
+    // Aliases first: what each names, in its own module, so that an alias of an enum
+    // can name its variants (`State.Open` where `type State = Status`).
+    let mut alias_targets: Vec<(String, Ty)> = Vec::new();
+    for (mi, m) in modules.iter().enumerate() {
+        let mut scratch = Vec::new();
+        let scope = scope_of(mi, m, &exports, index, &enums, &mut scratch);
+        let mut r = Resolver { scope: &scope, diags: &mut scratch };
+        for a in &m.prog.aliases {
+            let mut t = a.ty.clone();
+            r.ty(&mut t, a.pos);
+            alias_targets.push((format!("{}{}", m.prefix(), a.name), t));
+        }
+    }
+    let mut enums = enums;
+    loop {
+        let more: Vec<(String, String)> = alias_targets
+            .iter()
+            .filter(|(q, _)| !enums.contains_key(q))
+            .filter_map(|(q, t)| match t {
+                Ty::Named(n) => enums.get(n).map(|e| (q.clone(), e.clone())),
+                _ => None,
+            })
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        enums.extend(more);
+    }
     for (mi, m) in modules.iter_mut().enumerate() {
-        let mut scope = Scope {
-            prefix: m.prefix(),
-            types: HashMap::new(),
-            fns: HashMap::new(),
-            consts: HashMap::new(),
-            aliases: HashMap::new(),
-            alias_prefix: HashMap::new(),
-            enums: &enums,
-        };
-        for (n, (q, _)) in &exports[mi].types {
-            scope.types.insert(n.clone(), q.clone());
-        }
-        for (n, (q, _)) in &exports[mi].fns {
-            scope.fns.insert(n.clone(), q.clone());
-        }
-        for (n, (q, _)) in &exports[mi].consts {
-            scope.consts.insert(n.clone(), q.clone());
-        }
-        let mut seen_consts = HashSet::new();
-        for c in &m.prog.consts {
-            if !seen_consts.insert(c.name.clone()) {
-                diags.push(err("E101", c.pos, format!("constant '{}' is declared twice", c.name)));
-            }
-        }
-        if !m.path.is_empty() {
-            for t in &m.prog.types {
-                if BUILTIN_TYPES.contains(&t.name.as_str()) {
-                    diags.push(err("E101", t.pos, format!("type '{}' is built in and cannot be declared", t.name)));
-                }
-            }
-        }
-        for en in &m.prog.enums {
-            if BUILTIN_TYPES.contains(&en.name.as_str()) {
-                diags.push(err("E101", en.pos, format!("type '{}' is built in and cannot be declared", en.name)));
-            }
-        }
-        let mut seen_paths = HashSet::new();
-        let mut brought_in: HashSet<String> = HashSet::new();
-        for imp in &m.prog.imports {
-            if !seen_paths.insert(imp.path.clone()) {
-                diags.push(err("E106", imp.pos, format!("'{}' is imported twice", imp.path.join("."))));
-                continue;
-            }
-            let target = index[&imp.path];
-            let tex = &exports[target];
-            if scope.aliases.contains_key(&imp.alias) {
-                diags.push(err(
-                    "E106",
-                    imp.pos,
-                    format!("two imports are both named '{}'; rename one with `as`", imp.alias),
-                ));
-                continue;
-            }
-            if exports[mi].types.contains_key(&imp.alias)
-                || exports[mi].fns.contains_key(&imp.alias)
-                || exports[mi].consts.contains_key(&imp.alias)
-            {
-                diags.push(err(
-                    "E106",
-                    imp.pos,
-                    format!("import '{}' has the same name as a declaration in this file; rename it with `as`", imp.alias),
-                ));
-                continue;
-            }
-            scope.aliases.insert(imp.alias.clone(), tex);
-            scope.alias_prefix.insert(imp.alias.clone(), modules_prefix(&imp.path));
-            for (n, npos) in &imp.names {
-                let ty = tex.types.get(n);
-                let f = tex.fns.get(n);
-                let c = tex.consts.get(n);
-                if ty.is_none() && f.is_none() && c.is_none() {
-                    diags.push(err("E100", *npos, format!("module '{}' has no '{n}'", imp.path.join("."))));
-                    continue;
-                }
-                if ty.is_some_and(|t| !t.1) || f.is_some_and(|f| !f.1) || c.is_some_and(|c| !c.1) {
-                    diags.push(err(
-                        "E107",
-                        *npos,
-                        format!("'{n}' in module '{}' is not `pub`, so it cannot be imported", imp.path.join(".")),
-                    ));
-                    continue;
-                }
-                // A name may come from one place only: this file, or one import.
-                let local_clash = (ty.is_some() && exports[mi].types.contains_key(n))
-                    || (f.is_some() && exports[mi].fns.contains_key(n))
-                    || (c.is_some() && exports[mi].consts.contains_key(n));
-                if local_clash || !brought_in.insert(n.clone()) {
-                    diags.push(err("E106", *npos, format!("'{n}' is already defined in this file")));
-                    continue;
-                }
-                if let Some((q, _)) = ty {
-                    scope.types.insert(n.clone(), q.clone());
-                }
-                if let Some((q, _)) = f {
-                    scope.fns.insert(n.clone(), q.clone());
-                }
-                if let Some((q, _)) = c {
-                    scope.consts.insert(n.clone(), q.clone());
-                }
-            }
-        }
+        let scope = scope_of(mi, m, &exports, index, &enums, &mut diags);
         let mut r = Resolver { scope: &scope, diags: &mut diags };
         for t in &mut m.prog.types {
             t.name = format!("{}{}", scope.prefix, t.name);
@@ -383,6 +319,10 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 }
             }
         }
+        for a in &mut m.prog.aliases {
+            a.name = format!("{}{}", scope.prefix, a.name);
+            r.ty(&mut a.ty, a.pos);
+        }
         for c in &mut m.prog.consts {
             c.name = format!("{}{}", scope.prefix, c.name);
             if let Some(t) = &mut c.ty {
@@ -400,12 +340,140 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
         out.caps.extend(m.prog.caps);
         out.consts.extend(m.prog.consts);
         out.enums.extend(m.prog.enums);
+        out.aliases.extend(m.prog.aliases);
+    }
+    let diags = crate::aliases::expand(&mut out);
+    if !diags.is_empty() {
+        return Err(diags);
     }
     let diags = crate::consts::expand(&mut out);
     if !diags.is_empty() {
         return Err(diags);
     }
     Ok(out)
+}
+
+/// The names visible in module `mi`, reporting problems with its imports.
+fn scope_of<'a>(
+    mi: usize,
+    m: &Module,
+    exports: &'a [Exports],
+    index: &HashMap<Vec<String>, usize>,
+    enums: &'a HashMap<String, String>,
+    diags: &mut Vec<Diagnostic>,
+) -> Scope<'a> {
+    let mut scope = Scope {
+        prefix: m.prefix(),
+        types: HashMap::new(),
+        fns: HashMap::new(),
+        consts: HashMap::new(),
+        aliases: HashMap::new(),
+        alias_prefix: HashMap::new(),
+        enums,
+    };
+    for (n, (q, _)) in &exports[mi].types {
+        scope.types.insert(n.clone(), q.clone());
+    }
+    for (n, (q, _)) in &exports[mi].fns {
+        scope.fns.insert(n.clone(), q.clone());
+    }
+    for (n, (q, _)) in &exports[mi].consts {
+        scope.consts.insert(n.clone(), q.clone());
+    }
+    let mut seen_consts = HashSet::new();
+    for c in &m.prog.consts {
+        if !seen_consts.insert(c.name.clone()) {
+            diags.push(err("E101", c.pos, format!("constant '{}' is declared twice", c.name)));
+        }
+    }
+    if !m.path.is_empty() {
+        for t in &m.prog.types {
+            if BUILTIN_TYPES.contains(&t.name.as_str()) {
+                diags.push(err("E101", t.pos, format!("type '{}' is built in and cannot be declared", t.name)));
+            }
+        }
+    }
+    for en in &m.prog.enums {
+        if BUILTIN_TYPES.contains(&en.name.as_str()) {
+            diags.push(err("E101", en.pos, format!("type '{}' is built in and cannot be declared", en.name)));
+        }
+    }
+    // An alias shares the type names of its file with records and enums.
+    let mut declared: HashSet<&str> =
+        m.prog.types.iter().map(|t| t.name.as_str()).chain(m.prog.enums.iter().map(|e| e.name.as_str())).collect();
+    for a in &m.prog.aliases {
+        if BUILTIN_TYPES.contains(&a.name.as_str()) {
+            diags.push(err("E101", a.pos, format!("type '{}' is built in and cannot be declared", a.name)));
+        } else if !declared.insert(a.name.as_str()) {
+            diags.push(err("E101", a.pos, format!("type '{}' is already defined", a.name)));
+        }
+    }
+    let mut seen_paths = HashSet::new();
+    let mut brought_in: HashSet<String> = HashSet::new();
+    for imp in &m.prog.imports {
+        if !seen_paths.insert(imp.path.clone()) {
+            diags.push(err("E106", imp.pos, format!("'{}' is imported twice", imp.path.join("."))));
+            continue;
+        }
+        let target = index[&imp.path];
+        let tex = &exports[target];
+        if scope.aliases.contains_key(&imp.alias) {
+            diags.push(err(
+                "E106",
+                imp.pos,
+                format!("two imports are both named '{}'; rename one with `as`", imp.alias),
+            ));
+            continue;
+        }
+        if exports[mi].types.contains_key(&imp.alias)
+            || exports[mi].fns.contains_key(&imp.alias)
+            || exports[mi].consts.contains_key(&imp.alias)
+        {
+            diags.push(err(
+                "E106",
+                imp.pos,
+                format!("import '{}' has the same name as a declaration in this file; rename it with `as`", imp.alias),
+            ));
+            continue;
+        }
+        scope.aliases.insert(imp.alias.clone(), tex);
+        scope.alias_prefix.insert(imp.alias.clone(), modules_prefix(&imp.path));
+        for (n, npos) in &imp.names {
+            let ty = tex.types.get(n);
+            let f = tex.fns.get(n);
+            let c = tex.consts.get(n);
+            if ty.is_none() && f.is_none() && c.is_none() {
+                diags.push(err("E100", *npos, format!("module '{}' has no '{n}'", imp.path.join("."))));
+                continue;
+            }
+            if ty.is_some_and(|t| !t.1) || f.is_some_and(|f| !f.1) || c.is_some_and(|c| !c.1) {
+                diags.push(err(
+                    "E107",
+                    *npos,
+                    format!("'{n}' in module '{}' is not `pub`, so it cannot be imported", imp.path.join(".")),
+                ));
+                continue;
+            }
+            // A name may come from one place only: this file, or one import.
+            let local_clash = (ty.is_some() && exports[mi].types.contains_key(n))
+                || (f.is_some() && exports[mi].fns.contains_key(n))
+                || (c.is_some() && exports[mi].consts.contains_key(n));
+            if local_clash || !brought_in.insert(n.clone()) {
+                diags.push(err("E106", *npos, format!("'{n}' is already defined in this file")));
+                continue;
+            }
+            if let Some((q, _)) = ty {
+                scope.types.insert(n.clone(), q.clone());
+            }
+            if let Some((q, _)) = f {
+                scope.fns.insert(n.clone(), q.clone());
+            }
+            if let Some((q, _)) = c {
+                scope.consts.insert(n.clone(), q.clone());
+            }
+        }
+    }
+    scope
 }
 
 fn modules_prefix(path: &[String]) -> String {
@@ -425,7 +493,7 @@ impl Resolver<'_, '_, '_> {
             self.diags.push(err("E101", pos, format!("'{name}' is reserved for optional values; choose another name")));
         }
         // `Status.Pending` must always mean the enum's variant, never a field of a variable.
-        if self.scope.types.get(name).is_some_and(|q| self.scope.enums.contains(q)) {
+        if self.scope.types.get(name).is_some_and(|q| self.scope.enums.contains_key(q)) {
             self.diags.push(err("E101", pos, format!("'{name}' is an enum here; choose another name")));
         }
         if self.scope.consts.contains_key(name) {
@@ -524,14 +592,14 @@ impl Resolver<'_, '_, '_> {
             [alias, name] => {
                 let ex = self.scope.aliases.get(*alias)?;
                 let (q, public) = ex.types.get(*name)?;
-                if self.scope.enums.contains(q) && !public {
+                if self.scope.enums.contains_key(q) && !public {
                     self.diags.push(err("E107", pos, format!("enum '{alias}.{name}' is not `pub` in its module")));
                 }
                 q.clone()
             }
             _ => return None,
         };
-        self.scope.enums.contains(&q).then_some(q)
+        self.scope.enums.get(&q).cloned()
     }
 
     fn expr(&mut self, e: &mut Expr) {

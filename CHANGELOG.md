@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Type aliases, `type Amount = Money`: another name for any type, replaced by that
+  type before checking, so the two are interchangeable everywhere. Aliases of
+  records and enums build their records and variants. Cycles, clashing names and
+  aliases of unknown types are errors; `pub type` exports one.
 - Optional values, `Optional<T>`, with `some(x)` and `none`, matched with
   `some(x)`, `none` and `_`. `none` takes its type from where it is used; a T is
   never made optional implicitly. In JSON `none` is `null`, and a model is asked

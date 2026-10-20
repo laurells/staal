@@ -1,3 +1,4 @@
+pub mod aliases;
 pub mod ast;
 pub mod budget;
 pub mod capi;

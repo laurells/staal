@@ -70,7 +70,7 @@ fn split(src: &str) -> Option<Split> {
     // A capability's action and canonical functions (named with a space) are moved with
     // the capability, never on their own.
     moved.retain(|n| !n.contains(' ') && prog.fns.iter().any(|f| &f.name == n));
-    if moved.is_empty() && prog.types.is_empty() && prog.caps.is_empty() && prog.consts.is_empty() && prog.enums.is_empty() {
+    if moved.is_empty() && prog.types.is_empty() && prog.caps.is_empty() && prog.consts.is_empty() && prog.enums.is_empty() && prog.aliases.is_empty() {
         return None;
     }
     // Declarations by starting line; each runs to the line before the next one.
@@ -85,6 +85,7 @@ fn split(src: &str) -> Option<Split> {
         // Constants move with the types, and are imported by name like them.
         .chain(prog.consts.iter().map(|c| (c.pos.line, c.pos.col, true, c.name.clone())))
         .chain(prog.enums.iter().map(|e| (e.pos.line, e.pos.col, true, e.name.clone())))
+        .chain(prog.aliases.iter().map(|a| (a.pos.line, a.pos.col, true, a.name.clone())))
         .collect();
     decls.sort();
     let lines: Vec<&str> = src.lines().collect();

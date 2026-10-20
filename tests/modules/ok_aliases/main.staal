@@ -1,0 +1,20 @@
+// expect: ok
+// Aliases cross modules like types: qualified or imported by name, for records and
+// enum variants alike.
+import shop.kinds as k { State, Item }
+
+fn open() -> State {
+    return State.Open
+}
+
+fn closed() -> k.State {
+    return k.State.Closed
+}
+
+fn item(p: k.Amount) -> Item {
+    return k.Item { name: "x", price: p }
+}
+
+fn same(a: State, b: k.Status) -> Bool {
+    return a == b
+}

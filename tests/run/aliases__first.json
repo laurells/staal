@@ -1,0 +1,1 @@
+{"entry": "first", "inputs": {"names": ["Ada", "Bo"], "owed": {"amount": "5.00", "currency": "NGN"}}, "expect": {"result": {"name": "Ada", "email": null, "owed": {"amount": "5.00", "currency": "NGN"}}}, "model": {"provider": "script", "responses": []}}

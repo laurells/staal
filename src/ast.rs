@@ -617,6 +617,16 @@ impl CapDecl {
     }
 }
 
+/// `type Name = T`: another name for type T. Before the checker runs, every use is
+/// replaced by T (`crate::aliases`), so an alias is exactly the type it names.
+#[derive(Debug, Clone)]
+pub struct AliasDecl {
+    pub public: bool,
+    pub name: String,
+    pub ty: Ty,
+    pub pos: Pos,
+}
+
 #[derive(Debug, Default)]
 pub struct Program {
     /// The imports of a single parsed file. Empty after modules are resolved into one
@@ -627,4 +637,7 @@ pub struct Program {
     pub caps: Vec<CapDecl>,
     pub consts: Vec<ConstDecl>,
     pub enums: Vec<EnumDecl>,
+    /// Type aliases; after modules are resolved, each holds its type with every alias
+    /// in it replaced, and no other part of the program names an alias.
+    pub aliases: Vec<AliasDecl>,
 }

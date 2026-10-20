@@ -1,0 +1,7 @@
+// expect: E107
+// An alias without `pub` stays inside its module.
+import kinds as k
+
+fn f(x: k.Hidden) -> Int {
+    return 1
+}

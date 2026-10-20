@@ -1,0 +1,3 @@
+// expect: E102
+// An alias that names nothing is an error even if it is never used.
+type When = Clock

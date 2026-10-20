@@ -115,6 +115,16 @@ capability, and no field called `kind`. `pub enum` exports one; another module
 writes `module.Payment.Paid { ... }`, or imports `Payment` by name. Both engines
 run enums and `match` (section 15).
 
+**Type aliases.** `type Amount = Money` gives a type another name. An alias is
+exactly the type it names: before checking, every use is replaced by that type, so
+`Amount` and `Money` are interchangeable and every rule applies to them alike. An
+alias may name any type, including another alias, a list, an optional value, a
+record or an enum; through an alias of a record, `Alias { ... }` builds that record,
+and through an alias of an enum, `Alias.Variant` builds that variant. Aliases that
+name each other in a cycle are E101, as is an alias with the name of another type in
+its file or of a built-in type, and a type an alias names must exist even if the
+alias is never used (E102). `pub type` exports one, like a record.
+
 **Optional values.** `Optional<T>` holds a T or nothing. `some(x)` makes one that
 holds x; `none` makes one that holds nothing, and takes its type from where it is
 used: a typed `let`, a parameter, a field, a return, a list beside a `some(...)`.

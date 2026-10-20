@@ -1,0 +1,81 @@
+// Type aliases: other names for types, used anywhere a type is written, and for
+// building records and enum variants through them.
+type Amount = Money
+type Names = List<Text, 3>
+type Email = Optional<Text>
+type Customer = Person
+type State = Status
+type States = List<State, 4>
+type Person { name: Text, email: Email, owed: Amount }
+
+enum Status {
+    Open,
+    Closed { reason: Text },
+}
+
+fn first(names: Names, owed: Amount) -> Customer {
+    return Customer { name: names[0], email: none, owed: owed }
+}
+
+fn owed(p: Customer) -> Amount {
+    return p.owed
+}
+
+fn closed(why: Text) -> State {
+    return State.Closed { reason: why }
+}
+
+fn open_count(xs: States) -> Int {
+    let n = 0
+    for x in xs {
+        match x {
+            Open => {
+                set n = n + 1
+            }
+            _ => {}
+        }
+    }
+    return n
+}
+
+fn mail(p: Person) -> Text {
+    let e: Email = p.email
+    match e {
+        some(m) => {
+            let again: Email = some(m)
+            match again {
+                some(x) => {
+                    return x
+                }
+                none => {
+                    return "lost"
+                }
+            }
+        }
+        none => {
+            return "no email"
+        }
+    }
+}
+
+const LIMIT: Amount = 5.00 NGN
+
+enum Contact {
+    Mail { to: Email },
+}
+
+fn capped(a: Amount) -> Amount {
+    if a > LIMIT {
+        return LIMIT
+    }
+    return a
+}
+
+fn contact(p: Person) -> Contact {
+    return Contact.Mail { to: p.email }
+}
+
+fn ask(q: Text) -> Text budget(calls: 1, tokens: 3000) {
+    let p = validate propose(Customer, instruct: "Who is this about?", data: [q], tokens: 2000)
+    return p.name
+}

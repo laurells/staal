@@ -1,0 +1,7 @@
+// expect: E101
+// An alias is its type: a List<Text, 3> is not a List<Text, 2>.
+type Short = List<Text, 2>
+
+fn f(xs: List<Text, 3>) -> Short {
+    return xs
+}

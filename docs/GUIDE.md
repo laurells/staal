@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 35 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 352 invalid ones
+rejecting the programs it should. 36 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 362 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -130,6 +130,19 @@ is, so with `order: Order @blind(payment.reference)` an arm may still ask a mode
 about the amount, but binding `reference` there and passing it on is E007, and
 with the whole `payment` blinded, deciding a model call by the variant is E007
 too.
+
+### Type aliases
+
+    type Amount = Money
+    type Names = List<Text, 20>
+    type Email = Optional<Text>
+    type State = Status        // an enum: State.Open builds Status.Open
+
+A type alias is another name for a type, and nothing more: `Amount` and `Money`
+are the same type everywhere, so a function taking `Money` accepts an `Amount` and
+blinding, trust and budgets treat them alike. An alias of a record builds it with
+`Alias { ... }`, and an alias of an enum builds its variants. A `pub type` alias is
+imported like any type.
 
 ### Optional values
 

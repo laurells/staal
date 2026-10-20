@@ -260,6 +260,15 @@ impl Parser {
                 self.bump();
             }
             match self.peek() {
+                // `type Name = T` is an alias; `type Name { ... }` a record.
+                Tok::Type if self.toks.get(self.i + 2).map(|t| &t.tok) == Some(&Tok::Eq) => {
+                    let pos = self.pos();
+                    self.bump();
+                    let name = self.ident()?;
+                    self.bump(); // `=`
+                    let ty = self.ty()?;
+                    p.aliases.push(AliasDecl { public, name, ty, pos });
+                }
                 Tok::Type => p.types.push(self.typedecl(public)?),
                 Tok::Ident(w) if w == "enum" => p.enums.push(self.enumdecl(public)?),
                 Tok::Fn => p.fns.push(self.fndecl(public)?),

@@ -1,0 +1,4 @@
+// expect: E101
+// message: type aliases name each other in a cycle: A -> B -> A
+type A = List<B, 2>
+type B = Optional<A>

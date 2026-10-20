@@ -1,0 +1,3 @@
+// expect: E101
+// message: type aliases name each other in a cycle: A -> A
+type A = List<A, 2>

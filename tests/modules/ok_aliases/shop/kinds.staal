@@ -1,0 +1,9 @@
+pub enum Status {
+    Open,
+    Closed,
+}
+
+pub type State = Status
+pub type Amount = Money
+pub type Line { name: Text, price: Amount }
+pub type Item = Line
