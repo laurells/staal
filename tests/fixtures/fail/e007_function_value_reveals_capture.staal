@@ -1,0 +1,11 @@
+// expect: E007 E007
+// What a function value gives can reveal what it captured.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+
+fn f(o: Order @blind(customer.email)) -> Text budget(calls: 1, tokens: 100) {
+    let contact = fn(x: Int) -> Text {
+        return o.customer.email
+    }
+    return validate propose(Text, instruct: "Write a note.", data: [contact(1)], tokens: 100)
+}

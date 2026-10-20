@@ -1,0 +1,8 @@
+// expect: E007 E007
+// And what it is given.
+type Customer { name: Text, email: Text }
+type Order { id: Text, customer: Customer }
+
+fn f(o: Order @blind(customer.email), pick: fn(Customer) -> Text) -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: "Write a note.", data: [pick(o.customer)], tokens: 100)
+}

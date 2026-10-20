@@ -639,7 +639,15 @@ impl Setup {
         if entry.contains(' ') {
             return Err(format!("run config: '{entry}' is part of a capability, not a function a run can start"));
         }
-        let f = prog.fns.iter().find(|f| f.name == entry).ok_or(format!("run config: no function named '{entry}'"))?;
+        // A function lifted from `fn(...) { ... }` has no name a program wrote.
+        let f = prog
+            .fns
+            .iter()
+            .find(|f| f.name == entry && !entry.contains("::fn@"))
+            .ok_or(format!("run config: no function named '{entry}'"))?;
+        if let Some(Ty::Func(..)) = &f.ret {
+            return Err(format!("run config: '{entry}' returns a function value, which is not data a run can give back"));
+        }
         let types = types_of(prog);
         let empty = Map::new();
         let inputs = match cfg.get("inputs") {
@@ -1366,6 +1374,25 @@ impl<'p> Interp<'p> {
             }
             Expr::Named { .. } => internal("a named argument outside a call"),
             Expr::Method { .. } => internal("a method call the compiler did not resolve"),
+            Expr::Lambda { .. } => internal("a function value the compiler did not lift"),
+            Expr::Closure { name, captures, .. } => {
+                let mut captured = Vec::with_capacity(captures.len());
+                for c in captures {
+                    captured.push(self.eval(frame, c)?);
+                }
+                Ok(Value::Func { name: name.clone(), captured })
+            }
+            // The callee first, then the arguments in the order written; what it captured
+            // goes before them.
+            Expr::CallValue { callee, args, .. } => {
+                let Value::Func { name, mut captured } = self.eval(frame, callee)? else {
+                    return internal("calling a value that is not a function");
+                };
+                for a in args {
+                    captured.push(self.eval(frame, a)?);
+                }
+                self.call(&name, captured)
+            }
             Expr::Tuple(items, _) => {
                 let mut vals = Vec::with_capacity(items.len());
                 for i in items {

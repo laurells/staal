@@ -28,10 +28,14 @@ struct Split {
     moved: HashSet<String>,
 }
 
+/// The functions `f` calls, or names as a value (any name read: `split` keeps those
+/// that are functions). Inside `fn(...) { ... }` too.
 fn calls_in(f: &FnDecl) -> Vec<String> {
     fn expr(e: &Expr, out: &mut Vec<String>) {
-        if let Expr::Call { name, .. } = e {
-            out.push(name.clone());
+        match e {
+            Expr::Call { name, .. } | Expr::Var(name, _) => out.push(name.clone()),
+            Expr::Lambda { body, .. } => block(body, out),
+            _ => {}
         }
         for c in e.children() {
             expr(c, out);

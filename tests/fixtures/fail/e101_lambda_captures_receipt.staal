@@ -1,0 +1,10 @@
+// expect: E101
+// message: this function value reads 'r', which holds a Receipt
+fn f(lock: cap building.lock.open) -> Int {
+    let r = lock.open("north-door")
+    let g = fn(x: Int) -> Int {
+        let again = r
+        return x
+    }
+    return g(1)
+}

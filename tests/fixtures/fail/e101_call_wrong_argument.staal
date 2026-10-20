@@ -1,0 +1,5 @@
+// expect: E101
+// message: in call to 'f': expected Int, found Text
+fn apply(f: fn(Int) -> Int) -> Int {
+    return f("one")
+}

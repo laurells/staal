@@ -20,6 +20,9 @@ pub enum Ty {
     Map(Box<Ty>, Box<Ty>, u64),
     /// `Set<T, N>`: at most N different values of type T (Text or Int), in order.
     Set(Box<Ty>, u64),
+    /// `fn(A, B) -> R`: a function value. Function values only compute: they never
+    /// act, ask a model or hold authority (see `Expr::Lambda`).
+    Func(Vec<Ty>, Box<Ty>),
     /// A capability, e.g. `cap payments.refund(max: 500 USD)`, with its limits.
     Cap { path: Vec<String>, limits: CapLimits },
 }
@@ -44,6 +47,7 @@ impl Ty {
             Ty::Tuple(ts) => ts.iter().any(Ty::has_unknown),
             Ty::Map(k, v, _) => k.has_unknown() || v.has_unknown(),
             Ty::Set(t, _) => t.has_unknown(),
+            Ty::Func(ps, r) => ps.iter().any(Ty::has_unknown) || r.has_unknown(),
             Ty::Cap { .. } => false,
         }
     }
@@ -151,6 +155,7 @@ impl std::fmt::Display for Ty {
             Ty::Tuple(ts) => write!(f, "({})", ts.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")),
             Ty::Map(k, v, n) => write!(f, "Map<{k}, {v}, {n}>"),
             Ty::Set(t, n) => write!(f, "Set<{t}, {n}>"),
+            Ty::Func(ps, r) => write!(f, "fn({}) -> {r}", ps.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")),
             Ty::Cap { path, limits } => write!(f, "cap {}{limits}", path.join(".")),
         }
     }
@@ -539,6 +544,18 @@ pub enum Expr {
     Record { ty: String, fields: Vec<(String, Expr)>, pos: Pos },
     /// `[a, b, c]`
     List(Vec<Expr>, Pos),
+    /// `fn(x: Int) -> Int { return x * k }`: a function value, which may read the
+    /// variables around it (`k`): each is copied when the value is made. Its body only
+    /// computes: no action, model call, `try`, `parse`, `validate` or `done`, and it
+    /// calls only functions that do none of these either; it cannot read a capability,
+    /// a secret or proof. The compiler lifts it into a function of its own, taking what
+    /// it reads first (`Expr::Closure`).
+    Lambda { params: Vec<(String, Ty)>, ret: Box<Ty>, body: Vec<Stmt>, pos: Pos },
+    /// A function value: function `name` with `captures` given as its first arguments.
+    /// A named function used as a value is one with no captures.
+    Closure { name: String, captures: Vec<Expr>, pos: Pos },
+    /// `f(args)` where `f` is a variable holding a function value.
+    CallValue { callee: Box<Expr>, args: Vec<Expr>, pos: Pos },
     /// `[k: v, ...]`: a map, or `[:]`, an empty one (which takes its type from a
     /// typed `let`).
     MapLit(Vec<(Expr, Expr)>, Pos),
@@ -607,6 +624,10 @@ impl Expr {
             Expr::Named { value, .. } => vec![value],
             Expr::MapLit(entries, _) => entries.iter().flat_map(|(k, v)| [k, v]).collect(),
             Expr::Method { base, args, .. } => std::iter::once(base.as_ref()).chain(args.iter()).collect(),
+            // A lambda's body runs when it is called, not where it is written.
+            Expr::Lambda { .. } => Vec::new(),
+            Expr::Closure { captures, .. } => captures.iter().collect(),
+            Expr::CallValue { callee, args, .. } => std::iter::once(callee.as_ref()).chain(args.iter()).collect(),
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -637,6 +658,9 @@ impl Expr {
             Expr::Named { value, .. } => vec![value],
             Expr::MapLit(entries, _) => entries.iter_mut().flat_map(|(k, v)| [k, v]).collect(),
             Expr::Method { base, args, .. } => std::iter::once(base.as_mut()).chain(args.iter_mut()).collect(),
+            Expr::Lambda { .. } => Vec::new(),
+            Expr::Closure { captures, .. } => captures.iter_mut().collect(),
+            Expr::CallValue { callee, args, .. } => std::iter::once(callee.as_mut()).chain(args.iter_mut()).collect(),
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -680,6 +704,7 @@ impl Expr {
             Expr::Cmp { pos, .. } | Expr::Field { pos, .. } | Expr::Done { pos, .. } => *pos,
             Expr::Propose { pos, .. } | Expr::Parse { pos, .. } => *pos,
             Expr::Action { pos, .. } | Expr::Call { pos, .. } | Expr::Named { pos, .. } | Expr::Method { pos, .. } => *pos,
+            Expr::Lambda { pos, .. } | Expr::Closure { pos, .. } | Expr::CallValue { pos, .. } => *pos,
         }
     }
 }

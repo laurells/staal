@@ -1,0 +1,15 @@
+// expect: E101
+// message: declares `fails Problem`; a function value cannot carry a typed failure
+type Problem { code: Int }
+
+fn check(x: Int) -> Int fails Problem {
+    if x < 0 {
+        fail(Problem { code: 1 })
+    }
+    return x
+}
+
+fn f() -> Int {
+    let g = check
+    return 0
+}

@@ -1,0 +1,5 @@
+// expect: E101
+// message: holds a function value, which is never kept inside data
+fn f(t: (Int, fn(Int) -> Int)) -> Int {
+    return 0
+}

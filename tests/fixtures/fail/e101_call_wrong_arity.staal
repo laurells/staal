@@ -1,0 +1,5 @@
+// expect: E101
+// message: which takes 1 argument(s), but 2 were given
+fn apply(f: fn(Int) -> Int) -> Int {
+    return f(1, 2)
+}

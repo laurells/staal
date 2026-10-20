@@ -638,6 +638,10 @@ fn check_ty(t: &Ty, pos: Pos, p: &Package, diags: &mut Vec<Diagnostic>) {
             check_ty(v, pos, p, diags);
         }
         Ty::Set(t, _) => check_ty(t, pos, p, diags),
+        Ty::Func(ps, r) => {
+            ps.iter().for_each(|t| check_ty(t, pos, p, diags));
+            check_ty(r, pos, p, diags);
+        }
         Ty::Named(_) => {}
     }
 }

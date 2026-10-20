@@ -1,0 +1,10 @@
+// expect: E101
+// message: has an @trusted parameter, and a function value's arguments carry no trust
+fn say(t: Text @trusted) -> Text {
+    return t
+}
+
+fn f() -> Int {
+    let g = say
+    return 0
+}

@@ -1,0 +1,21 @@
+pub fn double(x: Int) -> Int {
+    return x * 2
+}
+
+pub fn triple(x: Int) -> Int {
+    return x * 3
+}
+
+pub fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+pub fn adder(k: Int) -> fn(Int) -> Int {
+    return fn(x: Int) -> Int {
+        return x + secret(k)
+    }
+}
+
+fn secret(k: Int) -> Int {
+    return k
+}

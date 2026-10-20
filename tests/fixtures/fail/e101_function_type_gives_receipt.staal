@@ -1,0 +1,5 @@
+// expect: E101
+// message: takes or gives a Receipt, which only the runtime makes and keeps
+fn f(g: fn(Int) -> Receipt) -> Int {
+    return 0
+}

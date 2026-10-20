@@ -1,0 +1,11 @@
+// expect: E101
+// message: cannot
+// What a function value captures is a copy, which it cannot change.
+fn f() -> Int {
+    let n = 1
+    let g = fn(x: Int) -> Int {
+        set n = x
+        return n
+    }
+    return g(2)
+}

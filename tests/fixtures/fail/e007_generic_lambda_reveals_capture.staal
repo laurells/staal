@@ -1,0 +1,11 @@
+// expect: E007 E007
+// In a generic function, even one never called, a function value reveals what it
+// captured.
+type Customer { name: Text, email: Text }
+
+fn note<T>(c: Customer @blind(email), x: T) -> Text budget(calls: 1, tokens: 100) {
+    let contact = fn(y: T) -> Text {
+        return c.email
+    }
+    return validate propose(Text, instruct: "Write a note.", data: [contact(x)], tokens: 100)
+}

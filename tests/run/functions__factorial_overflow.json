@@ -1,0 +1,1 @@
+{"entry": "factorial", "inputs": {"n": 21}, "expect": {"failure": "value", "message_contains": "21 * 2432902008176640000"}, "model": {"provider": "script", "responses": []}}

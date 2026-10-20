@@ -1,0 +1,10 @@
+// expect: E101
+// message: cannot apply `+` to T and Int
+// A function value inside a generic function is checked there, with T unknown, even
+// when no copy of the function is ever made.
+fn bump<T>(x: T) -> Int {
+    let g = fn(y: T) -> Int {
+        return y + 1
+    }
+    return 0
+}

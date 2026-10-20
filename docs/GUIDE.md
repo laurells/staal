@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 43 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 466 invalid ones
+rejecting the programs it should. 44 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 519 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -182,6 +182,31 @@ parameter. It is called on a value of that type, and is checked exactly as the
 function it is: its model calls count against its caller's budget, `@blind` and
 `@trusted` on its parameters (`self` included) apply, and a capability's actions
 are never methods.
+
+### Function values
+
+    fn apply(f: fn(Int) -> Int, x: Int) -> Int { return f(x) }
+
+    fn adder(k: Int) -> fn(Int) -> Int {
+        return fn(x: Int) -> Int { return x + k }
+    }
+
+    let a = apply(double, 3)       // a named function as a value
+    let add3 = adder(3)            // a function value that captured k = 3
+    let b = add3(4) + adder(1)(2)
+    let cost = total_by(lines, fn(l: Line) -> Money { return l.price * l.qty + fee })
+
+A function value is a function to call later: a named function, or one written in
+place with `fn(...) { ... }`, which may read the variables around it. What it reads
+is copied when the value is made. A function value only computes: its function, and
+everything that calls, makes no action, model call or `done`. So a function value
+can never carry a capability (reading one is E003, so authority cannot leave a
+function inside one and be used later), a secret or proof, and nothing about budgets
+or blinding depends on which function it holds. It is never kept inside data (a
+list, record, map, tuple or optional value), compared, encoded or sent anywhere.
+What one returns is untrusted, and reveals everything it captured and was given.
+Generic functions take function values like any other type (`fn twice<T>(f: fn(T)
+-> T, x: T) -> T`). Both engines run them.
 
 ### Default values and named arguments
 
@@ -340,8 +365,8 @@ in which each name is qualified by its module (`send` in `sms/termii.staal` is
 promises, budgets, trust, evidence and partial operations therefore hold
 across modules with no separate cross-module analysis. This is tested by
 splitting every test program in two (`tests/split_test.rs`): types and called
-functions move to a module (capability declarations too), and every one of 160
-splittable fixtures and 132 runtime cases must give identical results. Mutations that hide one module's
+functions move to a module (capability declarations too), and every one of 310
+splittable fixtures and 274 runtime cases must give identical results. Mutations that hide one module's
 model calls, failures or costs from another are each caught.
 
 The program's hash, which a journal records, covers each module's path and

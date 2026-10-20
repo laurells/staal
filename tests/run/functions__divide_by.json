@@ -1,0 +1,1 @@
+{"entry": "divide_by", "inputs": {"d": 4}, "expect": {"result": 25}, "model": {"provider": "script", "responses": []}}

@@ -1,0 +1,8 @@
+// expect: E100
+// message: undefined name 'k'
+fn f() -> Int {
+    let g = fn(x: Int) -> Int {
+        return x + k
+    }
+    return g(1)
+}

@@ -1,0 +1,10 @@
+// expect: E104
+// message: a function value has no fields
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn f() -> Int {
+    let g = double
+    return g.size
+}

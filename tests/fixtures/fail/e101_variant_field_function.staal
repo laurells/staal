@@ -1,0 +1,6 @@
+// expect: E101
+// message: field 'Step.Run.f' cannot hold a function value
+enum Step {
+    Stop,
+    Run { f: fn(Int) -> Int },
+}

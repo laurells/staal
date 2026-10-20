@@ -134,6 +134,9 @@ struct Tables {
     variants: Vec<(String, String, Vec<String>)>,
     /// Enum type name and its variant names in declaration order, for `match`.
     enums: Vec<(String, Vec<String>)>,
+    /// Every compiled function, for calls of function values: its entry wrapper's
+    /// address and its parameter types. Filled in once the code is in place.
+    funcs: HashMap<String, (usize, Vec<Ty>)>,
 }
 
 /// The built-in functions by the number generated code passes for them.
@@ -323,6 +326,68 @@ extern "C" fn rt_cmp(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
         let (l, r) = (c.take(a)?, c.take(b)?);
         Ok(compare(op, &l, &r)? as i64)
     })
+}
+
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_closure")]
+extern "C" fn rt_closure(c: *mut Ctx, name: i64, argv: *const i64, n: i64) -> i64 {
+    guard(c, |c| {
+        let name = match usize::try_from(name).ok().and_then(|i| tables(c).ok()?.consts.get(i)) {
+            Some(Value::Text(t)) => t.clone(),
+            _ => return Err(internal(format!("native code: no function name {name}"))),
+        };
+        let captured = take_args(c, argv, n)?;
+        Ok(c.put(Value::Func { name, captured }))
+    })
+}
+
+/// A call of the function value `fh` with the `n` arguments in `argv`: the arguments
+/// its function takes first are what it captured.
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_call_value")]
+extern "C" fn rt_call_value(c: *mut Ctx, fh: i64, argv: *const i64, n: i64) -> i64 {
+    let prepared = (|| -> Result<(usize, Vec<i64>), Failure> {
+        let cx = ctx(c);
+        let Value::Func { name, captured } = cx.take(fh)? else {
+            return Err(internal("native code: calling a value that is not a function"));
+        };
+        let (ptr, params) = tables(cx)?
+            .funcs
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| internal(format!("native code: the function value '{name}' is not compiled")))?;
+        let n = usize::try_from(n).map_err(|_| internal("native code: a negative argument count"))?;
+        if params.len() != captured.len() + n {
+            return Err(internal(format!("native code: '{name}' called with {} arguments, expects {}", captured.len() + n, params.len())));
+        }
+        let mut all = Vec::with_capacity(params.len());
+        for (v, t) in captured.into_iter().zip(&params) {
+            match (v, rep(t)) {
+                (Value::Int(i), Rep::Raw) if is(t, "Int") => all.push(i),
+                (Value::Bool(b), Rep::Raw) if is(t, "Bool") => all.push(b as i64),
+                (_, Rep::Raw) => return Err(internal(format!("native code: a captured value of '{name}' is not a {t}"))),
+                (v, Rep::Handle) => all.push(cx.put(v)),
+            }
+        }
+        for i in 0..n {
+            // SAFETY: generated code passes a stack array of exactly `n` i64 values.
+            all.push(unsafe { *argv.add(i) });
+        }
+        Ok((ptr, all))
+    })();
+    match prepared {
+        Err(e) => {
+            record(ctx(c), e);
+            0
+        }
+        Ok((ptr, all)) => {
+            // SAFETY: `ptr` is the entry wrapper of a compiled function, with signature
+            // (ctx, argv) -> i64, from the tables of the code running now; `all` holds
+            // exactly as many i64 as it takes. No reference to the Ctx is held here.
+            let f = unsafe { std::mem::transmute::<usize, extern "C" fn(*mut Ctx, *const i64) -> i64>(ptr) };
+            f(c, all.as_ptr())
+        }
+    }
 }
 
 /// Reads `n` handles from `argv` and takes their values.
@@ -676,6 +741,7 @@ impl<'p> Env<'p> {
             Ty::Tuple(items) => items.iter().all(|t| self.allowed(t, depth + 1)),
             Ty::Map(k, v, _) => self.allowed(k, depth + 1) && self.allowed(v, depth + 1),
             Ty::Set(t, _) => self.allowed(t, depth + 1),
+            Ty::Func(ps, r) => ps.iter().all(|p| self.allowed(p, depth + 1)) && self.allowed(r, depth + 1),
             Ty::Proposed(_) | Ty::Cap { .. } => false,
         }
     }
@@ -853,6 +919,31 @@ impl<'p> Env<'p> {
                 }
                 ret.clone()
             }
+            // A compiled function as a value, with what it captured as its first arguments.
+            Expr::Closure { name, captures, .. } => {
+                let (params, ret) = self.sigs.get(name.as_str())?;
+                if captures.len() > params.len() {
+                    return None;
+                }
+                for (c, p) in captures.iter().zip(params) {
+                    if !self.ty(c, var)?.widens(p) {
+                        return None;
+                    }
+                }
+                Ty::Func(params[captures.len()..].to_vec(), Box::new(ret.clone()))
+            }
+            Expr::CallValue { callee, args, .. } => {
+                let Ty::Func(params, ret) = self.ty(callee, var)? else { return None };
+                if params.len() != args.len() {
+                    return None;
+                }
+                for (a, p) in args.iter().zip(&params) {
+                    if !self.ty(a, var)?.widens(p) {
+                        return None;
+                    }
+                }
+                *ret
+            }
             _ => return None,
         };
         self.allowed(&t, 0).then_some(t)
@@ -1003,7 +1094,8 @@ pub fn eligible(prog: &Program) -> HashSet<String> {
 
 fn callees(body: &[Stmt]) -> Vec<String> {
     fn expr(e: &Expr, out: &mut Vec<String>) {
-        if let Expr::Call { name, .. } = e {
+        // A function made into a value here is called from here, through it.
+        if let Expr::Call { name, .. } | Expr::Closure { name, .. } = e {
             out.push(name.clone());
         }
         for c in e.children() {
@@ -1068,6 +1160,8 @@ struct Helpers {
     tuple: FuncId,
     map: FuncId,
     empty: FuncId,
+    closure: FuncId,
+    call_value: FuncId,
 }
 
 impl Native {
@@ -1092,7 +1186,9 @@ impl Native {
             let (params, ret) = env.sigs[name.as_str()].clone();
             entries.insert(name, (p as usize, params, ret));
         }
-        Ok(Native { module: Some(module), entries, tables: Box::new(tables) })
+        let mut tables = Box::new(tables);
+        tables.funcs = entries.iter().map(|(n, (p, params, _))| (n.clone(), (*p, params.clone()))).collect();
+        Ok(Native { module: Some(module), entries, tables })
     }
 
     /// Native code linked into an executable by `staalc build`: `fns` are the entry
@@ -1116,7 +1212,9 @@ impl Native {
             let (params, ret) = env.sigs[name.as_str()].clone();
             entries.insert(name.clone(), (*p, params, ret));
         }
-        Ok(Native { module: None, entries, tables: Box::new(Tables::from_json(tables)?) })
+        let mut tables = Box::new(Tables::from_json(tables)?);
+        tables.funcs = entries.iter().map(|(n, (p, params, _))| (n.clone(), (*p, params.clone()))).collect();
+        Ok(Native { module: None, entries, tables })
     }
 
     pub fn has(&self, name: &str) -> bool {
@@ -1137,6 +1235,17 @@ impl Native {
     pub fn call(&self, name: &str, ctx: &mut Ctx, args: &[Value]) -> Option<Result<Value, Failure>> {
         let (ptr, params, ret) = self.entries.get(name)?;
         if params.len() != args.len() {
+            return None;
+        }
+        // A function value passed in must be one native code can call: its function
+        // compiled, and so every function value it holds.
+        fn callable(v: &Value, entries: &HashMap<String, (usize, Vec<Ty>, Ty)>) -> bool {
+            match v {
+                Value::Func { name, captured } => entries.contains_key(name) && captured.iter().all(|c| callable(c, entries)),
+                _ => true,
+            }
+        }
+        if !args.iter().all(|a| callable(a, &self.entries)) {
             return None;
         }
         let mut argv: Vec<i64> = Vec::with_capacity(args.len());
@@ -1207,6 +1316,8 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("staal_rt_tuple", rt_tuple as *const u8),
     ("staal_rt_map", rt_map as *const u8),
     ("staal_rt_empty", rt_empty as *const u8),
+    ("staal_rt_closure", rt_closure as *const u8),
+    ("staal_rt_call_value", rt_call_value as *const u8),
 ];
 
 /// The machine to generate code for: this one. `host_features`: use every feature
@@ -1276,6 +1387,8 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
         tuple: helper(module, "staal_rt_tuple", 2, true)?,
         map: helper(module, "staal_rt_map", 2, true)?,
         empty: helper(module, "staal_rt_empty", 1, true)?,
+        closure: helper(module, "staal_rt_closure", 3, true)?,
+        call_value: helper(module, "staal_rt_call_value", 3, true)?,
     };
     // In program order, so the same program always gives the same code and tables.
     let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
@@ -1375,7 +1488,7 @@ impl Tables {
         let fields: Vec<String> = serde_json::from_value(j["fields"].clone()).map_err(|_| bad())?;
         let variants: Vec<(String, String, Vec<String>)> = serde_json::from_value(j["variants"].clone()).map_err(|_| bad())?;
         let enums: Vec<(String, Vec<String>)> = serde_json::from_value(j["enums"].clone()).map_err(|_| bad())?;
-        Ok(Tables { consts, records, fields, variants, enums })
+        Ok(Tables { consts, records, fields, variants, enums, funcs: HashMap::new() })
     }
 }
 
@@ -2255,6 +2368,41 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 let callee = self.module.declare_func_in_func(id, self.b.func);
                 let call = self.b.ins().call(callee, &vals);
                 let r = self.b.inst_results(call)[0];
+                self.b.ins().store(flags, depth, self.ctx, OFF_DEPTH);
+                self.check_failed();
+                Ok(r)
+            }
+            Expr::Closure { name, captures, .. } => {
+                let mut held = Vec::with_capacity(captures.len());
+                for c in captures {
+                    let t = self.ty(c)?;
+                    let v = self.expr(c)?;
+                    held.push(self.as_handle(v, &t));
+                }
+                let argv = self.argv(&held);
+                self.tables.consts.push(Value::Text(name.clone()));
+                let idx = self.b.ins().iconst(types::I64, (self.tables.consts.len() - 1) as i64);
+                let n = self.b.ins().iconst(types::I64, held.len() as i64);
+                Ok(self.call_checked(self.h.closure, &[idx, argv, n]))
+            }
+            // The callee first, then the arguments in the order written, as the
+            // interpreter does; then the call, with the same depth check as any call.
+            Expr::CallValue { callee, args, .. } => {
+                let f = self.expr(callee)?;
+                let mut vals = Vec::with_capacity(args.len());
+                for a in args {
+                    vals.push(self.expr(a)?);
+                }
+                let argv = self.argv(&vals);
+                let n = self.b.ins().iconst(types::I64, vals.len() as i64);
+                let flags = MemFlagsData::trusted();
+                let depth = self.b.ins().load(types::I64, flags, self.ctx, OFF_DEPTH);
+                let max = self.b.ins().load(types::I64, flags, self.ctx, OFF_MAX_DEPTH);
+                let deep = self.b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, depth, max);
+                self.fail_if(deep, self.h.depth, &[]);
+                let up = self.b.ins().iadd_imm_s(depth, 1);
+                self.b.ins().store(flags, up, self.ctx, OFF_DEPTH);
+                let r = self.call0(self.h.call_value, &[f, argv, n]).expect("a result");
                 self.b.ins().store(flags, depth, self.ctx, OFF_DEPTH);
                 self.check_failed();
                 Ok(r)

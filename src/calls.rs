@@ -114,6 +114,19 @@ impl Completer<'_, '_> {
             self.call(name, args, slots, *pos);
         }
         match e {
+            Expr::Lambda { body, .. } => self.block(body),
+            // A function value's parameters have no names a call could use.
+            Expr::CallValue { callee, args, .. } => {
+                self.expr(callee);
+                for a in args.iter_mut() {
+                    if let Expr::Named { name, value, pos } = a {
+                        self.diags.push(err(*pos, format!("`{name}: ...` names a parameter, but a function value takes its arguments in order")));
+                        let v = std::mem::replace(value.as_mut(), Expr::Bool(false, *pos));
+                        *a = v;
+                    }
+                    self.expr(a);
+                }
+            }
             // `x.m(a: 1)` may be a method call: decided once its type is known.
             Expr::Action { .. } | Expr::Method { .. } if !self.last => {
                 for c in e.children_mut() {

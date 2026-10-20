@@ -145,6 +145,12 @@ fn replace_in(t: &mut Ty, with: &mut dyn FnMut(&str) -> Result<Option<Ty>, Diagn
             replace_in(v, with)
         }
         Ty::Set(t, _) => replace_in(t, with),
+        Ty::Func(ps, r) => {
+            for p in ps.iter_mut() {
+                replace_in(p, with)?;
+            }
+            replace_in(r, with)
+        }
         Ty::Cap { .. } => Ok(()),
     }
 }
@@ -196,6 +202,13 @@ impl Expander<'_, '_> {
     fn expr(&mut self, e: &mut Expr) {
         match e {
             Expr::Propose { ty, .. } | Expr::Parse { ty, .. } => self.ty(ty),
+            Expr::Lambda { params, ret, body, .. } => {
+                for (_, t) in params.iter_mut() {
+                    self.ty(t);
+                }
+                self.ty(ret);
+                self.block(body);
+            }
             // `Alias { ... }` builds the record the alias names.
             Expr::Record { ty, pos, .. } => match self.to.get(ty.as_str()) {
                 Some(Ty::Named(n)) => *ty = n.clone(),

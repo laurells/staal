@@ -1,0 +1,12 @@
+// expect: E101
+// message: it cannot call 'ask', which acts, asks a model or calls something that does
+fn ask(t: Text) -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: "Summarise.", data: [t], tokens: 100)
+}
+
+fn f(t: Text) -> Text budget(calls: 1, tokens: 100) {
+    let g = fn(x: Text) -> Text {
+        return ask(x)
+    }
+    return g(t)
+}

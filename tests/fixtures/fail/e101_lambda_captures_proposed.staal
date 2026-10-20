@@ -1,0 +1,10 @@
+// expect: E101
+// message: this function value reads 'p', which is unvalidated Proposed<Text>
+fn f() -> Int budget(calls: 1, tokens: 100) {
+    let p = propose(Text, instruct: "Say hi.", tokens: 100)
+    let g = fn(x: Int) -> Int {
+        let q = p
+        return x
+    }
+    return g(1)
+}

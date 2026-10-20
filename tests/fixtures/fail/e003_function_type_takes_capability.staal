@@ -1,0 +1,7 @@
+// expect: E003
+// message: takes or gives a capability; a function value can never carry authority
+// A function value cannot take a capability either: calling one would hand it
+// authority no signature in the program limits.
+fn run(f: fn(cap building.lock.open) -> Int) -> Int {
+    return 0
+}

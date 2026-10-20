@@ -1,0 +1,11 @@
+// expect: E101
+// message: cannot `set n`: parameters and loop variables cannot be reassigned
+// Setting a variable around it, without reading it, is refused the same way.
+fn f() -> Int {
+    let n = 1
+    let g = fn(x: Int) -> Int {
+        set n = x
+        return x
+    }
+    return g(2) + n
+}

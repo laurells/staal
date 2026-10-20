@@ -59,6 +59,8 @@ pub enum Value {
     Map(Vec<(Value, Value)>),
     /// A set: its items, each once, in order (`key_order`).
     Set(Vec<Value>),
+    /// A function value: function `name`, called with `captured` before its arguments.
+    Func { name: String, captured: Vec<Value> },
     /// Raw output from outside (a model, or text given to `parse`), not yet checked
     /// against `ty`. `lenient`: fields the type does not declare are dropped when it is
     /// validated, as services add fields over time. Model output is strict.
@@ -131,6 +133,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
     match ty {
         Ty::Proposed(inner) => Ok(Value::Proposed { ty: (**inner).clone(), raw: json.clone(), lenient: false }),
         Ty::Cap { .. } => Err(format!("{path}: a capability cannot be supplied as data")),
+        Ty::Func(..) => Err(format!("{path}: a function value cannot be supplied as data")),
         // `null` is none; anything else must be a valid T. (The checker refuses
         // Optional<Optional<T>>, whose `some(none)` would also be `null`.)
         Ty::Optional(inner) => match json {
@@ -361,6 +364,7 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
             Json::Object(obj)
         }
         Value::Set(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
+        Value::Func { .. } => return Err("a function value is not data and cannot be written as JSON".into()),
         Value::Opt(None) => Json::Null,
         Value::Opt(Some(inner)) => to_json(inner, for_model)?,
         Value::Proposed { raw, .. } => raw.clone(),
@@ -396,6 +400,8 @@ fn schema_at(ty: &Ty, types: &Types, seen: &mut HashSet<String>) -> Json {
         // The compiler never asks a model for a map or a set; these are exact all the same.
         Ty::Map(_, v, max) => json!({ "type": "object", "additionalProperties": schema_at(v, types, seen), "maxProperties": max }),
         Ty::Set(t, max) => json!({ "type": "array", "items": schema_at(t, types, seen), "maxItems": max, "uniqueItems": true }),
+        // Never asked of a model (the compiler refuses it).
+        Ty::Func(..) => json!({}),
         // The compiler never asks a model for a tuple (a schema could not fix each
         // position for every provider); this is the exact JSON Schema all the same.
         Ty::Tuple(tys) => json!({

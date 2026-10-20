@@ -1,0 +1,17 @@
+// expect: ok
+// Function values cross modules: a library's functions as values, by the module's
+// name or imported by name, passed to and returned from its functions.
+import util.calc as c { double, apply }
+
+fn f(n: Int) -> Int {
+    let g = c.triple
+    let h = double
+    let plus = c.adder(n)
+    return apply(g, n) + c.apply(h, n) + plus(1) + c.adder(2)(n)
+}
+
+fn local(n: Int) -> Int {
+    return apply(fn(x: Int) -> Int {
+        return x + n
+    }, 1)
+}

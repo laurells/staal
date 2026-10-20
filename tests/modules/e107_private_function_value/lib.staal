@@ -1,0 +1,3 @@
+fn hidden(x: Int) -> Int {
+    return x
+}

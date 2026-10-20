@@ -1,0 +1,13 @@
+// expect: E007
+// A function that calls a function value may fail, since the value may be any
+// function: whether the model call after it happens depends on what it was given.
+type Customer { name: Text, email: Text }
+
+fn run(f: fn(Text) -> Int, t: Text) -> Int {
+    return f(t)
+}
+
+fn greet(c: Customer @blind(email), check: fn(Text) -> Int) {
+    let n = run(check, c.email)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

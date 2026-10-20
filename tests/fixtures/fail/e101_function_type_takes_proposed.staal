@@ -1,0 +1,5 @@
+// expect: E101
+// message: takes or gives unvalidated Proposed<Text>
+fn f(g: fn(Proposed<Text>) -> Int) -> Int {
+    return 0
+}

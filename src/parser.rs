@@ -761,6 +761,28 @@ impl Parser {
             }
             return Ok(Ty::Cap { path, limits });
         }
+        // `fn(A, B) -> R`: a function type.
+        if *self.peek() == Tok::Fn {
+            self.bump();
+            self.expect(Tok::LParen, "'('")?;
+            let mut ps = Vec::new();
+            while *self.peek() != Tok::RParen {
+                ps.push(self.ty()?);
+                if *self.peek() == Tok::Comma {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+            self.expect(Tok::RParen, "')'")?;
+            let r = if *self.peek() == Tok::Arrow {
+                self.bump();
+                self.ty()?
+            } else {
+                Ty::Named("Unit".into())
+            };
+            return Ok(Ty::Func(ps, Box::new(r)));
+        }
         // `(A, B, ...)`: a tuple type.
         if *self.peek() == Tok::LParen {
             let tpos = self.pos();
@@ -1233,11 +1255,17 @@ impl Parser {
         Ok(Expr::List(items, pos))
     }
 
-    /// An atom followed by any number of `.field` accesses and `[index]`es.
+    /// An atom followed by any number of `.field` accesses, `[index]`es and calls of
+    /// the function value it gives (`adder(3)(4)`).
     fn primary(&mut self) -> PResult<Expr> {
         let mut e = self.atom()?;
         loop {
             match self.peek() {
+                Tok::LParen => {
+                    let pos = self.pos();
+                    let args = self.args()?;
+                    e = Expr::CallValue { callee: Box::new(e), args, pos };
+                }
                 Tok::Dot => {
                     self.bump();
                     let pos = self.pos();
@@ -1324,6 +1352,34 @@ impl Parser {
                 Ok(Expr::Tuple(items, pos))
             }
             Tok::LBracket => self.with_records(true, |p| p.list_or_map(pos)),
+            // `fn(x: Int) -> Int { ... }`: a function value.
+            Tok::Fn => {
+                self.bump();
+                self.expect(Tok::LParen, "'('")?;
+                let mut params = Vec::new();
+                while *self.peek() != Tok::RParen {
+                    let n = self.ident()?;
+                    self.expect(Tok::Colon, "':'")?;
+                    params.push((n, self.ty()?));
+                    if *self.peek() == Tok::Comma {
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(Tok::RParen, "')'")?;
+                let ret = if *self.peek() == Tok::Arrow {
+                    self.bump();
+                    self.ty()?
+                } else {
+                    Ty::Named("Unit".into())
+                };
+                let saved = self.no_record;
+                self.no_record = false;
+                let body = self.block();
+                self.no_record = saved;
+                Ok(Expr::Lambda { params, ret: Box::new(ret), body: body?, pos })
+            }
             Tok::Propose => self.propose(),
             Tok::Validate => {
                 self.bump();

@@ -1,0 +1,9 @@
+// expect: E101
+// message: a function value cannot be sent to a model as data
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn f() -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: "Describe.", data: [double], tokens: 100)
+}

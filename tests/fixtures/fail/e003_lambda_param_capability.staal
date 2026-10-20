@@ -1,0 +1,9 @@
+// expect: E003
+// message: takes or gives a capability
+// A capability cannot come in through a function value's own parameter.
+fn f() -> Int {
+    let g = fn(lock: cap building.lock.open, door: Text) -> Int {
+        return 0
+    }
+    return 0
+}

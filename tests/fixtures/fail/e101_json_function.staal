@@ -1,0 +1,9 @@
+// expect: E101
+// message: `json` cannot encode a function value
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn f() -> Text {
+    return json(double)
+}

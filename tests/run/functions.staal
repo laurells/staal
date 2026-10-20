@@ -1,0 +1,184 @@
+// Function values: named functions used as values, `fn(...) { ... }` written in
+// place and the variables they capture, functions that take and return them, and
+// calls through them, on both engines.
+type Line { name: Text, price: Money, qty: Int }
+
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int {
+    return fn(x: Int) -> Int {
+        return g(f(x))
+    }
+}
+
+fn adder(k: Int) -> fn(Int) -> Int {
+    return fn(x: Int) -> Int {
+        return x + k
+    }
+}
+
+fn twice<T>(f: fn(T) -> T, x: T) -> T {
+    return f(f(x))
+}
+
+fn total_by(xs: List<Line, 10>, cost: fn(Line) -> Money) -> Money {
+    let total = 0.00 NGN
+    for l in xs {
+        set total = total + cost(l)
+    }
+    return total
+}
+
+fn count_where(xs: List<Int, 10>, keep: fn(Int) -> Bool) -> Int {
+    let n = 0
+    for x in xs {
+        if keep(x) {
+            set n = n + 1
+        }
+    }
+    return n
+}
+
+// A function used as a value inside itself.
+fn fact(n: Int) -> Int {
+    if n <= 1 {
+        return 1
+    }
+    let me = fact
+    return n * me(n - 1)
+}
+
+fn basics(n: Int) -> Int {
+    let g = double
+    let add3 = adder(3)
+    return apply(g, n) + add3(n) + twice(add3, n) + compose(double, add3)(n)
+}
+
+// What a function value captures is copied when it is made.
+fn copies(n: Int) -> Int {
+    let k = n
+    let f = fn(x: Int) -> Int {
+        return x + k
+    }
+    set k = 1000
+    return f(0) + k
+}
+
+fn nested(n: Int) -> Int {
+    let base = 100
+    let outer = fn(y: Int) -> Int {
+        let inner = fn(z: Int) -> Int {
+            return z + base + y + n
+        }
+        return inner(1)
+    }
+    return outer(10)
+}
+
+fn lines(fee: Money) -> Money {
+    let xs = [Line { name: "a", price: 2.00 NGN, qty: 3 }, Line { name: "b", price: 5.50 NGN, qty: 2 }]
+    return total_by(xs, fn(l: Line) -> Money {
+        return l.price * l.qty + fee
+    })
+}
+
+fn filters(limit: Int) -> Int {
+    let xs = [1, 5, 9, 12, 3]
+    return count_where(xs, fn(x: Int) -> Bool {
+        return x > limit
+    }) * 10 + count_where(xs, fn(x: Int) -> Bool {
+        return x == limit
+    })
+}
+
+fn factorial(n: Int) -> Int {
+    return fact(n)
+}
+
+// A failure inside a function value stops its caller as any failure does.
+fn divide_by(d: Int) -> Int {
+    let f = fn(x: Int) -> Int {
+        return x / d
+    }
+    return f(100)
+}
+
+fn texts(name: Text) -> Text {
+    let greet = fn(t: Text) -> Text {
+        return "hello, " + t
+    }
+    let shout = fn(t: Text) -> Text {
+        return t + "!"
+    }
+    return twice(shout, greet(name))
+}
+
+fn half(x: Int, d: Int) -> Int {
+    return x / d
+}
+
+// A function value whose function cannot be native code (it uses `try`) passed to
+// functions that can, alone or captured inside another function value: they run on
+// the interpreter for that call, so nothing changes.
+fn tried(d: Int) -> Int {
+    let safe = fn(x: Int) -> Int {
+        let o = try half(x, d)
+        if o.ok {
+            return half(x, d)
+        }
+        return -1
+    }
+    return apply(safe, 10) + compose(safe, double)(7) + apply(compose(safe, double), 7)
+}
+
+// In a generic function, a function value is made in each copy, where its types are
+// known, and calls the methods its bounds promise.
+interface Priced {
+    fn price(self) -> Money
+}
+
+fn Line.price(self) -> Money {
+    return self.price * self.qty
+}
+
+fn total_with<T: Priced>(xs: List<T, 10>, fee: Money) -> Money {
+    let cost = fn(x: T) -> Money {
+        return x.price() + fee
+    }
+    return total_of(xs, cost)
+}
+
+fn total_of<T>(xs: List<T, 10>, cost: fn(T) -> Money) -> Money {
+    let total = 0.00 NGN
+    for x in xs {
+        set total = total + cost(x)
+    }
+    return total
+}
+
+fn priced(fee: Money) -> Money {
+    let xs = [Line { name: "a", price: 2.00 NGN, qty: 3 }, Line { name: "b", price: 5.50 NGN, qty: 2 }]
+    return total_with(xs, fee)
+}
+
+// Called right where it is made.
+fn at_once(n: Int) -> Int {
+    return fn(x: Int) -> Int {
+        return x * x
+    }(n)
+}
+
+// Calls through a function value count against the depth limit like any call.
+fn countdown(n: Int) -> Int {
+    if n <= 0 {
+        return 0
+    }
+    let me = countdown
+    return me(n - 1)
+}

@@ -1,0 +1,5 @@
+// expect: E101
+// message: a function value takes its arguments in order
+fn apply(f: fn(Int) -> Int) -> Int {
+    return f(x: 1)
+}

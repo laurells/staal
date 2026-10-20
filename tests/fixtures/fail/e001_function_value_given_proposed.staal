@@ -1,0 +1,10 @@
+// expect: E001
+fn size(t: Text) -> Int {
+    return len(t)
+}
+
+fn f() -> Int budget(calls: 1, tokens: 100) {
+    let g = size
+    let p = propose(Text, instruct: "Say hi.", tokens: 100)
+    return g(p)
+}

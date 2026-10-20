@@ -77,6 +77,7 @@ capability need cannot have the name of a constant in scope (E101).
 | `(A, B, ...)` | a tuple: two or more values, of these types, in this order |
 | `Map<K, V, N>` | at most N values of type V, each under a different key of type K, in key order |
 | `Set<T, N>` | at most N different values of type T, in order |
+| `fn(A, B) -> R` | a function value: a function, and the values it captured |
 | `Proposed<T>` | raw model output (JSON), not yet checked against T |
 | `Receipt` | proof of one completed action: id, capability, method |
 | `Outcome` | `ok`, `error`, and (hidden) what succeeded |
@@ -293,6 +294,36 @@ Evaluation is strictly left to right and statement by statement.
   without `pub` is called only in its own file (E107). On a variable that is a
   capability, `x.m(...)` is always an action, never a method; on any other variable
   with no such method it is E002, as before.
+- A function value has a type `fn(A, B) -> R` (`fn(A)` alone returns nothing). A
+  function's name where a value goes (`let f = double`, `apply(double, 3)`,
+  `lib.double` from an import) is that function as a value; `fn(x: Int) -> Int {
+  return x + k }` written in place is a new one, which may read the variables around
+  it (`k`): each is copied when the value is made, so a later `set k = ...` does not
+  change it, and the value cannot `set` them. `f(x)` where `f` is a variable holding
+  one calls it, as does any expression followed by arguments (`adder(3)(4)`). A call
+  evaluates the function value first, then the arguments left to right, then runs
+  its function with what it captured before the arguments; arguments are given in
+  order (a named one is E101) and the depth limit applies as to any call. The
+  compiler lifts each `fn(...) { ... }` into a function of its own, taking what it
+  captures first, named after the function it is in and where (`main::fn@4:13`, as
+  messages show it).
+  A function value only computes. Its function, and every function that one calls,
+  makes no action, model call or `done`, so a function value can never spend a
+  budget, reach a model or act, and blinding and budgets need no knowledge of which
+  function it is. A capability never enters one: `fn(...) { ... }` reading a
+  variable that holds a capability is E003, as is a function type taking or giving
+  one; one reading a `Secret`, `Header`, `Receipt`, `Outcome`, `Done` or unvalidated
+  `Proposed` value is E101, as is a function type taking or giving one. A named
+  function used as a value cannot be generic, declare `fails` (a typed failure
+  could not reach the caller's `try`), or have an `@trusted` parameter (E101). A
+  function value is never kept inside data: a list, map, set, tuple, optional value,
+  record field or variant field cannot hold one, and it cannot be compared, encoded
+  with `json`, sent to a model or passed to an action (E101). What a call through
+  one returns is untrusted, and may reveal everything it captured and was given
+  (E006, E007); since it may fail, whether later code runs depends on its inputs.
+  A run cannot be given a function value as input, nor start a function that returns
+  one, nor start a lifted one: the run is refused before it starts. A variable cannot be called when its name is that of a function or a
+  built-in in scope (E101).
 - A function call evaluates its arguments left to right, in the order written,
   then runs the callee with a fresh scope containing only its parameters.
   `name: value` passes an argument to the parameter it names; arguments without
@@ -1113,9 +1144,13 @@ of these, optional values, tuples, maps or sets of these, or lists of these, and
 `fail`, literals (an integer must fit an Int; a list must not be empty), arithmetic,
 unary `-`, comparisons, `and`, `or`, `not`, field reads, record and variant literals,
 `some(...)`, `none`, tuples, map literals, empty typed literals, indexing,
-the built-in functions other than `header` and `fill_secret`, and calls to other
-qualifying functions. A function that calls one that does not qualify does not
-qualify. Native code is entered only from the interpreter, when it calls a compiled
+the built-in functions other than `header` and `fill_secret`, calls to other
+qualifying functions, function values of qualifying functions (whose types are
+`fn(...)` of the types above), and calls of function values. A function that calls
+one that does not qualify, or makes one that does not qualify into a value, does
+not qualify. A function value given to native code from the interpreter whose
+function (or that of any function value it captured) does not qualify makes that
+call run on the interpreter, so native code only ever calls compiled functions. Native code is entered only from the interpreter, when it calls a compiled
 function; model calls, actions, `try`, `parse`, `validate`, HTTP, files, budgets and
 the journal therefore never run in native code.
 

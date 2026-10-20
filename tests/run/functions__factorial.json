@@ -1,0 +1,1 @@
+{"entry": "factorial", "inputs": {"n": 10}, "expect": {"result": 3628800}, "model": {"provider": "script", "responses": []}}

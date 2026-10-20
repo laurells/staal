@@ -1,0 +1,17 @@
+// expect: E101
+// message: 'check' fails with Problem, which would leave
+type Problem { code: Int }
+
+fn check(x: Int) -> Int fails Problem {
+    if x < 0 {
+        fail(Problem { code: 1 })
+    }
+    return x
+}
+
+fn f(n: Int) -> Int {
+    let g = fn(x: Int) -> Int {
+        return check(x)
+    }
+    return g(n)
+}

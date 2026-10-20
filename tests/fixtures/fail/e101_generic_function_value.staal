@@ -1,0 +1,13 @@
+// expect: E101
+// message: 'first' is generic, and a function value is one function
+fn first<T>(xs: List<T, 3>) -> Optional<T> {
+    for x in xs {
+        return some(x)
+    }
+    return none
+}
+
+fn f() -> Int {
+    let g = first
+    return 0
+}

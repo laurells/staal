@@ -1,0 +1,5 @@
+// expect: E101
+// message: is a Int, not a function value, so it cannot be called
+fn f(n: Int) -> Int {
+    return n(1)
+}

@@ -1,0 +1,1 @@
+{"entry": "at_once", "inputs": {"n": 9}, "expect": {"result": 81}, "model": {"provider": "script", "responses": []}}

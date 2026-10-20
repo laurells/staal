@@ -1,0 +1,8 @@
+// expect: E107
+// A function that is not `pub` cannot leave its module as a value either.
+import lib
+
+fn f() -> Int {
+    let g = lib.hidden
+    return g(1)
+}

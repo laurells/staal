@@ -1,0 +1,60 @@
+// Function values in the places the rules allow them: variables, parameters,
+// results, generic types, the body of a capability's action, and under `try`.
+type Order { id: Text, total: Money }
+
+fn id<T>(x: T) -> T {
+    return x
+}
+
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn half(x: Int) -> Int {
+    return x / 2
+}
+
+fn pick(big: Bool) -> fn(Int) -> Int {
+    let f = half
+    if big {
+        set f = double
+    }
+    return id(f)
+}
+
+fn safely(f: fn(Int) -> Int, x: Int) -> Int {
+    let o = try f(x)
+    if o.ok {
+        return 1
+    }
+    return 0
+}
+
+fn note(audit: cap audit.log.write, o: Order) -> Receipt {
+    let line = fn(prefix: Text) -> Text {
+        return prefix + o.id
+    }
+    return audit.write(line("order "))
+}
+
+fn chain(n: Int) -> Int {
+    return pick(n > 10)(n) + safely(half, n)
+}
+
+fn say(t: Text @trusted) -> Text {
+    return t
+}
+
+// A capability's name inside a function value names its own parameter or `let`, not
+// the capability around it; a trusted value it captures stays trusted inside it.
+fn shadows(lock: cap building.lock.open) -> Int {
+    let task = "Open the north door."
+    let a = fn(lock: Int) -> Int {
+        return lock + 1
+    }
+    let b = fn(x: Int) -> Text {
+        let lock = say(task)
+        return lock
+    }
+    return a(1)
+}

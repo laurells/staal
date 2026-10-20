@@ -1,0 +1,1 @@
+{"entry": "countdown", "inputs": {"n": 1000}, "limits": {"max_depth": 50}, "expect": {"failure": "depth_limit", "message_contains": "50 deep"}, "model": {"provider": "script", "responses": []}}

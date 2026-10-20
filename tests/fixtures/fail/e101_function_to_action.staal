@@ -1,0 +1,9 @@
+// expect: E101
+// message: a function value cannot be passed to an action
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn f(audit: cap audit.log.write) -> Receipt {
+    return audit.write(double)
+}

@@ -1,0 +1,13 @@
+// expect: E101
+// message: expected fn(Int) -> Int, found fn(Text) -> Int
+fn size(t: Text) -> Int {
+    return len(t)
+}
+
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+fn g() -> Int {
+    return apply(size, 3)
+}

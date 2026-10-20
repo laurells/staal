@@ -1,0 +1,11 @@
+// expect: E003
+// message: this function value reads 'one', which holds a capability
+// Nor a capability narrowed in a `let`: no copy of authority goes into a function value.
+fn f(lock: cap building.lock.open) -> Int {
+    let one: cap building.lock.open(uses: 1) = lock
+    let g = fn(door: Text) -> Int {
+        let r = one.open(door)
+        return 1
+    }
+    return 0
+}

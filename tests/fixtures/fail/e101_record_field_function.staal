@@ -1,0 +1,3 @@
+// expect: E101
+// message: field 'Rule.check' cannot hold a function value
+type Rule { name: Text, check: fn(Int) -> Bool }

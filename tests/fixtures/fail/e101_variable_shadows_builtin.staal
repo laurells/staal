@@ -1,0 +1,14 @@
+// expect: E101
+// message: 'add' is both a variable and a built-in function here; rename the variable
+// A call written with a built-in's name is the built-in, so a variable of that name
+// cannot be called: it is refused rather than silently passed over.
+fn adder(k: Int) -> fn(Int) -> Int {
+    return fn(x: Int) -> Int {
+        return x + k
+    }
+}
+
+fn f() -> Int {
+    let add = adder(1)
+    return add(2)
+}

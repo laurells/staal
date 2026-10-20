@@ -1,0 +1,8 @@
+// expect: E101
+// message: declares parameter 'x' twice
+fn f() -> Int {
+    let g = fn(x: Int, x: Int) -> Int {
+        return x
+    }
+    return g(1, 2)
+}

@@ -262,7 +262,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
     for (mi, m) in modules.iter().enumerate() {
         let mut scratch = Vec::new();
         let scope = scope_of(mi, m, &exports, index, &enums, &mut scratch);
-        let mut r = Resolver { scope: &scope, diags: &mut scratch, generics: Vec::new() };
+        let mut r = Resolver { scope: &scope, diags: &mut scratch, generics: Vec::new(), locals: Vec::new() };
         for a in &m.prog.aliases {
             let mut t = a.ty.clone();
             r.ty(&mut t, a.pos);
@@ -286,7 +286,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
     }
     for (mi, m) in modules.iter_mut().enumerate() {
         let scope = scope_of(mi, m, &exports, index, &enums, &mut diags);
-        let mut r = Resolver { scope: &scope, diags: &mut diags, generics: Vec::new() };
+        let mut r = Resolver { scope: &scope, diags: &mut diags, generics: Vec::new(), locals: Vec::new() };
         for t in &mut m.prog.types {
             t.name = format!("{}{}", scope.prefix, t.name);
             for (_, fty) in &mut t.fields {
@@ -319,6 +319,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 }
             }
             r.generics = f.generics.clone();
+            r.locals = f.params.iter().map(|p| p.name.clone()).collect();
             for (_, iface) in &mut f.bounds {
                 *iface = r.type_name(iface, f.pos);
             }
@@ -542,6 +543,9 @@ struct Resolver<'s, 'a, 'd> {
     diags: &'d mut Vec<Diagnostic>,
     /// The type parameters of the function being resolved: names, not types to qualify.
     generics: Vec<String>,
+    /// The variables in scope where resolution is: parameters and those declared so far.
+    /// `f(x)` with a variable `f` calls the function value it holds.
+    locals: Vec<String>,
 }
 
 impl Resolver<'_, '_, '_> {
@@ -606,11 +610,23 @@ impl Resolver<'_, '_, '_> {
                 self.ty(v, pos);
             }
             Ty::Set(t, _) => self.ty(t, pos),
+            Ty::Func(ps, r) => {
+                for p in ps {
+                    self.ty(p, pos);
+                }
+                self.ty(r, pos);
+            }
             Ty::Cap { .. } => {}
         }
     }
 
     fn block(&mut self, body: &mut [Stmt]) {
+        let outer = self.locals.len();
+        self.block_in(body);
+        self.locals.truncate(outer);
+    }
+
+    fn block_in(&mut self, body: &mut [Stmt]) {
         for s in body {
             match s {
                 Stmt::Let { name, ty, value, pos } => {
@@ -619,6 +635,7 @@ impl Resolver<'_, '_, '_> {
                         self.ty(t, *pos);
                     }
                     self.expr(value);
+                    self.locals.push(name.clone());
                 }
                 Stmt::Set { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value), _) | Stmt::Fail(value, _) => {
                     self.expr(value)
@@ -628,7 +645,9 @@ impl Resolver<'_, '_, '_> {
                 Stmt::For { var, list, body, pos } => {
                     self.binder(var, *pos);
                     self.expr(list);
+                    self.locals.push(var.clone());
                     self.block(body);
+                    self.locals.pop();
                 }
                 Stmt::If { cond, then, els, .. } => {
                     self.expr(cond);
@@ -638,16 +657,22 @@ impl Resolver<'_, '_, '_> {
                 Stmt::Match { value, arms, .. } => {
                     self.expr(value);
                     for a in arms {
+                        let outer = self.locals.len();
                         match &a.pattern {
                             Pattern::Variant { binds, pos, .. } => {
                                 for (_, to) in binds {
                                     self.binder(to, *pos);
+                                    self.locals.push(to.clone());
                                 }
                             }
-                            Pattern::Present { bind, pos } => self.binder(bind, *pos),
+                            Pattern::Present { bind, pos } => {
+                                self.binder(bind, *pos);
+                                self.locals.push(bind.clone());
+                            }
                             Pattern::Absent(_) | Pattern::Any(_) => {}
                         }
                         self.block(&mut a.body);
+                        self.locals.truncate(outer);
                     }
                 }
             }
@@ -739,15 +764,69 @@ impl Resolver<'_, '_, '_> {
             *e = Expr::Var(q.clone(), *pos);
             return;
         }
+        // `alias.f` where a value goes: the imported function as a value.
+        if let Expr::Field { base, field, pos } = e
+            && let Expr::Var(alias, _) = base.as_ref()
+            && !self.locals.contains(alias)
+            && let Some(ex) = self.scope.aliases.get(alias.as_str())
+            && let Some((q, public)) = ex.fns.get(field.as_str())
+        {
+            if !public {
+                self.diags.push(err("E107", *pos, format!("function '{alias}.{field}' is not `pub` in its module")));
+            }
+            *e = Expr::Closure { name: q.clone(), captures: Vec::new(), pos: *pos };
+            return;
+        }
         match e {
+            Expr::Var(name, _) if self.locals.contains(name) => {}
             Expr::Var(name, _) if self.scope.consts.contains_key(name.as_str()) => {
                 *name = self.scope.consts[name.as_str()].clone();
+            }
+            // A function named where a value goes: the function as a value.
+            Expr::Var(name, pos) if self.scope.fns.contains_key(name.as_str()) => {
+                let q = self.scope.fns[name.as_str()].clone();
+                *e = Expr::Closure { name: q, captures: Vec::new(), pos: *pos };
+                return;
+            }
+            // `f(x)` with a variable `f`: a call of the function value it holds.
+            Expr::Call { name, pos, args, slots } if !name.contains('.') && self.locals.contains(name) => {
+                if self.scope.fns.contains_key(name.as_str()) {
+                    self.diags.push(err(
+                        "E101",
+                        *pos,
+                        format!("'{name}' is both a variable and a function here; rename the variable"),
+                    ));
+                }
+                debug_assert!(slots.is_empty());
+                let pos = *pos;
+                let callee = Box::new(Expr::Var(std::mem::take(name), pos));
+                *e = Expr::CallValue { callee, args: std::mem::take(args), pos };
+            }
+            // `add(x)` with a variable `add`: the built-in, which would surprise.
+            Expr::Builtin { f, pos, .. } if self.locals.iter().any(|l| l == f.name()) => {
+                let n = f.name();
+                self.diags.push(err("E101", *pos, format!("'{n}' is both a variable and a built-in function here; rename the variable")));
             }
             Expr::Call { name, .. } if !name.contains('.') => {
                 *name = match self.scope.fns.get(name.as_str()) {
                     Some(q) => q.clone(),
                     None => format!("{}{name}", self.scope.prefix),
                 };
+            }
+            Expr::Lambda { params, ret, body, pos } => {
+                let pos = *pos;
+                for (_, t) in params.iter_mut() {
+                    self.ty(t, pos);
+                }
+                self.ty(ret, pos);
+                let outer = self.locals.len();
+                for (n, _) in params.iter() {
+                    self.binder(n, pos);
+                    self.locals.push(n.clone());
+                }
+                self.block(body);
+                self.locals.truncate(outer);
+                return;
             }
             Expr::Record { ty, pos, .. } => *ty = self.type_name(ty, *pos),
             Expr::Propose { ty, pos, .. } | Expr::Parse { ty, pos, .. } => self.ty(ty, *pos),
@@ -762,6 +841,18 @@ impl Resolver<'_, '_, '_> {
             | Expr::Not(inner, _)
             | Expr::SomeOf(inner, _) => self.expr(inner),
             Expr::Named { value, .. } => self.expr(value),
+            Expr::Lambda { .. } => {}
+            Expr::Closure { captures, .. } => {
+                for c in captures {
+                    self.expr(c);
+                }
+            }
+            Expr::CallValue { callee, args, .. } => {
+                self.expr(callee);
+                for a in args {
+                    self.expr(a);
+                }
+            }
             Expr::Method { base, args, .. } => {
                 self.expr(base);
                 for a in args {

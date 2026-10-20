@@ -1,0 +1,10 @@
+// expect: E007
+// Likewise `add` on a full set.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email)) {
+    let seen: Set<Text, 1> = to_set(["ceo@example.com"])
+    let more = add(seen, order.customer.email)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

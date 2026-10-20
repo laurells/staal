@@ -1,0 +1,16 @@
+// expect: E101
+// message: cannot be a function value
+// Nor one that asks a model, even through another function: a function value's
+// cost would be hidden from every budget.
+fn ask(t: Text) -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: "Summarise.", data: [t], tokens: 100)
+}
+
+fn summary(t: Text) -> Text budget(calls: 1, tokens: 100) {
+    return ask(t)
+}
+
+fn f() -> Int {
+    let g = summary
+    return 0
+}

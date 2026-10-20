@@ -1,0 +1,10 @@
+// expect: E006
+// What a function value gives is untrusted, like the result of any function that
+// does not promise `@trusted`: it cannot be a model's instruction.
+fn f() -> Text budget(calls: 1, tokens: 100) {
+    let task = "Summarise."
+    let say = fn(x: Int) -> Text {
+        return task
+    }
+    return validate propose(Text, instruct: say(1), tokens: 100)
+}

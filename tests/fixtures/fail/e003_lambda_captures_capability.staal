@@ -1,0 +1,11 @@
+// expect: E003
+// message: this function value reads 'lock', which holds a capability
+// A function value never carries authority: one that reads a capability is refused,
+// so no capability can leave a function inside one, with its limits or without, and
+// whoever calls it later cannot act through it.
+fn open_later(lock: cap building.lock.open(uses: 1, only: ["north-door"])) -> fn(Text) -> Int {
+    return fn(door: Text) -> Int {
+        let r = lock.open(door)
+        return 1
+    }
+}

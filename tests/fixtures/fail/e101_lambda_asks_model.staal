@@ -1,0 +1,8 @@
+// expect: E101
+// message: is a function value, which only computes: it cannot ask a model
+fn f(t: Text) -> Int budget(calls: 1, tokens: 100) {
+    let g = fn(x: Text) -> Text {
+        return validate propose(Text, instruct: "Summarise.", data: [x], tokens: 100)
+    }
+    return 0
+}

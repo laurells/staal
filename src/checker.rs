@@ -129,6 +129,14 @@ struct Ctx<'a> {
     fail_fns: HashSet<String>,
     /// Functions that may never finish: `loop` or recursion, directly or through any call.
     diverge_fns: HashSet<String>,
+    /// Functions that only compute: no action, model call or `done`, directly or
+    /// through any call. Only these can be function values.
+    pure_fns: HashSet<String>,
+    /// Each `fn(...) { ... }` found that can be lifted now, by the function it is in and
+    /// its position: the function it becomes and what it captures.
+    lambdas: HashMap<Site, Lifted>,
+    /// How many `fn(...) { ... }` bodies the expression being checked is inside.
+    lambda_depth: usize,
 }
 
 impl Ctx<'_> {
@@ -213,6 +221,14 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
         Expr::Method { base, args, .. } => {
             inexact(std::iter::once(base.as_ref()).chain(args.iter()).flat_map(|a| reveals(a, env)).collect())
         }
+        // A function value reveals what it captured; calling one, that and its arguments.
+        Expr::Lambda { params, body, .. } => {
+            inexact(lambda_captures(params, body, env).iter().filter_map(|n| env.get(n)).flat_map(|b| b.reveals.clone()).collect())
+        }
+        Expr::Closure { captures, .. } => inexact(captures.iter().flat_map(|a| reveals(a, env)).collect()),
+        Expr::CallValue { callee, args, .. } => {
+            inexact(std::iter::once(callee.as_ref()).chain(args.iter()).flat_map(|a| reveals(a, env)).collect())
+        }
         Expr::Call { args, .. }
         | Expr::Action { args, .. }
         | Expr::Done { evidence: args, .. }
@@ -242,6 +258,9 @@ fn expr_text(e: &Expr) -> String {
         Expr::Field { base, field, .. } => format!("{}.{field}", expr_text(base)),
         Expr::Call { name, .. } => format!("{name}(...)"),
         Expr::Method { base, method, .. } => format!("{}.{method}(...)", expr_text(base)),
+        Expr::Lambda { .. } => "fn(...) { ... }".into(),
+        Expr::Closure { name, .. } => name.clone(),
+        Expr::CallValue { callee, .. } => format!("{}(...)", expr_text(callee)),
         Expr::Action { receiver, method, .. } => format!("{receiver}.{method}(...)"),
         Expr::Validate(inner, _) => format!("validate {}", expr_text(inner)),
         Expr::Try(inner, _) => format!("try {}", expr_text(inner)),
@@ -305,10 +324,22 @@ type Site = (String, Pos);
 /// A generic function and the types of its parameters at one call.
 type Instance = (String, Vec<Ty>);
 
-/// What one check found to rewrite: method calls, and calls of generic functions.
+/// A `fn(...) { ... }` lifted into a function of its own: its name, and each variable
+/// it captures, with its type and whether it is trusted.
+type Lifted = (String, Vec<(String, Ty, bool)>);
+
+/// What one check found to rewrite: method calls, calls of generic functions, and
+/// function values written in place.
 struct Resolutions {
     methods: HashMap<Site, String>,
     instances: HashMap<Site, Instance>,
+    lambdas: HashMap<Site, Lifted>,
+}
+
+impl Resolutions {
+    fn is_empty(&self) -> bool {
+        self.methods.is_empty() && self.instances.is_empty() && self.lambdas.is_empty()
+    }
 }
 
 /// Checks a program whose method calls and generic calls are not resolved yet.
@@ -330,7 +361,7 @@ pub fn check_and_resolve(prog: &mut Program) -> Found {
     };
     for _ in 0..MAX_RESOLVE_ROUNDS {
         let (found, res) = check_once(prog);
-        if res.methods.is_empty() && res.instances.is_empty() {
+        if res.is_empty() {
             return finish(found, resolving);
         }
         resolving.extend(found.0.into_iter().filter(|d| d.code == "E107" && d.msg.starts_with("method '")));
@@ -346,7 +377,7 @@ pub fn check_and_resolve(prog: &mut Program) -> Found {
         }
     }
     let (mut found, res) = check_once(prog);
-    for (_, pos) in res.methods.keys().chain(res.instances.keys()) {
+    for (_, pos) in res.methods.keys().chain(res.instances.keys()).chain(res.lambdas.keys()) {
         found.0.push(Diagnostic {
             code: "E101",
             pos: *pos,
@@ -399,8 +430,237 @@ fn resolve(prog: &mut Program, res: &Resolutions) -> Result<(), Diagnostic> {
         calls.insert(key.clone(), name);
     }
     prog.fns.extend(made);
+    lift_lambdas(prog, &res.lambdas);
     rewrite_calls(prog, &calls);
     Ok(())
+}
+
+/// The name of the function a `fn(...) { ... }` at `pos` inside `outer` becomes:
+/// `main::fn@4:13`. No program can write it: `@` is not part of a name.
+fn lifted_name(outer: &str, pos: Pos) -> String {
+    format!("{outer}::fn@{}:{}", pos.line, pos.col)
+}
+
+/// Whether `name` is a function lifted from a `fn(...) { ... }`.
+fn is_lifted(name: &str) -> bool {
+    name.contains("::fn@")
+}
+
+/// The function a `fn(...) { ... }` becomes: what it captures first, then its own
+/// parameters. A captured value keeps its trust; a parameter is untrusted.
+fn lifted_decl(name: String, captures: &[(String, Ty, bool)], params: &[(String, Ty)], ret: &Ty, body: Vec<Stmt>, pos: Pos) -> FnDecl {
+    let param = |name: &str, ty: &Ty, trusted: bool| Param {
+        name: name.to_string(),
+        ty: ty.clone(),
+        trusted,
+        target: false,
+        amount: false,
+        blind: Vec::new(),
+        default: None,
+    };
+    FnDecl {
+        public: false,
+        name,
+        params: captures.iter().map(|(n, t, tr)| param(n, t, *tr)).chain(params.iter().map(|(n, t)| param(n, t, false))).collect(),
+        ret: (*ret != named("Unit")).then(|| ret.clone()),
+        ret_trusted: false,
+        budget: None,
+        fails: None,
+        generics: Vec::new(),
+        bounds: Vec::new(),
+        method_of: None,
+        body,
+        pos,
+    }
+}
+
+/// Lifts each `fn(...) { ... }` found into a function of its own, and puts in its
+/// place the function value: that function with what it captures.
+fn lift_lambdas(prog: &mut Program, lambdas: &HashMap<Site, Lifted>) {
+    let mut wanted: Vec<(&Site, &Lifted)> = lambdas.iter().collect();
+    // In a fixed order, so the same program always gives the same functions.
+    wanted.sort_by(|a, b| (&a.0.0, a.0.1.file, a.0.1.line, a.0.1.col).cmp(&(&b.0.0, b.0.1.file, b.0.1.line, b.0.1.col)));
+    let mut made = Vec::new();
+    for ((outer, at), (name, captures)) in wanted {
+        let Some(f) = prog.fns.iter_mut().find(|f| &f.name == outer) else { continue };
+        let mut taken = None;
+        exprs_mut(&mut f.body, &mut |e| {
+            if let Expr::Lambda { pos, .. } = e
+                && pos == at
+                && taken.is_none()
+            {
+                let caps = captures.iter().map(|(n, _, _)| Expr::Var(n.clone(), *at)).collect();
+                let lambda = std::mem::replace(e, Expr::Closure { name: name.clone(), captures: caps, pos: *at });
+                taken = Some(lambda);
+            }
+        });
+        if let Some(Expr::Lambda { params, ret, body, pos }) = taken {
+            made.push(lifted_decl(name.clone(), captures, &params, &ret, body, pos));
+        }
+    }
+    prog.fns.extend(made);
+}
+
+/// Calls `f` on every expression in `body`, outermost first, nested blocks included
+/// but not the bodies of `fn(...) { ... }`, which are functions of their own.
+fn exprs_mut(body: &mut [Stmt], f: &mut dyn FnMut(&mut Expr)) {
+    fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
+        f(e);
+        for c in e.children_mut() {
+            expr(c, f);
+        }
+    }
+    for s in body {
+        match s {
+            Stmt::Let { value, .. } | Stmt::Set { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value), _) | Stmt::Fail(value, _) => {
+                expr(value, f)
+            }
+            Stmt::Return(None, _) | Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => exprs_mut(body, f),
+            Stmt::For { list, body, .. } => {
+                expr(list, f);
+                exprs_mut(body, f);
+            }
+            Stmt::If { cond, then, els, .. } => {
+                expr(cond, f);
+                exprs_mut(then, f);
+                exprs_mut(els, f);
+            }
+            Stmt::Match { value, arms, .. } => {
+                expr(value, f);
+                for a in arms {
+                    exprs_mut(&mut a.body, f);
+                }
+            }
+        }
+    }
+}
+
+/// The functions that only compute: none of them, nor anything they call, acts, asks a
+/// model or makes a `done`. (An action left in a function is one on a capability: a
+/// method call is a plain call by the last check.)
+fn find_pure_fns(prog: &Program) -> HashSet<String> {
+    let mut calls: HashMap<&str, HashSet<String>> = HashMap::new();
+    let mut impure: HashSet<String> = HashSet::new();
+    for f in &prog.fns {
+        let mut direct = f.name.contains(' ');
+        let mut called = HashSet::new();
+        walk_block(&f.body, &mut |e| match e {
+            Expr::Propose { .. } | Expr::Done { .. } | Expr::Action { .. } => direct = true,
+            Expr::Call { name, .. } => {
+                called.insert(name.clone());
+            }
+            _ => {}
+        });
+        if direct {
+            impure.insert(f.name.clone());
+        }
+        calls.insert(&f.name, called);
+    }
+    loop {
+        let before = impure.len();
+        for (name, called) in &calls {
+            if called.iter().any(|c| impure.contains(c)) {
+                impure.insert(name.to_string());
+            }
+        }
+        if impure.len() == before {
+            return calls.keys().filter(|n| !impure.contains(**n)).map(|n| n.to_string()).collect();
+        }
+    }
+}
+
+/// A lifted `fn(...) { ... }` only computes: reports what in its body does more.
+fn check_pure_body(ctx: &mut Ctx, name: &str, body: &[Stmt]) {
+    let mut found: Vec<(Pos, String)> = Vec::new();
+    walk_block(body, &mut |e| match e {
+        Expr::Propose { pos, .. } => found.push((*pos, "it cannot ask a model".into())),
+        Expr::Done { pos, .. } => found.push((*pos, "it cannot make a `done`".into())),
+        Expr::Call { name: callee, pos, .. }
+            if ctx.sigs.get(callee.as_str()).is_some_and(|s| s.generics.is_empty()) && !ctx.pure_fns.contains(callee) =>
+        {
+            found.push((*pos, format!("it cannot call '{callee}', which acts, asks a model or calls something that does")))
+        }
+        _ => {}
+    });
+    for (pos, why) in found {
+        ctx.err("E101", pos, format!("'{name}' is a function value, which only computes: {why}"));
+    }
+}
+
+/// The variables of the scope around a `fn(...) { ... }` that its body reads, in the
+/// order first read: what it captures. Names its own parameters and `let`s bind, and
+/// names no variable around it has, are not captured.
+fn lambda_captures(params: &[(String, Ty)], body: &[Stmt], env: &Env) -> Vec<String> {
+    fn note(n: &str, bound: &[String], env: &Env, out: &mut Vec<String>) {
+        if !bound.iter().any(|b| b == n) && env.contains_key(n) && !out.iter().any(|o| o == n) {
+            out.push(n.to_string());
+        }
+    }
+    fn expr(e: &Expr, bound: &mut Vec<String>, env: &Env, out: &mut Vec<String>) {
+        match e {
+            Expr::Var(n, _) => note(n, bound, env, out),
+            Expr::Action { receiver, .. } => note(receiver, bound, env, out),
+            Expr::Lambda { params, body, .. } => {
+                let outer = bound.len();
+                bound.extend(params.iter().map(|(n, _)| n.clone()));
+                block(body, bound, env, out);
+                bound.truncate(outer);
+                return;
+            }
+            _ => {}
+        }
+        for c in e.children() {
+            expr(c, bound, env, out);
+        }
+    }
+    fn block(body: &[Stmt], bound: &mut Vec<String>, env: &Env, out: &mut Vec<String>) {
+        let outer = bound.len();
+        for s in body {
+            match s {
+                Stmt::Let { name, value, .. } => {
+                    expr(value, bound, env, out);
+                    bound.push(name.clone());
+                }
+                Stmt::For { var, list, body, .. } => {
+                    expr(list, bound, env, out);
+                    bound.push(var.clone());
+                    block(body, bound, env, out);
+                    bound.pop();
+                }
+                Stmt::Set { name, value, .. } => {
+                    note(name, bound, env, out);
+                    expr(value, bound, env, out);
+                }
+                Stmt::Match { value, arms, .. } => {
+                    expr(value, bound, env, out);
+                    for a in arms {
+                        let here = bound.len();
+                        match &a.pattern {
+                            Pattern::Variant { binds, .. } => bound.extend(binds.iter().map(|(_, to)| to.clone())),
+                            Pattern::Present { bind, .. } => bound.push(bind.clone()),
+                            Pattern::Absent(_) | Pattern::Any(_) => {}
+                        }
+                        block(&a.body, bound, env, out);
+                        bound.truncate(here);
+                    }
+                }
+                _ => {
+                    for e in s.exprs() {
+                        expr(e, bound, env, out);
+                    }
+                    for b in s.blocks() {
+                        block(b, bound, env, out);
+                    }
+                }
+            }
+        }
+        bound.truncate(outer);
+    }
+    let mut bound: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+    let mut out = Vec::new();
+    block(body, &mut bound, env, &mut out);
+    out
 }
 
 /// Rewrites, in each function, the calls `calls` names (by function and position):
@@ -492,6 +752,9 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
         interfaces: HashMap::new(),
         lib_actions: HashMap::new(),
         flow: None,
+        pure_fns: find_pure_fns(prog),
+        lambdas: HashMap::new(),
+        lambda_depth: 0,
     };
     (ctx.fail_fns, ctx.diverge_fns) = partial_fns(prog);
     // Built-in result of `try`.
@@ -516,6 +779,10 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
         for (fname, fty) in &t.fields {
             if !seen.insert(fname.as_str()) {
                 ctx.err("E101", t.pos, format!("type '{}' declares field '{fname}' twice", t.name));
+            }
+            if func_inside(fty) {
+                ctx.err("E101", t.pos, format!("field '{}.{fname}' cannot hold a function value: data holds data, not code", t.name));
+                continue;
             }
             if let Some(bad) = proof_or_authority(fty) {
                 let why = if bad == "capability" {
@@ -560,6 +827,10 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
                 // In JSON a variant is {"kind": "...", fields...}.
                 if fname == "kind" {
                     ctx.err("E101", v.pos, format!("field '{at}' cannot be called `kind`: JSON uses it to name the variant"));
+                }
+                if func_inside(fty) {
+                    ctx.err("E101", v.pos, format!("field '{at}' cannot hold a function value: data holds data, not code"));
+                    continue;
                 }
                 if let Some(bad) = proof_or_authority(fty) {
                     ctx.err("E101", v.pos, format!("field '{at}' cannot hold a {bad}: it would travel inside data"));
@@ -705,7 +976,7 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
     ctx.diags.retain(|d| seen.insert((d.code, d.pos, d.msg.clone())));
     let mut diags = ctx.diags;
     diags.extend(ctx.method_diags);
-    ((diags, ctx.for_bounds, ctx.capacities), Resolutions { methods: ctx.methods, instances: ctx.instances })
+    ((diags, ctx.for_bounds, ctx.capacities), Resolutions { methods: ctx.methods, instances: ctx.instances, lambdas: ctx.lambdas })
 }
 
 /// Calls `f` on every expression in `body`, nested blocks included, outermost first.
@@ -768,7 +1039,16 @@ fn expr_can_fail_itself(e: &Expr) -> bool {
             | Expr::Index { .. }
             | Expr::Parse { .. }
             | Expr::Builtin {
-                f: Builtin::Json | Builtin::Header | Builtin::FillSecret | Builtin::Replace | Builtin::Form | Builtin::Lower | Builtin::UrlSegment,
+                f: Builtin::Json
+                    | Builtin::Header
+                    | Builtin::FillSecret
+                    | Builtin::Replace
+                    | Builtin::Form
+                    | Builtin::Lower
+                    | Builtin::UrlSegment
+                    // A map or set that is full refuses another entry.
+                    | Builtin::Put
+                    | Builtin::Add,
                 ..
             }
     )
@@ -811,6 +1091,7 @@ fn secret_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<&'sta
         Ty::Tuple(items) => items.iter().find_map(|t| secret_inside(ctx, t, seen)),
         Ty::Map(k, v, _) => secret_inside(ctx, k, seen).or_else(|| secret_inside(ctx, v, seen)),
         Ty::Set(t, _) => secret_inside(ctx, t, seen),
+        Ty::Func(ps, r) => ps.iter().chain(std::iter::once(r.as_ref())).find_map(|t| secret_inside(ctx, t, seen)),
         Ty::Cap { .. } => None,
     }
 }
@@ -832,6 +1113,7 @@ fn no_schema_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<&'
         Ty::Tuple(_) => Some("a tuple, whose positions"),
         Ty::Map(..) => Some("a map, whose keys"),
         Ty::Set(..) => Some("a set, whose items"),
+        Ty::Func(..) => Some("a function value, which"),
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => no_schema_inside(ctx, inner, seen),
         Ty::Named(n) => {
             if !seen.insert(n.clone()) {
@@ -851,6 +1133,7 @@ fn cap_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> bool {
         Ty::Tuple(items) => items.iter().any(|t| cap_inside(ctx, t, seen)),
         Ty::Map(k, v, _) => cap_inside(ctx, k, seen) || cap_inside(ctx, v, seen),
         Ty::Set(t, _) => cap_inside(ctx, t, seen),
+        Ty::Func(ps, r) => ps.iter().chain(std::iter::once(r.as_ref())).any(|t| cap_inside(ctx, t, seen)),
         Ty::Named(n) => {
             seen.insert(n.clone())
                 && inner_types(ctx, n).is_some_and(|ts| ts.iter().any(|t| cap_inside(ctx, t, seen)))
@@ -874,6 +1157,11 @@ fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
     fn scan_expr(e: &Expr, tried: bool, i: &mut Info) {
         match e {
             Expr::Action { .. } if !tried => i.fails = true,
+            // A function value may be any pure function: it may fail, or never end.
+            Expr::CallValue { .. } => {
+                i.fails = true;
+                i.diverges = true;
+            }
             Expr::Call { name, .. } => {
                 if tried {
                     i.calls_tried.insert(name.clone());
@@ -953,6 +1241,7 @@ fn op_is_partial(ctx: &Ctx, e: &Expr, tried: bool) -> bool {
     match e {
         Expr::Action { .. } => !tried,
         Expr::Call { name, .. } => ctx.diverge_fns.contains(name) || (!tried && ctx.fail_fns.contains(name)),
+        Expr::CallValue { .. } => true,
         _ => expr_can_fail_itself(e),
     }
 }
@@ -1014,6 +1303,18 @@ fn add_srcs(into: &mut Vec<Src>, from: Vec<Src>) {
 }
 
 fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
+    // Data holds data: a function value is never stored inside a list, map, set,
+    // tuple or optional value (nor a record or enum, checked where they are declared).
+    let holds_fn = match ty {
+        Ty::List(i, _) | Ty::Optional(i) | Ty::Set(i, _) | Ty::Proposed(i) => func_inside(i),
+        Ty::Map(k, v, _) => func_inside(k) || func_inside(v),
+        Ty::Tuple(ts) => ts.iter().any(func_inside),
+        _ => false,
+    };
+    if holds_fn {
+        ctx.err("E101", pos, format!("{ty} holds a function value, which is never kept inside data"));
+        return;
+    }
     match ty {
         Ty::Named(n) if ctx.interfaces.contains_key(n) => ctx.err(
             "E101",
@@ -1094,6 +1395,22 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
             check_ty_known(ctx, v, pos);
         }
         Ty::Set(t, _) => check_key(ctx, t, "a set's items", pos),
+        // A function value only computes: it takes and gives data, never authority,
+        // secrets or proof.
+        Ty::Func(ps, r) => {
+            for t in ps.iter().chain(std::iter::once(r.as_ref())) {
+                if cap_inside(ctx, t, &mut HashSet::new()) {
+                    ctx.err("E003", pos, format!("{ty} takes or gives a capability; a function value can never carry authority"));
+                } else if let Some(bad) = secret_inside(ctx, t, &mut HashSet::new()) {
+                    ctx.err("E101", pos, format!("{ty} takes or gives a {bad}; secrets never pass through function values"));
+                } else if let Some(bad) = proof_or_authority(t) {
+                    ctx.err("E101", pos, format!("{ty} takes or gives a {bad}, which only the runtime makes and keeps"));
+                } else if matches!(t, Ty::Proposed(_)) {
+                    ctx.err("E101", pos, format!("{ty} takes or gives unvalidated {t}; a function value cannot validate it"));
+                }
+                check_ty_known(ctx, t, pos);
+            }
+        }
         Ty::Tuple(items) => {
             for t in items {
                 if let Some(bad) = proof_or_authority(t) {
@@ -1236,6 +1553,7 @@ fn proof_or_authority(ty: &Ty) -> Option<&'static str> {
         Ty::Tuple(items) => items.iter().find_map(proof_or_authority),
         Ty::Map(k, v, _) => proof_or_authority(k).or_else(|| proof_or_authority(v)),
         Ty::Set(t, _) => proof_or_authority(t),
+        Ty::Func(ps, r) => ps.iter().chain(std::iter::once(r.as_ref())).find_map(proof_or_authority),
     }
 }
 
@@ -1437,6 +1755,15 @@ fn check_caps(ctx: &mut Ctx, prog: &Program) {
 }
 
 fn check_fn(ctx: &mut Ctx, f: &FnDecl, prog: &Program) {
+    let action = prog.caps.iter().find_map(|c| c.actions.iter().find(|a| a.fn_name == f.name).map(|a| (c, a)));
+    check_fn_as(ctx, f, action);
+}
+
+/// Checks function `f`; `action` is the capability action it is the body of, if any.
+fn check_fn_as(ctx: &mut Ctx, f: &FnDecl, action: Option<(&CapDecl, &ActionDecl)>) {
+    if is_lifted(&f.name) {
+        check_pure_body(ctx, &f.name, &f.body);
+    }
     // `fails E`: E is data a caller reads back, so a declared record or enum.
     if let Some(t) = &f.fails {
         check_ty_known(ctx, t, f.pos);
@@ -1452,7 +1779,6 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl, prog: &Program) {
         }
     }
     escaping_failures(ctx, f);
-    let action = prog.caps.iter().find_map(|c| c.actions.iter().find(|a| a.fn_name == f.name).map(|a| (c, a)));
     if action.is_none() && f.params.iter().any(|p| p.target || p.amount) {
         ctx.err("E101", f.pos, format!("'{}': @target and @amount mark parameters of capability actions only", f.name));
     }
@@ -2520,6 +2846,7 @@ fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option
         Ty::Tuple(items) => items.iter().find_map(|t| runtime_only_inside(ctx, t, seen)),
         Ty::Map(k, v, _) => runtime_only_inside(ctx, k, seen).or_else(|| runtime_only_inside(ctx, v, seen)),
         Ty::Set(t, _) => runtime_only_inside(ctx, t, seen),
+        Ty::Func(..) => Some("function value".into()),
         Ty::Named(n) if n == "Receipt" || n == "Outcome" || n == "Done" => Some(n.clone()),
         Ty::Named(n) => {
             if !seen.insert(n.clone()) {
@@ -2600,6 +2927,10 @@ fn bind_generics(gens: &[String], pattern: &Ty, actual: &Ty, bound: &mut HashMap
         (Ty::Tuple(ps), Ty::Tuple(as_)) if ps.len() == as_.len() => {
             ps.iter().zip(as_).try_for_each(|(p, a)| bind_generics(gens, p, a, bound))
         }
+        (Ty::Func(ps, pr), Ty::Func(as_, ar)) if ps.len() == as_.len() => {
+            ps.iter().zip(as_).try_for_each(|(p, a)| bind_generics(gens, p, a, bound))?;
+            bind_generics(gens, pr, ar, bound)
+        }
         // Anything else is for `assignable` to report, once the parameters are known.
         _ => Ok(()),
     }
@@ -2652,7 +2983,19 @@ fn subst_generics(t: &Ty, to: &HashMap<String, Ty>) -> Ty {
         Ty::Set(i, n) => Ty::Set(Box::new(subst_generics(i, to)), *n),
         Ty::Map(k, v, n) => Ty::Map(Box::new(subst_generics(k, to)), Box::new(subst_generics(v, to)), *n),
         Ty::Tuple(ts) => Ty::Tuple(ts.iter().map(|x| subst_generics(x, to)).collect()),
+        Ty::Func(ps, r) => Ty::Func(ps.iter().map(|x| subst_generics(x, to)).collect(), Box::new(subst_generics(r, to))),
         Ty::Cap { .. } => t.clone(),
+    }
+}
+
+/// Whether a function type appears anywhere in `t` (records cannot hold one).
+fn func_inside(t: &Ty) -> bool {
+    match t {
+        Ty::Func(..) => true,
+        Ty::Proposed(i) | Ty::List(i, _) | Ty::Optional(i) | Ty::Set(i, _) => func_inside(i),
+        Ty::Map(k, v, _) => func_inside(k) || func_inside(v),
+        Ty::Tuple(ts) => ts.iter().any(func_inside),
+        Ty::Named(_) | Ty::Cap { .. } => false,
     }
 }
 
@@ -2663,6 +3006,7 @@ fn mentions(t: &Ty, names: &[String]) -> bool {
         Ty::Proposed(i) | Ty::List(i, _) | Ty::Optional(i) | Ty::Set(i, _) => mentions(i, names),
         Ty::Map(k, v, _) => mentions(k, names) || mentions(v, names),
         Ty::Tuple(ts) => ts.iter().any(|x| mentions(x, names)),
+        Ty::Func(ps, r) => ps.iter().any(|x| mentions(x, names)) || mentions(r, names),
         Ty::Cap { .. } => false,
     }
 }
@@ -2739,6 +3083,126 @@ fn method_call(ctx: &mut Ctx, base: &Expr, method: &str, args: &[Expr], pos: Pos
     let mut all = vec![base.clone()];
     all.extend(args.iter().cloned());
     type_of(ctx, &Expr::Call { name, args: all, slots: Vec::new(), pos }, env)
+}
+
+/// The type of `fn(params) -> ret { body }` here: checks what it captures and its body
+/// (as the function it becomes), and notes it to be lifted into that function.
+fn lambda_type(ctx: &mut Ctx, params: &[(String, Ty)], ret: &Ty, body: &[Stmt], pos: Pos, env: &Env) -> Option<Typed> {
+    let before = ctx.diags.len();
+    let fty = Ty::Func(params.iter().map(|(_, t)| t.clone()).collect(), Box::new(ret.clone()));
+    check_ty_known(ctx, &fty, pos);
+    let mut seen = HashSet::new();
+    for (n, _) in params {
+        if !seen.insert(n.as_str()) {
+            ctx.err("E101", pos, format!("a function value declares parameter '{n}' twice"));
+        }
+    }
+    let mut captures: Vec<(String, Ty, bool)> = Vec::new();
+    for n in lambda_captures(params, body, env) {
+        let b = &env[&n];
+        let t = b.ty.clone();
+        if cap_inside(ctx, &t, &mut HashSet::new()) {
+            ctx.err(
+                "E003",
+                pos,
+                format!("this function value reads '{n}', which holds a capability; a function value can never carry authority, so pass the capability to a function instead"),
+            );
+        } else if let Some(bad) = secret_inside(ctx, &t, &mut HashSet::new()) {
+            ctx.err("E101", pos, format!("this function value reads '{n}', which holds a {bad}; secrets never pass into function values"));
+        } else if let Some(bad) = proof_or_authority(&t) {
+            ctx.err("E101", pos, format!("this function value reads '{n}', which holds a {bad}: proof made by the runtime stays where it was made"));
+        } else if matches!(t, Ty::Proposed(_)) {
+            ctx.err("E101", pos, format!("this function value reads '{n}', which is unvalidated {t}; use `validate` first"));
+        }
+        captures.push((n, t, b.trusted));
+    }
+    let trusted = captures.iter().all(|(_, _, tr)| *tr);
+    let ok = ctx.diags.len() == before;
+    // Lifted now unless it is inside another (lifted first, so this one next) or in a
+    // generic function (lifted in each copy, where its types are known).
+    let lift = ok && ctx.lambda_depth == 0 && ctx.generic_params.is_empty();
+    let name = lifted_name(&ctx.fn_name, pos);
+    // Its body is checked as the function it becomes. What that finds to resolve
+    // belongs to that function if it is lifted now, and is found again later if not.
+    let decl = lifted_decl(name.clone(), &captures, params, ret, body.to_vec(), pos);
+    let saved = (
+        ctx.flow.take(),
+        std::mem::take(&mut ctx.fn_blind),
+        std::mem::take(&mut ctx.pc),
+        std::mem::take(&mut ctx.params),
+        std::mem::replace(&mut ctx.fn_name, name.clone()),
+    );
+    let kept = (!lift).then(|| (std::mem::take(&mut ctx.methods), std::mem::take(&mut ctx.instances), std::mem::take(&mut ctx.lambdas)));
+    ctx.lambda_depth += 1;
+    if ok {
+        check_fn_as(ctx, &decl, None);
+    }
+    ctx.lambda_depth -= 1;
+    if let Some((m, i, l)) = kept {
+        (ctx.methods, ctx.instances, ctx.lambdas) = (m, i, l);
+    }
+    (ctx.flow, ctx.fn_blind, ctx.pc, ctx.params, ctx.fn_name) = saved;
+    if lift {
+        ctx.lambdas.insert((ctx.fn_name.clone(), pos), (name, captures));
+    }
+    Some((fty, trusted))
+}
+
+/// The type of function `name` as a value, with `captures` as its first arguments.
+fn closure_type(ctx: &mut Ctx, name: &str, captures: &[Expr], pos: Pos, env: &Env) -> Option<Typed> {
+    let cap_tys: Vec<Option<Typed>> = captures.iter().map(|c| type_of(ctx, c, env)).collect();
+    let Some(sig) = ctx.sigs.get(name) else {
+        ctx.err("E100", pos, format!("undefined function '{name}'"));
+        return None;
+    };
+    let (params, ret) = (sig.params.clone(), sig.ret.clone());
+    if !sig.generics.is_empty() {
+        ctx.err(
+            "E101",
+            pos,
+            format!("'{name}' is generic, and a function value is one function; write `fn(...) {{ ... }}` calling it with the types given"),
+        );
+        return None;
+    }
+    if let Some(e) = &sig.fails {
+        ctx.err("E101", pos, format!("'{name}' declares `fails {e}`; a function value cannot carry a typed failure to its caller"));
+        return None;
+    }
+    // A lifted `fn(...) { ... }` that does more than compute is reported in its body.
+    if !ctx.pure_fns.contains(name) && !is_lifted(name) {
+        ctx.err("E101", pos, format!("'{name}' cannot be a function value: it acts, asks a model or calls something that does, and a function value only computes"));
+        return None;
+    }
+    if captures.len() > params.len() {
+        // Only lifting makes captures, as many as its function takes first.
+        ctx.err("E101", pos, format!("internal: the function value '{name}' captures more than it takes"));
+        return None;
+    }
+    let mut trusted = true;
+    for ((c, t), (want, wtrusted, _)) in captures.iter().zip(cap_tys).zip(&params) {
+        let (t, tr) = t?;
+        if let Err((code, msg)) = assignable(&t, want) {
+            ctx.err(code, c.pos(), format!("in the function value '{name}': {msg}"));
+            return None;
+        }
+        if *wtrusted && !tr {
+            ctx.err("E006", c.pos(), format!("in the function value '{name}': untrusted value captured for an @trusted parameter"));
+            return None;
+        }
+        trusted &= tr;
+    }
+    let rest = &params[captures.len()..];
+    if rest.iter().any(|(_, tr, _)| *tr) {
+        ctx.err("E101", pos, format!("'{name}' has an @trusted parameter, and a function value's arguments carry no trust; call it directly"));
+        return None;
+    }
+    let fty = Ty::Func(rest.iter().map(|(t, _, _)| t.clone()).collect(), Box::new(ret));
+    let before = ctx.diags.len();
+    check_ty_known(ctx, &fty, pos);
+    if ctx.diags.len() > before {
+        return None;
+    }
+    Some((fty, trusted))
 }
 
 /// Returns the expression's type and whether its value is trusted.
@@ -2821,7 +3285,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             Some((named("Done"), false))
         }
         Expr::Try(inner, pos) => {
-            if !matches!(inner.as_ref(), Expr::Action { .. } | Expr::Call { .. }) {
+            if !matches!(inner.as_ref(), Expr::Action { .. } | Expr::Call { .. } | Expr::CallValue { .. }) {
                 ctx.err("E101", *pos, "`try` applies to an action or a function call".into());
                 return None;
             }
@@ -3005,6 +3469,10 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     }
                     if cap_inside(ctx, &tys[0].0, &mut HashSet::new()) {
                         ctx.err("E101", *pos, "`json` cannot encode a capability".into());
+                        return None;
+                    }
+                    if matches!(tys[0].0, Ty::Func(..)) {
+                        ctx.err("E101", *pos, "`json` cannot encode a function value: it is code, not data".into());
                         return None;
                     }
                     return Some((text, trusted));
@@ -3299,6 +3767,10 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     ctx.err("E104", *pos, format!("{bty} has no fields; cannot read '.{field}' (use get(m, key), contains, keys or items)"));
                     None
                 }
+                Ty::Func(..) => {
+                    ctx.err("E104", *pos, format!("a function value has no fields; cannot read '.{field}'"));
+                    None
+                }
                 Ty::Tuple(items) => match field.parse::<usize>().ok().and_then(|i| items.get(i)) {
                     Some(t) => Some((t.clone(), trusted)),
                     None => {
@@ -3322,6 +3794,8 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             let ordered = matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge);
             if matches!(lt, Ty::Cap { .. }) || matches!(rt, Ty::Cap { .. }) {
                 ctx.err("E101", *pos, "capabilities cannot be compared".into());
+            } else if matches!(lt, Ty::Func(..)) || matches!(rt, Ty::Func(..)) {
+                ctx.err("E101", *pos, "function values cannot be compared".into());
             } else if secret_inside(ctx, &lt, &mut HashSet::new()).is_some()
                 || secret_inside(ctx, &rt, &mut HashSet::new()).is_some()
             {
@@ -3374,6 +3848,9 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 match type_of(ctx, d, env) {
                     Some((Ty::Cap { .. }, _)) => {
                         ctx.err("E101", d.pos(), "a capability cannot be sent to a model as data".into())
+                    }
+                    Some((Ty::Func(..), _)) => {
+                        ctx.err("E101", d.pos(), "a function value cannot be sent to a model as data: it is code, not data".into())
                     }
                     Some((t, _)) => {
                         if let Some(bad) = secret_inside(ctx, &t, &mut HashSet::new()) {
@@ -3482,6 +3959,31 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             }
             Some((ret, ret_trusted))
         }
+        Expr::Lambda { params, ret, body, pos } => lambda_type(ctx, params, ret, body, *pos, env),
+        Expr::Closure { name, captures, pos } => closure_type(ctx, name, captures, *pos, env),
+        Expr::CallValue { callee, args, pos } => {
+            let callee_ty = type_of(ctx, callee, env);
+            let arg_tys: Vec<Option<Typed>> = args.iter().map(|a| type_of(ctx, a, env)).collect();
+            let (ty, _) = callee_ty?;
+            let Ty::Func(params, ret) = &ty else {
+                ctx.err("E101", *pos, format!("'{}' is a {ty}, not a function value, so it cannot be called", expr_text(callee)));
+                return None;
+            };
+            if params.len() != args.len() {
+                ctx.err("E101", *pos, format!("'{}' is a {ty}, which takes {} argument(s), but {} were given", expr_text(callee), params.len(), args.len()));
+                return Some((*ret.clone(), false));
+            }
+            for ((a, t), want) in args.iter().zip(arg_tys).zip(params) {
+                if let Some((t, _)) = t
+                    && let Err((code, msg)) = assignable(&t, want)
+                {
+                    ctx.err(code, a.pos(), format!("in call to '{}': {msg}", expr_text(callee)));
+                }
+            }
+            // What a function value gives is untrusted, like any function's result
+            // without `@trusted`.
+            Some((*ret.clone(), false))
+        }
         // `x.total()` on a record or enum `x`: a call of its type's method.
         Expr::Action { receiver, method, args, pos }
             if env.get(receiver).is_some_and(|b| !matches!(b.ty, Ty::Cap { .. })) =>
@@ -3548,12 +4050,14 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             }
             let kind = cap_path.as_deref().and_then(runtime_cap);
             let Some(kind) = kind else {
-                // An adapter's action: anything but secrets may be passed.
+                // An adapter's action: anything but secrets and function values may be passed.
                 for (a, t) in args.iter().zip(&arg_tys) {
                     if let Some((t, _)) = t
                         && let Some(bad) = secret_inside(ctx, t, &mut HashSet::new())
                     {
                         ctx.err("E101", a.pos(), format!("a {bad} can only be sent as an HTTP header, through net.http"));
+                    } else if let Some((Ty::Func(..), _)) = t {
+                        ctx.err("E101", a.pos(), "a function value cannot be passed to an action: it is code, not data".into());
                     }
                 }
                 return Some((named("Receipt"), false));

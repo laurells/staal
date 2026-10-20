@@ -1,0 +1,5 @@
+// expect: E003
+// message: takes or gives a capability
+fn make() -> fn(Int) -> cap building.lock.open {
+    return make()
+}

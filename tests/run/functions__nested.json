@@ -1,0 +1,1 @@
+{"entry": "nested", "inputs": {"n": 1}, "expect": {"result": 112}, "model": {"provider": "script", "responses": []}}

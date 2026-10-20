@@ -1,0 +1,12 @@
+// expect: E007
+// And it may never finish, which `try` does not catch.
+type Customer { name: Text, email: Text }
+
+fn run(f: fn(Text) -> Int, t: Text) -> Int {
+    return f(t)
+}
+
+fn greet(c: Customer @blind(email), check: fn(Text) -> Int) {
+    let n = try run(check, c.email)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

@@ -1,0 +1,10 @@
+// expect: E105
+// message: can finish without returning a value of type Int
+fn f() -> Int {
+    let g = fn(x: Int) -> Int {
+        if x > 0 {
+            return x
+        }
+    }
+    return g(1)
+}

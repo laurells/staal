@@ -1,0 +1,11 @@
+// expect: E007
+// `put` fails when a new key would overfill the map, so whether the model call
+// after it happens depends on the key: here, the email.
+type Customer { email: Text }
+type Order { customer: Customer }
+
+fn f(order: Order @blind(customer.email)) {
+    let seen: Map<Text, Int, 1> = ["ceo@example.com": 1]
+    let more = put(seen, order.customer.email, 2)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

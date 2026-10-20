@@ -1,0 +1,9 @@
+// expect: E101
+// message: 'double' is both a variable and a function here; rename the variable
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn f(double: fn(Int) -> Int) -> Int {
+    return double(3)
+}

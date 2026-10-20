@@ -215,6 +215,48 @@ fn the_generic_cases_really_run_native_code() {
 }
 
 #[test]
+fn the_function_value_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/functions.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    // Every one but those using `try` (`tried` and its function value): those written
+    // as `fn(...) { ... }` are functions of their own, named by the function they are in
+    // and where.
+    let want = [
+        "Line::price", "adder", "adder::fn@21:12", "apply", "at_once", "at_once::fn@172:12", "basics", "compose", "compose::fn@15:12", "copies",
+        "copies::fn@66:13", "count_where", "countdown", "divide_by", "divide_by::fn@106:13", "double", "fact", "factorial", "filters",
+        "filters::fn@93:28",
+        "filters::fn@95:31", "half", "lines", "lines::fn@86:25", "nested", "nested::fn@75:17", "nested::fn@75:17::fn@76:21", "priced", "texts",
+        "texts::fn@113:17", "texts::fn@116:17", "total_by", "total_of<Line>", "total_with<Line>", "total_with<Line>::fn@151:16", "twice<Int>",
+        "twice<Text>",
+    ];
+    assert_eq!(got, want);
+}
+
+#[test]
+fn function_values_never_cross_the_edge_of_a_run() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/functions.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let model = json!({"provider": "script", "responses": []});
+    let refused = [
+        (json!({"entry": "adder", "inputs": {"k": 1}, "model": model}), "run config: 'adder' returns a function value, which is not data a run can give back"),
+        (json!({"entry": "apply", "inputs": {"f": "double", "x": 1}, "model": model}), "inputs.f: a function value cannot be supplied as data"),
+        (json!({"entry": "adder::fn@21:12", "inputs": {"k": 1, "x": 2}, "model": model}), "run config: no function named 'adder::fn@21:12'"),
+    ];
+    for (cfg, want) in refused {
+        for engine in [Engine::Interpreter, Engine::Native] {
+            let j = tmp("edge").join("run.journal");
+            let _ = fs::remove_file(&j);
+            match run_config_engine(&prog, &src, &cfg, Durability::Create(&j), engine) {
+                Err(e) => assert_eq!(e, want),
+                Ok(_) => panic!("{cfg} ran"),
+            }
+        }
+    }
+}
+
+#[test]
 fn the_interface_cases_really_run_native_code() {
     let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/interfaces.staal")).unwrap();
     let prog = staalc::check_program(&src).unwrap();

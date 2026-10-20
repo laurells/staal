@@ -102,6 +102,12 @@ fn replace(e: &mut Expr, with: &mut dyn FnMut(&str) -> Option<Expr>) {
         *e = v;
         return;
     }
+    if let Expr::Lambda { body, .. } = e {
+        for s in body.iter_mut() {
+            stmt_with(s, with);
+        }
+        return;
+    }
     for c in e.children_mut() {
         replace(c, with);
     }
@@ -109,31 +115,35 @@ fn replace(e: &mut Expr, with: &mut dyn FnMut(&str) -> Option<Expr>) {
 
 fn stmt(s: &mut Stmt, values: &HashMap<String, Expr>) {
     let mut with = |n: &str| values.get(n).cloned();
+    stmt_with(s, &mut with);
+}
+
+fn stmt_with(s: &mut Stmt, with: &mut dyn FnMut(&str) -> Option<Expr>) {
     match s {
         Stmt::Let { value, .. } | Stmt::Set { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value), _) | Stmt::Fail(value, _) => {
-            replace(value, &mut with)
+            replace(value, with)
         }
         Stmt::If { cond, then, els, .. } => {
-            replace(cond, &mut with);
+            replace(cond, with);
             for s in then.iter_mut().chain(els.iter_mut()) {
-                stmt(s, values);
+                stmt_with(s, with);
             }
         }
         Stmt::For { list, body, .. } => {
-            replace(list, &mut with);
+            replace(list, with);
             for s in body {
-                stmt(s, values);
+                stmt_with(s, with);
             }
         }
         Stmt::Match { value, arms, .. } => {
-            replace(value, &mut with);
+            replace(value, with);
             for s in arms.iter_mut().flat_map(|a| a.body.iter_mut()) {
-                stmt(s, values);
+                stmt_with(s, with);
             }
         }
         Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => {
             for s in body {
-                stmt(s, values);
+                stmt_with(s, with);
             }
         }
         Stmt::Return(None, _) | Stmt::Break(_) | Stmt::Continue(_) => {}
@@ -153,6 +163,9 @@ pub(crate) fn form(e: &Expr, index: &HashMap<String, usize>, diags: &mut Vec<Dia
         Expr::Validate(..) | Expr::Parse { .. } => Some("a constant cannot hold or check outside data".to_string()),
         Expr::Try(..) => Some("`try` has nothing to catch in a constant".to_string()),
         Expr::Done { .. } => Some("a constant cannot be evidence of work".to_string()),
+        Expr::Lambda { .. } | Expr::Closure { .. } | Expr::CallValue { .. } => {
+            Some("a constant cannot be or call a function value".to_string())
+        }
         // They need a capacity only known from a type; write the literal instead.
         Expr::Builtin { f: Builtin::Put | Builtin::Add, .. } => Some("a constant cannot grow a map or set; write it as a literal".to_string()),
         _ => None,

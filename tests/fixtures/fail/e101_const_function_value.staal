@@ -1,0 +1,7 @@
+// expect: E101
+// message: a constant cannot be or call a function value
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+const F = double

@@ -1,0 +1,1 @@
+{"entry": "countdown", "inputs": {"n": 10}, "expect": {"result": 0}, "model": {"provider": "script", "responses": []}}

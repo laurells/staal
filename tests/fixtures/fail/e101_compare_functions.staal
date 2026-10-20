@@ -1,0 +1,10 @@
+// expect: E101
+// message: function values cannot be compared
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn f() -> Bool {
+    let g = double
+    return g == double
+}

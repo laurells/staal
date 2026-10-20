@@ -7,6 +7,15 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Function values, of type `fn(Int) -> Int`: a named function used as a value,
+  or `fn(x: Int) -> Int { return x + k }` written in place, which copies the
+  variables it reads. They are passed, returned, held in variables and called as
+  `f(x)` or `adder(3)(4)`, and generic functions take them. A function value only
+  computes (no action, model call or `done`, through any call), so no capability,
+  secret or proof ever enters one: reading a capability is E003. They are never
+  kept inside data, compared, encoded or sent. The compiler lifts each one written
+  in place into a function of its own; both engines run them, and native code
+  calls them natively.
 - Interfaces, `interface Priced { fn price(self) -> Money }`, as bounds on type
   parameters, `<T: Priced + Named>`. A type satisfies one by having its methods,
   with the same parameters, result, `fails` and trust, which the caller could call
@@ -78,6 +87,17 @@ the language or its file formats.
 - `examples/claude/triage.staal`, run against the live API: the injected request
   for a larger refund stays data, and the token count matched the usage reported.
 - `extra_root_certificates` for the Claude provider, as for `net.http`.
+
+### Changed
+- Any expression followed by arguments is a call of the function value it gives:
+  `f(1)(2)` is one call of what `f(1)` returns, where before the `(2)` was read as
+  a separate statement.
+- A variable that has the name of a built-in function (`add`, `get`, ...) cannot be
+  called: `add(x)` is the built-in, so with such a variable in scope it is E101.
+
+### Fixed
+- `put` and `add` were not counted as operations that can fail, so whether code
+  after a full map or set ran was not tracked as depending on their inputs (E007).
 
 ## 0.22.0 — 2026-10-19
 
