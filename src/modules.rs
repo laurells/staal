@@ -305,6 +305,9 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             if let Some(t) = &mut f.ret {
                 r.ty(t, f.pos);
             }
+            if let Some(t) = &mut f.fails {
+                r.ty(t, f.pos);
+            }
             r.block(&mut f.body);
         }
         for c in &mut m.prog.caps {

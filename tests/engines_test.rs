@@ -175,6 +175,16 @@ fn the_map_cases_really_run_native_code() {
     assert_eq!(got, want);
 }
 
+#[test]
+fn the_error_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/errors.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    // The rest use `try`, which runs on the interpreter; what they call is native.
+    assert_eq!(got, ["charge", "charge_twice", "overflow"]);
+}
+
 // ---------------------------------------------------------------------------------
 // Generated programs
 

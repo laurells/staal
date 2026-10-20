@@ -1,0 +1,9 @@
+// expect: E101
+// message: `fail` needs a Text message, found E; to fail with a value of type E, declare `fails E`
+enum E {
+    Bad,
+}
+
+fn f() {
+    fail(E.Bad)
+}

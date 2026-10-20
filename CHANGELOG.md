@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Typed errors: `fn f(...) -> T fails E` with E a record or enum, `fail(e)` with a
+  value of E, and `outcome.failure`, an `Optional<E>`, after `try f(...)`. A
+  declared failure that is not caught must be declared by the caller too, so
+  `.failure` always holds the declared type. Both engines carry them.
 - Maps, `Map<Text, Int, 100>`, and sets, `Set<Text, 100>`, bounded like lists,
   with Text or Int keys kept in order. `["a": 1]` and `[:]` build maps; `get`,
   `put`, `remove`, `keys`, `values`, `entries`, `add`, `items` and `to_set` work on

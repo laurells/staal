@@ -592,9 +592,16 @@ impl Parser {
         } else {
             (None, false)
         };
+        // `fails` is a word only here, so it stays usable as a name elsewhere.
+        let fails = if matches!(self.peek(), Tok::Ident(w) if w == "fails") {
+            self.bump();
+            Some(self.ty()?)
+        } else {
+            None
+        };
         let budget = if *self.peek() == Tok::Budget { Some(self.budget()?) } else { None };
         let body = self.block()?;
-        Ok(FnDecl { public, name, params, ret, ret_trusted, budget, body, pos })
+        Ok(FnDecl { public, name, params, ret, ret_trusted, budget, fails, body, pos })
     }
 
     fn ty(&mut self) -> PResult<Ty> {

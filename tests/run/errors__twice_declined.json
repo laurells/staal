@@ -1,0 +1,1 @@
+{"entry": "explain_twice", "inputs": {"c": {"amount": {"amount": "10.00", "currency": "NGN"}, "card": ""}}, "expect": {"result": "declined"}, "model": {"provider": "script", "responses": []}}

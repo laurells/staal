@@ -1,0 +1,13 @@
+// expect: E101
+// message: 'g' fails with E, which would leave 'f', which declares no `fails` type; catch it with `try`, or declare `fails E`
+enum E {
+    Bad,
+}
+
+fn g() -> Int fails E {
+    fail(E.Bad)
+}
+
+fn f() -> Int {
+    return g()
+}

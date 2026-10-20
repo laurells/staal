@@ -65,7 +65,8 @@ pub enum Value {
     Proposed { ty: Ty, raw: Json, lenient: bool },
     Receipt(Receipt),
     /// `held` is the successful result a `try` produced (hidden from programs).
-    Outcome { ok: bool, error: String, held: Option<Box<Value>> },
+    /// `raised` is what a callee declaring `fails E` raised, read as `.failure`.
+    Outcome { ok: bool, error: String, held: Option<Box<Value>>, raised: Option<Box<Value>> },
     Done(Vec<Value>),
     /// A handle into the capability broker.
     Cap(usize),

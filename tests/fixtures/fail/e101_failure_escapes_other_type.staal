@@ -1,0 +1,16 @@
+// expect: E101
+// message: 'g' fails with E, which would leave 'f', which declares `fails F`
+enum E {
+    Bad,
+}
+enum F {
+    Worse,
+}
+
+fn g() -> Int fails E {
+    fail(E.Bad)
+}
+
+fn f() -> Int fails F {
+    return g() + 1
+}

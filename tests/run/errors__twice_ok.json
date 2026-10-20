@@ -1,0 +1,1 @@
+{"entry": "explain_twice", "inputs": {"c": {"amount": {"amount": "10.00", "currency": "NGN"}, "card": "4111"}}, "expect": {"result": "charged twice"}, "model": {"provider": "script", "responses": []}}

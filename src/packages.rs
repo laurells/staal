@@ -580,6 +580,9 @@ pub fn check_authority(prog: &Program, module_of: &[Vec<String>], project: &Proj
         if let Some(t) = &f.ret {
             check_ty(t, f.pos, p, &mut diags);
         }
+        if let Some(t) = &f.fails {
+            check_ty(t, f.pos, p, &mut diags);
+        }
         check_block(&f.body, p, &mut diags);
     }
     for t in &prog.types {

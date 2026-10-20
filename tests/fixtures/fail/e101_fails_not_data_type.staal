@@ -1,0 +1,5 @@
+// expect: E101
+// message: 'f' declares `fails Text`; a function fails with a declared record or enum type
+fn f() fails Text {
+    fail("x")
+}

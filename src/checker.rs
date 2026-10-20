@@ -62,6 +62,8 @@ struct Sig {
     params: Vec<(Ty, bool, Vec<Vec<String>>)>,
     ret: Ty,
     ret_trusted: bool,
+    /// `fails E`: what its `fail(...)` raises.
+    fails: Option<Ty>,
 }
 
 /// While checking a capability action's body: the `@target` and `@amount` parameters
@@ -127,6 +129,9 @@ struct Binding {
     /// The position of the `let` that declared it; None for parameters and loop variables,
     /// which cannot be reassigned.
     decl: Option<Pos>,
+    /// For an `Outcome` from `try` around a call to a function declaring `fails E`: E,
+    /// so `.failure` is an `Optional<E>`.
+    raises: Option<Ty>,
 }
 
 /// A source a value can reveal. `path` is rooted at a parameter, e.g. ["order", "customer"].
@@ -380,6 +385,7 @@ pub fn check_with_bounds(prog: &Program) -> Found {
                 params: f.params.iter().map(|p| (p.ty.clone(), p.trusted, p.blind.clone())).collect(),
                 ret: f.ret.clone().unwrap_or_else(|| named("Unit")),
                 ret_trusted: f.ret_trusted,
+                fails: f.fails.clone(),
             },
         );
     }
@@ -1176,6 +1182,21 @@ fn check_caps(ctx: &mut Ctx, prog: &Program) {
 }
 
 fn check_fn(ctx: &mut Ctx, f: &FnDecl, prog: &Program) {
+    // `fails E`: E is data a caller reads back, so a declared record or enum.
+    if let Some(t) = &f.fails {
+        check_ty_known(ctx, t, f.pos);
+        let declared = matches!(t, Ty::Named(n) if n != "Outcome" && n != "Response" && (ctx.fields.contains_key(n) || ctx.enums.contains_key(n)));
+        let unknown = matches!(t, Ty::Named(n) if !ctx.known.contains(n));
+        if !declared && !unknown {
+            ctx.err("E101", f.pos, format!("'{}' declares `fails {t}`; a function fails with a declared record or enum type", f.name));
+        } else if let Some(bad) = secret_inside(ctx, t, &mut HashSet::new()).or_else(|| proof_or_authority(t)) {
+            ctx.err("E101", f.pos, format!("'{}' cannot fail with a {bad}: what a function fails with is data", f.name));
+        }
+        if f.name.contains(' ') {
+            ctx.err("E101", f.pos, "a capability's action cannot declare `fails`".into());
+        }
+    }
+    escaping_failures(ctx, f);
     let action = prog.caps.iter().find_map(|c| c.actions.iter().find(|a| a.fn_name == f.name).map(|a| (c, a)));
     if action.is_none() && f.params.iter().any(|p| p.target || p.amount) {
         ctx.err("E101", f.pos, format!("'{}': @target and @amount mark parameters of capability actions only", f.name));
@@ -1210,7 +1231,7 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl, prog: &Program) {
         }
         let reveals = vec![Src { path: vec![p.name.clone()], exact: true }];
         // A parameter's Outcome came from the caller: it is never this function's proof.
-        let b = Binding { ty: p.ty.clone(), trusted: p.trusted, reveals, proven_ok: false, holds_evidence: false, decl: None };
+        let b = Binding { ty: p.ty.clone(), trusted: p.trusted, reveals, proven_ok: false, holds_evidence: false, decl: None, raises: None };
         env.insert(p.name.clone(), b);
     }
     let ret = f.ret.clone().unwrap_or_else(|| named("Unit"));
@@ -1249,6 +1270,62 @@ fn check_fn(ctx: &mut Ctx, f: &FnDecl, prog: &Program) {
 
 fn f_params_contains(ctx: &Ctx, name: &str) -> bool {
     ctx.params.contains(name)
+}
+
+/// For an Outcome: the type the call it came from declares it `fails` with, if any.
+/// `try g(...)` where `g` declares `fails E`, or a variable holding such an Outcome.
+fn outcome_raises(ctx: &Ctx, value: &Expr, env: &Env) -> Option<Ty> {
+    match value {
+        Expr::Try(inner, _) => match inner.as_ref() {
+            Expr::Call { name, .. } => ctx.sigs.get(name.as_str())?.fails.clone(),
+            _ => None,
+        },
+        Expr::Var(v, _) => env.get(v)?.raises.clone(),
+        _ => None,
+    }
+}
+
+/// The calls in `body` whose declared failures would escape this function: calls to a
+/// function declaring `fails E` that are not directly under `try`. Each such failure
+/// leaves this function as it is, so this function must declare the same type.
+fn escaping_failures(ctx: &mut Ctx, f: &FnDecl) {
+    fn expr(ctx: &mut Ctx, f: &FnDecl, e: &Expr) {
+        if let Expr::Try(inner, _) = e
+            && let Expr::Call { args, .. } = inner.as_ref()
+        {
+            // Caught here; its arguments are not.
+            for a in args {
+                expr(ctx, f, a);
+            }
+            return;
+        }
+        if let Expr::Call { name, pos, .. } = e
+            && let Some(theirs) = ctx.sigs.get(name.as_str()).and_then(|s| s.fails.clone())
+            && f.fails.as_ref() != Some(&theirs)
+        {
+            let ours = match &f.fails {
+                Some(t) => format!("declares `fails {t}`"),
+                None => "declares no `fails` type".to_string(),
+            };
+            ctx.err(
+                "E101",
+                *pos,
+                format!("'{name}' fails with {theirs}, which would leave '{}', which {ours}; catch it with `try`, or declare `fails {theirs}`", f.name),
+            );
+        }
+        for c in e.children() {
+            expr(ctx, f, c);
+        }
+    }
+    let mut stack: Vec<&[Stmt]> = vec![&f.body];
+    while let Some(b) = stack.pop() {
+        for s in b {
+            for e in s.exprs() {
+                expr(ctx, f, e);
+            }
+            stack.extend(s.blocks());
+        }
+    }
 }
 
 /// Whether binding `value` yields an Outcome that holds proof on success: it is
@@ -1511,7 +1588,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     check_ty_known(ctx, decl, *pos);
                     let mut reveals = Vec::new();
                     add_srcs(&mut reveals, ctx.pc.clone());
-                    let b = Binding { ty: decl.clone(), trusted: true, reveals, proven_ok: false, holds_evidence: false, decl: Some(*pos) };
+                    let b = Binding { ty: decl.clone(), trusted: true, reveals, proven_ok: false, holds_evidence: false, decl: Some(*pos), raises: None };
                     hide_shadowed(&mut env, name);
                     env.insert(name.clone(), b);
                     continue;
@@ -1556,7 +1633,8 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 let proven_ok = matches!(value, Expr::Var(v, _) if env.get(v).is_some_and(|b| b.proven_ok));
                 let holds_evidence = outcome_holds_evidence(ctx, value, &env);
                 hide_shadowed(&mut env, name);
-                env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r, proven_ok, holds_evidence, decl: Some(*pos) });
+                let raises = outcome_raises(ctx, value, &env);
+                env.insert(name.clone(), Binding { ty: bound, trusted, reveals: r, proven_ok, holds_evidence, decl: Some(*pos), raises });
             }
             Stmt::Set { name, value, pos } => {
                 let Some(b) = env.get(name).cloned() else {
@@ -1670,6 +1748,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     proven_ok: false,
                     holds_evidence: false,
                     decl: None,
+                    raises: None,
                 };
                 body_env.insert(var.clone(), b);
                 // How many times the body runs reveals the list's length, so everything the
@@ -1770,10 +1849,25 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 }
             }
             Stmt::Fail(msg, pos) => {
-                if let Some((t, _)) = type_of(ctx, msg, &env)
-                    && t != named("Text")
-                {
-                    ctx.err("E101", *pos, format!("`fail` needs a Text message, found {t}"));
+                if let Some((t, _)) = type_of(ctx, msg, &env) {
+                    // An action's `fails` is refused where declared; its `fail` stays Text.
+                    match f.fails.as_ref().filter(|_| !f.name.contains(' ')) {
+                        Some(e) => {
+                            if let Err((code, m)) = assignable(&t, e) {
+                                ctx.err(code, *pos, format!("'{}' declares `fails {e}`, so `fail` needs a value of type {e}: {m}", f.name));
+                            }
+                        }
+                        None if t != named("Text") => {
+                            let hint = match &t {
+                                Ty::Named(n) if ctx.fields.contains_key(n) || ctx.enums.contains_key(n) => {
+                                    format!("; to fail with a value of type {t}, declare `fails {t}`")
+                                }
+                                _ => String::new(),
+                            };
+                            ctx.err("E101", *pos, format!("`fail` needs a Text message, found {t}{hint}"));
+                        }
+                        None => {}
+                    }
                 }
             }
             Stmt::Break(pos) => {
@@ -1861,7 +1955,7 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                             .collect();
                         add_srcs(&mut r, ctx.pc.clone());
                         hide_shadowed(&mut arm_env, to);
-                        let b = Binding { ty: fty, trusted: vtrusted, reveals: r, proven_ok: false, holds_evidence: false, decl: None };
+                        let b = Binding { ty: fty, trusted: vtrusted, reveals: r, proven_ok: false, holds_evidence: false, decl: None, raises: None };
                         arm_env.insert(to.clone(), b);
                     }
                     outs.push(check_block(ctx, f, ret, &arm.body, arm_env, in_loop));
@@ -2729,6 +2823,18 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     );
                     None
                 }
+                // What the call `try` caught raised, when the callee declares `fails E`.
+                Ty::Named(tname) if tname == "Outcome" && field == "failure" => match outcome_raises(ctx, base, env) {
+                    Some(e) => Some((Ty::Optional(Box::new(e)), trusted)),
+                    None => {
+                        ctx.err(
+                            "E104",
+                            *pos,
+                            "'.failure' is only on the Outcome of `try` around a call to a function that declares `fails`".into(),
+                        );
+                        None
+                    }
+                },
                 Ty::Named(tname) if ctx.enums.contains_key(tname) => {
                     ctx.err(
                         "E104",

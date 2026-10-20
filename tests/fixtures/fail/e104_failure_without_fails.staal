@@ -1,0 +1,10 @@
+// expect: E104
+// message: '.failure' is only on the Outcome of `try` around a call to a function that declares `fails`
+fn g() -> Int {
+    fail("no")
+}
+
+fn f() -> Bool {
+    let r = try g()
+    return r.failure == none
+}

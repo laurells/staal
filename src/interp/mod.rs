@@ -95,10 +95,28 @@ impl fmt::Display for FailKind {
 pub struct Failure {
     pub kind: FailKind,
     pub message: String,
+    /// What `fail(e)` raised in a function declaring `fails E`: the E, which a `try`
+    /// keeps for `outcome.failure`. None for every other failure.
+    pub raised: Option<Box<Value>>,
+}
+
+/// The failure `fail(x)` makes: an `action` failure, with the message itself for
+/// text, or for a value of a declared `fails` type, that value as JSON and the value.
+pub(crate) fn raise(v: Value) -> Failure {
+    match v {
+        Value::Text(m) => Failure { raised: None, kind: FailKind::Action, message: m },
+        v => {
+            let message = match to_json(&v, false) {
+                Ok(j) => j.to_string(),
+                Err(e) => e,
+            };
+            Failure { kind: FailKind::Action, message, raised: Some(Box::new(v)) }
+        }
+    }
 }
 
 fn fail<T>(kind: FailKind, message: impl Into<String>) -> Result<T, Failure> {
-    Err(Failure { kind, message: message.into() })
+    Err(Failure { raised: None, kind, message: message.into() })
 }
 
 fn internal<T>(message: impl Into<String>) -> Result<T, Failure> {
@@ -1120,10 +1138,10 @@ impl<'p> Interp<'p> {
                 frame.assign(name, v)?;
                 Ok(Flow::Next)
             }
-            Stmt::Fail(msg, _) => match self.eval(frame, msg)? {
-                Value::Text(m) => fail(FailKind::Action, m),
-                _ => internal("`fail` with a message that is not Text"),
-            },
+            Stmt::Fail(msg, _) => {
+                let v = self.eval(frame, msg)?;
+                Err(raise(v))
+            }
             Stmt::Expr(e) => {
                 self.eval(frame, e)?;
                 Ok(Flow::Next)
@@ -1325,9 +1343,10 @@ impl<'p> Interp<'p> {
                     None => internal(format!("no field '{field}'")),
                 },
                 Value::Tuple(items) => tuple_item(items, field),
-                Value::Outcome { ok, error, .. } => match field.as_str() {
+                Value::Outcome { ok, error, raised, .. } => match field.as_str() {
                     "ok" => Ok(Value::Bool(ok)),
                     "error" => Ok(Value::Text(error)),
+                    "failure" => Ok(Value::Opt(raised)),
                     _ => internal(format!("Outcome has no field '{field}'")),
                 },
                 _ => internal(format!("cannot read '.{field}' of this value")),
@@ -1412,12 +1431,12 @@ impl<'p> Interp<'p> {
                 _ => internal("`validate` applied to a value that is not Proposed"),
             },
             Expr::Try(inner, _) => match self.eval(frame, inner) {
-                Ok(v) => Ok(Value::Outcome { ok: true, error: String::new(), held: Some(Box::new(v)) }),
+                Ok(v) => Ok(Value::Outcome { ok: true, error: String::new(), held: Some(Box::new(v)), raised: None }),
                 Err(f) if !f.kind.catchable() => Err(f),
                 Err(f) => {
                     let error = format!("{}: {}", f.kind, f.message);
                     self.emit("caught", json!({ "failure": f.kind.to_string(), "message": f.message }));
-                    Ok(Value::Outcome { ok: false, error, held: None })
+                    Ok(Value::Outcome { ok: false, error, held: None, raised: f.raised })
                 }
             },
             Expr::Done { evidence, .. } => {
@@ -1986,15 +2005,15 @@ pub(crate) fn list_index(items: &[Value], i: i64) -> Result<Value, Failure> {
 }
 
 pub(crate) fn step_limit(max_steps: u64) -> Failure {
-    Failure { kind: FailKind::StepLimit, message: format!("more than {max_steps} steps executed") }
+    Failure { raised: None, kind: FailKind::StepLimit, message: format!("more than {max_steps} steps executed") }
 }
 
 pub(crate) fn depth_limit(max_depth: u64) -> Failure {
-    Failure { kind: FailKind::DepthLimit, message: format!("calls nested more than {max_depth} deep") }
+    Failure { raised: None, kind: FailKind::DepthLimit, message: format!("calls nested more than {max_depth} deep") }
 }
 
 pub(crate) fn neg(n: i64) -> Result<i64, Failure> {
-    n.checked_neg().ok_or_else(|| Failure { kind: FailKind::Value, message: format!("integer overflow: -({n})") })
+    n.checked_neg().ok_or_else(|| Failure { raised: None, kind: FailKind::Value, message: format!("integer overflow: -({n})") })
 }
 
 /// The failure `arith` gives for Int operands that fail: native code calls this only
@@ -2003,7 +2022,7 @@ pub(crate) fn neg(n: i64) -> Result<i64, Failure> {
 pub(crate) fn arith_failure(op: ArithOp, a: i64, b: i64) -> Failure {
     match arith(op, Value::Int(a), Value::Int(b)) {
         Err(f) => f,
-        Ok(_) => Failure { kind: FailKind::Internal, message: format!("native code reported {a} {op} {b} as failing; it does not") },
+        Ok(_) => Failure { raised: None, kind: FailKind::Internal, message: format!("native code reported {a} {op} {b} as failing; it does not") },
     }
 }
 
@@ -2116,7 +2135,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
                 HeaderValue::Text(t) => http::check_header(name, t),
                 HeaderValue::Secret(s) => http::check_header(name, &s.value),
             };
-            check.map_err(|e| Failure { kind: FailKind::Value, message: e })?;
+            check.map_err(|e| Failure { raised: None, kind: FailKind::Value, message: e })?;
             Ok(Value::Header { name: name.clone(), value })
         }
         (Builtin::FillSecret, [Value::Text(template), Value::Secret(key)]) => {
@@ -2200,7 +2219,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         (Builtin::MinorUnits, [Value::Money(m)]) => Ok(Value::Int(m.minor)),
         (Builtin::Currency, [Value::Money(m)]) => Ok(Value::Text(m.currency.code.to_string())),
         (Builtin::Json, [v]) => {
-            let text = to_json(v, true).map_err(|e| Failure { kind: FailKind::Internal, message: e })?.to_string();
+            let text = to_json(v, true).map_err(|e| Failure { raised: None, kind: FailKind::Internal, message: e })?.to_string();
             if text.len() > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("json would be longer than {MAX_TEXT_BYTES} bytes"));
             }
@@ -2403,7 +2422,7 @@ fn in_slots(vals: Vec<Value>, slots: &[usize]) -> Result<Vec<Value>, Failure> {
             _ => return internal("a call's arguments do not fit its parameters"),
         }
     }
-    out.into_iter().map(|v| v.ok_or_else(|| Failure { kind: FailKind::Internal, message: "a call's argument is missing".into() })).collect()
+    out.into_iter().map(|v| v.ok_or_else(|| Failure { raised: None, kind: FailKind::Internal, message: "a call's argument is missing".into() })).collect()
 }
 
 fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
@@ -2467,7 +2486,7 @@ mod tests {
     #[test]
     fn hollow_evidence_holds_no_receipt() {
         let receipt = Value::Receipt(Receipt { id: "r1".into(), capability: "email.send".into(), method: "send".into() });
-        let ok = |held: Value| Value::Outcome { ok: true, error: String::new(), held: Some(Box::new(held)) };
+        let ok = |held: Value| Value::Outcome { ok: true, error: String::new(), held: Some(Box::new(held)), raised: None };
         // Real proof: a receipt, directly or through an outcome or a nested Done.
         assert_eq!(receipt_count(&receipt), 1);
         assert_eq!(receipt_count(&ok(receipt.clone())), 1);
@@ -2475,7 +2494,7 @@ mod tests {
         // Not proof: an outcome of a pure call, a failed outcome, an empty Done.
         assert_eq!(receipt_count(&ok(Value::Int(1))), 0);
         assert_eq!(receipt_count(&ok(Value::Unit)), 0);
-        assert_eq!(receipt_count(&Value::Outcome { ok: false, error: "x".into(), held: None }), 0);
+        assert_eq!(receipt_count(&Value::Outcome { ok: false, error: "x".into(), held: None, raised: None }), 0);
         assert_eq!(receipt_count(&Value::Done(vec![])), 0);
     }
 

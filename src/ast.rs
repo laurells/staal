@@ -243,6 +243,9 @@ pub struct FnDecl {
     /// `-> T @trusted` — every returned value must be trusted.
     pub ret_trusted: bool,
     pub budget: Option<Budget>,
+    /// `fails E`: the record or enum type its `fail(...)` raises, which a caller's
+    /// `try` can read back as `outcome.failure`.
+    pub fails: Option<Ty>,
     pub body: Vec<Stmt>,
     pub pos: Pos,
 }

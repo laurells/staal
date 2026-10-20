@@ -1,0 +1,26 @@
+// Typed errors: declared, raised, propagated under the same type, caught and read.
+type Problem { code: Int, detail: Text }
+
+fn parse_amount(text: Text) -> Int fails Problem {
+    if text == "" {
+        fail(Problem { code: 1, detail: "empty" })
+    }
+    return len(text)
+}
+
+fn total(a: Text, b: Text) -> Int fails Problem {
+    return parse_amount(a) + parse_amount(b)
+}
+
+fn safe(a: Text) -> Int {
+    let r = try parse_amount(a)
+    let copy = r
+    match copy.failure {
+        some(p) => {
+            return 0 - p.code
+        }
+        none => {
+            return 1
+        }
+    }
+}

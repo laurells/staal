@@ -67,6 +67,9 @@ pub fn expand(prog: &mut Program) -> Vec<Diagnostic> {
         if let Some(t) = &mut f.ret {
             x.ty(t);
         }
+        if let Some(t) = &mut f.fails {
+            x.ty(t);
+        }
         x.block(&mut f.body);
     }
     diags

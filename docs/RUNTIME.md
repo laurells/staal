@@ -532,6 +532,18 @@ enclosing `try`. `try e` evaluates `e`: on success it yields
 `Outcome { ok: false, error: "<kind>: <message>" }`. If no `try` catches it,
 the run ends with that failure.
 
+**Typed errors.** `fn charge(c: Charge) -> Money fails ChargeError` declares the
+record or enum type its failures carry. In such a function `fail(e)` takes a value
+of that type (in any other function, Text); it is an `action` failure whose message
+is the value as JSON, and which carries the value. For `r = try charge(c)`,
+`r.failure` is an `Optional<ChargeError>`: the value `charge` failed with, or `none`
+when it succeeded or failed some other way (an overflow, a refused action). A call
+to a function declaring `fails E` that is not under `try` lets its failure leave the
+caller unchanged, so the caller must declare the same `fails E` (E101 otherwise):
+what `.failure` holds is always of the type the callee declares. A capability's
+action cannot declare `fails`. `.failure`, like the rest of an Outcome, is
+untrusted. Both engines raise and carry typed errors.
+
 `step_limit`, `depth_limit`, `internal`, `journal` and `in_doubt` are **fatal**: `try` never catches
 them, and they always end the run. The deployment limits are safeguards, not
 part of the program's meaning, so a program must not be able to observe them

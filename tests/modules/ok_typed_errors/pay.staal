@@ -1,0 +1,11 @@
+pub enum PayError {
+    Declined,
+    Limit { over: Int },
+}
+
+pub fn pay(n: Int) -> Int fails PayError {
+    if n > 10 {
+        fail(PayError.Limit { over: n - 10 })
+    }
+    return n
+}

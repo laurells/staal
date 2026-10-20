@@ -1,0 +1,1 @@
+{"entry": "explain", "inputs": {"c": {"amount": {"amount": "150.00", "currency": "NGN"}, "card": "4111"}}, "expect": {"result": "over by 50.00 NGN"}, "model": {"provider": "script", "responses": []}}

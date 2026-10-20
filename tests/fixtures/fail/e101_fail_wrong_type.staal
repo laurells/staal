@@ -1,0 +1,9 @@
+// expect: E101
+// message: 'f' declares `fails E`, so `fail` needs a value of type E: expected E, found Text
+enum E {
+    Bad,
+}
+
+fn f() fails E {
+    fail("text")
+}

@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 39 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 418 invalid ones
+rejecting the programs it should. 40 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 427 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -391,6 +391,30 @@ the operation was given (an error message can quote the address it failed on).
 
 `try` catches failure, not a computation that never ends: a call to a function
 containing `loop` or recursion can still stall, under `try` or not.
+
+### Typed errors
+
+    enum ChargeError {
+        Declined { reason: Text },
+        Limit { over: Money },
+    }
+
+    fn charge(c: Charge) -> Money fails ChargeError {
+        if c.amount > LIMIT { fail(ChargeError.Limit { over: c.amount - LIMIT }) }
+        ...
+    }
+
+    let r = try charge(c)
+    match r.failure {
+        some(e) => { match e { Declined { reason } => { ... } Limit { over } => { ... } } }
+        none => { ... }    // succeeded, or failed some other way: r.error says how
+    }
+
+A function can declare what it fails with: a record or enum, so callers can decide
+by kind instead of parsing a message. `fail(...)` in it must give that type. A
+failure that is not caught leaves every caller as it is, so a function that calls
+`charge` without `try` must declare `fails ChargeError` too; the compiler checks
+this, and `.failure` is therefore always of the declared type.
 
 ## Claiming completion: `Done` and evidence
 

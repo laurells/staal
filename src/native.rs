@@ -112,7 +112,7 @@ impl Ctx {
 }
 
 fn bad_handle(h: i64) -> Failure {
-    Failure { kind: FailKind::Internal, message: format!("native code used an invalid value handle {h}") }
+    Failure { raised: None, kind: FailKind::Internal, message: format!("native code used an invalid value handle {h}") }
 }
 
 const OFF_STEPS: i32 = 0;
@@ -180,7 +180,7 @@ fn arith_op(code: i64) -> Option<ArithOp> {
 }
 
 fn internal(message: impl Into<String>) -> Failure {
-    Failure { kind: FailKind::Internal, message: message.into() }
+    Failure { raised: None, kind: FailKind::Internal, message: message.into() }
 }
 
 // ---------------------------------------------------------------------------------
@@ -596,7 +596,7 @@ extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
 extern "C" fn rt_fail(c: *mut Ctx, h: i64) {
     guard(c, |c| {
         Err(match c.take(h)? {
-            Value::Text(m) => Failure { kind: FailKind::Action, message: m },
+            v @ (Value::Text(_) | Value::Enum { .. } | Value::Record { .. }) => crate::interp::raise(v),
             _ => internal("`fail` with a message that is not Text"),
         })
     });
@@ -864,6 +864,8 @@ struct Check<'e, 'p> {
     env: &'e Env<'p>,
     scopes: Vec<HashMap<String, Ty>>,
     ret: Ty,
+    /// `fails E`: what `fail(...)` may raise besides Text.
+    fails: Option<Ty>,
 }
 
 impl Check<'_, '_> {
@@ -911,7 +913,7 @@ impl Check<'_, '_> {
             },
             Stmt::Expr(e) => self.ty(e).is_some(),
             Stmt::Return(Some(e), _) => self.ty(e).is_some_and(|t| t.widens(&self.ret)),
-            Stmt::Fail(e, _) => self.ty(e).is_some_and(|t| is(&t, "Text")),
+            Stmt::Fail(e, _) => self.ty(e).is_some_and(|t| if let Some(f) = &self.fails { t.widens(f) } else { is(&t, "Text") }),
             Stmt::If { cond, then, els, .. } => self.ty(cond).is_some_and(|t| is(&t, "Bool")) && self.block(then) && self.block(els),
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => self.block(body),
             Stmt::For { var, list, body, .. } => {
@@ -979,7 +981,7 @@ pub fn eligible(prog: &Program) -> HashSet<String> {
         .filter(|f| {
             let Some((params, ret)) = env.sigs.get(f.name.as_str()) else { return false };
             let first = f.params.iter().zip(params).map(|(p, t)| (p.name.clone(), t.clone())).collect();
-            Check { env: &env, scopes: vec![first], ret: ret.clone() }.block(&f.body)
+            Check { env: &env, scopes: vec![first], ret: ret.clone(), fails: f.fails.clone() }.block(&f.body)
         })
         .map(|f| f.name.clone())
         .collect();

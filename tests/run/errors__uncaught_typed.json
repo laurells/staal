@@ -1,0 +1,1 @@
+{"entry": "charge", "inputs": {"c": {"amount": {"amount": "10.00", "currency": "NGN"}, "card": ""}}, "expect": {"failure": "action", "message_contains": "{\"kind\":\"Declined\",\"reason\":\"no card\"}"}, "model": {"provider": "script", "responses": []}}

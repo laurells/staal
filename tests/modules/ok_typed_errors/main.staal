@@ -1,0 +1,30 @@
+// expect: ok
+// A typed error crosses modules: declared there, read here.
+import pay as p { PayError }
+
+fn try_pay(n: Int) -> Int {
+    let r = try p.pay(n)
+    match r.failure {
+        some(e) => {
+            match e {
+                Limit { over } => {
+                    return over
+                }
+                _ => {
+                    return 0
+                }
+            }
+        }
+        none => {
+            return n
+        }
+    }
+}
+
+fn pass_on(n: Int) -> Int fails p.PayError {
+    return p.pay(n)
+}
+
+fn same_type(n: Int) -> Int fails PayError {
+    return p.pay(n)
+}

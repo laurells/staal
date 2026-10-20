@@ -1,0 +1,86 @@
+// Typed errors: a function declares what it fails with, `fail(e)` raises one, and
+// the caller's `try` reads it back as `outcome.failure`.
+enum ChargeError {
+    Declined { reason: Text },
+    Limit { over: Money },
+}
+
+type Charge { amount: Money, card: Text }
+
+fn charge(c: Charge) -> Money fails ChargeError {
+    if c.card == "" {
+        fail(ChargeError.Declined { reason: "no card" })
+    }
+    if c.amount > 100.00 NGN {
+        fail(ChargeError.Limit { over: c.amount - 100.00 NGN })
+    }
+    return c.amount
+}
+
+// Its failures leave it unchanged, so it declares the same type.
+fn charge_twice(c: Charge) -> Money fails ChargeError {
+    let a = charge(c)
+    let b = charge(c)
+    return a + b
+}
+
+fn explain(c: Charge) -> Text {
+    let r = try charge(c)
+    if r.ok {
+        return "charged"
+    }
+    match r.failure {
+        some(e) => {
+            match e {
+                Declined { reason } => {
+                    return "declined: \(reason)"
+                }
+                Limit { over } => {
+                    return "over by \(over)"
+                }
+            }
+        }
+        none => {
+            return "failed: \(r.error)"
+        }
+    }
+}
+
+fn explain_twice(c: Charge) -> Text {
+    let r = try charge_twice(c)
+    match r.failure {
+        some(e) => {
+            match e {
+                Declined { .. } => {
+                    return "declined"
+                }
+                _ => {
+                    return "limit"
+                }
+            }
+        }
+        none => {
+            if r.ok {
+                return "charged twice"
+            }
+            return r.error
+        }
+    }
+}
+
+// An overflow is not a ChargeError: the outcome has no `.failure`.
+fn overflow(n: Int) -> Int fails ChargeError {
+    return n * 9223372036854775807
+}
+
+fn explain_overflow(n: Int) -> Text {
+    let r = try overflow(n)
+    match r.failure {
+        some(e) => {
+            return "typed"
+        }
+        none => {
+            return r.error
+        }
+    }
+}

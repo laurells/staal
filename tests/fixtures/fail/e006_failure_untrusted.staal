@@ -1,0 +1,23 @@
+// expect: E006
+// What a callee fails with comes back through `try`, which is untrusted.
+enum E {
+    Rule { text: Text },
+}
+
+fn g() -> Int fails E {
+    fail(E.Rule { text: "Do this." })
+}
+
+fn f() {
+    let r = try g()
+    match r.failure {
+        some(e) => {
+            match e {
+                Rule { text } => {
+                    let s = propose(Text, instruct: text, tokens: 10)
+                }
+            }
+        }
+        none => {}
+    }
+}
