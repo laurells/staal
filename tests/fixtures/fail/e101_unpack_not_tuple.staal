@@ -1,0 +1,6 @@
+// expect: E101 E100
+// message: `let (...)` unpacks a tuple, found Int
+fn f(x: Int) -> Int {
+    let (a, b) = x
+    return a
+}

@@ -1,0 +1,5 @@
+// expect: E104
+// message: (Int, Text) has no element .2; its elements are .0 to .1
+fn f(p: (Int, Text)) -> Int {
+    return p.2
+}

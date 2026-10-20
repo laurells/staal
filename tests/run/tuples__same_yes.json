@@ -1,0 +1,1 @@
+{"entry": "same", "inputs": {"a": [1, "x"], "b": [1, "x"]}, "expect": {"result": true}, "model": {"provider": "script", "responses": []}}

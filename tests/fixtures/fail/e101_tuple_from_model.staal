@@ -1,0 +1,6 @@
+// expect: E101
+// message: a model cannot be asked for (Text, Int): it holds a tuple
+fn f() -> Bool budget(calls: 1, tokens: 100) {
+    let p = validate propose((Text, Int), instruct: "Guess.", tokens: 100)
+    return p.1 > 0
+}

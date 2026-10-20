@@ -1,0 +1,6 @@
+// expect: E006
+// A tuple built from untrusted text is untrusted, and so are its elements.
+fn f(ticket: Text) {
+    let p = (ticket, 1)
+    let s = propose(Text, instruct: p.0, tokens: 10)
+}

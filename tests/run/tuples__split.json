@@ -1,0 +1,1 @@
+{"entry": "split", "inputs": {"total": {"amount": "10.00", "currency": "NGN"}, "people": 2}, "expect": {"result": [{"amount": "10.00", "currency": "NGN"}, {"amount": "0.00", "currency": "NGN"}]}, "model": {"provider": "script", "responses": []}}

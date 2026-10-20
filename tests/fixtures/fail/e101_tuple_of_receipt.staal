@@ -1,0 +1,3 @@
+// expect: E101
+// message: a tuple cannot hold a Receipt
+fn f(p: (Receipt, Int)) {}

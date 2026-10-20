@@ -186,6 +186,8 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
         | Expr::Done { evidence: args, .. }
         | Expr::Builtin { args, .. }
         | Expr::List(args, _) => inexact(args.iter().flat_map(|a| reveals(a, env)).collect()),
+        // Conservative: every element of a tuple literal counts as revealing all of them.
+        Expr::Tuple(items, _) => inexact(items.iter().flat_map(|a| reveals(a, env)).collect()),
         // Conservative: every field of a record literal counts as revealing all of them.
         Expr::Record { fields, .. } | Expr::Variant { fields, .. } => {
             inexact(fields.iter().flat_map(|(_, v)| reveals(v, env)).collect())
@@ -224,6 +226,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Record { ty, .. } => format!("{ty} {{...}}"),
         Expr::Variant { ty, variant, .. } => format!("{ty}.{variant}"),
         Expr::List(..) => "[...]".into(),
+        Expr::Tuple(..) => "(...)".into(),
         Expr::Index { base, .. } => format!("{}[...]", expr_text(base)),
         Expr::SomeOf(inner, _) => format!("some({})", expr_text(inner)),
         Expr::NoneLit(_) => "none".into(),
@@ -542,6 +545,7 @@ fn secret_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<&'sta
             inner_types(ctx, n)?.iter().find_map(|fty| secret_inside(ctx, fty, seen))
         }
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => secret_inside(ctx, inner, seen),
+        Ty::Tuple(items) => items.iter().find_map(|t| secret_inside(ctx, t, seen)),
         Ty::Cap { .. } => None,
     }
 }
@@ -556,11 +560,22 @@ fn inner_types(ctx: &Ctx, n: &str) -> Option<Vec<Ty>> {
     Some(vs.iter().flat_map(|(_, fs)| fs.iter().map(|(_, t)| t.clone())).collect())
 }
 
+/// Whether a tuple appears anywhere inside `ty`, following records and enums.
+fn tuple_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> bool {
+    match ty {
+        Ty::Tuple(_) => true,
+        Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => tuple_inside(ctx, inner, seen),
+        Ty::Named(n) => seen.insert(n.clone()) && inner_types(ctx, n).is_some_and(|ts| ts.iter().any(|t| tuple_inside(ctx, t, seen))),
+        Ty::Cap { .. } => false,
+    }
+}
+
 /// Whether a capability appears anywhere inside `ty`.
 fn cap_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> bool {
     match ty {
         Ty::Cap { .. } => true,
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => cap_inside(ctx, inner, seen),
+        Ty::Tuple(items) => items.iter().any(|t| cap_inside(ctx, t, seen)),
         Ty::Named(n) => {
             seen.insert(n.clone())
                 && inner_types(ctx, n).is_some_and(|ts| ts.iter().any(|t| cap_inside(ctx, t, seen)))
@@ -789,6 +804,16 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
             }
             check_ty_known(ctx, inner, pos);
         }
+        Ty::Tuple(items) => {
+            for t in items {
+                if let Some(bad) = proof_or_authority(t) {
+                    ctx.err("E101", pos, format!("a tuple cannot hold a {bad}"));
+                } else if matches!(t, Ty::Named(n) if n == "Secret" || n == "Header") {
+                    ctx.err("E101", pos, format!("a tuple cannot hold a {t}: secrets never travel inside data"));
+                }
+                check_ty_known(ctx, t, pos);
+            }
+        }
     }
 }
 
@@ -802,6 +827,7 @@ fn proof_or_authority(ty: &Ty) -> Option<&'static str> {
         Ty::Named(n) if n == "Done" => Some("Done"),
         Ty::Named(_) => None,
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => proof_or_authority(inner),
+        Ty::Tuple(items) => items.iter().find_map(proof_or_authority),
     }
 }
 
@@ -1265,6 +1291,10 @@ fn field_path_exists(ctx: &Ctx, ty: &Ty, rel: &[String]) -> bool {
     if let Ty::Optional(inner) = ty {
         return field_path_exists(ctx, inner, rel);
     }
+    // In a tuple, the names are positions: `pair.0`.
+    if let Ty::Tuple(items) = ty {
+        return name.parse::<usize>().ok().and_then(|i| items.get(i)).is_some_and(|t| field_path_exists(ctx, t, rest));
+    }
     let Ty::Named(t) = ty else { return false };
     if let Some(fields) = ctx.fields.get(t) {
         return fields.iter().any(|(n, fty)| n == name && field_path_exists(ctx, fty, rest));
@@ -1321,12 +1351,27 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                     env.insert(name.clone(), b);
                     continue;
                 }
+                // `let (a, b) = x`: the parser holds x in a variable named `(tuple N)`
+                // and reads its elements. When x is not a tuple that was reported once,
+                // at the holder; its elements are not reported again.
+                if let Expr::Field { base, .. } = value
+                    && let Expr::Var(h, _) = base.as_ref()
+                    && h.starts_with("(tuple ")
+                    && !env.contains_key(h)
+                {
+                    continue;
+                }
                 let Some((vty, trusted)) = type_of(ctx, value, &env) else { continue };
+                if name.starts_with("(tuple ") && !matches!(vty, Ty::Tuple(_)) {
+                    ctx.err("E101", value.pos(), format!("`let (...)` unpacks a tuple, found {vty}"));
+                    continue;
+                }
                 let bound = match ty {
                     Some(decl) => {
                         check_ty_known(ctx, decl, *pos);
                         if let Err((code, msg)) = assignable(&vty, decl) {
-                            ctx.err(code, *pos, format!("in `let {name}`: {msg}"));
+                            let shown = if name.starts_with("(tuple ") { "(...)" } else { name.as_str() };
+                            ctx.err(code, *pos, format!("in `let {shown}`: {msg}"));
                         }
                         decl.clone()
                     }
@@ -1947,6 +1992,7 @@ fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option
     match ty {
         Ty::Cap { .. } => Some("capability".into()),
         Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => runtime_only_inside(ctx, inner, seen),
+        Ty::Tuple(items) => items.iter().find_map(|t| runtime_only_inside(ctx, t, seen)),
         Ty::Named(n) if n == "Receipt" || n == "Outcome" || n == "Done" => Some(n.clone()),
         Ty::Named(n) => {
             if !seen.insert(n.clone()) {
@@ -2342,6 +2388,22 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             Some((named(ty), trusted))
         }
         Expr::NoneLit(_) => Some((Ty::none(), true)),
+        Expr::Tuple(items, pos) => {
+            let tys: Vec<Option<(Ty, bool)>> = items.iter().map(|i| type_of(ctx, i, env)).collect();
+            let tys: Vec<(Ty, bool)> = tys.into_iter().collect::<Option<Vec<_>>>()?;
+            for (t, _) in &tys {
+                if let Some(bad) = proof_or_authority(t) {
+                    ctx.err("E101", *pos, format!("a tuple cannot hold a {bad}"));
+                    return None;
+                }
+                if let Some(bad) = secret_inside(ctx, t, &mut HashSet::new()) {
+                    ctx.err("E101", *pos, format!("a tuple cannot hold a {bad}: secrets never travel inside data"));
+                    return None;
+                }
+            }
+            let trusted = tys.iter().all(|(_, tr)| *tr);
+            Some((Ty::Tuple(tys.into_iter().map(|(t, _)| t).collect()), trusted))
+        }
         Expr::SomeOf(inner, pos) => {
             let (t, trusted) = type_of(ctx, inner, env)?;
             let bad = match &t {
@@ -2463,6 +2525,14 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     );
                     None
                 }
+                Ty::Tuple(items) => match field.parse::<usize>().ok().and_then(|i| items.get(i)) {
+                    Some(t) => Some((t.clone(), trusted)),
+                    None => {
+                        let last = items.len() - 1;
+                        ctx.err("E104", *pos, format!("{bty} has no element .{field}; its elements are .0 to .{last}"));
+                        None
+                    }
+                },
             }
         }
         Expr::Cmp { op, left, right, pos } => {
@@ -2499,6 +2569,13 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                         "a model cannot produce a {bad}: only the runtime creates receipts, outcomes and \
                          Done values, so model output of type {ty} could forge one"
                     ),
+                );
+            }
+            if tuple_inside(ctx, ty, &mut HashSet::new()) {
+                ctx.err(
+                    "E101",
+                    *pos,
+                    format!("a model cannot be asked for {ty}: it holds a tuple, whose positions a model's output schema cannot fix; use a record"),
                 );
             }
             check_blind(ctx, instruct.as_deref(), data, blind_to, env, *pos);

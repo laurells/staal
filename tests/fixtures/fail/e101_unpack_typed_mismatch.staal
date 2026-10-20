@@ -1,0 +1,6 @@
+// expect: E101
+// message: in `let (...)`: expected (Int, Int), found (Text, Int)
+fn f() -> Int {
+    let (a, b): (Int, Int) = ("x", 1)
+    return b
+}

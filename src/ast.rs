@@ -13,6 +13,8 @@ pub enum Ty {
     List(Box<Ty>, u64),
     /// `Optional<T>`: a T, or nothing (`none`).
     Optional(Box<Ty>),
+    /// `(A, B, ...)`: a fixed number of values, of these types, in this order.
+    Tuple(Vec<Ty>),
     /// A capability, e.g. `cap payments.refund(max: 500 USD)`, with its limits.
     Cap { path: Vec<String>, limits: CapLimits },
 }
@@ -34,6 +36,7 @@ impl Ty {
         match self {
             Ty::Named(n) => n.is_empty(),
             Ty::Proposed(t) | Ty::List(t, _) | Ty::Optional(t) => t.has_unknown(),
+            Ty::Tuple(ts) => ts.iter().any(Ty::has_unknown),
             Ty::Cap { .. } => false,
         }
     }
@@ -47,6 +50,9 @@ impl Ty {
             (Ty::Optional(a), Ty::Optional(b)) => Some(Ty::Optional(Box::new(a.unify(b)?))),
             (Ty::List(a, n), Ty::List(b, m)) if n == m => Some(Ty::List(Box::new(a.unify(b)?), *n)),
             (Ty::Proposed(a), Ty::Proposed(b)) => Some(Ty::Proposed(Box::new(a.unify(b)?))),
+            (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
+                Some(Ty::Tuple(a.iter().zip(b).map(|(x, y)| x.unify(y)).collect::<Option<Vec<_>>>()?))
+            }
             _ => (self == other).then(|| self.clone()),
         }
     }
@@ -122,6 +128,7 @@ impl std::fmt::Display for Ty {
             Ty::List(t, n) => write!(f, "List<{t}, {n}>"),
             Ty::Optional(t) if t.is_unknown() => write!(f, "none"),
             Ty::Optional(t) => write!(f, "Optional<{t}>"),
+            Ty::Tuple(ts) => write!(f, "({})", ts.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")),
             Ty::Cap { path, limits } => write!(f, "cap {}{limits}", path.join(".")),
         }
     }
@@ -453,6 +460,9 @@ pub enum Expr {
     Record { ty: String, fields: Vec<(String, Expr)>, pos: Pos },
     /// `[a, b, c]`
     List(Vec<Expr>, Pos),
+    /// `(a, b)`: a tuple. Its elements are read as `t.0`, `t.1`, ... (a `Field` whose
+    /// name is the position), or by `let (x, y) = t`.
+    Tuple(Vec<Expr>, Pos),
     /// `Status.Paid { amount: x }` or `Status.Pending`: a value of an enum. The parser
     /// sees these as a record literal and a field read; module resolution, which knows
     /// which names are enums, makes them this.
@@ -518,6 +528,7 @@ impl Expr {
             | Expr::Action { args, .. }
             | Expr::Builtin { args, .. }
             | Expr::List(args, _)
+            | Expr::Tuple(args, _)
             | Expr::Done { evidence: args, .. } => args.iter().collect(),
             Expr::Record { fields, .. } | Expr::Variant { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
             // Only what the model is given is evaluated; `blind_to` names data, it is not evaluated.
@@ -545,6 +556,7 @@ impl Expr {
             | Expr::Action { args, .. }
             | Expr::Builtin { args, .. }
             | Expr::List(args, _)
+            | Expr::Tuple(args, _)
             | Expr::Done { evidence: args, .. } => args.iter_mut().collect(),
             Expr::Record { fields, .. } | Expr::Variant { fields, .. } => fields.iter_mut().map(|(_, v)| v).collect(),
             Expr::Propose { instruct, data, blind_to, .. } => {
@@ -566,6 +578,7 @@ impl Expr {
             | Expr::Not(_, p)
             | Expr::SomeOf(_, p)
             | Expr::NoneLit(p)
+            | Expr::Tuple(_, p)
             | Expr::List(_, p) => *p,
             Expr::Arith { pos, .. }
             | Expr::Logic { pos, .. }

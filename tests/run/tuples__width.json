@@ -1,0 +1,1 @@
+{"entry": "width", "inputs": {"r": {"bounds": [3, 10], "label": "a"}}, "expect": {"result": 7}, "model": {"provider": "script", "responses": []}}

@@ -53,6 +53,8 @@ pub enum Value {
     List(Vec<Value>),
     /// A value of `Optional<T>`: a T (`some`), or nothing (`none`).
     Opt(Option<Box<Value>>),
+    /// A tuple: its elements, in order.
+    Tuple(Vec<Value>),
     /// Raw output from outside (a model, or text given to `parse`), not yet checked
     /// against `ty`. `lenient`: fields the type does not declare are dropped when it is
     /// validated, as services add fields over time. Model output is strict.
@@ -130,6 +132,18 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
             Json::Null => Ok(Value::Opt(None)),
             _ => Ok(Value::Opt(Some(Box::new(from_json_at(inner, json, types, path, depth + 1, lenient)?)))),
         },
+        // A tuple is a JSON array of exactly its length, each item valid as its type.
+        Ty::Tuple(tys) => {
+            let items = json.as_array().ok_or_else(|| expected(&format!("a list of {} items", tys.len())))?;
+            if items.len() != tys.len() {
+                return Err(format!("{path}: expected exactly {} items, found {}", tys.len(), items.len()));
+            }
+            let mut out = Vec::with_capacity(items.len());
+            for (i, (item, t)) in items.iter().zip(tys).enumerate() {
+                out.push(from_json_at(t, item, types, &format!("{path}[{i}]"), depth + 1, lenient)?);
+            }
+            Ok(Value::Tuple(out))
+        }
         Ty::List(inner, max) => {
             let items = json.as_array().ok_or_else(|| expected("a list"))?;
             // Checked before looking at any element: a program's budget is computed
@@ -267,6 +281,7 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
             Json::Object(obj)
         }
         Value::List(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
+        Value::Tuple(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
         Value::Opt(None) => Json::Null,
         Value::Opt(Some(inner)) => to_json(inner, for_model)?,
         Value::Proposed { raw, .. } => raw.clone(),
@@ -299,6 +314,15 @@ fn schema_at(ty: &Ty, types: &Types, seen: &mut HashSet<String>) -> Json {
         Ty::Cap { .. } => json!({}),
         Ty::List(inner, max) => json!({ "type": "array", "items": schema_at(inner, types, seen), "maxItems": max }),
         Ty::Optional(inner) => json!({ "anyOf": [schema_at(inner, types, seen), { "type": "null" }] }),
+        // The compiler never asks a model for a tuple (a schema could not fix each
+        // position for every provider); this is the exact JSON Schema all the same.
+        Ty::Tuple(tys) => json!({
+            "type": "array",
+            "prefixItems": tys.iter().map(|t| schema_at(t, types, seen)).collect::<Vec<_>>(),
+            "items": false,
+            "minItems": tys.len(),
+            "maxItems": tys.len(),
+        }),
         Ty::Named(n) => match n.as_str() {
             "Text" => json!({ "type": "string" }),
             "Int" => json!({ "type": "integer" }),

@@ -1,0 +1,5 @@
+// expect: E101
+// message: expected (Int, Text), found (Int, Int)
+fn f() -> (Int, Text) {
+    return (1, 2)
+}

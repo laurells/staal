@@ -1,0 +1,5 @@
+// expect: E007
+// Blinding reaches an element by its position.
+fn f(p: (Text, Text) @blind(1)) budget(calls: 1, tokens: 10) {
+    let s = propose(Text, instruct: "Greet.", data: [p.1], tokens: 10)
+}

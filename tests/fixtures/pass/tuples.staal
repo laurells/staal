@@ -1,0 +1,9 @@
+// Tuples with blinded elements: the other element may still reach a model.
+fn f(p: (Text, Text) @blind(1)) -> Text budget(calls: 1, tokens: 10) {
+    let (open, hidden) = p
+    return validate propose(Text, instruct: "Greet.", data: [open], tokens: 10)
+}
+
+fn g(xs: List<(Text, Int), 3>) -> (Text, Int) {
+    return xs[0]
+}

@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Tuples, `(Int, Text)`, built as `(1, "a")`, read as `t.0` and unpacked with
+  `let (n, s) = t`. In JSON a tuple is an array of exactly its length. A model is
+  never asked for one. Blind paths name positions (`@blind(pair.1)`). Both engines
+  run them.
 - Default values, `fn f(x: Int, tries: Int = 3)`, and named arguments,
   `f(1, tries: 5)`. Defaults are constants; arguments are evaluated in the order
   written and passed to the parameters they name, on both engines. An entry

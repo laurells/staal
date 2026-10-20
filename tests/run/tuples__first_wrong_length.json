@@ -1,0 +1,1 @@
+{"entry": "first", "inputs": {"p": ["ada", 3, 4]}, "expect": {"config_error_contains": "inputs.p: expected exactly 2 items, found 3"}, "model": {"provider": "script", "responses": []}}

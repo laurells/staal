@@ -1,0 +1,8 @@
+// expect: E007
+// A tuple built from blinded data still holds it.
+type Order { email: Text }
+
+fn f(order: Order @blind(email)) {
+    let p = (order.email, 1)
+    let s = propose(Text, instruct: "Greet.", data: [p], tokens: 10)
+}

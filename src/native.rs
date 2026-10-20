@@ -368,6 +368,10 @@ extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
                 Some((_, v)) => Ok(c.put(v)),
                 None => Err(internal(format!("no field '{name}'"))),
             },
+            Value::Tuple(items) => {
+                let v = crate::interp::tuple_item(items, name)?;
+                Ok(c.put(v))
+            }
             _ => Err(internal(format!("cannot read '.{name}' of this value"))),
         }
     })
@@ -388,6 +392,7 @@ extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
                 Some((_, v)) => v.clone(),
                 None => return Err(internal(format!("no field '{name}'"))),
             },
+            Value::Tuple(items) => crate::interp::tuple_item(items.clone(), name)?,
             _ => return Err(internal(format!("cannot read '.{name}' of this value"))),
         };
         Ok(c.put(v))
@@ -504,6 +509,15 @@ extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     guard(c, |c| {
         let vals = take_args(c, argv, n)?;
         Ok(c.put(Value::List(vals)))
+    })
+}
+
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_tuple")]
+extern "C" fn rt_tuple(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
+    guard(c, |c| {
+        let vals = take_args(c, argv, n)?;
+        Ok(c.put(Value::Tuple(vals)))
     })
 }
 
@@ -625,6 +639,7 @@ impl<'p> Env<'p> {
             // `none`'s own type, whose only value is `none`, or an optional allowed value.
             Ty::Optional(_) if *t == Ty::none() => true,
             Ty::Optional(inner) => self.allowed(inner, depth + 1),
+            Ty::Tuple(items) => items.iter().all(|t| self.allowed(t, depth + 1)),
             Ty::Proposed(_) | Ty::Cap { .. } => false,
         }
     }
@@ -682,7 +697,11 @@ impl<'p> Env<'p> {
                 named("Bool")
             }
             Expr::Field { base, field, .. } => {
-                let Ty::Named(n) = self.ty(base, var)? else { return None };
+                let bt = self.ty(base, var)?;
+                if let Ty::Tuple(items) = &bt {
+                    return field.parse::<usize>().ok().and_then(|i| items.get(i)).cloned().filter(|t| self.allowed(t, 0));
+                }
+                let Ty::Named(n) = bt else { return None };
                 let fields = self.records.get(n.as_str())?;
                 fields.iter().find(|(f, _)| f == field)?.1.clone()
             }
@@ -720,6 +739,7 @@ impl<'p> Env<'p> {
                 Ty::List(Box::new(first), items.len() as u64)
             }
             Expr::NoneLit(_) => Ty::none(),
+            Expr::Tuple(items, _) => Ty::Tuple(items.iter().map(|i| self.ty(i, var)).collect::<Option<Vec<_>>>()?),
             Expr::SomeOf(inner, _) => Ty::Optional(Box::new(self.ty(inner, var)?)),
             Expr::Index { base, index, .. } => {
                 let Ty::List(inner, _) = self.ty(base, var)? else { return None };
@@ -951,6 +971,7 @@ struct Helpers {
     opt_has: FuncId,
     opt_get_ref: FuncId,
     opt_no_arm: FuncId,
+    tuple: FuncId,
 }
 
 impl Native {
@@ -1087,6 +1108,7 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("staal_rt_opt_has", rt_opt_has as *const u8),
     ("staal_rt_opt_get_ref", rt_opt_get_ref as *const u8),
     ("staal_rt_opt_no_arm", rt_opt_no_arm as *const u8),
+    ("staal_rt_tuple", rt_tuple as *const u8),
 ];
 
 /// The machine to generate code for: this one. `host_features`: use every feature
@@ -1153,6 +1175,7 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
         opt_has: helper(module, "staal_rt_opt_has", 1, true)?,
         opt_get_ref: helper(module, "staal_rt_opt_get_ref", 1, true)?,
         opt_no_arm: helper(module, "staal_rt_opt_no_arm", 0, false)?,
+        tuple: helper(module, "staal_rt_tuple", 2, true)?,
     };
     // In program order, so the same program always gives the same code and tables.
     let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
@@ -2016,6 +2039,17 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 Ok(self.call_checked(self.h.variant, &[idx, argv, n]))
             }
             Expr::NoneLit(_) => Ok(self.call_checked(self.h.none, &[])),
+            Expr::Tuple(items, _) => {
+                let mut hs = Vec::with_capacity(items.len());
+                for i in items {
+                    let t = self.ty(i)?;
+                    let v = self.expr(i)?;
+                    hs.push(self.as_handle(v, &t));
+                }
+                let argv = self.argv(&hs);
+                let n = self.b.ins().iconst(types::I64, hs.len() as i64);
+                Ok(self.call_checked(self.h.tuple, &[argv, n]))
+            }
             Expr::SomeOf(inner, _) => {
                 let t = self.ty(inner)?;
                 let v = self.expr(inner)?;

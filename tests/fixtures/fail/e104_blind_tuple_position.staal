@@ -1,0 +1,3 @@
+// expect: E104
+// message: has no field path '2'
+fn f(p: (Text, Text) @blind(2)) {}

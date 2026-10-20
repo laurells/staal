@@ -1,0 +1,6 @@
+// expect: E104
+// message: (Int, Int) has no element .2
+fn f(p: (Int, Int)) -> Int {
+    let (a, b, c) = p
+    return a
+}

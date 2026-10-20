@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 37 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 377 invalid ones
+rejecting the programs it should. 38 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 394 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -146,6 +146,19 @@ names, wherever it is written, and every rule of that parameter applies to it:
 an untrusted value named for an `@trusted` parameter is still E006. Arguments are
 evaluated in the order written. A run can leave out an entry parameter that has a
 default.
+
+### Tuples
+
+    fn min_max(xs: List<Int, 100>) -> (Int, Int) { ... return (lo, hi) }
+
+    let (lo, hi) = min_max(readings)
+    let width = hi - lo
+    let first = pair.0
+
+A tuple groups a fixed number of values without naming them: `(Int, Int)`, read by
+position (`.0`, `.1`) or unpacked with `let (a, b) = ...`. In JSON it is an array of
+exactly that length. For anything a model produces, or anything whose parts deserve
+names, use a record: a model is never asked for a tuple.
 
 ### Type aliases
 
@@ -818,9 +831,9 @@ compares both with git. `git` must be installed to fetch.
 
 On the native engine, every pure function is compiled to machine code when the run
 starts (Cranelift, in memory): its parameters and result are Int, Bool, Text, Money,
-records, enums, optional values or lists of these, and its body uses `let`, `set`, `if`, `match`,
+records, enums, optional values, tuples or lists of these, and its body uses `let`, `set`, `if`, `match`,
 `repeat`, `loop`, `for`, `break`, `continue`, `return`, `fail`, arithmetic,
-comparisons, field reads, record, variant and list literals, `some` and `none`, indexing, the pure built-in functions, and calls to other such
+comparisons, field reads, record, variant, tuple and list literals, `some` and `none`, indexing, the pure built-in functions, and calls to other such
 functions. Everything else runs on the interpreter, which stays the reference.
 Model calls, actions, `try`, `parse`, `validate`, HTTP, files and the journal never
 run in native code. The full rules are in [RUNTIME.md](RUNTIME.md) section 15. In short:

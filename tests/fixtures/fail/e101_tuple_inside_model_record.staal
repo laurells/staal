@@ -1,0 +1,8 @@
+// expect: E101
+// message: it holds a tuple
+type Guess { range: (Int, Int) }
+
+fn f() -> Int budget(calls: 1, tokens: 100) {
+    let g = validate propose(Guess, instruct: "Guess.", tokens: 100)
+    return g.range.0
+}

@@ -1,0 +1,6 @@
+// expect: E006
+// An element of an untrusted tuple is untrusted.
+fn f(p: (Text, Int)) {
+    let (text, n) = p
+    let s = propose(Text, instruct: text, tokens: 10)
+}

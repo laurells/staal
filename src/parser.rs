@@ -66,13 +66,15 @@ pub struct Parser {
     i: usize,
     /// Set while parsing an `if` or `for` head, where `{` must open the block.
     no_record: bool,
+    /// How many tuples `let (a, b) = ...` has unpacked, to name each one's holder.
+    unpacked: usize,
 }
 
 type PResult<T> = Result<T, (Pos, String)>;
 
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
-        Parser { toks, i: 0, no_record: false }
+        Parser { toks, i: 0, no_record: false, unpacked: 0 }
     }
 
     fn peek(&self) -> &Tok {
@@ -113,6 +115,23 @@ impl Parser {
             return Ok(k.to_string());
         }
         self.ident()
+    }
+
+    /// One step of a path inside a value: a field name, or a tuple position. `0.1`
+    /// arrives as one number and is two positions.
+    fn path_parts(&mut self) -> PResult<Vec<String>> {
+        match self.peek().clone() {
+            Tok::Num(n) => {
+                self.bump();
+                Ok(vec![n.to_string()])
+            }
+            Tok::Decimal(d) if d.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) => {
+                let pos = self.pos();
+                self.bump();
+                d.split('.').map(|p| p.parse::<u64>().map(|n| n.to_string()).map_err(|_| (pos, format!("'{p}' is not a tuple position")))).collect()
+            }
+            _ => Ok(vec![self.field_name()?]),
+        }
     }
 
     fn num(&mut self) -> PResult<u64> {
@@ -157,10 +176,10 @@ impl Parser {
                     if *self.peek() == Tok::LParen {
                         self.bump();
                         loop {
-                            let mut path = vec![self.field_name()?];
+                            let mut path = self.path_parts()?;
                             while *self.peek() == Tok::Dot {
                                 self.bump();
-                                path.push(self.field_name()?);
+                                path.extend(self.path_parts()?);
                             }
                             blind.push(path);
                             if *self.peek() == Tok::Comma {
@@ -618,6 +637,24 @@ impl Parser {
             }
             return Ok(Ty::Cap { path, limits });
         }
+        // `(A, B, ...)`: a tuple type.
+        if *self.peek() == Tok::LParen {
+            let tpos = self.pos();
+            self.bump();
+            let mut items = vec![self.ty()?];
+            while *self.peek() == Tok::Comma {
+                self.bump();
+                if *self.peek() == Tok::RParen {
+                    break;
+                }
+                items.push(self.ty()?);
+            }
+            self.expect(Tok::RParen, "')'")?;
+            if items.len() < 2 {
+                return Err((tpos, "a tuple type has two or more elements, e.g. (Text, Int)".into()));
+            }
+            return Ok(Ty::Tuple(items));
+        }
         let npos = self.pos();
         let name = self.ident()?;
         if *self.peek() == Tok::Lt {
@@ -669,10 +706,51 @@ impl Parser {
             if *self.peek() == Tok::Eof {
                 return Err((self.pos(), "unexpected end of file, missing '}'".into()));
             }
+            if *self.peek() == Tok::Let && self.toks.get(self.i + 1).map(|t| &t.tok) == Some(&Tok::LParen) {
+                stmts.extend(self.let_unpack()?);
+                continue;
+            }
             stmts.push(self.stmt()?);
         }
         self.expect(Tok::RBrace, "'}'")?;
         Ok(stmts)
+    }
+
+    /// `let (a, b) = value`: the tuple in a variable of its own, which no program can
+    /// name, then `let a = it.0`, `let b = it.1`. The names are ordinary variables.
+    fn let_unpack(&mut self) -> PResult<Vec<Stmt>> {
+        let pos = self.pos();
+        self.bump(); // `let`
+        self.expect(Tok::LParen, "'('")?;
+        let mut names = Vec::new();
+        loop {
+            names.push((self.pos(), self.ident()?));
+            if *self.peek() == Tok::Comma {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        self.expect(Tok::RParen, "')'")?;
+        if names.len() < 2 {
+            return Err((pos, "`let (...)` unpacks a tuple of two or more values; for one, write `let x = ...`".into()));
+        }
+        let ty = if *self.peek() == Tok::Colon {
+            self.bump();
+            Some(self.ty()?)
+        } else {
+            None
+        };
+        self.expect(Tok::Eq, "'='")?;
+        let value = self.expr()?;
+        self.unpacked += 1;
+        let holder = format!("(tuple {})", self.unpacked);
+        let mut out = vec![Stmt::Let { name: holder.clone(), ty, value, pos }];
+        for (i, (npos, name)) in names.into_iter().enumerate() {
+            let base = Box::new(Expr::Var(holder.clone(), npos));
+            out.push(Stmt::Let { name, ty: None, value: Expr::Field { base, field: i.to_string(), pos: npos }, pos: npos });
+        }
+        Ok(out)
     }
 
     fn stmt(&mut self) -> PResult<Stmt> {
@@ -951,6 +1029,23 @@ impl Parser {
                 Tok::Dot => {
                     self.bump();
                     let pos = self.pos();
+                    // `t.0`: an element of a tuple. `t.0.1` arrives as the number 0.1.
+                    match self.peek().clone() {
+                        Tok::Num(n) => {
+                            self.bump();
+                            e = Expr::Field { base: Box::new(e), field: n.to_string(), pos };
+                            continue;
+                        }
+                        Tok::Decimal(d) if d.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) => {
+                            self.bump();
+                            for part in d.split('.') {
+                                let n: u64 = part.parse().map_err(|_| (pos, format!("'{part}' is not a tuple position")))?;
+                                e = Expr::Field { base: Box::new(e), field: n.to_string(), pos };
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
                     let field = self.field_name()?;
                     if *self.peek() == Tok::LParen {
                         return Err((
@@ -1002,8 +1097,21 @@ impl Parser {
             Tok::LParen => {
                 self.bump();
                 let e = self.with_records(true, Self::expr)?;
+                if *self.peek() != Tok::Comma {
+                    self.expect(Tok::RParen, "')'")?;
+                    return Ok(e);
+                }
+                // `(a, b, ...)`: a tuple.
+                let mut items = vec![e];
+                while *self.peek() == Tok::Comma {
+                    self.bump();
+                    if *self.peek() == Tok::RParen {
+                        break; // trailing comma
+                    }
+                    items.push(self.with_records(true, Self::expr)?);
+                }
                 self.expect(Tok::RParen, "')'")?;
-                Ok(e)
+                Ok(Expr::Tuple(items, pos))
             }
             Tok::LBracket => Ok(Expr::List(self.list()?, pos)),
             Tok::Propose => self.propose(),

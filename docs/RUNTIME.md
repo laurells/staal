@@ -74,6 +74,7 @@ capability need cannot have the name of a constant in scope (E101).
 | declared enum type | one of its variants, and that variant's fields in declaration order |
 | `List<T, N>` | at most N values of type T, in order |
 | `Optional<T>` | a value of type T (`some(x)`), or nothing (`none`) |
+| `(A, B, ...)` | a tuple: two or more values, of these types, in this order |
 | `Proposed<T>` | raw model output (JSON), not yet checked against T |
 | `Receipt` | proof of one completed action: id, capability, method |
 | `Outcome` | `ok`, `error`, and (hidden) what succeeded |
@@ -114,6 +115,16 @@ for record fields: no `Secret`, `Header`, `Receipt`, `Outcome`, `Done` or
 capability, and no field called `kind`. `pub enum` exports one; another module
 writes `module.Payment.Paid { ... }`, or imports `Payment` by name. Both engines
 run enums and `match` (section 15).
+
+**Tuples.** `(a, b)` builds a tuple of type `(A, B)`; `t.0`, `t.1`, ... read its
+elements (`t.0.1` reads into a nested one), and `let (x, y) = t` unpacks it into two
+variables, optionally typed: `let (x, y): (Int, Int) = t`. Reading a position it
+does not have is E104, unpacking something that is not a tuple E101. Two tuples are
+equal when every element is. A tuple cannot hold a `Secret`, `Header`, `Receipt`,
+`Outcome`, `Done` or capability, and a model is never asked for one (E101), since an
+output schema cannot fix each position for every provider: use a record. `@blind`
+paths name positions as fields: `@blind(1)`, `@blind(range.0)`. Both engines run
+tuples.
 
 **Type aliases.** `type Amount = Money` gives a type another name. An alias is
 exactly the type it names: before checking, every use is replaced by that type, so
@@ -179,6 +190,8 @@ declared type by the same strict rules:
 - A `List<T, N>` must be a JSON array of at most N items, each valid as T. A
   model's JSON schema for it carries `maxItems: N`, but the bound is enforced
   here whatever the model returns.
+- A tuple `(A, B)` is a JSON array of exactly its length, each item valid as its
+  type: `["ada", 3]`. Results are written the same way.
 - An `Optional<T>` is `null` for `none`, or anything valid as T. A record field of
   an optional type must still be present: `{"email": null}`, not `{}`. A model's
   JSON schema for it is an `anyOf` of T's schema and `{"type": "null"}`. Results
@@ -1030,12 +1043,12 @@ line, `engine` in the C interface), never in the run config.
 
 A function qualifies when its parameters and result are `Int`, `Bool`, `Text`,
 `Money`, records whose fields are all of these, enums whose variants' fields are all
-of these, optional values of these, or lists of these, and its body uses only
+of these, optional values or tuples of these, or lists of these, and its body uses only
 `let`, `set`, `if`, `match`,
 `repeat`, `loop`, `for`, `break`, `continue`, `return` with a value,
 `fail`, literals (an integer must fit an Int; a list must not be empty), arithmetic,
 unary `-`, comparisons, `and`, `or`, `not`, field reads, record and variant literals,
-`some(...)`, `none`, indexing,
+`some(...)`, `none`, tuples, indexing,
 the built-in functions other than `header` and `fill_secret`, and calls to other
 qualifying functions. A function that calls one that does not qualify does not
 qualify. Native code is entered only from the interpreter, when it calls a compiled

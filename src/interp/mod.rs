@@ -1320,6 +1320,7 @@ impl<'p> Interp<'p> {
                     Some((_, v)) => Ok(v),
                     None => internal(format!("no field '{field}'")),
                 },
+                Value::Tuple(items) => tuple_item(items, field),
                 Value::Outcome { ok, error, .. } => match field.as_str() {
                     "ok" => Ok(Value::Bool(ok)),
                     "error" => Ok(Value::Text(error)),
@@ -1341,6 +1342,13 @@ impl<'p> Interp<'p> {
                 self.call(name, in_slots(vals, slots)?)
             }
             Expr::Named { .. } => internal("a named argument outside a call"),
+            Expr::Tuple(items, _) => {
+                let mut vals = Vec::with_capacity(items.len());
+                for i in items {
+                    vals.push(self.eval(frame, i)?);
+                }
+                Ok(Value::Tuple(vals))
+            }
             Expr::Action { receiver, method, args, .. } => {
                 let Value::Cap(h) = frame.get(receiver)? else {
                     return internal(format!("'{receiver}' is not a capability"));
@@ -2254,8 +2262,10 @@ fn eval_pure(e: &Expr, types: &Types) -> Result<Value, Failure> {
                 Some((_, v)) => Ok(v),
                 None => internal(format!("no field '{field}'")),
             },
+            Value::Tuple(items) => tuple_item(items, field),
             _ => internal(format!("cannot read '.{field}' of this value")),
         },
+        Expr::Tuple(items, _) => Ok(Value::Tuple(items.iter().map(ev).collect::<Result<_, _>>()?)),
         _ => internal("this is not something a constant can hold"),
     }
 }
@@ -2291,6 +2301,14 @@ fn receipt_count(v: &Value) -> usize {
 
 /// Receipts reachable from a Done: directly, through successful outcomes, and
 /// through nested Done values.
+/// Element `field` (its position, as text) of a tuple.
+pub(crate) fn tuple_item(items: Vec<Value>, field: &str) -> Result<Value, Failure> {
+    match field.parse::<usize>().ok().and_then(|i| items.into_iter().nth(i)) {
+        Some(v) => Ok(v),
+        None => internal(format!("a tuple has no element .{field}")),
+    }
+}
+
 /// Values evaluated in the order written, put in parameter order: value `i` is for
 /// parameter `slots[i]`. Empty `slots` means they are in order already.
 fn in_slots(vals: Vec<Value>, slots: &[usize]) -> Result<Vec<Value>, Failure> {

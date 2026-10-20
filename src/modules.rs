@@ -543,6 +543,11 @@ impl Resolver<'_, '_, '_> {
         match ty {
             Ty::Named(n) => *n = self.type_name(n, pos),
             Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => self.ty(inner, pos),
+            Ty::Tuple(items) => {
+                for i in items {
+                    self.ty(i, pos);
+                }
+            }
             Ty::Cap { .. } => {}
         }
     }
@@ -712,6 +717,7 @@ impl Resolver<'_, '_, '_> {
             | Expr::Action { args, .. }
             | Expr::Builtin { args, .. }
             | Expr::List(args, _)
+            | Expr::Tuple(args, _)
             | Expr::Done { evidence: args, .. } => {
                 for a in args {
                     self.expr(a);

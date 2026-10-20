@@ -1,0 +1,1 @@
+{"entry": "pairs", "inputs": {"xs": [["a", 1], ["", 100], ["b", 2]]}, "expect": {"result": 3}, "model": {"provider": "script", "responses": []}}

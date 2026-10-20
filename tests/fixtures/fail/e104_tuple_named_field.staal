@@ -1,0 +1,5 @@
+// expect: E104
+// message: (Int, Text) has no element .name
+fn f(p: (Int, Text)) -> Text {
+    return p.name
+}

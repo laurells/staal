@@ -1,0 +1,1 @@
+{"entry": "first", "inputs": {"p": [1, 3]}, "expect": {"config_error_contains": "inputs.p[0]: expected a string"}, "model": {"provider": "script", "responses": []}}

@@ -1,0 +1,79 @@
+// Tuples: built, read by position and unpacked, nested, in records and lists, from
+// JSON and back, compared.
+type Range { bounds: (Int, Int), label: Text }
+
+fn split(total: Money, people: Int) -> (Money, Money) {
+    let share = total * 1
+    let i = 1
+    loop {
+        if i >= people {
+            break
+        }
+        set i = i + 1
+    }
+    return (share, total - share)
+}
+
+fn min_max(xs: List<Int, 5>) -> (Int, Int) {
+    let lo = xs[0]
+    let hi = xs[0]
+    for x in xs {
+        if x < lo {
+            set lo = x
+        }
+        if x > hi {
+            set hi = x
+        }
+    }
+    return (lo, hi)
+}
+
+fn spread(xs: List<Int, 5>) -> Int {
+    let (lo, hi) = min_max(xs)
+    return hi - lo
+}
+
+fn first(p: (Text, Int)) -> Text {
+    return p.0
+}
+
+fn nested(p: ((Int, Int), Text)) -> Int {
+    return p.0.1 + p.0.0
+}
+
+fn width(r: Range) -> Int {
+    let (a, b): (Int, Int) = r.bounds
+    set a = a * 1
+    return b - a
+}
+
+fn pairs(xs: List<(Text, Int), 3>) -> Int {
+    let sum = 0
+    for p in xs {
+        let (name, n) = p
+        if len(name) > 0 {
+            set sum = sum + n
+        }
+    }
+    return sum
+}
+
+fn same(a: (Int, Text), b: (Int, Text)) -> Bool {
+    return a == b
+}
+
+fn make() -> Range {
+    return Range { bounds: (1, 9), label: "r" }
+}
+
+fn maybe(x: Int) -> (Bool, Optional<Int>) {
+    if x > 0 {
+        return (true, some(x))
+    }
+    return (false, none)
+}
+
+// An overflow inside a tuple's element fails the run like anywhere else.
+fn overflow(x: Int) -> (Int, Int) {
+    return (x, x * 2)
+}

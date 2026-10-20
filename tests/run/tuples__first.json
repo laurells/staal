@@ -1,0 +1,1 @@
+{"entry": "first", "inputs": {"p": ["ada", 3]}, "expect": {"result": "ada"}, "model": {"provider": "script", "responses": []}}
