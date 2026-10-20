@@ -1,0 +1,5 @@
+// expect: E101
+// message: `print` needs Text, found (Int)
+fn f(n: Int) {
+    print(n)
+}

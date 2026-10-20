@@ -1101,6 +1101,74 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// `print`, `now` and `random_int`: external operations, journaled, so a resumed run
+    /// uses what the first saw (RUNTIME.md section 11). Each is safe to make again when
+    /// a crash leaves it in doubt: the program never saw its answer (a line printed just
+    /// before the crash is printed again).
+    fn effect(&mut self, f: Builtin, vals: Vec<Value>) -> Result<Value, Failure> {
+        match (f, vals.as_slice()) {
+            (Builtin::Print, [Value::Text(t)]) => {
+                let (answer, replayed) = self.external("print", json!({ "text": t }), true, "print", |_, _| {
+                    use std::io::Write;
+                    let mut out = std::io::stdout().lock();
+                    match writeln!(out, "{t}").and_then(|_| out.flush()) {
+                        Ok(()) => Answer::Done(Ok(Json::Null)),
+                        Err(e) => Answer::Unknown(format!("standard output: {e}")),
+                    }
+                })?;
+                if let Err(e) = answer {
+                    return fail(FailKind::Journal, format!("malformed print result in the journal: {e}"));
+                }
+                self.emit("print", json!({ "text": t, "replayed": replayed }));
+                Ok(Value::Unit)
+            }
+            (Builtin::Now, []) => {
+                let (answer, replayed) = self.external("clock", json!({}), true, "clock read", |_, _| {
+                    let now = std::time::SystemTime::now();
+                    let ms = match now.duration_since(std::time::UNIX_EPOCH) {
+                        Ok(d) => i64::try_from(d.as_millis()).ok(),
+                        Err(e) => i64::try_from(e.duration().as_millis()).ok().map(|m| -m),
+                    };
+                    match ms.filter(|m| (time::MIN_MS..=time::MAX_MS).contains(m)) {
+                        Some(m) => Answer::Done(Ok(json!(m))),
+                        None => Answer::Done(Err("the system clock is outside the years 0000 to 9999".into())),
+                    }
+                })?;
+                let t = match answer {
+                    Ok(v) => match v.as_i64().filter(|m| (time::MIN_MS..=time::MAX_MS).contains(m)) {
+                        Some(m) => m,
+                        None => return fail(FailKind::Journal, format!("malformed clock reading in the journal: {v}")),
+                    },
+                    Err(e) => return fail(FailKind::Value, e),
+                };
+                self.emit("clock", json!({ "time": t, "replayed": replayed }));
+                Ok(Value::Int(t))
+            }
+            (Builtin::RandomInt, [Value::Int(lo), Value::Int(hi)]) => {
+                let (lo, hi) = (*lo, *hi);
+                if lo > hi {
+                    return fail(FailKind::Value, format!("random_int({lo}, {hi}): the lowest is above the highest"));
+                }
+                let (answer, replayed) = self.external("random", json!({ "lo": lo, "hi": hi }), true, "random number", |_, _| {
+                    match uniform(lo, hi) {
+                        Ok(n) => Answer::Done(Ok(json!(n))),
+                        Err(e) => Answer::Unknown(e),
+                    }
+                })?;
+                let n = match answer {
+                    Ok(v) => match v.as_i64().filter(|n| (lo..=hi).contains(n)) {
+                        Some(n) => n,
+                        None => return fail(FailKind::Journal, format!("malformed random number in the journal: {v}")),
+                    },
+                    Err(e) => return fail(FailKind::Journal, format!("malformed random number in the journal: {e}")),
+                };
+                self.emit("random", json!({ "lo": lo, "hi": hi, "value": n, "replayed": replayed }));
+                Ok(Value::Int(n))
+            }
+            _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
+        }
+    }
+
     /// `map`, `filter`, `any`, `all`, `count` and `fold`: the function value called on
     /// each item in order, as `f(x)` would call it.
     fn with_function(&mut self, f: Builtin, vals: Vec<Value>) -> Result<Value, Failure> {
@@ -1367,6 +1435,9 @@ impl<'p> Interp<'p> {
                 }
                 if f.calls_function() {
                     return self.with_function(*f, vals);
+                }
+                if f.is_effect() {
+                    return self.effect(*f, vals);
                 }
                 builtin(*f, &vals)
             }
@@ -2478,6 +2549,31 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
     }
 }
 
+/// An Int from `lo` to `hi` inclusive, every one equally likely, from the operating
+/// system's random source. Draws are rejected below a threshold so the remainder is
+/// unbiased (as arc4random_uniform does).
+fn uniform(lo: i64, hi: i64) -> Result<i64, String> {
+    // The number of values less one, as an unsigned 64-bit number: hi - lo fits.
+    let span = hi.wrapping_sub(lo) as u64;
+    let draw = || -> Result<u64, String> {
+        let mut b = [0u8; 8];
+        getrandom::fill(&mut b).map_err(|e| format!("could not read the operating system's random source: {e}"))?;
+        Ok(u64::from_le_bytes(b))
+    };
+    if span == u64::MAX {
+        return Ok(draw()? as i64);
+    }
+    let n = span + 1;
+    // 2^64 mod n: draws below it would make some remainders more likely than others.
+    let threshold = n.wrapping_neg() % n;
+    loop {
+        let x = draw()?;
+        if x >= threshold {
+            return Ok(lo.wrapping_add((x % n) as i64));
+        }
+    }
+}
+
 /// Bytes as lowercase hexadecimal, two digits each.
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -2733,6 +2829,31 @@ fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `random_int` draws within its bounds, over every width up to all of Int, and
+    /// evenly: each of three values about a third of the time (a deviation of seven
+    /// standard deviations in any of them would happen less than once in a trillion runs).
+    #[test]
+    fn random_numbers_are_within_bounds_and_even() {
+        for (lo, hi) in [(5, 5), (-3, 3), (i64::MIN, i64::MIN + 1), (i64::MAX - 1, i64::MAX), (i64::MIN, i64::MAX), (0, i64::MAX), (i64::MIN, 0)] {
+            for _ in 0..2000 {
+                let n = uniform(lo, hi).unwrap();
+                assert!((lo..=hi).contains(&n), "{n} outside {lo}..={hi}");
+            }
+        }
+        let mut seen = [0u32; 3];
+        for _ in 0..30_000 {
+            seen[uniform(0, 2).unwrap() as usize] += 1;
+        }
+        // 10,000 expected each, standard deviation about 82.
+        assert!(seen.iter().all(|&k| (9_400..=10_600).contains(&k)), "{seen:?}");
+        // Every part of the widest range is reached: both signs, and values beyond
+        // half of Int either way (each draw is one with probability 1/2, so 200 draws
+        // missing one would happen with probability 2^-200).
+        let draws: Vec<i64> = (0..200).map(|_| uniform(i64::MIN, i64::MAX).unwrap()).collect();
+        assert!(draws.iter().any(|&n| n < 0) && draws.iter().any(|&n| n >= 0));
+        assert!(draws.iter().any(|&n| !(i64::MIN / 2..=i64::MAX / 2).contains(&n)));
+    }
 
     /// Every library function that can lengthen a text refuses past the limit, and
     /// only past it: each is tried at the longest result allowed and one byte beyond.

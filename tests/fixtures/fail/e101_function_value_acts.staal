@@ -1,5 +1,5 @@
 // expect: E101
-// message: 'open' cannot be a function value: it acts, asks a model or calls something that does
+// message: 'open' cannot be a function value: it acts, asks a model, prints, reads the clock or draws a random number, or calls something that does
 // A named function that acts cannot be a value.
 fn open(lock: cap building.lock.open, door: Text) -> Receipt {
     return lock.open(door)

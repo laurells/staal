@@ -1,0 +1,10 @@
+// expect: E101
+// message: 'stamp' cannot be a function value: it acts, asks a model, prints, reads the clock or draws a random number
+fn stamp(x: Int) -> Int {
+    return now() + x
+}
+
+fn f() -> Int {
+    let g = stamp
+    return 0
+}

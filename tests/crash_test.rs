@@ -67,6 +67,9 @@ const ACCESS: Scenario = Scenario {
 /// Pure Int functions (native code on the native engine) between three actions.
 const NATIVE: Scenario = Scenario { program: "tests/crash/native.staal", config: "tests/crash/native.json", actions: 2 };
 
+/// Random numbers, the clock and printing around two actions that carry their values.
+const EFFECTS: Scenario = Scenario { program: "tests/crash/effects.staal", config: "tests/crash/effects.json", actions: 2 };
+
 /// A fresh directory with the scenario's config pointing at its own world file.
 struct Case {
     dir: PathBuf,
@@ -308,6 +311,110 @@ fn a_crash_during_an_authorized_retry_puts_the_action_back_in_doubt() {
     assert_eq!(out.code, Some(3), "{}", out.stderr);
     assert_eq!(c.world().len(), 1);
     check_recovered(&c, &baseline("retry-interrupted"), "retry-interrupted");
+}
+
+/// The phase 8 gate: what differs between runs (random numbers, the clock) is
+/// journaled, so a run resumed after a crash at any point uses exactly the values it
+/// had already given the world, and prints each line once (a line printed just before
+/// the crash, before it was recorded, may be printed once more).
+#[test]
+fn what_differs_between_runs_is_replayed_after_any_crash() {
+    for idempotent in [true, false] {
+        let mode = format!("effects-{}", if idempotent { "idempotent" } else { "plain" });
+        let b = baseline_of(&EFFECTS, &mode);
+        let print_ops: Vec<u64> = {
+            let c = Case::of(&EFFECTS, &format!("{mode}-shape"), idempotent);
+            assert_eq!(c.run(None).code, Some(0));
+            c.journal_lines().iter().filter(|r| r["j"] == "intent" && r["op"] == "print").map(|r| r["n"].as_u64().unwrap()).collect()
+        };
+        assert_eq!(print_ops.len(), 3, "the scenario prints three lines");
+        let mut points: Vec<String> = (1..=b.writes).map(|k| format!("after_write:{k}")).collect();
+        points.extend((1..=b.ops).map(|n| format!("before_result:{n}")));
+        for fp in &points {
+            let label = format!("{mode} {fp}");
+            let c = Case::of(&EFFECTS, &format!("{mode}-{}", fp.replace(':', "-")), idempotent);
+            let crashed = c.run(Some(fp));
+            assert_eq!(crashed.code, None, "{label}: the injected crash did not happen: {}", crashed.stderr);
+            let mut printed: Vec<String> = crashed.stdout.lines().map(String::from).collect();
+            // Resume, resolving actions in doubt as an operator would, keeping every line printed.
+            let mut last = None;
+            for _ in 0..10 {
+                let out = c.resume();
+                match out.code {
+                    Some(0) => {
+                        last = Some(out);
+                        break;
+                    }
+                    Some(3) => {
+                        printed.extend(out.stdout.lines().map(String::from));
+                        let key = c.doubtful_key();
+                        let done = c.world_entries().into_iter().find(|e| e["key"] == key);
+                        let r = match done {
+                            Some(e) => c.resolve(&["--performed", e["receipt"].as_str().unwrap()]),
+                            None => c.resolve(&["--retry"]),
+                        };
+                        assert_eq!(r.code, Some(0), "{label}: resolve failed: {}", r.stderr);
+                    }
+                    other => panic!("{label}: resume exited {other:?}: {}", out.stderr),
+                }
+            }
+            let out = last.unwrap_or_else(|| panic!("{label}: the run did not finish"));
+            let mut lines: Vec<String> = out.stdout.lines().map(String::from).collect();
+            let result: String = serde_json::from_str(&lines.pop().expect("a result")).unwrap();
+            printed.extend(lines);
+            let parts: Vec<&str> = result.split(' ').collect();
+            let (code, at, roll) = (parts[0], parts[1], parts[2]);
+            // The world was given the values the run returns: none was drawn again.
+            let world: Vec<Json> = c.world().iter().map(|e| e["args"][0].clone()).collect();
+            assert_eq!(
+                world,
+                [Json::String(format!("user@example.com: your code is {code}")), Json::String(format!("audit@example.com: {code} at {at}"))],
+                "{label}: the world saw other values than the run used"
+            );
+            c.assert_no_duplicates(&label);
+            // Each line once, in order; a line may repeat only when the crash came after
+            // it was printed and before that was recorded.
+            let want = [format!("code {code}"), format!("sent at {at}"), format!("rolled {roll}")];
+            let mut collapsed = printed.clone();
+            collapsed.dedup();
+            assert_eq!(collapsed, want, "{label}: printed {printed:?}");
+            let crash_after_print = print_ops.iter().any(|n| *fp == format!("before_result:{n}"));
+            assert!(
+                printed.len() == 3 || (crash_after_print && printed.len() == 4),
+                "{label}: a line was printed more than once: {printed:?}"
+            );
+            // Resuming the finished run changes nothing and prints nothing.
+            let again = c.resume();
+            assert_eq!(again.code, Some(0), "{label}: {}", again.stderr);
+            assert_eq!(again.stdout, out.stdout.lines().last().unwrap(), "{label}: replay of a finished run printed or differed");
+        }
+    }
+}
+
+/// A journal whose recorded random number is outside its bounds, or whose clock
+/// reading is not a time, is refused on resume, as any malformed journal is.
+#[test]
+fn a_tampered_random_number_or_time_is_refused() {
+    for (op, bad) in [("random", Json::from(0)), ("random", Json::from("7")), ("clock", Json::from(253402300800000i64)), ("clock", Json::Null)] {
+        let c = Case::of(&EFFECTS, &format!("tampered-{op}-{}", bad.to_string().replace('"', "")), true);
+        // Crash after the first operation of this kind has its result recorded.
+        let lines = {
+            let shape = Case::of(&EFFECTS, &format!("tampered-shape-{op}"), true);
+            assert_eq!(shape.run(None).code, Some(0));
+            shape.journal_lines()
+        };
+        let n = lines.iter().find(|r| r["j"] == "intent" && r["op"] == op).unwrap()["n"].as_u64().unwrap();
+        let k = lines.iter().position(|r| r["j"] == "result" && r["n"] == n).unwrap() + 1;
+        assert_eq!(c.run(Some(&format!("after_write:{k}"))).code, None);
+        let mut recs = c.journal_lines();
+        let rec = recs.iter_mut().find(|r| r["j"] == "result" && r["n"] == n).unwrap();
+        rec["ok"] = bad.clone();
+        let text: String = recs.iter().map(|r| format!("{r}\n")).collect();
+        std::fs::write(c.path("journal"), text).unwrap();
+        let out = c.resume();
+        assert_eq!(out.code, Some(3), "{op} {bad}: resumed with a tampered value: {}", out.stdout);
+        assert!(out.stderr.contains("journal") && out.stderr.contains("malformed"), "{op} {bad}: {}", out.stderr);
+    }
 }
 
 #[test]

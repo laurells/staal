@@ -1,0 +1,6 @@
+// expect: E101
+// message: cannot call `random_int`: it differs between runs
+// A default is a constant.
+fn roll(sides: Int, start: Int = random_int(1, 6)) -> Int {
+    return start
+}

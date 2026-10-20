@@ -1,0 +1,8 @@
+// expect: E101
+// message: it cannot call `random_int`, which differs between runs
+fn f() -> Int {
+    let roll = fn(sides: Int) -> Int {
+        return random_int(1, sides)
+    }
+    return roll(6)
+}

@@ -7,6 +7,12 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `print`, `now` and `random_int`: printing to standard output, the current time,
+  and uniform random Ints from the operating system's random source. Each is an
+  external operation in the journal (`print`, `clock`, `random`), so a run resumed
+  after a crash at any point uses exactly the values it had already given the world,
+  and prints each line once; a crash test proves it at every crash point. They run on
+  the interpreter only, and a function value cannot use them.
 - Dates and times, on both engines: a time is an Int of milliseconds since
   1970-01-01T00:00:00Z (UTC), for the years 0000 to 9999. `format_time`,
   `parse_time` (strict RFC 3339, an optional value), `make_time`, `date_parts`,
@@ -27,7 +33,8 @@ the language or its file formats.
   or `fn(x: Int) -> Int { return x + k }` written in place, which copies the
   variables it reads. They are passed, returned, held in variables and called as
   `f(x)` or `adder(3)(4)`, and generic functions take them. A function value only
-  computes (no action, model call or `done`, through any call), so no capability,
+  computes (no action, model call, `done`, printing, clock or random number, through
+  any call), so no capability,
   secret or proof ever enters one: reading a capability is E003. They are never
   kept inside data, compared, encoded or sent. The compiler lifts each one written
   in place into a function of its own; both engines run them, and native code

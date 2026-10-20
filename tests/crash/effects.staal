@@ -1,0 +1,15 @@
+// A crash-test scenario for what differs between runs: random numbers, the clock and
+// printing, around actions that carry them out into the world. After a crash at any
+// point, the resumed run must use exactly the values the world was already given.
+
+fn handle(mail: cap email.send(uses: 5)) -> Text {
+    let code = random_int(100000, 999999)
+    print("code " + to_text(code))
+    let sent = mail.send("user@example.com: your code is " + to_text(code))
+    let at = now()
+    print("sent at " + to_text(at))
+    let logged = mail.send("audit@example.com: " + to_text(code) + " at " + to_text(at))
+    let roll = random_int(1, 6)
+    print("rolled " + to_text(roll))
+    return to_text(code) + " " + to_text(at) + " " + to_text(roll)
+}

@@ -1,0 +1,5 @@
+// expect: E101
+// message: `random_int` needs (lo: Int, hi: Int), found (Int, Money)
+fn f() -> Int {
+    return random_int(1, 2.00 NGN)
+}

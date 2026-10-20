@@ -1,0 +1,3 @@
+// expect: E101
+// message: a constant cannot call `now`: it differs between runs
+const STARTED: Int = now()

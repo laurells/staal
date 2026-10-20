@@ -1,0 +1,9 @@
+// expect: E101
+// message: is a function value, which only computes: it cannot call `print`, which differs between runs
+fn f(xs: List<Int, 3>) -> Int {
+    let shown = map(xs, fn(x: Int) -> Int {
+        print(to_text(x))
+        return x
+    })
+    return len(shown)
+}

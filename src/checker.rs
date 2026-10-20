@@ -547,6 +547,7 @@ fn find_pure_fns(prog: &Program) -> HashSet<String> {
         let mut called = HashSet::new();
         walk_block(&f.body, &mut |e| match e {
             Expr::Propose { .. } | Expr::Done { .. } | Expr::Action { .. } => direct = true,
+            Expr::Builtin { f, .. } if f.is_effect() => direct = true,
             Expr::Call { name, .. } => {
                 called.insert(name.clone());
             }
@@ -576,10 +577,13 @@ fn check_pure_body(ctx: &mut Ctx, name: &str, body: &[Stmt]) {
     walk_block(body, &mut |e| match e {
         Expr::Propose { pos, .. } => found.push((*pos, "it cannot ask a model".into())),
         Expr::Done { pos, .. } => found.push((*pos, "it cannot make a `done`".into())),
+        Expr::Builtin { f, pos, .. } if f.is_effect() => {
+            found.push((*pos, format!("it cannot call `{}`, which differs between runs", f.name())))
+        }
         Expr::Call { name: callee, pos, .. }
             if ctx.sigs.get(callee.as_str()).is_some_and(|s| s.generics.is_empty()) && !ctx.pure_fns.contains(callee) =>
         {
-            found.push((*pos, format!("it cannot call '{callee}', which acts, asks a model or calls something that does")))
+            found.push((*pos, format!("it cannot call '{callee}', which acts, asks a model, prints, reads the clock or draws a random number, or calls something that does")))
         }
         _ => {}
     });
@@ -1070,7 +1074,11 @@ fn expr_can_fail_itself(e: &Expr) -> bool {
                     | Builtin::MakeTime
                     | Builtin::DateParts
                     | Builtin::TimeParts
-                    | Builtin::Weekday,
+                    | Builtin::Weekday
+                    // The journal can fail to record them; `random_int` fails if lo > hi.
+                    | Builtin::Print
+                    | Builtin::Now
+                    | Builtin::RandomInt,
                 ..
             }
     )
@@ -3361,7 +3369,7 @@ fn closure_type(ctx: &mut Ctx, name: &str, captures: &[Expr], pos: Pos, env: &En
     }
     // A lifted `fn(...) { ... }` that does more than compute is reported in its body.
     if !ctx.pure_fns.contains(name) && !is_lifted(name) {
-        ctx.err("E101", pos, format!("'{name}' cannot be a function value: it acts, asks a model or calls something that does, and a function value only computes"));
+        ctx.err("E101", pos, format!("'{name}' cannot be a function value: it acts, asks a model, prints, reads the clock or draws a random number, or calls something that does, and a function value only computes"));
         return None;
     }
     if captures.len() > params.len() {
@@ -3706,6 +3714,22 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 Builtin::Map | Builtin::Filter | Builtin::Any | Builtin::All | Builtin::Count | Builtin::Fold => {
                     return function_builtin(ctx, *f, &tys, *pos);
                 }
+                // The runtime makes these values itself, from no party's data: trusted.
+                Builtin::Print | Builtin::Now | Builtin::RandomInt => {
+                    let want = match f {
+                        Builtin::Print => vec![text.clone()],
+                        Builtin::RandomInt => vec![named("Int"), named("Int")],
+                        _ => Vec::new(),
+                    };
+                    if tys.iter().map(|(t, _)| t).ne(want.iter()) {
+                        let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();
+                        let need = if *f == Builtin::Print { "Text" } else { "(lo: Int, hi: Int)" };
+                        ctx.err("E101", *pos, format!("`{}` needs {need}, found ({})", f.name(), found.join(", ")));
+                        return None;
+                    }
+                    let result = if *f == Builtin::Print { named("Unit") } else { named("Int") };
+                    return Some((result, true));
+                }
                 _ => {}
             }
             if *f == Builtin::Contains && secret_inside(ctx, &tys[0].0, &mut HashSet::new()).is_some() {
@@ -3773,7 +3797,10 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::MakeTime
                 | Builtin::DateParts
                 | Builtin::TimeParts
-                | Builtin::Weekday => true,
+                | Builtin::Weekday
+                | Builtin::Print
+                | Builtin::Now
+                | Builtin::RandomInt => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();

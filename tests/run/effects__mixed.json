@@ -1,0 +1,1 @@
+{"entry": "mixed", "inputs": {"x": 20}, "model": {"provider": "script", "responses": []}, "expect": {"result": 41, "events": ["random", "print"]}}

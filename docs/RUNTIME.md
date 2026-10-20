@@ -308,8 +308,9 @@ Evaluation is strictly left to right and statement by statement.
   captures first, named after the function it is in and where (`main::fn@4:13`, as
   messages show it).
   A function value only computes. Its function, and every function that one calls,
-  makes no action, model call or `done`, so a function value can never spend a
-  budget, reach a model or act, and blinding and budgets need no knowledge of which
+  makes no action, model call or `done`, and does not print, read the clock or draw
+  a random number, so a function value can never spend a budget, reach a model, act
+  or make a journaled operation, and blinding and budgets need no knowledge of which
   function it is. A capability never enters one: `fn(...) { ... }` reading a
   variable that holds a capability is E003, as is a function type taking or giving
   one; one reading a `Secret`, `Header`, `Receipt`, `Outcome`, `Done` or unvalidated
@@ -415,6 +416,23 @@ Evaluation is strictly left to right and statement by statement.
   `(year, month, day)`, `time_parts(t)` is `(hour, minute, second, millisecond)`,
   and `weekday(t)` is 1 for Monday to 7 for Sunday. Each fails for a time outside
   the range, and `make_time` for a date or time of day that does not exist.
+- Printing, the clock and random numbers: what differs between runs. `print(text)`
+  writes `text` and a line break to standard output (the result of `staalc run`
+  follows the printed lines). `now()` is the current time, as a time above, from the
+  system clock. `random_int(lo, hi)` is an Int from `lo` to `hi` inclusive, each
+  equally likely, from the operating system's random source; it fails if `lo` is
+  above `hi`. Each is an external operation in the journal (section 11): resuming a
+  run uses the time, the number and the printing the first run recorded, so a value
+  the world was given before a crash is the value the run goes on with, and a line is
+  not printed twice. A crash after a line was printed but before that was recorded
+  leaves it in doubt, and it is printed again on resume, as a model call in doubt is
+  made again. Each is also logged (`print`, `clock`, `random`). What the runtime
+  makes itself is trusted (E006): a time or a random number may be part of an
+  instruction. Printing is for people, not models, so printing blinded data is not
+  refused; but since the journal could fail to record a print, it can stop the run,
+  and so it makes whether later code runs depend on its text, as any operation that
+  might not finish does (E007). None of the three is a constant or a default (E101),
+  none runs as native code, and a function value cannot use one.
 - What a standard library function gives is trusted only if everything it is given
   is, and reveals everything it is given (E006, E007). Those that can fail make
   whether later code runs depend on their arguments, as other failing operations
@@ -712,7 +730,8 @@ loss, out-of-memory kill, `kill -9`). Resuming it finishes the run so that:
 ### How
 
 Everything a run does is deterministic except what the outside world tells
-it: token counts, model replies and action results. Each of these is an
+it: token counts, model replies, action results, the time and random numbers;
+and printing is a change to the world. Each of these is an
 **external operation**, numbered 1, 2, 3, ... in the order the run reaches
 them. For each one the runtime appends, and flushes to disk (`fsync`) before
 continuing:
@@ -747,6 +766,9 @@ doubt**: it may or may not have happened.
 
 - A token count or model call in doubt is simply performed again. This may
   cost one extra call at the provider; the program never saw the lost reply.
+- A clock read or random number in doubt is simply made again: the program never
+  saw the lost value, so a new one is as good. A print in doubt is printed again, so
+  that one line may appear twice.
 - An action in doubt must not be guessed. Every action is performed with an
   **idempotency key**, `<run id>-<operation number>`, unique to this run and
   this operation. If the adapter declares the action idempotent (the service
@@ -787,7 +809,7 @@ JSON lines, append-only. Records:
 {"j":"end","ok":true,"result":…}       or  {"j":"end","ok":false,"failure":"…","message":"…"}
 ```
 
-`op` is `count`, `model` or `action`. After an intent come only its result, or,
+`op` is `count`, `model`, `action`, `print`, `clock` or `random`. After an intent come only its result, or,
 for an action, `retry`/`attempt` pairs and then its result. A crash can tear only the last line; a
 torn last line is discarded on resume (it was never acknowledged). Any other
 malformed line is corruption, and resume refuses. Resuming a journal that

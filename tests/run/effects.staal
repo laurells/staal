@@ -1,0 +1,24 @@
+// Printing and random numbers whose value is fixed, so both engines' logs and
+// journals can be compared exactly. (Time and randomness that vary are tested by the
+// crash test, where the journal must replay them.)
+fn greet(name: Text) -> Int {
+    print("hello, " + name)
+    print("")
+    return random_int(7, 7)
+}
+
+fn backwards() -> Int {
+    return random_int(2, 1)
+}
+
+// A function that prints or draws runs on the interpreter: what it calls still runs
+// as native code.
+fn twice(x: Int) -> Int {
+    return x * 2
+}
+
+fn mixed(x: Int) -> Int {
+    let y = twice(x) + random_int(1, 1)
+    print(to_text(y))
+    return y
+}

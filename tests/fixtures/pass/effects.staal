@@ -1,0 +1,14 @@
+// Printing, the clock and random numbers in ordinary functions. What the runtime
+// makes itself is trusted, so a time or a draw can be part of an instruction.
+// Blinding keeps data from models; printing is for people, so printing blinded data
+// after the model call is allowed.
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email)) -> Text budget(calls: 1, tokens: 100) {
+    print("greeting " + c.name)
+    let at = now()
+    let pick = random_int(1, 3)
+    let note = validate propose(Text, instruct: "Write greeting number " + to_text(pick) + " for " + format_time(at), data: [c.name], tokens: 100)
+    print("sent to " + c.email)
+    return note
+}

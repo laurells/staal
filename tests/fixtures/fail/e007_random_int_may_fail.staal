@@ -1,0 +1,9 @@
+// expect: E007
+// `random_int` fails when lo is above hi, so whether the model call after it happens
+// depends on the blinded bound.
+type Customer { name: Text, age: Int }
+
+fn f(c: Customer @blind(age)) {
+    let n = random_int(18, c.age)
+    let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+}

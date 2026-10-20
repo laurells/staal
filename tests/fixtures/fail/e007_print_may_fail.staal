@@ -1,0 +1,10 @@
+// expect: E007
+// Printing can stop the run (a journal that cannot be written), so printing blinded
+// data before a model call makes whether that call happens depend on it. (The value
+// is printed as it is: `+` on text can fail too, and would hide what this tests.)
+type Customer { name: Text, email: Text }
+
+fn f(c: Customer @blind(email)) -> Text budget(calls: 1, tokens: 100) {
+    print(c.email)
+    return validate propose(Text, instruct: "Write a greeting.", data: [c.name], tokens: 100)
+}

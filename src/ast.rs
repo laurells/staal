@@ -421,9 +421,22 @@ pub enum Builtin {
     DateParts,
     TimeParts,
     Weekday,
+    /// What differs between runs, each an external operation in the journal, so a
+    /// resumed run replays what the first saw: `print(text)` writes a line to standard
+    /// output; `now()` is the current time (an Int of milliseconds since 1970 in UTC);
+    /// `random_int(lo, hi)` is an Int from lo to hi inclusive, from the operating
+    /// system's random source.
+    Print,
+    Now,
+    RandomInt,
 }
 
 impl Builtin {
+    /// Whether it is an external operation, journaled (RUNTIME.md section 11).
+    pub fn is_effect(self) -> bool {
+        matches!(self, Builtin::Print | Builtin::Now | Builtin::RandomInt)
+    }
+
     /// Whether it calls a function value it is given.
     pub fn calls_function(self) -> bool {
         matches!(self, Builtin::Map | Builtin::Filter | Builtin::Any | Builtin::All | Builtin::Count | Builtin::Fold)
@@ -487,6 +500,9 @@ impl Builtin {
             "date_parts" => Some(Builtin::DateParts),
             "time_parts" => Some(Builtin::TimeParts),
             "weekday" => Some(Builtin::Weekday),
+            "print" => Some(Builtin::Print),
+            "now" => Some(Builtin::Now),
+            "random_int" => Some(Builtin::RandomInt),
             _ => None,
         }
     }
@@ -549,6 +565,9 @@ impl Builtin {
             Builtin::DateParts => "date_parts",
             Builtin::TimeParts => "time_parts",
             Builtin::Weekday => "weekday",
+            Builtin::Print => "print",
+            Builtin::Now => "now",
+            Builtin::RandomInt => "random_int",
         }
     }
 
@@ -584,7 +603,9 @@ impl Builtin {
             | Builtin::ParseTime
             | Builtin::DateParts
             | Builtin::TimeParts
-            | Builtin::Weekday => 1,
+            | Builtin::Weekday
+            | Builtin::Print => 1,
+            Builtin::Now => 0,
             Builtin::Contains
             | Builtin::StartsWith
             | Builtin::EndsWith
@@ -600,6 +621,7 @@ impl Builtin {
             | Builtin::Rem
             | Builtin::Append
             | Builtin::Concat
+            | Builtin::RandomInt
             | Builtin::Map
             | Builtin::Filter
             | Builtin::Any
@@ -695,9 +717,9 @@ pub enum Expr {
     List(Vec<Expr>, Pos),
     /// `fn(x: Int) -> Int { return x * k }`: a function value, which may read the
     /// variables around it (`k`): each is copied when the value is made. Its body only
-    /// computes: no action, model call, `try`, `parse`, `validate` or `done`, and it
+    /// computes: no action, model call, `done`, `print`, `now` or `random_int`, and it
     /// calls only functions that do none of these either; it cannot read a capability,
-    /// a secret or proof. The compiler lifts it into a function of its own, taking what
+    /// a secret, proof or an unvalidated value. The compiler lifts it into a function of its own, taking what
     /// it reads first (`Expr::Closure`).
     Lambda { params: Vec<(String, Ty)>, ret: Box<Ty>, body: Vec<Stmt>, pos: Pos },
     /// A function value: function `name` with `captures` given as its first arguments.
