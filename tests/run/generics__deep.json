@@ -1,0 +1,1 @@
+{"entry": "deep", "inputs": {"xs": [{"amount": "1.00", "currency": "NGN"}, {"amount": "4.00", "currency": "NGN"}]}, "expect": {"result": {"amount": "4.00", "currency": "NGN"}}, "model": {"provider": "script", "responses": []}}

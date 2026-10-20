@@ -75,6 +75,23 @@ pub fn expand(prog: &mut Program) -> Vec<Diagnostic> {
     diags
 }
 
+/// Replaces named types in a function as `to` says: a generic function's type
+/// parameters by the types of one instance of it.
+pub fn substitute(f: &mut FnDecl, to: &HashMap<String, Ty>) {
+    let mut diags = Vec::new();
+    let mut x = Expander { to, diags: &mut diags };
+    for p in &mut f.params {
+        x.ty(&mut p.ty);
+        if let Some(d) = &mut p.default {
+            x.expr(d);
+        }
+    }
+    for t in f.ret.iter_mut().chain(f.fails.iter_mut()) {
+        x.ty(t);
+    }
+    x.block(&mut f.body);
+}
+
 /// The type alias `i` names, with every alias in it replaced.
 fn expanded(
     i: usize,

@@ -68,6 +68,8 @@ struct Sig {
     /// its type, not by a name an import could check.
     public: bool,
     file: u32,
+    /// Its type parameters, if it is generic.
+    generics: Vec<String>,
 }
 
 /// While checking a capability action's body: the `@target` and `@amount` parameters
@@ -102,8 +104,15 @@ struct Ctx<'a> {
     for_bounds: HashMap<Pos, u64>,
     /// The capacity of the map or set each `put` and `add` grows, by its position.
     capacities: HashMap<Pos, u64>,
-    /// Each method call found, by its position: the method it calls.
-    methods: HashMap<Pos, String>,
+    /// Each method call found, by the function it is in and its position: the method
+    /// it calls. (A generic function's copies share its positions.)
+    methods: HashMap<(String, Pos), String>,
+    /// Each call of a generic function with concrete types, likewise: the function and
+    /// the types of its parameters there.
+    instances: HashMap<(String, Pos), (String, Vec<Ty>)>,
+    /// The function being checked, and its type parameters.
+    fn_name: String,
+    generic_params: Vec<String>,
     /// Problems with method calls found while resolving them, which the plain calls
     /// they become no longer show (a method that is not `pub`).
     method_diags: Vec<Diagnostic>,
@@ -285,12 +294,26 @@ pub fn check_with_bounds(prog: &Program) -> Found {
     check_once(prog).0
 }
 
-/// Checks a program whose method calls may not be resolved yet. Resolving one needs
-/// the type of what it is called on, which only checking finds: so the program is
-/// checked, each method call found is rewritten into a plain call of that method
-/// (`c.total()` into `Charge::total(c)`), and the result is checked again, until
-/// nothing is left to resolve. The last check sees only plain calls, so every rule
-/// applies to a method exactly as to any function.
+/// A call site: the function it is in and its position. (A generic function's copies
+/// share its positions.)
+type Site = (String, Pos);
+
+/// A generic function and the types of its parameters at one call.
+type Instance = (String, Vec<Ty>);
+
+/// What one check found to rewrite: method calls, and calls of generic functions.
+struct Resolutions {
+    methods: HashMap<Site, String>,
+    instances: HashMap<Site, Instance>,
+}
+
+/// Checks a program whose method calls and generic calls are not resolved yet.
+/// Resolving one needs types, which only checking finds: so the program is checked,
+/// each method call found is rewritten into a plain call of that method
+/// (`c.total()` into `Charge::total(c)`), each call of a generic function into a call
+/// of its copy for those types (`first<Int>`, made once), and the result is checked
+/// again, until nothing is left to resolve. The last check sees only plain calls of
+/// concrete functions, so every rule applies to them exactly as to any function.
 pub fn check_and_resolve(prog: &mut Program) -> Found {
     let mut resolving: Vec<Diagnostic> = Vec::new();
     let finish = |mut found: Found, resolving: Vec<Diagnostic>| {
@@ -301,83 +324,146 @@ pub fn check_and_resolve(prog: &mut Program) -> Found {
         }
         found
     };
-    for _ in 0..8 {
-        let (found, methods) = check_once(prog);
-        if methods.is_empty() {
+    for _ in 0..MAX_RESOLVE_ROUNDS {
+        let (found, res) = check_once(prog);
+        if res.methods.is_empty() && res.instances.is_empty() {
             return finish(found, resolving);
         }
         resolving.extend(found.0.into_iter().filter(|d| d.code == "E107" && d.msg.starts_with("method '")));
-        resolve_methods(prog, &methods);
+        if let Err(d) = resolve(prog, &res) {
+            let mut found = check_once(prog).0;
+            found.0.push(d);
+            return finish(found, resolving);
+        }
         // Arguments of method calls are completed (named, defaults) now they are calls.
         let diags = crate::calls::complete(prog, true);
         if !diags.is_empty() {
             return (diags, HashMap::new(), HashMap::new());
         }
     }
-    let (mut found, methods) = check_once(prog);
-    for pos in methods.keys() {
-        found.0.push(Diagnostic { code: "E101", pos: *pos, msg: "this method call could not be resolved".into() });
+    let (mut found, res) = check_once(prog);
+    for (_, pos) in res.methods.keys().chain(res.instances.keys()) {
+        found.0.push(Diagnostic {
+            code: "E101",
+            pos: *pos,
+            msg: format!("this call could not be resolved in {MAX_RESOLVE_ROUNDS} rounds; a generic function that calls itself with ever larger types has no end"),
+        });
     }
     finish(found, resolving)
 }
 
-/// Rewrites each method call `methods` names into a call of that method, with what
-/// it is called on as the first argument.
-fn resolve_methods(prog: &mut Program, methods: &HashMap<Pos, String>) {
-    fn expr(e: &mut Expr, m: &HashMap<Pos, String>) {
-        for c in e.children_mut() {
-            expr(c, m);
+const MAX_RESOLVE_ROUNDS: usize = 32;
+
+/// The most copies of generic functions a program may need.
+const MAX_INSTANCES: usize = 1000;
+
+/// The name of the copy of generic `f` for these types: `first<Int>`, `pair<Int,Text>`.
+/// Without spaces: a name with one is a capability's action.
+fn instance_name(f: &str, tys: &[Ty]) -> String {
+    let args: Vec<String> = tys.iter().map(|t| t.to_string().replace(' ', "")).collect();
+    format!("{f}<{}>", args.join(","))
+}
+
+/// Rewrites what `res` found: method calls into calls of the method, generic calls
+/// into calls of the copy for their types, making each copy that does not exist yet.
+fn resolve(prog: &mut Program, res: &Resolutions) -> Result<(), Diagnostic> {
+    let mut calls: HashMap<(String, Pos), String> = res.methods.clone();
+    let have: HashSet<String> = prog.fns.iter().map(|f| f.name.clone()).collect();
+    let mut made: Vec<FnDecl> = Vec::new();
+    let mut wanted: Vec<(&Site, &Instance)> = res.instances.iter().collect();
+    // In a fixed order, so the same program always gives the same copies.
+    wanted.sort_by(|a, b| (&a.0.0, a.0.1.file, a.0.1.line, a.0.1.col).cmp(&(&b.0.0, b.0.1.file, b.0.1.line, b.0.1.col)));
+    for (key, (generic, tys)) in wanted {
+        let name = instance_name(generic, tys);
+        if !have.contains(&name) && !made.iter().any(|f| f.name == name) {
+            let Some(g) = prog.fns.iter().find(|f| &f.name == generic) else { continue };
+            let mut copy = g.clone();
+            let to: HashMap<String, Ty> = g.generics.iter().cloned().zip(tys.iter().cloned()).collect();
+            crate::aliases::substitute(&mut copy, &to);
+            copy.generics.clear();
+            copy.name = name.clone();
+            made.push(copy);
+            if prog.fns.len() + made.len() > MAX_INSTANCES + have.len() {
+                return Err(Diagnostic {
+                    code: "E101",
+                    pos: key.1,
+                    msg: format!("generic functions need more than {MAX_INSTANCES} copies; the types they are called with grow without end"),
+                });
+            }
         }
+        calls.insert(key.clone(), name);
+    }
+    prog.fns.extend(made);
+    rewrite_calls(prog, &calls);
+    Ok(())
+}
+
+/// Rewrites, in each function, the calls `calls` names (by function and position):
+/// a method call into a plain call with what it is called on as the first argument,
+/// a call of a generic function into a call of the copy named.
+fn rewrite_calls(prog: &mut Program, calls: &HashMap<(String, Pos), String>) {
+    fn expr(e: &mut Expr, f: &str, m: &HashMap<(String, Pos), String>) {
+        for c in e.children_mut() {
+            expr(c, f, m);
+        }
+        let key = |pos: &Pos| (f.to_string(), *pos);
         let call = match e {
-            Expr::Action { receiver, args, pos, .. } => m.get(pos).map(|name| {
+            Expr::Action { receiver, args, pos, .. } => m.get(&key(pos)).map(|name| {
                 let mut all = vec![Expr::Var(receiver.clone(), *pos)];
                 all.append(args);
                 Expr::Call { name: name.clone(), args: all, slots: Vec::new(), pos: *pos }
             }),
-            Expr::Method { base, args, pos, .. } => m.get(pos).map(|name| {
+            Expr::Method { base, args, pos, .. } => m.get(&key(pos)).map(|name| {
                 let pos = *pos;
                 let mut all = vec![std::mem::replace(base.as_mut(), Expr::Bool(false, pos))];
                 all.append(args);
                 Expr::Call { name: name.clone(), args: all, slots: Vec::new(), pos }
             }),
+            Expr::Call { name, pos, .. } => {
+                if let Some(n) = m.get(&key(pos)) {
+                    *name = n.clone();
+                }
+                None
+            }
             _ => None,
         };
         if let Some(c) = call {
             *e = c;
         }
     }
-    fn block(body: &mut [Stmt], m: &HashMap<Pos, String>) {
+    fn block(body: &mut [Stmt], f: &str, m: &HashMap<(String, Pos), String>) {
         for s in body {
             match s {
                 Stmt::Let { value, .. } | Stmt::Set { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value), _) | Stmt::Fail(value, _) => {
-                    expr(value, m)
+                    expr(value, f, m)
                 }
                 Stmt::Return(None, _) | Stmt::Break(_) | Stmt::Continue(_) => {}
-                Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => block(body, m),
+                Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => block(body, f, m),
                 Stmt::For { list, body, .. } => {
-                    expr(list, m);
-                    block(body, m);
+                    expr(list, f, m);
+                    block(body, f, m);
                 }
                 Stmt::If { cond, then, els, .. } => {
-                    expr(cond, m);
-                    block(then, m);
-                    block(els, m);
+                    expr(cond, f, m);
+                    block(then, f, m);
+                    block(els, f, m);
                 }
                 Stmt::Match { value, arms, .. } => {
-                    expr(value, m);
+                    expr(value, f, m);
                     for a in arms {
-                        block(&mut a.body, m);
+                        block(&mut a.body, f, m);
                     }
                 }
             }
         }
     }
     for f in &mut prog.fns {
-        block(&mut f.body, methods);
+        let name = f.name.clone();
+        block(&mut f.body, &name, calls);
     }
 }
 
-fn check_once(prog: &Program) -> (Found, HashMap<Pos, String>) {
+fn check_once(prog: &Program) -> (Found, Resolutions) {
     let mut ctx = Ctx {
         known: ["Text", "Int", "Bool", "Money", "Unit", "Receipt"].iter().map(|s| s.to_string()).collect(),
         fields: HashMap::new(),
@@ -394,6 +480,9 @@ fn check_once(prog: &Program) -> (Found, HashMap<Pos, String>) {
         capacities: HashMap::new(),
         methods: HashMap::new(),
         method_diags: Vec::new(),
+        instances: HashMap::new(),
+        fn_name: String::new(),
+        generic_params: Vec::new(),
         lib_actions: HashMap::new(),
         flow: None,
     };
@@ -499,6 +588,7 @@ fn check_once(prog: &Program) -> (Found, HashMap<Pos, String>) {
                 fails: f.fails.clone(),
                 public: f.public,
                 file: f.pos.file,
+                generics: f.generics.clone(),
             },
         );
     }
@@ -564,7 +654,16 @@ fn check_once(prog: &Program) -> (Found, HashMap<Pos, String>) {
         }
     }
     for f in &prog.fns {
+        // A generic function is checked with each type parameter as a type of which
+        // nothing is known: no fields, no methods, no operations but equality.
+        ctx.fn_name = f.name.clone();
+        ctx.generic_params = f.generics.clone();
+        let fresh: Vec<String> = f.generics.iter().filter(|g| ctx.known.insert((*g).clone())).cloned().collect();
         check_fn(&mut ctx, f, prog);
+        for g in fresh {
+            ctx.known.remove(&g);
+        }
+        ctx.generic_params.clear();
     }
     // A constant's value appears wherever it is used, so a problem inside it would be
     // reported once per use: report each exact diagnostic once, where first found.
@@ -572,7 +671,7 @@ fn check_once(prog: &Program) -> (Found, HashMap<Pos, String>) {
     ctx.diags.retain(|d| seen.insert((d.code, d.pos, d.msg.clone())));
     let mut diags = ctx.diags;
     diags.extend(ctx.method_diags);
-    ((diags, ctx.for_bounds, ctx.capacities), ctx.methods)
+    ((diags, ctx.for_bounds, ctx.capacities), Resolutions { methods: ctx.methods, instances: ctx.instances })
 }
 
 /// Calls `f` on every expression in `body`, nested blocks included, outermost first.
@@ -1032,6 +1131,8 @@ fn collection_builtin(ctx: &mut Ctx, f: Builtin, tys: &[(Ty, bool)], trusted: bo
 /// Passes `put` and `add` the capacity of the map or set they grow, as a last
 /// argument: the capacity is the type's, which only the compiler knows.
 pub fn supply_capacities(prog: &mut Program, capacities: &HashMap<Pos, u64>) {
+    // Generic functions run only as their copies, which the program now calls.
+    prog.fns.retain(|f| f.generics.is_empty());
     fn expr(e: &mut Expr, caps: &HashMap<Pos, u64>) {
         for c in e.children_mut() {
             expr(c, caps);
@@ -2431,6 +2532,65 @@ fn record_fields(ctx: &mut Ctx, env: &Env, ty: &str, decl: &[(String, Ty)], fiel
 /// An expression's type and whether its value is trusted.
 type Typed = (Ty, bool);
 
+/// Matches parameter type `pattern`, which may hold the type parameters `gens`, against
+/// an argument's type, recording what each parameter is. A parameter met twice must be
+/// the same type both times (`none`'s type fits any optional one).
+fn bind_generics(gens: &[String], pattern: &Ty, actual: &Ty, bound: &mut HashMap<String, Ty>) -> Result<(), String> {
+    match (pattern, actual) {
+        (Ty::Named(g), a) if gens.contains(g) => {
+            match bound.get(g) {
+                None => {
+                    bound.insert(g.clone(), a.clone());
+                }
+                Some(prev) => match prev.unify(a) {
+                    Some(u) => {
+                        bound.insert(g.clone(), u);
+                    }
+                    None => return Err(format!("{g} is {prev} in one argument and {a} in another")),
+                },
+            }
+            Ok(())
+        }
+        (Ty::List(p, _), Ty::List(a, _)) | (Ty::Optional(p), Ty::Optional(a)) | (Ty::Proposed(p), Ty::Proposed(a)) | (Ty::Set(p, _), Ty::Set(a, _)) => {
+            bind_generics(gens, p, a, bound)
+        }
+        (Ty::Map(pk, pv, _), Ty::Map(ak, av, _)) => {
+            bind_generics(gens, pk, ak, bound)?;
+            bind_generics(gens, pv, av, bound)
+        }
+        (Ty::Tuple(ps), Ty::Tuple(as_)) if ps.len() == as_.len() => {
+            ps.iter().zip(as_).try_for_each(|(p, a)| bind_generics(gens, p, a, bound))
+        }
+        // Anything else is for `assignable` to report, once the parameters are known.
+        _ => Ok(()),
+    }
+}
+
+/// `t` with each type parameter `to` knows replaced by its type.
+fn subst_generics(t: &Ty, to: &HashMap<String, Ty>) -> Ty {
+    match t {
+        Ty::Named(n) => to.get(n).cloned().unwrap_or_else(|| t.clone()),
+        Ty::Proposed(i) => Ty::Proposed(Box::new(subst_generics(i, to))),
+        Ty::List(i, n) => Ty::List(Box::new(subst_generics(i, to)), *n),
+        Ty::Optional(i) => Ty::Optional(Box::new(subst_generics(i, to))),
+        Ty::Set(i, n) => Ty::Set(Box::new(subst_generics(i, to)), *n),
+        Ty::Map(k, v, n) => Ty::Map(Box::new(subst_generics(k, to)), Box::new(subst_generics(v, to)), *n),
+        Ty::Tuple(ts) => Ty::Tuple(ts.iter().map(|x| subst_generics(x, to)).collect()),
+        Ty::Cap { .. } => t.clone(),
+    }
+}
+
+/// Whether `t` names any of `names`.
+fn mentions(t: &Ty, names: &[String]) -> bool {
+    match t {
+        Ty::Named(n) => names.contains(n),
+        Ty::Proposed(i) | Ty::List(i, _) | Ty::Optional(i) | Ty::Set(i, _) => mentions(i, names),
+        Ty::Map(k, v, _) => mentions(k, names) || mentions(v, names),
+        Ty::Tuple(ts) => ts.iter().any(|x| mentions(x, names)),
+        Ty::Cap { .. } => false,
+    }
+}
+
 /// `base.method(args)`: a call of the method of `base`'s type, `T::method(base, args)`.
 /// It is recorded, so the call can be rewritten into exactly that (see
 /// `check_and_resolve`), and typed as that call.
@@ -2465,7 +2625,7 @@ fn method_call(ctx: &mut Ctx, base: &Expr, method: &str, args: &[Expr], pos: Pos
     if !public && file != pos.file {
         ctx.method_diags.push(Diagnostic { code: "E107", pos, msg: format!("method '{name}' is not `pub` in its module") });
     }
-    ctx.methods.insert(pos, name.clone());
+    ctx.methods.insert((ctx.fn_name.clone(), pos), name.clone());
     let mut all = vec![base.clone()];
     all.extend(args.iter().cloned());
     type_of(ctx, &Expr::Call { name, args: all, slots: Vec::new(), pos }, env)
@@ -3139,7 +3299,46 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 ctx.err("E100", *pos, format!("undefined function '{name}'"));
                 return None;
             };
-            let (params, ret, ret_trusted) = (sig.params.clone(), sig.ret.clone(), sig.ret_trusted);
+            let (mut params, mut ret, ret_trusted) = (sig.params.clone(), sig.ret.clone(), sig.ret_trusted);
+            let gens = sig.generics.clone();
+            // A generic function: its type parameters are what the arguments make them.
+            if !gens.is_empty() {
+                let mut bound: HashMap<String, Ty> = HashMap::new();
+                if params.len() == args.len() {
+                    for ((pty, _, _), aty) in params.iter().zip(&arg_tys) {
+                        if let Some((a, _)) = aty
+                            && let Err(msg) = bind_generics(&gens, pty, a, &mut bound)
+                        {
+                            ctx.err("E101", *pos, format!("in call to '{name}': {msg}"));
+                            return None;
+                        }
+                    }
+                }
+                let mut tys = Vec::with_capacity(gens.len());
+                for g in &gens {
+                    match bound.get(g) {
+                        Some(t) if !t.has_unknown() => tys.push(t.clone()),
+                        _ => {
+                            ctx.err(
+                                "E101",
+                                *pos,
+                                format!("in call to '{name}': cannot tell what {g} is from the arguments; give one a type, as in a typed `let`"),
+                            );
+                            return None;
+                        }
+                    }
+                }
+                for (p, _, _) in &mut params {
+                    *p = subst_generics(p, &bound);
+                }
+                ret = subst_generics(&ret, &bound);
+                // Types still holding this function's own parameters are resolved in
+                // its copies, where they are concrete.
+                let open = tys.iter().any(|t| mentions(t, &ctx.generic_params));
+                if !open {
+                    ctx.instances.insert((ctx.fn_name.clone(), *pos), (name.clone(), tys));
+                }
+            }
             if params.len() == args.len() {
                 check_call_blind(ctx, name, args, &params, env, *pos);
             }

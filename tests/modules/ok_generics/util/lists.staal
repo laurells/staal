@@ -1,0 +1,20 @@
+pub type Box { n: Int }
+
+pub fn first<T>(xs: List<T, 5>) -> Optional<T> {
+    for x in xs {
+        return some(x)
+    }
+    return none
+}
+
+// A generic function using a private helper: the copies live in this module's scope.
+pub fn second<T>(xs: List<T, 5>) -> Optional<T> {
+    return at(xs, 1)
+}
+
+fn at<T>(xs: List<T, 5>, i: Int) -> Optional<T> {
+    if i < len(xs) {
+        return some(xs[i])
+    }
+    return none
+}

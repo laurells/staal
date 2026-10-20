@@ -198,6 +198,22 @@ fn the_method_cases_really_run_native_code() {
     assert_eq!(got, want);
 }
 
+#[test]
+fn the_generic_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/generics.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    // One native function per copy; the generic definitions themselves are gone.
+    assert!(prog.fns.iter().all(|f| f.generics.is_empty()), "a generic definition was left in the program");
+    let want = [
+        "count_of<Int>", "deep", "first<Int>", "first<Text>", "first_or<Int>", "first_or<Text>", "ints", "last<Line>", "last<Money>",
+        "lines", "or_else<Int>", "or_else<Money>", "or_else<Text>", "pair<Int,Text>", "repeat_last<Money>", "swap<Int,Text>", "texts",
+        "tuples",
+    ];
+    assert_eq!(got, want);
+}
+
 // ---------------------------------------------------------------------------------
 // Generated programs
 

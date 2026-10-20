@@ -1,0 +1,13 @@
+// expect: E101
+// message: in call to 'first': cannot tell what T is from the arguments
+// `[none]` says it holds optional values, but not of what.
+fn first<T>(xs: List<T, 5>) -> Optional<T> {
+    for x in xs {
+        return some(x)
+    }
+    return none
+}
+
+fn f() -> Bool {
+    return first([none]) == none
+}

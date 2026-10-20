@@ -1,0 +1,9 @@
+// expect: E006
+// Untrusted in, untrusted out, whatever the type.
+fn id<T>(x: T) -> T {
+    return x
+}
+
+fn f(ticket: Text) {
+    let s = propose(Text, instruct: id(ticket), tokens: 10)
+}

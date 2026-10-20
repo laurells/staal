@@ -258,7 +258,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
     for (mi, m) in modules.iter().enumerate() {
         let mut scratch = Vec::new();
         let scope = scope_of(mi, m, &exports, index, &enums, &mut scratch);
-        let mut r = Resolver { scope: &scope, diags: &mut scratch };
+        let mut r = Resolver { scope: &scope, diags: &mut scratch, generics: Vec::new() };
         for a in &m.prog.aliases {
             let mut t = a.ty.clone();
             r.ty(&mut t, a.pos);
@@ -282,7 +282,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
     }
     for (mi, m) in modules.iter_mut().enumerate() {
         let scope = scope_of(mi, m, &exports, index, &enums, &mut diags);
-        let mut r = Resolver { scope: &scope, diags: &mut diags };
+        let mut r = Resolver { scope: &scope, diags: &mut diags, generics: Vec::new() };
         for t in &mut m.prog.types {
             t.name = format!("{}{}", scope.prefix, t.name);
             for (_, fty) in &mut t.fields {
@@ -308,6 +308,13 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             if !f.name.contains(' ') {
                 f.name = format!("{}{}", scope.prefix, f.name);
             }
+            // A type parameter is a name of its own; it cannot also name a type here.
+            for g in &f.generics {
+                if BUILTIN_TYPES.contains(&g.as_str()) || r.scope.types.contains_key(g) {
+                    r.diags.push(err("E101", f.pos, format!("type parameter '{g}' has the name of a type; choose another name")));
+                }
+            }
+            r.generics = f.generics.clone();
             for p in &mut f.params {
                 r.binder(&p.name, f.pos);
                 r.ty(&mut p.ty, f.pos);
@@ -322,6 +329,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
                 r.ty(t, f.pos);
             }
             r.block(&mut f.body);
+            r.generics.clear();
         }
         for c in &mut m.prog.caps {
             for (name, t, pos) in &mut c.needs {
@@ -506,6 +514,8 @@ fn modules_prefix(path: &[String]) -> String {
 struct Resolver<'s, 'a, 'd> {
     scope: &'s Scope<'a>,
     diags: &'d mut Vec<Diagnostic>,
+    /// The type parameters of the function being resolved: names, not types to qualify.
+    generics: Vec<String>,
 }
 
 impl Resolver<'_, '_, '_> {
@@ -557,6 +567,7 @@ impl Resolver<'_, '_, '_> {
 
     fn ty(&mut self, ty: &mut Ty, pos: Pos) {
         match ty {
+            Ty::Named(n) if self.generics.contains(n) => {}
             Ty::Named(n) => *n = self.type_name(n, pos),
             Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => self.ty(inner, pos),
             Ty::Tuple(items) => {

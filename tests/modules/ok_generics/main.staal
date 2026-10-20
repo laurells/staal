@@ -1,0 +1,13 @@
+// expect: ok
+// Generic functions cross modules: called with this module's types too.
+import util.lists as l { first, Box }
+
+type Note { text: Text }
+
+fn f(xs: List<Note, 5>) -> Optional<Note> {
+    return first(xs)
+}
+
+fn g(xs: List<Box, 5>) -> Optional<l.Box> {
+    return l.second(xs)
+}

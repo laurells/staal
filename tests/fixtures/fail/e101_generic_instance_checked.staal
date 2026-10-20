@@ -1,0 +1,10 @@
+// expect: E101
+// message: secrets and headers cannot be compared
+// Each copy is checked for its types: comparing is fine for most, never for secrets.
+fn same<T>(a: T, b: T) -> Bool {
+    return a == b
+}
+
+fn f(key: Secret) -> Bool {
+    return same(key, key)
+}

@@ -1,0 +1,9 @@
+// expect: E101
+// message: in call to 'nothing': cannot tell what T is from the arguments
+fn nothing<T>() -> Optional<T> {
+    return none
+}
+
+fn f() -> Bool {
+    return nothing() == none
+}

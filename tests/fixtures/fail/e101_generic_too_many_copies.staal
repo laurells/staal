@@ -1,0 +1,13 @@
+// expect: E101
+// message: generic functions need more than 1000 copies
+// Each copy asks for two new ones: the number of copies doubles every round.
+fn spread<T>(x: T, n: Int) -> Int {
+    if n == 0 {
+        return 0
+    }
+    return spread((x, 1), n - 1) + spread([x], n - 1)
+}
+
+fn f() -> Int {
+    return spread(1, 20)
+}

@@ -266,6 +266,16 @@ Evaluation is strictly left to right and statement by statement.
 - `break` leaves the innermost loop; `continue` goes on to its next iteration
   (for `repeat` and `for`, the next count or element). Each iteration costs one
   step either way. `return` leaves the function.
+- A generic function, `fn first<T>(xs: List<T, 10>) -> Optional<T>`, has type
+  parameters. A call's arguments decide what each one is (`first(names)` with
+  `names: List<Text, 10>` makes T Text); one the arguments do not decide, or decide
+  two ways, is E101. The function is checked once with each parameter as a type of
+  which nothing is known (no fields, no methods, no arithmetic or ordering; equality
+  is allowed), and the compiler makes one copy per set of types it is called with,
+  `first<Text>`, which it checks and runs like any function: so every rule holds for
+  each copy with its real types, and a copy for which one fails (comparing secrets,
+  say) is an error. A type parameter cannot have the name of a type in scope. Calls
+  that would need copies without end are E101.
 - A method, `fn Line.total(self) -> Money`, is a function of the record or enum
   `Line`, declared in the file that declares `Line`; its first parameter, `self`, is
   the value it is called on. `l.total()` (or `cart.lines[0].total()`, on any

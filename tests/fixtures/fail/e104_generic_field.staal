@@ -1,0 +1,5 @@
+// expect: E104
+// message: T has no fields
+fn name_of<T>(x: T) -> Text {
+    return x.name
+}

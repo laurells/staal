@@ -1,0 +1,9 @@
+// expect: E004
+// A generic function's model calls count wherever a copy of it is called.
+fn ask<T>(x: T) -> Text budget(calls: 1, tokens: 500) {
+    return validate propose(Text, instruct: "Describe.", data: [x], tokens: 500)
+}
+
+fn f() -> Text budget(calls: 1, tokens: 100) {
+    return ask(3)
+}

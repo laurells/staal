@@ -1,0 +1,87 @@
+// Generic functions: one definition, a copy per set of types it is called with,
+// each checked and run like any function.
+type Line { name: Text, price: Money }
+
+fn first<T>(xs: List<T, 10>) -> Optional<T> {
+    for x in xs {
+        return some(x)
+    }
+    return none
+}
+
+fn last<T>(xs: List<T, 10>) -> Optional<T> {
+    let found: Optional<T> = none
+    for x in xs {
+        set found = some(x)
+    }
+    return found
+}
+
+fn pair<A, B>(a: A, b: B) -> (A, B) {
+    return (a, b)
+}
+
+fn swap<A, B>(p: (A, B)) -> (B, A) {
+    let (a, b) = p
+    return (b, a)
+}
+
+fn count_of<T>(xs: List<T, 10>, wanted: T) -> Int {
+    let n = 0
+    for x in xs {
+        if x == wanted {
+            set n = n + 1
+        }
+    }
+    return n
+}
+
+fn or_else<T>(x: Optional<T>, fallback: T) -> T {
+    match x {
+        some(v) => {
+            return v
+        }
+        none => {
+            return fallback
+        }
+    }
+}
+
+// A generic function calling another, and itself.
+fn first_or<T>(xs: List<T, 10>, fallback: T) -> T {
+    return or_else(first(xs), fallback)
+}
+
+fn repeat_last<T>(xs: List<T, 10>, n: Int) -> Optional<T> {
+    if n <= 0 {
+        return last(xs)
+    }
+    return repeat_last(xs, n - 1)
+}
+
+fn ints(xs: List<Int, 10>) -> Int {
+    return first_or(xs, 0) + count_of(xs, 3)
+}
+
+fn texts(xs: List<Text, 10>) -> Text {
+    return first_or(xs, "none")
+}
+
+fn lines(xs: List<Line, 10>) -> Text {
+    match last(xs) {
+        some(l) => {
+            return l.name
+        }
+        none => {
+            return "no lines"
+        }
+    }
+}
+
+fn tuples() -> (Text, Int) {
+    return swap(pair(3, "three"))
+}
+
+fn deep(xs: List<Money, 10>) -> Money {
+    return or_else(repeat_last(xs, 3), 0.00 NGN)
+}

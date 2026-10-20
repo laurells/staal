@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Generic functions, `fn first<T>(xs: List<T, 10>) -> Optional<T>`. Type
+  parameters are inferred from the arguments; the body is checked with each as an
+  unknown type, and each set of types used becomes a copy (`first<Text>`) that is
+  checked and run like any function, on both engines.
 - Methods, `fn Line.total(self) -> Money`, declared beside a record or enum and
   called as `line.total()` on any expression, with named arguments and defaults.
   The compiler resolves each call by type and rewrites it into a plain call before

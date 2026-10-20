@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 41 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 438 invalid ones
+rejecting the programs it should. 42 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 452 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -130,6 +130,24 @@ is, so with `order: Order @blind(payment.reference)` an arm may still ask a mode
 about the amount, but binding `reference` there and passing it on is E007, and
 with the whole `payment` blinded, deciding a model call by the variant is E007
 too.
+
+### Generic functions
+
+    fn first<T>(xs: List<T, 100>) -> Optional<T> {
+        for x in xs { return some(x) }
+        return none
+    }
+
+    fn pair<A, B>(a: A, b: B) -> (A, B) { return (a, b) }
+
+    let top = first(scores)        // T is Int
+    let who = first(names)         // T is Text
+
+A generic function works for any types its callers give it. Inside it, a type
+parameter is a type of which nothing is known, so code that compiles there works for
+every type. Each set of types it is used with becomes a copy, compiled and checked
+like a hand-written function: a value passed through `first` keeps its trust and its
+blinding, and a copy's model calls count against its caller's budget.
 
 ### Methods
 

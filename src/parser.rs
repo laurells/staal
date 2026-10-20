@@ -564,6 +564,25 @@ impl Parser {
 
     /// The rest of a function after its name: parameters, return type, budget, body.
     fn fn_rest(&mut self, public: bool, name: String, pos: Pos) -> PResult<FnDecl> {
+        // `<T, U>`: type parameters.
+        let mut generics = Vec::new();
+        if *self.peek() == Tok::Lt {
+            self.bump();
+            loop {
+                let gpos = self.pos();
+                let g = self.ident()?;
+                if generics.contains(&g) {
+                    return Err((gpos, format!("type parameter '{g}' is declared twice")));
+                }
+                generics.push(g);
+                if *self.peek() == Tok::Comma {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+            self.expect(Tok::Gt, "'>'")?;
+        }
         self.expect(Tok::LParen, "'('")?;
         let mut params = Vec::new();
         // A method's first parameter is `self`, the value it is called on.
@@ -634,7 +653,7 @@ impl Parser {
         };
         let budget = if *self.peek() == Tok::Budget { Some(self.budget()?) } else { None };
         let body = self.block()?;
-        Ok(FnDecl { public, name, params, ret, ret_trusted, budget, fails, method_of: None, body, pos })
+        Ok(FnDecl { public, name, params, ret, ret_trusted, budget, fails, generics, method_of: None, body, pos })
     }
 
     fn ty(&mut self) -> PResult<Ty> {

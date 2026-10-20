@@ -1,0 +1,5 @@
+// expect: E101
+// Nothing is known of a type parameter: no arithmetic, whatever it is called with.
+fn plus<T>(a: T, b: T) -> T {
+    return a + b
+}

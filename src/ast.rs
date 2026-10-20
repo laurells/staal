@@ -199,7 +199,7 @@ pub enum Pattern {
     Any(Pos),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Arm {
     pub pattern: Pattern,
     pub body: Vec<Stmt>,
@@ -214,7 +214,7 @@ pub struct TypeDecl {
     pub pos: Pos,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
     pub ty: Ty,
@@ -233,7 +233,7 @@ pub struct Param {
     pub default: Option<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FnDecl {
     /// `pub fn ...`: other modules may call it.
     pub public: bool,
@@ -246,6 +246,11 @@ pub struct FnDecl {
     /// `fails E`: the record or enum type its `fail(...)` raises, which a caller's
     /// `try` can read back as `outcome.failure`.
     pub fails: Option<Ty>,
+    /// `fn first<T>(xs: List<T, 10>) -> Optional<T>`: its type parameters. A generic
+    /// function is checked once with each parameter as a type of which nothing is
+    /// known, and run as one copy per set of types it is called with (`first<Int>`),
+    /// which the compiler makes and checks like any function.
+    pub generics: Vec<String>,
     /// `fn Charge.total(self) -> Money`: a method of the record or enum `Charge`,
     /// called as `c.total()`. Its first parameter, `self`, is the value it is called
     /// on. Its name is `Charge::total` (qualified by its module like any name).
@@ -262,7 +267,7 @@ pub struct Budget {
     pub pos: Pos,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Let { name: String, ty: Option<Ty>, value: Expr, pos: Pos },
     Expr(Expr),

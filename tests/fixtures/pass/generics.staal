@@ -1,0 +1,28 @@
+// Generic functions over lists, optionals, tuples and records, calling each other.
+type Line { price: Money }
+
+fn first<T>(xs: List<T, 5>) -> Optional<T> {
+    for x in xs {
+        return some(x)
+    }
+    return none
+}
+
+fn both<A, B>(a: A, b: B) -> (A, B) {
+    return (a, b)
+}
+
+fn f(xs: List<Line, 5>) -> Money {
+    match first(xs) {
+        some(l) => {
+            return l.price
+        }
+        none => {
+            return 0.00 NGN
+        }
+    }
+}
+
+fn g() -> (Int, Optional<Text>) {
+    return both(1, first(["a"]))
+}

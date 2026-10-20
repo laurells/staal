@@ -1,0 +1,7 @@
+// expect: E101
+// message: type parameter 'Line' has the name of a type; choose another name
+type Line { n: Int }
+
+fn f<Line>(x: Line) -> Line {
+    return x
+}

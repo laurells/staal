@@ -1,0 +1,9 @@
+// expect: E101
+// message: in call to 'count_of': T is List<Int, 2> in one argument and Text in another
+fn count_of<T>(xs: T, wanted: T) -> Int {
+    return 0
+}
+
+fn f() -> Int {
+    return count_of([1, 2], "a")
+}

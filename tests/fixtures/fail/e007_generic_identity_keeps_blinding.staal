@@ -1,0 +1,11 @@
+// expect: E007
+// A value through a generic function is still the value: blinding follows it.
+type Order { email: Text }
+
+fn id<T>(x: T) -> T {
+    return x
+}
+
+fn f(order: Order @blind(email)) {
+    let s = propose(Text, instruct: "Greet.", data: [id(order.email)], tokens: 10)
+}
