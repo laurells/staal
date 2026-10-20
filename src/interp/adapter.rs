@@ -117,6 +117,9 @@ fn first_money(v: &Value) -> Option<Money> {
         Value::Money(m) => Some(*m),
         Value::Record { fields, .. } | Value::Enum { fields, .. } => fields.iter().find_map(|(_, f)| first_money(f)),
         Value::List(items) => items.iter().find_map(first_money),
+        // Inside `some(...)` as anywhere else, so an optional amount is never skipped
+        // for a later, smaller one.
+        Value::Opt(Some(inner)) => first_money(inner),
         _ => None,
     }
 }
@@ -126,6 +129,7 @@ fn first_text(v: &Value) -> Option<String> {
         Value::Text(t) => Some(t.clone()),
         Value::Record { fields, .. } | Value::Enum { fields, .. } => fields.iter().find_map(|(_, f)| first_text(f)),
         Value::List(items) => items.iter().find_map(first_text),
+        Value::Opt(Some(inner)) => first_text(inner),
         _ => None,
     }
 }

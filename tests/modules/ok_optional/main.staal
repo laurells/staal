@@ -1,0 +1,22 @@
+// expect: ok
+// An optional value of a type from another module, qualified or imported by name.
+import crm.contacts as c { Contact }
+
+fn find(phone: Text) -> Optional<c.Contact> {
+    return c.lookup(phone)
+}
+
+fn phone(x: Optional<Contact>) -> Text {
+    match x {
+        some(k) => {
+            return k.phone
+        }
+        none => {
+            return "none"
+        }
+    }
+}
+
+fn both(p: Text) -> Text {
+    return phone(find(p))
+}

@@ -1,0 +1,8 @@
+pub type Contact { phone: Text }
+
+pub fn lookup(phone: Text) -> Optional<Contact> {
+    if phone == "" {
+        return none
+    }
+    return some(Contact { phone: phone })
+}

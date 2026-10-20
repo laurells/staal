@@ -375,6 +375,13 @@ impl Parser {
             let name = self.ident()?;
             let pattern = if name == "_" {
                 Pattern::Any(ppos)
+            } else if name == "none" {
+                Pattern::Absent(ppos)
+            } else if name == "some" && *self.peek() == Tok::LParen {
+                self.bump();
+                let bind = self.ident()?;
+                self.expect(Tok::RParen, "')'")?;
+                Pattern::Present { bind, pos: ppos }
             } else {
                 let mut binds = Vec::new();
                 let mut rest = false;
@@ -609,11 +616,18 @@ impl Parser {
                     self.expect(Tok::Gt, "'>'")?;
                     Ok(Ty::List(Box::new(inner), max))
                 }
+                "Optional" => {
+                    self.expect(Tok::Gt, "'>'")?;
+                    Ok(Ty::Optional(Box::new(inner)))
+                }
                 _ => Err((npos, format!("unknown generic type '{name}'"))),
             };
         }
         if name == "List" {
             return Err((npos, "a list type needs an element type and a maximum length, e.g. List<Text, 100>".into()));
+        }
+        if name == "Optional" {
+            return Err((npos, "an optional type needs the type it may hold, e.g. Optional<Text>".into()));
         }
         // `m.T`: a type from the module imported as `m`.
         if *self.peek() == Tok::Dot {
@@ -1017,6 +1031,18 @@ impl Parser {
                     p.expect(Tok::RParen, "')'")?;
                     Ok(Expr::Parse { ty, text: Box::new(text), pos })
                 })
+            }
+            Tok::Ident(name) if name == "none" => {
+                self.bump();
+                Ok(Expr::NoneLit(pos))
+            }
+            Tok::Ident(name) if name == "some" && self.toks.get(self.i + 1).map(|t| &t.tok) == Some(&Tok::LParen) => {
+                self.bump();
+                let mut args = self.args()?;
+                if args.len() != 1 {
+                    return Err((pos, "`some` takes exactly one value: some(x)".into()));
+                }
+                Ok(Expr::SomeOf(Box::new(args.remove(0)), pos))
             }
             Tok::Ident(name) => {
                 self.bump();

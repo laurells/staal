@@ -1,0 +1,1 @@
+{"entry": "double", "inputs": {"x": null}, "expect": {"result": 0}, "model": {"provider": "script", "responses": []}}

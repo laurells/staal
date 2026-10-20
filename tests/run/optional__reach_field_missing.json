@@ -1,0 +1,1 @@
+{"entry": "reach", "inputs": {"c": {"phone": "080"}}, "expect": {"config_error_contains": "inputs.c.email: missing"}, "model": {"provider": "script", "responses": []}}

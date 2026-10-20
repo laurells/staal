@@ -1,0 +1,5 @@
+// expect: E101
+// message: list elements must all have one type: Optional<Int> and Int
+fn f() -> List<Optional<Int>, 2> {
+    return [some(1), 2]
+}

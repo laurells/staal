@@ -1149,27 +1149,49 @@ impl<'p> Interp<'p> {
             Stmt::Break(_) => Ok(Flow::Break),
             Stmt::Continue(_) => Ok(Flow::Continue),
             Stmt::Match { value, arms, .. } => {
-                let Value::Enum { variant, fields, .. } = self.eval(frame, value)? else {
-                    return internal("`match` on a value that is not an enum");
+                // The first arm that accepts the value; the checker made the arms cover
+                // every case. Then what the arm binds, in the order written.
+                let (arm, binds) = match self.eval(frame, value)? {
+                    Value::Enum { variant, fields, .. } => {
+                        let arm = arms.iter().find(|a| match &a.pattern {
+                            Pattern::Variant { name, .. } => *name == variant,
+                            Pattern::Any(_) => true,
+                            Pattern::Present { .. } | Pattern::Absent(_) => false,
+                        });
+                        let Some(arm) = arm else { return internal(format!("no `match` arm for variant {variant}")) };
+                        let mut binds = Vec::new();
+                        if let Pattern::Variant { binds: names, .. } = &arm.pattern {
+                            for (field, to) in names {
+                                let Some((_, v)) = fields.iter().find(|(f, _)| f == field) else {
+                                    return internal(format!("variant {variant} has no field '{field}'"));
+                                };
+                                binds.push((to, v.clone()));
+                            }
+                        }
+                        (arm, binds)
+                    }
+                    Value::Opt(held) => {
+                        let arm = arms.iter().find(|a| match &a.pattern {
+                            Pattern::Present { .. } => held.is_some(),
+                            Pattern::Absent(_) => held.is_none(),
+                            Pattern::Any(_) => true,
+                            Pattern::Variant { .. } => false,
+                        });
+                        let Some(arm) = arm else { return internal("no `match` arm for this optional value") };
+                        let mut binds = Vec::new();
+                        if let (Pattern::Present { bind, .. }, Some(v)) = (&arm.pattern, held) {
+                            binds.push((bind, *v));
+                        }
+                        (arm, binds)
+                    }
+                    _ => return internal("`match` on a value that is neither an enum nor optional"),
                 };
-                // The checker made the arms cover every variant.
-                let arm = arms.iter().find(|a| match &a.pattern {
-                    Pattern::Variant { name, .. } => *name == variant,
-                    Pattern::Any(_) => true,
-                });
-                let Some(arm) = arm else { return internal(format!("no `match` arm for variant {variant}")) };
                 frame.scopes.push(HashMap::new());
                 let mut bound = Ok(());
-                if let Pattern::Variant { binds, .. } = &arm.pattern {
-                    for (field, to) in binds {
-                        let Some((_, v)) = fields.iter().find(|(f, _)| f == field) else {
-                            bound = internal(format!("variant {variant} has no field '{field}'"));
-                            break;
-                        };
-                        if let Err(e) = frame.set(to, v.clone()) {
-                            bound = Err(e);
-                            break;
-                        }
+                for (to, v) in binds {
+                    if let Err(e) = frame.set(to, v) {
+                        bound = Err(e);
+                        break;
                     }
                 }
                 let flow = bound.and_then(|()| self.exec_block(frame, &arm.body));
@@ -1207,6 +1229,8 @@ impl<'p> Interp<'p> {
                 Ok(n) => Ok(Value::Int(n)),
                 Err(_) => internal(format!("integer literal {n} is out of range")),
             },
+            Expr::NoneLit(_) => Ok(Value::Opt(None)),
+            Expr::SomeOf(inner, _) => Ok(Value::Opt(Some(Box::new(self.eval(frame, inner)?)))),
             Expr::Arith { op, left, right, .. } => {
                 let l = self.eval(frame, left)?;
                 let r = self.eval(frame, right)?;
@@ -2180,6 +2204,8 @@ fn eval_pure(e: &Expr, types: &Types) -> Result<Value, Failure> {
             let vals = args.iter().map(ev).collect::<Result<Vec<_>, _>>()?;
             builtin(*f, &vals)
         }
+        Expr::NoneLit(_) => Ok(Value::Opt(None)),
+        Expr::SomeOf(inner, _) => Ok(Value::Opt(Some(Box::new(ev(inner)?)))),
         Expr::Record { ty, fields, .. } => {
             let Some(decl) = types.get(ty) else { return internal(format!("unknown record type {ty}")) };
             let mut given = Vec::with_capacity(fields.len());

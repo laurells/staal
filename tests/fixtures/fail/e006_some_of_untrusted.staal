@@ -1,0 +1,11 @@
+// expect: E006
+// some(x) is as trusted as x: wrapping untrusted text does not make it an instruction.
+fn f(ticket: Text) {
+    let t = some(ticket)
+    match t {
+        some(text) => {
+            let s = propose(Text, instruct: text, tokens: 10)
+        }
+        none => {}
+    }
+}

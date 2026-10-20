@@ -1,0 +1,7 @@
+// expect: E104
+// message: cannot read '.email' of Optional<Contact>: it may hold nothing; use `match` with some(x) and none
+type Contact { email: Text }
+
+fn f(c: Optional<Contact>) -> Text {
+    return c.email
+}

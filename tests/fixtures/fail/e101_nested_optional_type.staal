@@ -1,0 +1,3 @@
+// expect: E101
+// message: Optional<Optional<Int>> cannot be told apart from `none`
+fn f(x: Optional<Optional<Int>>) {}

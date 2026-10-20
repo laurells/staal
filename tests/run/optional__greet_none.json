@@ -1,0 +1,1 @@
+{"entry": "greet", "inputs": {"name": null}, "expect": {"result": "hello, whoever you are"}, "model": {"provider": "script", "responses": []}}

@@ -1,0 +1,5 @@
+// expect: E101
+// message: 'some' is reserved for optional values; choose another name
+fn f(some: Int) -> Int {
+    return 1
+}

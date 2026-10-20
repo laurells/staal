@@ -1,0 +1,1 @@
+{"entry": "reach", "inputs": {"c": {"phone": "080", "email": 5}}, "expect": {"config_error_contains": "inputs.c.email: expected a string, found a number"}, "model": {"provider": "script", "responses": []}}

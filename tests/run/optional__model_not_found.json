@@ -1,0 +1,1 @@
+{"entry": "ask", "inputs": {"question": "q"}, "model": {"provider": "script", "responses": [{"output": {"found": null, "note": "no match"}, "output_tokens": 5}]}, "expect": {"result": "unknown: no match"}}

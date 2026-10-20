@@ -1,0 +1,12 @@
+// expect: E007
+// Whether a blinded optional value holds anything is part of it: it cannot decide a call.
+type Order { note: Optional<Text> }
+
+fn f(order: Order @blind(note)) {
+    match order.note {
+        some(n) => {
+            let s = propose(Text, instruct: "Say hello.", data: ["hello"], tokens: 10)
+        }
+        none => {}
+    }
+}

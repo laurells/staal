@@ -51,6 +51,8 @@ pub enum Value {
     /// A list; its length never exceeds the maximum in its type (checked where lists
     /// enter from outside, and fixed for literals).
     List(Vec<Value>),
+    /// A value of `Optional<T>`: a T (`some`), or nothing (`none`).
+    Opt(Option<Box<Value>>),
     /// Raw output from outside (a model, or text given to `parse`), not yet checked
     /// against `ty`. `lenient`: fields the type does not declare are dropped when it is
     /// validated, as services add fields over time. Model output is strict.
@@ -122,6 +124,12 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
     match ty {
         Ty::Proposed(inner) => Ok(Value::Proposed { ty: (**inner).clone(), raw: json.clone(), lenient: false }),
         Ty::Cap { .. } => Err(format!("{path}: a capability cannot be supplied as data")),
+        // `null` is none; anything else must be a valid T. (The checker refuses
+        // Optional<Optional<T>>, whose `some(none)` would also be `null`.)
+        Ty::Optional(inner) => match json {
+            Json::Null => Ok(Value::Opt(None)),
+            _ => Ok(Value::Opt(Some(Box::new(from_json_at(inner, json, types, path, depth + 1, lenient)?)))),
+        },
         Ty::List(inner, max) => {
             let items = json.as_array().ok_or_else(|| expected("a list"))?;
             // Checked before looking at any element: a program's budget is computed
@@ -259,6 +267,8 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
             Json::Object(obj)
         }
         Value::List(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
+        Value::Opt(None) => Json::Null,
+        Value::Opt(Some(inner)) => to_json(inner, for_model)?,
         Value::Proposed { raw, .. } => raw.clone(),
         Value::Receipt(r) => json!({ "receipt": r.id, "capability": r.capability, "method": r.method }),
         Value::Outcome { ok, error, .. } => json!({ "ok": ok, "error": error }),
@@ -288,6 +298,7 @@ fn schema_at(ty: &Ty, types: &Types, seen: &mut HashSet<String>) -> Json {
         Ty::Proposed(inner) => schema_at(inner, types, seen),
         Ty::Cap { .. } => json!({}),
         Ty::List(inner, max) => json!({ "type": "array", "items": schema_at(inner, types, seen), "maxItems": max }),
+        Ty::Optional(inner) => json!({ "anyOf": [schema_at(inner, types, seen), { "type": "null" }] }),
         Ty::Named(n) => match n.as_str() {
             "Text" => json!({ "type": "string" }),
             "Int" => json!({ "type": "integer" }),
@@ -357,6 +368,21 @@ mod tests {
 
     fn order_ty() -> Ty {
         Ty::Named("Order".into())
+    }
+
+    #[test]
+    fn optional_values_are_null_or_the_value() {
+        let t = Ty::Optional(Box::new(Ty::Named("Customer".into())));
+        assert_eq!(from_json(&t, &json!(null), &types(), "in").unwrap(), Value::Opt(None));
+        let v = from_json(&t, &json!({ "name": "Ada" }), &types(), "in").unwrap();
+        assert!(matches!(&v, Value::Opt(Some(c)) if matches!(**c, Value::Record { .. })));
+        assert_eq!(to_json(&v, true).unwrap(), json!({ "name": "Ada" }));
+        assert_eq!(to_json(&Value::Opt(None), true).unwrap(), json!(null));
+        // What is inside is checked exactly as it would be on its own.
+        let e = from_json(&t, &json!({ "name": 1 }), &types(), "in").unwrap_err();
+        assert_eq!(e, "in.name: expected a string, found a number");
+        let customer = json!({ "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"], "additionalProperties": false });
+        assert_eq!(schema(&t, &types()), json!({ "anyOf": [customer, { "type": "null" }] }));
     }
 
     #[test]

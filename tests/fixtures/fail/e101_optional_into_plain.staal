@@ -1,0 +1,5 @@
+// expect: E101
+// message: expected Int, found Optional<Int>
+fn f(x: Optional<Int>) -> Int {
+    return x
+}

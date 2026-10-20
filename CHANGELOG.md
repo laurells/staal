@@ -7,6 +7,12 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Optional values, `Optional<T>`, with `some(x)` and `none`, matched with
+  `some(x)`, `none` and `_`. `none` takes its type from where it is used; a T is
+  never made optional implicitly. In JSON `none` is `null`, and a model is asked
+  for one through an `anyOf` with `null`. Blinding reaches through them: whether
+  a blinded value holds anything decides nothing (E007). `some` and `none` are
+  reserved names. Both engines and `staalc build` executables run them.
 - Enums, `enum Payment { Pending, Paid { amount: Money, reference: Text } }`,
   and `match` with field patterns, `..` and `_`. A `match` must handle every
   variant (new code E109). Enums are read from and written as JSON objects with

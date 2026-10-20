@@ -1,0 +1,1 @@
+{"entry": "payout", "inputs": {"p": {"amount": {"amount": "500.00", "currency": "USD"}, "fee": {"amount": "1.00", "currency": "USD"}}}, "grants": {"pay": {"cap": "payments.refund"}}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "capability", "message_contains": "per action", "performed": []}}

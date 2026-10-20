@@ -1,0 +1,6 @@
+// expect: E104
+// message: has no field path 'contact.fax'
+type Contact { phone: Text }
+type Order { contact: Optional<Contact> }
+
+fn f(order: Order @blind(contact.fax)) {}

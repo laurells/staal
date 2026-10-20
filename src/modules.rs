@@ -421,6 +421,9 @@ impl Resolver<'_, '_, '_> {
     /// A local variable, parameter or loop variable may not reuse an import's name:
     /// `termii.send(...)` must always mean one thing.
     fn binder(&mut self, name: &str, pos: Pos) {
+        if name == "some" || name == "none" {
+            self.diags.push(err("E101", pos, format!("'{name}' is reserved for optional values; choose another name")));
+        }
         // `Status.Pending` must always mean the enum's variant, never a field of a variable.
         if self.scope.types.get(name).is_some_and(|q| self.scope.enums.contains(q)) {
             self.diags.push(err("E101", pos, format!("'{name}' is an enum here; choose another name")));
@@ -464,7 +467,7 @@ impl Resolver<'_, '_, '_> {
     fn ty(&mut self, ty: &mut Ty, pos: Pos) {
         match ty {
             Ty::Named(n) => *n = self.type_name(n, pos),
-            Ty::Proposed(inner) | Ty::List(inner, _) => self.ty(inner, pos),
+            Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => self.ty(inner, pos),
             Ty::Cap { .. } => {}
         }
     }
@@ -497,10 +500,14 @@ impl Resolver<'_, '_, '_> {
                 Stmt::Match { value, arms, .. } => {
                     self.expr(value);
                     for a in arms {
-                        if let Pattern::Variant { binds, pos, .. } = &a.pattern {
-                            for (_, to) in binds {
-                                self.binder(to, *pos);
+                        match &a.pattern {
+                            Pattern::Variant { binds, pos, .. } => {
+                                for (_, to) in binds {
+                                    self.binder(to, *pos);
+                                }
                             }
+                            Pattern::Present { bind, pos } => self.binder(bind, *pos),
+                            Pattern::Absent(_) | Pattern::Any(_) => {}
                         }
                         self.block(&mut a.body);
                     }
@@ -609,9 +616,13 @@ impl Resolver<'_, '_, '_> {
             _ => {}
         }
         match e {
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => {}
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) | Expr::NoneLit(..) => {}
             Expr::Field { base, .. } => self.expr(base),
-            Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => self.expr(inner),
+            Expr::Validate(inner, _)
+            | Expr::Try(inner, _)
+            | Expr::Neg(inner, _)
+            | Expr::Not(inner, _)
+            | Expr::SomeOf(inner, _) => self.expr(inner),
             Expr::Parse { text, .. } => self.expr(text),
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 self.expr(left);

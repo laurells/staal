@@ -402,6 +402,13 @@ mod tests {
     }
 
     #[test]
+    fn optional_values_keep_their_null_option() {
+        let s = json!({ "anyOf": [{ "type": "array", "items": { "type": "string" }, "maxItems": 2 }, { "type": "null" }] });
+        let want = json!({ "anyOf": [{ "type": "array", "items": { "type": "string" }, "description": "At most 2 items." }, { "type": "null" }] });
+        assert_eq!(api_schema(&s).unwrap(), want);
+    }
+
+    #[test]
     fn the_margin_is_kept_only_when_it_fits() {
         assert_eq!(max_tokens(1000, 400), 1000 - 16 - 2);
         assert_eq!(max_tokens(10, 400), 10);

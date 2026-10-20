@@ -11,8 +11,51 @@ pub enum Ty {
     Proposed(Box<Ty>),
     /// `List<T, N>`: a list of at most N values of type T.
     List(Box<Ty>, u64),
+    /// `Optional<T>`: a T, or nothing (`none`).
+    Optional(Box<Ty>),
     /// A capability, e.g. `cap payments.refund(max: 500 USD)`, with its limits.
     Cap { path: Vec<String>, limits: CapLimits },
+}
+
+impl Ty {
+    /// The type of `none` before its use says what it may hold: `Optional<?>`, written
+    /// with an empty name no program can spell. Its only value is `none`, so it fits
+    /// any optional type (`fits`).
+    pub fn none() -> Ty {
+        Ty::Optional(Box::new(Ty::Named(String::new())))
+    }
+
+    fn is_unknown(&self) -> bool {
+        matches!(self, Ty::Named(n) if n.is_empty())
+    }
+
+    /// Whether `none`'s type, which says nothing of what it may hold, is anywhere in this.
+    pub fn has_unknown(&self) -> bool {
+        match self {
+            Ty::Named(n) => n.is_empty(),
+            Ty::Proposed(t) | Ty::List(t, _) | Ty::Optional(t) => t.has_unknown(),
+            Ty::Cap { .. } => false,
+        }
+    }
+
+    /// The one type both `self` and `other` fit, if any: equal types, or the same shape
+    /// where one side has `none`'s type and the other an optional type.
+    pub fn unify(&self, other: &Ty) -> Option<Ty> {
+        match (self, other) {
+            (Ty::Optional(a), Ty::Optional(b)) if a.is_unknown() => Some(Ty::Optional(b.clone())),
+            (Ty::Optional(a), Ty::Optional(b)) if b.is_unknown() => Some(Ty::Optional(a.clone())),
+            (Ty::Optional(a), Ty::Optional(b)) => Some(Ty::Optional(Box::new(a.unify(b)?))),
+            (Ty::List(a, n), Ty::List(b, m)) if n == m => Some(Ty::List(Box::new(a.unify(b)?), *n)),
+            (Ty::Proposed(a), Ty::Proposed(b)) => Some(Ty::Proposed(Box::new(a.unify(b)?))),
+            _ => (self == other).then(|| self.clone()),
+        }
+    }
+
+    /// Whether a value of type `self` is also a value of type `to`: the same type, or
+    /// `none`'s type where `to` has an optional type.
+    pub fn fits(&self, to: &Ty) -> bool {
+        self.unify(to).as_ref() == Some(to)
+    }
 }
 
 /// The limits on a capability. Every limit is optional; a capability with none is
@@ -77,6 +120,8 @@ impl std::fmt::Display for Ty {
             Ty::Named(n) => write!(f, "{n}"),
             Ty::Proposed(t) => write!(f, "Proposed<{t}>"),
             Ty::List(t, n) => write!(f, "List<{t}, {n}>"),
+            Ty::Optional(t) if t.is_unknown() => write!(f, "none"),
+            Ty::Optional(t) => write!(f, "Optional<{t}>"),
             Ty::Cap { path, limits } => write!(f, "cap {}{limits}", path.join(".")),
         }
     }
@@ -117,6 +162,10 @@ pub enum Pattern {
     /// `Paid { amount, fee: f }` or `Paid { amount, .. }`: the variant, and each field
     /// bound to a name (`amount` binds `amount`). Without `..` every field is bound.
     Variant { name: String, binds: Vec<(String, String)>, rest: bool, pos: Pos },
+    /// `some(x)`: an optional value that holds one, bound to `x`.
+    Present { bind: String, pos: Pos },
+    /// `none`: an optional value that holds nothing.
+    Absent(Pos),
     /// `_`: every variant no earlier arm accepted.
     Any(Pos),
 }
@@ -405,6 +454,10 @@ pub enum Expr {
     /// sees these as a record literal and a field read; module resolution, which knows
     /// which names are enums, makes them this.
     Variant { ty: String, variant: String, fields: Vec<(String, Expr)>, pos: Pos },
+    /// `some(x)`: an optional value holding x.
+    SomeOf(Box<Expr>, Pos),
+    /// `none`: an optional value holding nothing. Its type comes from where it is used.
+    NoneLit(Pos),
     /// `xs[i]`
     Index { base: Box<Expr>, index: Box<Expr>, pos: Pos },
     /// `name(args)` — a call to a function defined in the program
@@ -439,9 +492,13 @@ impl Expr {
     /// that walk expressions through this function can never skip part of one.
     pub fn children(&self) -> Vec<&Expr> {
         match self {
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => Vec::new(),
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) | Expr::NoneLit(..) => Vec::new(),
             Expr::Field { base, .. } => vec![base],
-            Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => vec![inner],
+            Expr::Validate(inner, _)
+            | Expr::Try(inner, _)
+            | Expr::Neg(inner, _)
+            | Expr::Not(inner, _)
+            | Expr::SomeOf(inner, _) => vec![inner],
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -461,9 +518,13 @@ impl Expr {
     /// Every expression directly inside this one, `blind_to` included, to change them.
     pub fn children_mut(&mut self) -> Vec<&mut Expr> {
         match self {
-            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => Vec::new(),
+            Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) | Expr::NoneLit(..) => Vec::new(),
             Expr::Field { base, .. } => vec![base],
-            Expr::Validate(inner, _) | Expr::Try(inner, _) | Expr::Neg(inner, _) | Expr::Not(inner, _) => vec![inner],
+            Expr::Validate(inner, _)
+            | Expr::Try(inner, _)
+            | Expr::Neg(inner, _)
+            | Expr::Not(inner, _)
+            | Expr::SomeOf(inner, _) => vec![inner],
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -492,6 +553,8 @@ impl Expr {
             | Expr::Try(_, p)
             | Expr::Neg(_, p)
             | Expr::Not(_, p)
+            | Expr::SomeOf(_, p)
+            | Expr::NoneLit(p)
             | Expr::List(_, p) => *p,
             Expr::Arith { pos, .. }
             | Expr::Logic { pos, .. }

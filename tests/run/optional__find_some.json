@@ -1,0 +1,1 @@
+{"entry": "find", "inputs": {"words": ["apple", "banana", "berry"], "start": "b"}, "expect": {"result": "banana"}, "model": {"provider": "script", "responses": []}}

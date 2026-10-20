@@ -1,5 +1,5 @@
 // expect: E101
-// message: `match` needs an enum value, found Int
+// message: `match` needs an enum or optional value, found Int
 fn f(n: Int) {
     match n {
         _ => {}

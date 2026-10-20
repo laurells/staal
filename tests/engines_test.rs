@@ -124,6 +124,17 @@ fn the_enum_cases_really_run_native_code() {
     assert_eq!(got, ["describe", "double", "first_pending", "make", "same", "settled", "total"]);
 }
 
+#[test]
+fn the_optional_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/optional.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    // Everything but `ask`, which asks a model.
+    let want = ["double", "find", "greet", "latest", "missing", "pair", "reach", "same", "total", "track", "wrap"];
+    assert_eq!(got, want);
+}
+
 // ---------------------------------------------------------------------------------
 // Generated programs
 

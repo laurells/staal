@@ -1,0 +1,1 @@
+{"entry": "latest", "inputs": {"xs": [3, 4, 9]}, "expect": {"result": 9}, "model": {"provider": "script", "responses": []}}

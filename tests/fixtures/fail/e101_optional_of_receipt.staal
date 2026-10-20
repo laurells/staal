@@ -1,0 +1,3 @@
+// expect: E101
+// message: an optional value cannot hold a Receipt
+fn f(x: Optional<Receipt>) {}

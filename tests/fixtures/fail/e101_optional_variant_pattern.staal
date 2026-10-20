@@ -1,0 +1,8 @@
+// expect: E101
+// message: a `match` on Optional<Int> takes `some(x)`, `none` or `_`, not Paid
+fn f(x: Optional<Int>) {
+    match x {
+        Paid { .. } => {}
+        _ => {}
+    }
+}

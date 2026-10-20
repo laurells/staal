@@ -73,6 +73,7 @@ capability need cannot have the name of a constant in scope (E101).
 | declared record type | its fields, in declaration order |
 | declared enum type | one of its variants, and that variant's fields in declaration order |
 | `List<T, N>` | at most N values of type T, in order |
+| `Optional<T>` | a value of type T (`some(x)`), or nothing (`none`) |
 | `Proposed<T>` | raw model output (JSON), not yet checked against T |
 | `Receipt` | proof of one completed action: id, capability, method |
 | `Outcome` | `ok`, `error`, and (hidden) what succeeded |
@@ -113,6 +114,18 @@ for record fields: no `Secret`, `Header`, `Receipt`, `Outcome`, `Done` or
 capability, and no field called `kind`. `pub enum` exports one; another module
 writes `module.Payment.Paid { ... }`, or imports `Payment` by name. Both engines
 run enums and `match` (section 15).
+
+**Optional values.** `Optional<T>` holds a T or nothing. `some(x)` makes one that
+holds x; `none` makes one that holds nothing, and takes its type from where it is
+used: a typed `let`, a parameter, a field, a return, a list beside a `some(...)`.
+`let x = none` alone is E101, since nothing says what x may hold. A T is never
+turned into an `Optional<T>` silently: write `some(x)` (E101 otherwise). What an
+optional value holds is reached only through `match` with `some(x)`, `none` or `_`
+(a field read is E104). `==` and `!=` compare two optional values, or one with
+`none`; two are equal when both hold nothing or both hold equal values.
+`Optional<Optional<T>>` is refused (E101), since `some(none)` and `none` would be
+the same JSON, and an optional value cannot hold a `Secret`, `Header`, `Receipt`,
+`Outcome`, `Done` or capability. Both engines run optional values.
 
 No value can be created out of thin air: `Receipt` only by an action, `Done`
 only by `done(...)`, `Outcome` only by `try`, capabilities only by grants.
@@ -156,6 +169,10 @@ declared type by the same strict rules:
 - A `List<T, N>` must be a JSON array of at most N items, each valid as T. A
   model's JSON schema for it carries `maxItems: N`, but the bound is enforced
   here whatever the model returns.
+- An `Optional<T>` is `null` for `none`, or anything valid as T. A record field of
+  an optional type must still be present: `{"email": null}`, not `{}`. A model's
+  JSON schema for it is an `anyOf` of T's schema and `{"type": "null"}`. Results
+  are written the same way.
 - An enum must be a JSON object whose `kind` is the name of one of its variants,
   with exactly that variant's fields besides: `{"kind": "Paid", "amount": ...,
   "reference": "T-1"}`. An unknown variant, a missing field or an extra one is an
@@ -185,7 +202,8 @@ Evaluation is strictly left to right and statement by statement.
 - `if` evaluates its condition, then exactly one branch.
 - `match v { Paid { amount, reference: r } => { } Pending => { } _ => { } }`
   evaluates `v`, an enum value, once, then runs the first arm whose pattern names
-  its variant, or `_`. A pattern binds fields by name (`amount`), or to another
+  its variant, or `_`. On an optional value the patterns are `some(x)`, which
+  binds what it holds to `x`, `none`, and `_`. A pattern binds fields by name (`amount`), or to another
   name (`reference: r`), for that arm's block; it must bind every field of the
   variant unless it ends in `..`. The bindings cannot be reassigned. The compiler
   requires the arms to cover every variant, or a `_` (E109), and rejects an arm
@@ -993,10 +1011,12 @@ line, `engine` in the C interface), never in the run config.
 
 A function qualifies when its parameters and result are `Int`, `Bool`, `Text`,
 `Money`, records whose fields are all of these, enums whose variants' fields are all
-of these, or lists of these, and its body uses only `let`, `set`, `if`, `match`,
+of these, optional values of these, or lists of these, and its body uses only
+`let`, `set`, `if`, `match`,
 `repeat`, `loop`, `for`, `break`, `continue`, `return` with a value,
 `fail`, literals (an integer must fit an Int; a list must not be empty), arithmetic,
-unary `-`, comparisons, `and`, `or`, `not`, field reads, record and variant literals, indexing,
+unary `-`, comparisons, `and`, `or`, `not`, field reads, record and variant literals,
+`some(...)`, `none`, indexing,
 the built-in functions other than `header` and `fill_secret`, and calls to other
 qualifying functions. A function that calls one that does not qualify does not
 qualify. Native code is entered only from the interpreter, when it calls a compiled

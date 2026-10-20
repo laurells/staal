@@ -1,0 +1,13 @@
+// expect: E007
+// The value `some(x)` binds is the blinded field inside the optional value.
+type Contact { phone: Text, email: Text }
+type Order { contact: Optional<Contact> }
+
+fn f(order: Order @blind(contact.email)) {
+    match order.contact {
+        some(c) => {
+            let s = propose(Text, instruct: "Greet.", data: [c.email], tokens: 10)
+        }
+        none => {}
+    }
+}

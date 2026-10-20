@@ -1,0 +1,1 @@
+{"entry": "total", "inputs": {"xs": [1, null, 5]}, "limits": {"max_steps": 11}, "model": {"provider": "script", "responses": []}, "expect": {"failure": "step_limit"}}

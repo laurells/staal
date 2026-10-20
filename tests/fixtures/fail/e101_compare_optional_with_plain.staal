@@ -1,0 +1,5 @@
+// expect: E101
+// message: cannot compare Optional<Int> with Int
+fn f(x: Optional<Int>) -> Bool {
+    return x == 1
+}

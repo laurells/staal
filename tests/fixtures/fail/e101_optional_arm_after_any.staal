@@ -1,0 +1,9 @@
+// expect: E101
+// message: the `none` arm can never run: `_` above already matches it
+fn f(x: Optional<Int>) {
+    match x {
+        some(a) => {}
+        _ => {}
+        none => {}
+    }
+}

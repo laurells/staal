@@ -1,0 +1,5 @@
+// expect: E101
+// message: Optional<Int> is already optional
+fn f(x: Optional<Int>) -> Bool {
+    return some(x) == none
+}

@@ -1,0 +1,45 @@
+// Optional values: blinded inside, matched, compared, and passed on.
+type Contact { phone: Text, email: Text }
+type Order { contact: Optional<Contact>, note: Text }
+
+// Only the email is blinded: whether there is a contact, and its phone, may decide.
+fn ask(order: Order @blind(contact.email)) {
+    match order.contact {
+        some(c) => {
+            let s = propose(Text, instruct: "Draft a text message.", data: [c.phone], tokens: 10)
+        }
+        none => {}
+    }
+}
+
+fn first(xs: List<Optional<Int>, 3>) -> Optional<Int> {
+    for x in xs {
+        if x != none {
+            return x
+        }
+    }
+    return none
+}
+
+fn any_contact(o: Order) -> Bool {
+    let none_yet: Optional<Contact> = none
+    return o.contact != none_yet
+}
+
+fn list() -> List<Optional<Text>, 3> {
+    let xs: List<Optional<Text>, 3> = [none, some("a"), none]
+    return xs
+}
+
+// Whether there is a tag decides nothing about its `kind` field, which is blinded.
+type Tag { kind: Text, label: Text }
+type Item { tag: Optional<Tag> }
+
+fn label(item: Item @blind(tag.kind)) {
+    match item.tag {
+        some(t) => {
+            let s = propose(Text, instruct: "Describe the label.", data: [t.label], tokens: 10)
+        }
+        none => {}
+    }
+}

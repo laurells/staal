@@ -1,0 +1,10 @@
+// expect: E109
+// message: this `match` does not handle none; add an arm for it, or `_ =>`
+fn f(x: Optional<Int>) -> Int {
+    match x {
+        some(n) => {
+            return n
+        }
+    }
+    return 0
+}

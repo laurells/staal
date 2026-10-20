@@ -440,6 +440,51 @@ extern "C" fn rt_no_arm(c: *mut Ctx, h: i64) {
     });
 }
 
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_none")]
+extern "C" fn rt_none(c: *mut Ctx) -> i64 {
+    guard(c, |c| Ok(c.put(Value::Opt(None))))
+}
+
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_some")]
+extern "C" fn rt_some(c: *mut Ctx, h: i64) -> i64 {
+    guard(c, |c| {
+        let v = c.take(h)?;
+        Ok(c.put(Value::Opt(Some(Box::new(v)))))
+    })
+}
+
+/// Whether the optional value in `h`, which stays owned by the caller, holds one.
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_opt_has")]
+extern "C" fn rt_opt_has(c: *mut Ctx, h: i64) -> i64 {
+    guard(c, |c| match c.get(h)? {
+        Value::Opt(v) => Ok(v.is_some() as i64),
+        _ => Err(internal("`match` on a value that is neither an enum nor optional")),
+    })
+}
+
+/// A copy of what the optional value in `h` holds; `h` stays owned by the caller.
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_opt_get_ref")]
+extern "C" fn rt_opt_get_ref(c: *mut Ctx, h: i64) -> i64 {
+    guard(c, |c| {
+        let v = match c.get(h)? {
+            Value::Opt(Some(v)) => (**v).clone(),
+            _ => return Err(internal("native code: `some` arm on a value that holds nothing")),
+        };
+        Ok(c.put(v))
+    })
+}
+
+/// No arm matched an optional value: the interpreter's failure, word for word.
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_opt_no_arm")]
+extern "C" fn rt_opt_no_arm(c: *mut Ctx) {
+    record(ctx(c), internal("no `match` arm for this optional value"));
+}
+
 /// Item `i` of the list in `h`, which stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_index_ref")]
@@ -577,6 +622,9 @@ impl<'p> Env<'p> {
                 .all(|v| v.fields.iter().all(|(_, ft)| self.allowed(ft, depth + 1))),
             Ty::Named(n) => self.records.get(n.as_str()).is_some_and(|fs| fs.iter().all(|(_, ft)| self.allowed(ft, depth + 1))),
             Ty::List(inner, _) => self.allowed(inner, depth + 1),
+            // `none`'s own type, whose only value is `none`, or an optional allowed value.
+            Ty::Optional(_) if *t == Ty::none() => true,
+            Ty::Optional(inner) => self.allowed(inner, depth + 1),
             Ty::Proposed(_) | Ty::Cap { .. } => false,
         }
     }
@@ -628,7 +676,7 @@ impl<'p> Env<'p> {
             Expr::Cmp { op, left, right, .. } => {
                 let (l, r) = (self.ty(left, var)?, self.ty(right, var)?);
                 let ordered = (is(&l, "Int") && is(&r, "Int")) || (is(&l, "Money") && is(&r, "Money"));
-                if !(ordered || (matches!(op, CmpOp::Eq | CmpOp::Ne) && l == r)) {
+                if !(ordered || (matches!(op, CmpOp::Eq | CmpOp::Ne) && l.unify(&r).is_some())) {
                     return None;
                 }
                 named("Bool")
@@ -645,7 +693,7 @@ impl<'p> Env<'p> {
                 }
                 for (name, fe) in fields {
                     let want = &decl.iter().find(|(f, _)| f == name)?.1;
-                    if self.ty(fe, var)? != *want {
+                    if !self.ty(fe, var)?.fits(want) {
                         return None;
                     }
                 }
@@ -658,21 +706,21 @@ impl<'p> Env<'p> {
                 }
                 for (name, fe) in fields {
                     let want = &decl.iter().find(|(f, _)| f == name)?.1;
-                    if self.ty(fe, var)? != *want {
+                    if !self.ty(fe, var)?.fits(want) {
                         return None;
                     }
                 }
                 named(ty)
             }
             Expr::List(items, _) => {
-                let first = self.ty(items.first()?, var)?;
+                let mut first = self.ty(items.first()?, var)?;
                 for i in &items[1..] {
-                    if self.ty(i, var)? != first {
-                        return None;
-                    }
+                    first = first.unify(&self.ty(i, var)?)?;
                 }
                 Ty::List(Box::new(first), items.len() as u64)
             }
+            Expr::NoneLit(_) => Ty::none(),
+            Expr::SomeOf(inner, _) => Ty::Optional(Box::new(self.ty(inner, var)?)),
             Expr::Index { base, index, .. } => {
                 let Ty::List(inner, _) = self.ty(base, var)? else { return None };
                 if !is(&self.ty(index, var)?, "Int") {
@@ -705,7 +753,7 @@ impl<'p> Env<'p> {
                     return None;
                 }
                 for (a, p) in args.iter().zip(params) {
-                    if self.ty(a, var)? != *p {
+                    if !self.ty(a, var)?.fits(p) {
                         return None;
                     }
                 }
@@ -744,15 +792,21 @@ impl Check<'_, '_> {
         match s {
             Stmt::Let { name, ty, value, .. } => {
                 let Some(t) = self.ty(value) else { return false };
-                if ty.as_ref().is_some_and(|d| *d != t) {
-                    return false;
-                }
+                // A typed `let` holds its declared type (`let x: Optional<Int> = none`).
+                let t = match ty {
+                    Some(d) if t.fits(d) && self.env.allowed(d, 0) => d.clone(),
+                    Some(_) => return false,
+                    None => t,
+                };
                 self.scopes.last_mut().expect("a scope").insert(name.clone(), t);
                 true
             }
-            Stmt::Set { name, value, .. } => self.lookup(name).is_some() && self.ty(value) == self.lookup(name),
+            Stmt::Set { name, value, .. } => match (self.ty(value), self.lookup(name)) {
+                (Some(v), Some(t)) => v.fits(&t),
+                _ => false,
+            },
             Stmt::Expr(e) => self.ty(e).is_some(),
-            Stmt::Return(Some(e), _) => self.ty(e).as_ref() == Some(&self.ret),
+            Stmt::Return(Some(e), _) => self.ty(e).is_some_and(|t| t.fits(&self.ret)),
             Stmt::Fail(e, _) => self.ty(e).is_some_and(|t| is(&t, "Text")),
             Stmt::If { cond, then, els, .. } => self.ty(cond).is_some_and(|t| is(&t, "Bool")) && self.block(then) && self.block(els),
             Stmt::Repeat { body, .. } | Stmt::Loop { body, .. } => self.block(body),
@@ -764,7 +818,20 @@ impl Check<'_, '_> {
                 ok
             }
             Stmt::Match { value, arms, .. } => {
-                let Some(Ty::Named(ty)) = self.ty(value) else { return false };
+                let vt = self.ty(value);
+                if let Some(Ty::Optional(inner)) = vt {
+                    return arms.iter().all(|arm| {
+                        let mut scope = HashMap::new();
+                        if let Pattern::Present { bind, .. } = &arm.pattern {
+                            scope.insert(bind.clone(), (*inner).clone());
+                        }
+                        self.scopes.push(scope);
+                        let ok = self.block(&arm.body);
+                        self.scopes.pop();
+                        ok
+                    });
+                }
+                let Some(Ty::Named(ty)) = vt else { return false };
                 if !self.env.enums.contains_key(ty.as_str()) {
                     return false;
                 }
@@ -878,6 +945,11 @@ struct Helpers {
     variant: FuncId,
     variant_index: FuncId,
     no_arm: FuncId,
+    none: FuncId,
+    some: FuncId,
+    opt_has: FuncId,
+    opt_get_ref: FuncId,
+    opt_no_arm: FuncId,
 }
 
 impl Native {
@@ -1009,6 +1081,11 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("staal_rt_variant", rt_variant as *const u8),
     ("staal_rt_variant_index", rt_variant_index as *const u8),
     ("staal_rt_no_arm", rt_no_arm as *const u8),
+    ("staal_rt_none", rt_none as *const u8),
+    ("staal_rt_some", rt_some as *const u8),
+    ("staal_rt_opt_has", rt_opt_has as *const u8),
+    ("staal_rt_opt_get_ref", rt_opt_get_ref as *const u8),
+    ("staal_rt_opt_no_arm", rt_opt_no_arm as *const u8),
 ];
 
 /// The machine to generate code for: this one. `host_features`: use every feature
@@ -1070,6 +1147,11 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
         variant: helper(module, "staal_rt_variant", 3, true)?,
         variant_index: helper(module, "staal_rt_variant_index", 2, true)?,
         no_arm: helper(module, "staal_rt_no_arm", 1, false)?,
+        none: helper(module, "staal_rt_none", 0, true)?,
+        some: helper(module, "staal_rt_some", 1, true)?,
+        opt_has: helper(module, "staal_rt_opt_has", 1, true)?,
+        opt_get_ref: helper(module, "staal_rt_opt_get_ref", 1, true)?,
+        opt_no_arm: helper(module, "staal_rt_opt_no_arm", 0, false)?,
     };
     // In program order, so the same program always gives the same code and tables.
     let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
@@ -1405,8 +1487,12 @@ impl<M: Module> Gen<'_, '_, '_, M> {
     fn stmt(&mut self, s: &Stmt) -> Result<bool, String> {
         self.tick();
         match s {
-            Stmt::Let { name, value, .. } => {
-                let t = self.ty(value)?;
+            Stmt::Let { name, ty, value, .. } => {
+                // A typed `let` holds its declared type, which the value fits.
+                let t = match ty {
+                    Some(d) => d.clone(),
+                    None => self.ty(value)?,
+                };
                 let v = self.expr(value)?;
                 self.declare(name, v, t);
                 Ok(true)
@@ -1567,7 +1653,11 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 Ok(true)
             }
             Stmt::Match { value, arms, .. } => {
-                let Ty::Named(ty) = self.ty(value)? else { return Err("native code: `match` on a non-enum".into()) };
+                let vt = self.ty(value)?;
+                if let Ty::Optional(inner) = &vt {
+                    return self.match_optional(value, inner, arms);
+                }
+                let Ty::Named(ty) = vt else { return Err("native code: `match` on a non-enum".into()) };
                 let names: Vec<String> = self
                     .env
                     .enums
@@ -1596,6 +1686,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                             any = true;
                             break;
                         }
+                        Pattern::Present { .. } | Pattern::Absent(_) => return Err("native code: an optional pattern on an enum".into()),
                         Pattern::Variant { name, .. } => {
                             let pos = names.iter().position(|n| n == name).ok_or("native code: unknown variant")?;
                             let hit = self.b.ins().icmp_imm_s(IntCC::Equal, which, pos as i64);
@@ -1649,6 +1740,72 @@ impl<M: Module> Gen<'_, '_, '_, M> {
             }
             Stmt::Return(None, _) => Err("native code: statement not supported".into()),
         }
+    }
+
+    /// `match` on an optional value: the first arm that accepts it, as the interpreter
+    /// picks it. Like a `match` on an enum, the value is read in place from a variable,
+    /// or evaluated into a handle dropped before the arm runs.
+    fn match_optional(&mut self, value: &Expr, inner: &Ty, arms: &[crate::ast::Arm]) -> Result<bool, String> {
+        let (h, owned) = match self.var_handle(value) {
+            Some(v) => (v, false),
+            None => (self.expr(value)?, true),
+        };
+        let has = self.call_checked(self.h.opt_has, &[h]);
+        let blocks: Vec<ir::Block> = arms.iter().map(|_| self.b.create_block()).collect();
+        let mut any = false;
+        for (arm, &target) in arms.iter().zip(&blocks) {
+            match &arm.pattern {
+                Pattern::Any(_) => {
+                    self.b.ins().jump(target, &[]);
+                    any = true;
+                    break;
+                }
+                Pattern::Present { .. } => {
+                    let next = self.b.create_block();
+                    self.b.ins().brif(has, target, &[], next, &[]);
+                    self.b.switch_to_block(next);
+                }
+                Pattern::Absent(_) => {
+                    let next = self.b.create_block();
+                    self.b.ins().brif(has, next, &[], target, &[]);
+                    self.b.switch_to_block(next);
+                }
+                Pattern::Variant { .. } => return Err("native code: a variant pattern on an optional value".into()),
+            }
+        }
+        if !any {
+            // The checker makes the arms cover both cases; kept for parity.
+            self.call0(self.h.opt_no_arm, &[]);
+            self.fail_return();
+        }
+        let join = self.b.create_block();
+        let mut falls_any = false;
+        for (arm, &target) in arms.iter().zip(&blocks) {
+            self.b.switch_to_block(target);
+            self.scopes.push(Vec::new());
+            let bind_scope = self.scopes.len() - 1;
+            if let Pattern::Present { bind, .. } = &arm.pattern {
+                let ih = self.call_checked(self.h.opt_get_ref, &[h]);
+                let iv = self.unhandle(ih, inner);
+                self.declare(bind, iv, inner.clone());
+            }
+            if owned {
+                self.call0(self.h.drop, &[h]);
+            }
+            let falls = self.block(&arm.body)?;
+            if falls {
+                self.drop_scopes_from(bind_scope);
+                self.b.ins().jump(join, &[]);
+                falls_any = true;
+            }
+            self.scopes.pop();
+        }
+        self.b.switch_to_block(join);
+        if !falls_any {
+            self.b.ins().trap(ir::TrapCode::unwrap_user(1));
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// The handle a variable holds, when `e` is a variable holding one. Reading through
@@ -1856,6 +2013,13 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 let argv = self.argv(&ordered);
                 let n = self.b.ins().iconst(types::I64, ordered.len() as i64);
                 Ok(self.call_checked(self.h.variant, &[idx, argv, n]))
+            }
+            Expr::NoneLit(_) => Ok(self.call_checked(self.h.none, &[])),
+            Expr::SomeOf(inner, _) => {
+                let t = self.ty(inner)?;
+                let v = self.expr(inner)?;
+                let h = self.as_handle(v, &t);
+                Ok(self.call_checked(self.h.some, &[h]))
             }
             Expr::List(items, _) => {
                 let mut hs = Vec::with_capacity(items.len());
@@ -2130,5 +2294,60 @@ fn total(n: Int) -> Int {
         assert_eq!(r, Value::Int(-before));
         assert!(ctx.peak <= 8, "at most {} values were alive at once", ctx.peak);
         assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
+    }
+
+    /// Optional values are built and matched in native code, and a `match` on one holds
+    /// no more than what it binds.
+    #[test]
+    fn optional_values_are_compiled_and_matching_drops_what_it_binds() {
+        let src = r#"type Box { label: Text, n: Int }
+
+fn maybe(i: Int) -> Optional<Box> {
+    if i - i / 2 * 2 == 0 {
+        return none
+    }
+    return some(Box { label: "b", n: i })
+}
+
+fn sum(n: Int) -> Int {
+    let total = 0
+    let last: Optional<Int> = none
+    let i = 0
+    loop {
+        if i == n {
+            break
+        }
+        set i = i + 1
+        match maybe(i) {
+            none => {
+                continue
+            }
+            some(b) => {
+                set total = total + b.n + len(b.label)
+                set last = some(b.n)
+            }
+        }
+    }
+    match last {
+        some(l) => {
+            return total * 10 + l - l
+        }
+        _ => {
+            return 0 - 1
+        }
+    }
+}
+"#;
+        let prog = crate::check_program(src).unwrap();
+        let native = Native::compile(&prog).unwrap();
+        assert_eq!(native.compiled(), ["maybe", "sum"]);
+        let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
+        assert_eq!(native.call("maybe", &mut ctx, &[Value::Int(2)]).unwrap().unwrap(), Value::Opt(None));
+        let odd: i64 = (1..=3000).filter(|i| i % 2 == 1).map(|i| i + 1).sum();
+        let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
+        assert_eq!(native.call("sum", &mut ctx, &[Value::Int(3000)]).unwrap().unwrap(), Value::Int(odd * 10));
+        assert!(ctx.peak <= 8, "at most {} values were alive at once", ctx.peak);
+        let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
+        assert_eq!(native.call("sum", &mut ctx, &[Value::Int(0)]).unwrap().unwrap(), Value::Int(-1));
     }
 }

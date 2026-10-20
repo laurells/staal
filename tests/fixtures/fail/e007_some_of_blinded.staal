@@ -1,0 +1,8 @@
+// expect: E007
+// some(x) holds x: wrapping blinded data does not unblind it.
+type Order { note: Text }
+
+fn f(order: Order @blind(note)) {
+    let n = some(order.note)
+    let s = propose(Text, instruct: "Summarise.", data: [n], tokens: 10)
+}

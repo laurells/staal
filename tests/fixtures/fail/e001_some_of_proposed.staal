@@ -1,0 +1,6 @@
+// expect: E001
+// message: cannot wrap unvalidated Proposed<Text>; use `validate` first
+fn f() -> Bool budget(calls: 1, tokens: 100) {
+    let p = propose(Text, instruct: "Say hi.", tokens: 100)
+    return some(p) == none
+}

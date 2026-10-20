@@ -1,0 +1,12 @@
+// expect: E101
+// message: `some(...)` and `none` match optional values; Shape is an enum, so name its variants
+enum Shape {
+    Dot,
+}
+
+fn f(s: Shape) {
+    match s {
+        none => {}
+        _ => {}
+    }
+}

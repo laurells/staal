@@ -1,0 +1,1 @@
+{"entry": "ask", "inputs": {"question": "q"}, "model": {"provider": "script", "responses": [{"output": {"found": {"phone": "080", "email": "a@b.org"}, "note": "n"}, "output_tokens": 5}]}, "expect": {"result": "a@b.org"}}

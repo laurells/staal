@@ -1,0 +1,136 @@
+// Optional values: some and none, built, matched, compared, in records, lists and
+// enums, from JSON and from a model.
+type Contact { phone: Text, email: Optional<Text> }
+type Lookup { found: Optional<Contact>, note: Text }
+
+enum Delivery {
+    Pickup,
+    Courier { tracking: Optional<Text> },
+}
+
+fn find(words: List<Text, 5>, start: Text) -> Optional<Text> {
+    for w in words {
+        if starts_with(w, start) {
+            return some(w)
+        }
+    }
+    return none
+}
+
+fn greet(name: Optional<Text>) -> Text {
+    match name {
+        some(n) => {
+            return "hello \(n)"
+        }
+        none => {
+            return "hello, whoever you are"
+        }
+    }
+}
+
+fn total(xs: List<Optional<Int>, 5>) -> Int {
+    let sum = 0
+    for x in xs {
+        match x {
+            none => {
+                continue
+            }
+            some(n) => {
+                set sum = sum + n
+            }
+        }
+    }
+    return sum
+}
+
+fn latest(xs: List<Int, 5>) -> Optional<Int> {
+    let last: Optional<Int> = none
+    for x in xs {
+        set last = some(x)
+    }
+    return last
+}
+
+fn missing(x: Optional<Int>) -> Bool {
+    return x == none
+}
+
+fn same(a: Optional<Int>, b: Optional<Int>) -> Bool {
+    return a == b
+}
+
+fn pair(first: Int) -> List<Optional<Int>, 2> {
+    return [some(first), none]
+}
+
+fn reach(c: Contact) -> Text {
+    match c.email {
+        some(e) => {
+            return e
+        }
+        _ => {}
+    }
+    return c.phone
+}
+
+fn wrap(c: Contact) -> Lookup {
+    return Lookup { found: some(c), note: "ok" }
+}
+
+fn track(d: Optional<Delivery>) -> Text {
+    match d {
+        none => {
+            return "no delivery"
+        }
+        some(x) => {
+            match x {
+                Pickup => {
+                    return "pickup"
+                }
+                Courier { tracking } => {
+                    match tracking {
+                        some(t) => {
+                            return "courier \(t)"
+                        }
+                        none => {
+                            return "courier, untracked"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// An overflow inside an arm fails the run, with the same message on both engines.
+fn double(x: Optional<Int>) -> Int {
+    match x {
+        some(n) => {
+            return n * 2
+        }
+        none => {
+            return 0
+        }
+    }
+}
+
+fn ask(question: Text) -> Text budget(calls: 1, tokens: 3000) {
+    let r: Lookup = validate propose(Lookup, instruct: "Find the contact this question is about.", data: [question], tokens: 2000)
+    match r.found {
+        some(c) => {
+            return reach(c)
+        }
+        none => {
+            return "unknown: \(r.note)"
+        }
+    }
+}
+
+// An amount inside `some(...)` is the action's amount: it is never skipped for a
+// later, smaller one.
+type Payout { amount: Optional<Money>, fee: Money }
+
+fn payout(p: Payout, pay: cap payments.refund(each: 50 USD)) -> Int {
+    let r = pay.refund(p)
+    return 1
+}

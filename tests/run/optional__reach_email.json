@@ -1,0 +1,1 @@
+{"entry": "reach", "inputs": {"c": {"phone": "080", "email": "a@b.org"}}, "expect": {"result": "a@b.org"}, "model": {"provider": "script", "responses": []}}

@@ -1,0 +1,7 @@
+// expect: E101
+// message: there is nothing to match: this value is always `none`
+fn f() {
+    match none {
+        _ => {}
+    }
+}

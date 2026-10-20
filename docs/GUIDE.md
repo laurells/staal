@@ -24,13 +24,13 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E106 | An import problem: a missing module, an import cycle, a name that clashes with an import |
 | E107 | A declaration used from another module without being `pub` |
 | E108 | A package uses a capability its `staal.json` does not declare, or reaches beyond the targets it declares |
-| E109 | A `match` does not handle every variant of its enum, and has no `_` arm |
+| E109 | A `match` does not handle every variant of its enum (or both `some` and `none`), and has no `_` arm |
 | E900 | Lexer error |
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 34 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 324 invalid ones
+rejecting the programs it should. 35 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 352 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -130,6 +130,37 @@ is, so with `order: Order @blind(payment.reference)` an arm may still ask a mode
 about the amount, but binding `reference` there and passing it on is E007, and
 with the whole `payment` blinded, deciding a model call by the variant is E007
 too.
+
+### Optional values
+
+    type Contact { phone: Text, email: Optional<Text> }
+
+    fn reach(c: Contact) -> Text {
+        match c.email {
+            some(e) => { return e }
+            none => { return c.phone }
+        }
+    }
+
+    fn find(words: List<Text, 20>, start: Text) -> Optional<Text> {
+        for w in words {
+            if starts_with(w, start) { return some(w) }
+        }
+        return none
+    }
+
+`Optional<T>` is a T or nothing. `some(x)` holds x and `none` holds nothing; a
+plain T never becomes optional by itself, and what an optional value holds is
+reached only through `match`, which must handle both `some(...)` and `none`, or
+use `_` (E109). `let x = none` needs a type, as in `let x: Optional<Int> = none`.
+In JSON, `none` is `null`, and a field of an optional type must still be present.
+A model asked for a `Contact` may answer `"email": null`, and `validate` accepts
+it.
+
+Blinding works through optional values. With `order: Order @blind(contact.email)`
+where `contact` is optional, an arm chosen by whether there is a contact may ask a
+model about the phone, but passing the email bound from it is E007. With all of
+`contact` blinded, deciding a model call by whether it is there is E007 too.
 
 ### Reassignment
 
@@ -758,9 +789,9 @@ compares both with git. `git` must be installed to fetch.
 
 On the native engine, every pure function is compiled to machine code when the run
 starts (Cranelift, in memory): its parameters and result are Int, Bool, Text, Money,
-records, enums or lists of these, and its body uses `let`, `set`, `if`, `match`,
+records, enums, optional values or lists of these, and its body uses `let`, `set`, `if`, `match`,
 `repeat`, `loop`, `for`, `break`, `continue`, `return`, `fail`, arithmetic,
-comparisons, field reads, record, variant and list literals, indexing, the pure built-in functions, and calls to other such
+comparisons, field reads, record, variant and list literals, `some` and `none`, indexing, the pure built-in functions, and calls to other such
 functions. Everything else runs on the interpreter, which stays the reference.
 Model calls, actions, `try`, `parse`, `validate`, HTTP, files and the journal never
 run in native code. The full rules are in [RUNTIME.md](RUNTIME.md) section 15. In short:

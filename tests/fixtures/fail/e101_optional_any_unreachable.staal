@@ -1,0 +1,9 @@
+// expect: E101
+// message: this `_` arm can never run: `some` and `none` are already matched
+fn f(x: Optional<Int>) {
+    match x {
+        none => {}
+        some(a) => {}
+        _ => {}
+    }
+}

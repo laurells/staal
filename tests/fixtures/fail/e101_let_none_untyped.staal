@@ -1,0 +1,5 @@
+// expect: E101
+// message: `let x` needs a type: `none` alone does not say what it may hold
+fn f() {
+    let x = none
+}

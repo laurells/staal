@@ -172,6 +172,9 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
             inexact(reveals(inner, env))
         }
         Expr::Parse { text, .. } => inexact(reveals(text, env)),
+        // `some(x)` is x, wrapped: what is inside it is exactly x.
+        Expr::SomeOf(inner, _) => reveals(inner, env),
+        Expr::NoneLit(_) => Vec::new(),
         Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
             let mut v = reveals(left, env);
             v.extend(reveals(right, env));
@@ -221,6 +224,8 @@ fn expr_text(e: &Expr) -> String {
         Expr::Variant { ty, variant, .. } => format!("{ty}.{variant}"),
         Expr::List(..) => "[...]".into(),
         Expr::Index { base, .. } => format!("{}[...]", expr_text(base)),
+        Expr::SomeOf(inner, _) => format!("some({})", expr_text(inner)),
+        Expr::NoneLit(_) => "none".into(),
         Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => "literal".into(),
     }
 }
@@ -345,6 +350,10 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
         let base = f.name.rsplit('.').next().unwrap_or(&f.name);
         if Builtin::from_name(base).is_some() || base == "parse" {
             ctx.err("E101", f.pos, format!("'{}' is a built-in function and cannot be redefined", f.name));
+            continue;
+        }
+        if base == "some" || base == "none" {
+            ctx.err("E101", f.pos, format!("'{base}' is reserved for optional values; choose another name"));
             continue;
         }
         if ctx.sigs.contains_key(f.name.as_str()) {
@@ -503,7 +512,7 @@ fn secret_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<&'sta
             }
             inner_types(ctx, n)?.iter().find_map(|fty| secret_inside(ctx, fty, seen))
         }
-        Ty::Proposed(inner) | Ty::List(inner, _) => secret_inside(ctx, inner, seen),
+        Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => secret_inside(ctx, inner, seen),
         Ty::Cap { .. } => None,
     }
 }
@@ -522,7 +531,7 @@ fn inner_types(ctx: &Ctx, n: &str) -> Option<Vec<Ty>> {
 fn cap_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> bool {
     match ty {
         Ty::Cap { .. } => true,
-        Ty::Proposed(inner) | Ty::List(inner, _) => cap_inside(ctx, inner, seen),
+        Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => cap_inside(ctx, inner, seen),
         Ty::Named(n) => {
             seen.insert(n.clone())
                 && inner_types(ctx, n).is_some_and(|ts| ts.iter().any(|t| cap_inside(ctx, t, seen)))
@@ -740,6 +749,17 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
             }
             check_ty_known(ctx, inner, pos);
         }
+        Ty::Optional(inner) => {
+            if let Some(bad) = proof_or_authority(inner) {
+                ctx.err("E101", pos, format!("an optional value cannot hold a {bad}"));
+            } else if matches!(&**inner, Ty::Named(n) if n == "Secret" || n == "Header") {
+                ctx.err("E101", pos, format!("an optional value cannot hold a {inner}: secrets never travel inside data"));
+            } else if matches!(&**inner, Ty::Optional(_)) {
+                // In JSON both `some(none)` and `none` would be `null`.
+                ctx.err("E101", pos, format!("{ty} cannot be told apart from `none`; use one Optional, or an enum"));
+            }
+            check_ty_known(ctx, inner, pos);
+        }
     }
 }
 
@@ -752,7 +772,7 @@ fn proof_or_authority(ty: &Ty) -> Option<&'static str> {
         Ty::Named(n) if n == "Outcome" => Some("Outcome"),
         Ty::Named(n) if n == "Done" => Some("Done"),
         Ty::Named(_) => None,
-        Ty::Proposed(inner) | Ty::List(inner, _) => proof_or_authority(inner),
+        Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => proof_or_authority(inner),
     }
 }
 
@@ -762,7 +782,7 @@ fn assignable(from: &Ty, to: &Ty) -> Result<(), (&'static str, String)> {
     match (from, to) {
         (Ty::List(fe, fmax), Ty::List(te, tmax)) => {
             assignable(fe, te)?;
-            if fe != te {
+            if !fe.fits(te) {
                 return Err(("E101", format!("expected {to}, found {from}")));
             }
             if fmax > tmax {
@@ -815,7 +835,10 @@ fn assignable(from: &Ty, to: &Ty) -> Result<(), (&'static str, String)> {
             }
             Ok(())
         }
-        _ if from == to => Ok(()),
+        _ if from.fits(to) => Ok(()),
+        (t, Ty::Optional(inner)) if t.fits(inner) => {
+            Err(("E101", format!("expected {to}, found {from}; write some(...) to make an optional value")))
+        }
         _ => Err(("E101", format!("expected {to}, found {from}"))),
     }
 }
@@ -1209,6 +1232,10 @@ fn ok_test(cond: &Expr) -> Option<(String, bool)> {
 /// a field of any of its variants.
 fn field_path_exists(ctx: &Ctx, ty: &Ty, rel: &[String]) -> bool {
     let Some((name, rest)) = rel.split_first() else { return true };
+    // Through an optional value, to the fields of what it may hold.
+    if let Ty::Optional(inner) = ty {
+        return field_path_exists(ctx, inner, rel);
+    }
     let Ty::Named(t) = ty else { return false };
     if let Some(fields) = ctx.fields.get(t) {
         return fields.iter().any(|(n, fty)| n == name && field_path_exists(ctx, fty, rest));
@@ -1273,6 +1300,14 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                             ctx.err(code, *pos, format!("in `let {name}`: {msg}"));
                         }
                         decl.clone()
+                    }
+                    None if vty.has_unknown() => {
+                        ctx.err(
+                            "E101",
+                            *pos,
+                            format!("`let {name}` needs a type: `none` alone does not say what it may hold, e.g. let {name}: Optional<Text> = none"),
+                        );
+                        continue;
                     }
                     None => vty,
                 };
@@ -1499,31 +1534,44 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
             }
             Stmt::Match { value, arms, pos } => {
                 let Some((vty, vtrusted)) = type_of(ctx, value, &env) else { continue };
+                // An enum's variants, or what an optional value may hold.
                 let variants = match &vty {
                     Ty::Named(n) => ctx.enums.get(n).cloned(),
                     _ => None,
                 };
-                let Some(variants) = variants else {
+                let held = match &vty {
+                    Ty::Optional(inner) => Some((**inner).clone()),
+                    _ => None,
+                };
+                if let Some(v) = &variants {
+                    match_patterns(ctx, &vty.to_string(), v, arms, *pos);
+                } else if held.is_some() {
+                    if vty.has_unknown() {
+                        ctx.err("E101", value.pos(), "there is nothing to match: this value is always `none`".into());
+                        continue;
+                    }
+                    optional_patterns(ctx, &vty, arms, *pos);
+                } else {
                     if matches!(vty, Ty::Proposed(_)) {
                         ctx.err("E001", value.pos(), format!("cannot match unvalidated {vty}; use `validate` first"));
                     } else {
-                        ctx.err("E101", value.pos(), format!("`match` needs an enum value, found {vty}"));
+                        ctx.err("E101", value.pos(), format!("`match` needs an enum or optional value, found {vty}"));
                     }
                     continue;
-                };
-                let ename = vty.to_string();
-                match_patterns(ctx, &ename, &variants, arms, *pos);
-                // Which arm runs depends on the value's variant, like an `if` on its
-                // condition: for a path, that is the path's `kind` (no field is called
-                // that), so a blinded field inside does not decide the arm. Each bound
-                // field is exactly that field of the value.
+                }
+                // Which arm runs depends on the value's variant, or on whether it holds
+                // anything, like an `if` on its condition: for a path, that is the
+                // path's `kind`, or `?` (no field is called either), so a blinded field
+                // inside does not decide the arm. A bound field is exactly that field of
+                // the value; what `some(x)` binds is exactly the value's content.
                 let srcs = reveals(value, &env);
+                let marker = if variants.is_some() { "kind" } else { "?" };
                 let decides: Vec<Src> = srcs
                     .iter()
                     .map(|s| {
                         let mut s = s.clone();
                         if s.exact {
-                            s.path.push("kind".into());
+                            s.path.push(marker.into());
                         }
                         s
                     })
@@ -1533,33 +1581,38 @@ fn check_block(ctx: &mut Ctx, f: &FnDecl, ret: &Ty, body: &[Stmt], mut env: Env,
                 let mut outs = Vec::new();
                 for arm in arms.iter() {
                     let mut arm_env = env.clone();
-                    if let Pattern::Variant { name, binds, .. } = &arm.pattern
-                        && let Some((_, fields)) = variants.iter().find(|(v, _)| v == name)
-                    {
-                        for (field, to) in binds {
-                            let Some((_, fty)) = fields.iter().find(|(f, _)| f == field) else { continue };
-                            let mut r: Vec<Src> = srcs
-                                .iter()
-                                .map(|s| {
-                                    let mut s = s.clone();
-                                    if s.exact {
-                                        s.path.push(field.clone());
+                    // Each name the arm binds: its type, and the field of the value it is.
+                    let mut bound: Vec<(&String, Ty, Option<&String>)> = Vec::new();
+                    match (&arm.pattern, &variants, &held) {
+                        (Pattern::Variant { name, binds, .. }, Some(vs), _) => {
+                            if let Some((_, fields)) = vs.iter().find(|(v, _)| v == name) {
+                                for (field, to) in binds {
+                                    if let Some((_, fty)) = fields.iter().find(|(f, _)| f == field) {
+                                        bound.push((to, fty.clone(), Some(field)));
                                     }
-                                    s
-                                })
-                                .collect();
-                            add_srcs(&mut r, ctx.pc.clone());
-                            hide_shadowed(&mut arm_env, to);
-                            let b = Binding {
-                                ty: fty.clone(),
-                                trusted: vtrusted,
-                                reveals: r,
-                                proven_ok: false,
-                                holds_evidence: false,
-                                decl: None,
-                            };
-                            arm_env.insert(to.clone(), b);
+                                }
+                            }
                         }
+                        (Pattern::Present { bind, .. }, _, Some(inner)) => bound.push((bind, inner.clone(), None)),
+                        _ => {}
+                    }
+                    for (to, fty, field) in bound {
+                        let mut r: Vec<Src> = srcs
+                            .iter()
+                            .map(|s| {
+                                let mut s = s.clone();
+                                if s.exact
+                                    && let Some(field) = field
+                                {
+                                    s.path.push(field.clone());
+                                }
+                                s
+                            })
+                            .collect();
+                        add_srcs(&mut r, ctx.pc.clone());
+                        hide_shadowed(&mut arm_env, to);
+                        let b = Binding { ty: fty, trusted: vtrusted, reveals: r, proven_ok: false, holds_evidence: false, decl: None };
+                        arm_env.insert(to.clone(), b);
                     }
                     outs.push(check_block(ctx, f, ret, &arm.body, arm_env, in_loop));
                 }
@@ -1617,6 +1670,9 @@ fn match_patterns(ctx: &mut Ctx, ename: &str, variants: &Variants, arms: &[Arm],
                 }
                 any = true;
             }
+            Pattern::Present { pos: p, .. } | Pattern::Absent(p) => {
+                ctx.err("E101", *p, format!("`some(...)` and `none` match optional values; {ename} is an enum, so name its variants"));
+            }
             Pattern::Variant { name, binds, rest, pos: p } => {
                 if any {
                     ctx.err("E101", *p, format!("the arm for {name} can never run: `_` above already matches it"));
@@ -1657,6 +1713,39 @@ fn match_patterns(ctx: &mut Ctx, ename: &str, variants: &Variants, arms: &[Arm],
         if !left.is_empty() {
             ctx.err("E109", pos, format!("this `match` does not handle {}; add an arm for each, or `_ =>`", left.join(", ")));
         }
+    }
+}
+
+/// The patterns of a `match` on optional type `ty`: `some(x)` and `none`, each once,
+/// or `_` for what is left, last and with something left to accept (E109 without).
+fn optional_patterns(ctx: &mut Ctx, ty: &Ty, arms: &[Arm], pos: Pos) {
+    let (mut some, mut none, mut any) = (false, false, false);
+    for arm in arms {
+        let (seen, what, p) = match &arm.pattern {
+            Pattern::Any(p) => {
+                if any || (some && none) {
+                    ctx.err("E101", *p, "this `_` arm can never run: `some` and `none` are already matched".into());
+                }
+                any = true;
+                continue;
+            }
+            Pattern::Variant { name, pos: p, .. } => {
+                ctx.err("E101", *p, format!("a `match` on {ty} takes `some(x)`, `none` or `_`, not {name}"));
+                continue;
+            }
+            Pattern::Present { pos, .. } => (&mut some, "some", *pos),
+            Pattern::Absent(p) => (&mut none, "none", *p),
+        };
+        if any {
+            ctx.err("E101", p, format!("the `{what}` arm can never run: `_` above already matches it"));
+        } else if *seen {
+            ctx.err("E101", p, format!("`{what}` is matched twice"));
+        }
+        *seen = true;
+    }
+    if !any && !(some && none) {
+        let left = if some { "none" } else if none { "some(...)" } else { "some(...) or none" };
+        ctx.err("E109", pos, format!("this `match` does not handle {left}; add an arm for it, or `_ =>`"));
     }
 }
 
@@ -1828,7 +1917,7 @@ fn check_call_blind(ctx: &mut Ctx, name: &str, args: &[Expr], params: &[(Ty, boo
 fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<String> {
     match ty {
         Ty::Cap { .. } => Some("capability".into()),
-        Ty::Proposed(inner) | Ty::List(inner, _) => runtime_only_inside(ctx, inner, seen),
+        Ty::Proposed(inner) | Ty::List(inner, _) | Ty::Optional(inner) => runtime_only_inside(ctx, inner, seen),
         Ty::Named(n) if n == "Receipt" || n == "Outcome" || n == "Done" => Some(n.clone()),
         Ty::Named(n) => {
             if !seen.insert(n.clone()) {
@@ -2153,7 +2242,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 Builtin::Len => matches!(&tys[0].0, Ty::List(..)) || tys[0].0 == text,
                 Builtin::Contains => match (&tys[0].0, &tys[1].0) {
                     (a, b) if *a == text && *b == text => true,
-                    (Ty::List(el, _), b) => **el == *b,
+                    (Ty::List(el, _), b) => b.fits(el),
                     _ => false,
                 },
                 Builtin::StartsWith | Builtin::EndsWith => tys[0].0 == text && tys[1].0 == text,
@@ -2218,6 +2307,23 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             let trusted = record_fields(ctx, env, ty, &decl, fields, *pos)?;
             Some((named(ty), trusted))
         }
+        Expr::NoneLit(_) => Some((Ty::none(), true)),
+        Expr::SomeOf(inner, pos) => {
+            let (t, trusted) = type_of(ctx, inner, env)?;
+            let bad = match &t {
+                Ty::Optional(_) => Some(format!("{t} is already optional; some(...) of it could not be told apart from `none`")),
+                Ty::Proposed(_) => Some(format!("cannot wrap unvalidated {t}; use `validate` first")),
+                _ => proof_or_authority(&t)
+                    .map(|b| format!("an optional value cannot hold a {b}"))
+                    .or_else(|| secret_inside(ctx, &t, &mut HashSet::new()).map(|b| format!("an optional value cannot hold a {b}: secrets never travel inside data"))),
+            };
+            if let Some(msg) = bad {
+                let code = if matches!(t, Ty::Proposed(_)) { "E001" } else { "E101" };
+                ctx.err(code, *pos, msg);
+                return None;
+            }
+            Some((Ty::Optional(Box::new(t)), trusted))
+        }
         Expr::Variant { ty, variant, fields, pos } => {
             let Some(variants) = ctx.enums.get(ty) else {
                 ctx.err("E102", *pos, format!("unknown type '{ty}'"));
@@ -2242,15 +2348,19 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
             }
             let tys: Vec<Option<(Ty, bool)>> = items.iter().map(|i| type_of(ctx, i, env)).collect();
             let tys: Vec<(Ty, bool)> = tys.into_iter().collect::<Option<Vec<_>>>()?;
-            let first = tys[0].0.clone();
+            let mut first = tys[0].0.clone();
             if let Some(bad) = proof_or_authority(&first) {
                 ctx.err("E101", *pos, format!("a list cannot hold a {bad}"));
                 return None;
             }
+            // `[some(1), none]` is a List<Optional<Int>, 2>.
             for (item, (t, _)) in items.iter().zip(&tys).skip(1) {
-                if *t != first {
-                    ctx.err("E101", item.pos(), format!("list elements must all have one type: {first} and {t}"));
-                    return None;
+                match first.unify(t) {
+                    Some(u) => first = u,
+                    None => {
+                        ctx.err("E101", item.pos(), format!("list elements must all have one type: {first} and {t}"));
+                        return None;
+                    }
                 }
             }
             let trusted = tys.iter().all(|(_, tr)| *tr);
@@ -2311,6 +2421,14 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     ctx.err("E104", *pos, format!("a list has no fields; cannot read '.{field}' (use len(xs) or xs[i])"));
                     None
                 }
+                Ty::Optional(_) => {
+                    ctx.err(
+                        "E104",
+                        *pos,
+                        format!("cannot read '.{field}' of {bty}: it may hold nothing; use `match` with some(x) and none"),
+                    );
+                    None
+                }
             }
         }
         Expr::Cmp { op, left, right, pos } => {
@@ -2330,7 +2448,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 || secret_inside(ctx, &rt, &mut HashSet::new()).is_some()
             {
                 ctx.err("E101", *pos, "secrets and headers cannot be compared: a comparison would reveal them".into());
-            } else if lt != rt {
+            } else if lt.unify(&rt).is_none() {
                 ctx.err("E101", *pos, format!("cannot compare {lt} with {rt}"));
             } else if ordered && lt != named("Int") && lt != named("Money") {
                 ctx.err("E101", *pos, format!("`{op}` needs Int or Money, found {lt}"));

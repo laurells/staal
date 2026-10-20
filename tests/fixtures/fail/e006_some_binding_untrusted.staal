@@ -1,0 +1,10 @@
+// expect: E006
+// What `some(x)` binds from untrusted data is untrusted.
+fn f(note: Optional<Text>) {
+    match note {
+        some(n) => {
+            let s = propose(Text, instruct: "Do this: " + n, tokens: 10)
+        }
+        none => {}
+    }
+}
