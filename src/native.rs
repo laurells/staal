@@ -2,10 +2,10 @@
 //
 // A function is compiled when everything it does can be done without effects: its
 // parameters and result are Int, Bool, Text, Money, records of these, or lists of
-// these; its body uses `let`, `set`, `if`, `repeat`, `loop`, `for`, `break`,
-// `return`, `fail`, arithmetic, comparisons, `and`/`or`/`not`, field reads, record and
-// list literals, indexing, the pure built-in functions, and calls to other compiled
-// functions. Every other function runs on the interpreter, and a compiled function is
+// these, enums whose variants hold these; its body uses `let`, `set`, `if`, `match`,
+// `repeat`, `loop`, `for`, `break`, `continue`, `return`, `fail`, arithmetic,
+// comparisons, `and`/`or`/`not`, field reads, record, variant and list literals,
+// indexing, the pure built-in functions, and calls to other compiled functions. Every other function runs on the interpreter, and a compiled function is
 // only ever entered from it. Model calls, actions, `try`, `parse`/`validate`, HTTP,
 // files and the journal therefore never run in native code.
 //
@@ -33,7 +33,7 @@
 // returns i64. On failure it records the failure in `Ctx`, sets `failed`, and returns
 // 0; every caller checks `failed` after each call or fallible helper, and returns.
 
-use crate::ast::{ArithOp, Builtin, CmpOp, Expr, FnDecl, LogicOp, Program, Stmt, Ty};
+use crate::ast::{ArithOp, Builtin, CmpOp, Expr, FnDecl, LogicOp, Pattern, Program, Stmt, Ty, Variant};
 use crate::interp::value::{from_json, to_json, Value};
 use serde_json::{json, Value as Json};
 use crate::interp::{arith, arith_failure, builtin, compare, depth_limit, list_index, neg, step_limit, Failure, FailKind};
@@ -129,6 +129,11 @@ struct Tables {
     records: Vec<(String, Vec<String>)>,
     /// Field names, for field reads.
     fields: Vec<String>,
+    /// Enum type name, variant name and its field names in declaration order, for
+    /// variant literals.
+    variants: Vec<(String, String, Vec<String>)>,
+    /// Enum type name and its variant names in declaration order, for `match`.
+    enums: Vec<(String, Vec<String>)>,
 }
 
 /// The built-in functions by the number generated code passes for them.
@@ -378,7 +383,8 @@ extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
         let name = usize::try_from(idx).ok().and_then(|i| t.fields.get(i));
         let name = name.ok_or_else(|| internal("native code: unknown field"))?;
         let v = match c.get(h)? {
-            Value::Record { fields, .. } => match fields.iter().find(|(f, _)| f == name) {
+            // An enum's fields are read only by `match` binding them.
+            Value::Record { fields, .. } | Value::Enum { fields, .. } => match fields.iter().find(|(f, _)| f == name) {
                 Some((_, v)) => v.clone(),
                 None => return Err(internal(format!("no field '{name}'"))),
             },
@@ -386,6 +392,52 @@ extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
         };
         Ok(c.put(v))
     })
+}
+
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_variant")]
+extern "C" fn rt_variant(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
+    guard(c, |c| {
+        let t = tables(c)?;
+        let var = usize::try_from(idx).ok().and_then(|i| t.variants.get(i));
+        let (ty, variant, names) = var.ok_or_else(|| internal("native code: unknown variant"))?;
+        let vals = take_args(c, argv, n)?;
+        if vals.len() != names.len() {
+            return Err(internal(format!("native code: {ty}.{variant} with {} fields", vals.len())));
+        }
+        let fields = names.iter().cloned().zip(vals).collect();
+        Ok(c.put(Value::Enum { ty: ty.clone(), variant: variant.clone(), fields }))
+    })
+}
+
+/// The position, among the variants of enum `idx`, of the variant of the enum value
+/// in `h`, which stays owned by the caller.
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_variant_index")]
+extern "C" fn rt_variant_index(c: *mut Ctx, h: i64, idx: i64) -> i64 {
+    guard(c, |c| {
+        let t = tables(c)?;
+        let e = usize::try_from(idx).ok().and_then(|i| t.enums.get(i));
+        let (ty, names) = e.ok_or_else(|| internal("native code: unknown enum"))?;
+        let Value::Enum { variant, .. } = c.get(h)? else { return Err(internal("`match` on a value that is not an enum")) };
+        match names.iter().position(|n| n == variant) {
+            Some(i) => Ok(i as i64),
+            None => Err(internal(format!("native code: {variant} is not a variant of {ty}"))),
+        }
+    })
+}
+
+/// No arm matched the enum value in `h`: the interpreter's failure, word for word.
+// Exported so `staalc build` executables link to it by name.
+#[unsafe(export_name = "staal_rt_no_arm")]
+extern "C" fn rt_no_arm(c: *mut Ctx, h: i64) {
+    guard(c, |c| {
+        let variant = match c.get(h)? {
+            Value::Enum { variant, .. } => variant.clone(),
+            _ => return Err(internal("`match` on a value that is not an enum")),
+        };
+        Err(internal(format!("no `match` arm for variant {variant}")))
+    });
 }
 
 /// Item `i` of the list in `h`, which stays owned by the caller.
@@ -481,16 +533,18 @@ fn named(n: &str) -> Ty {
     Ty::Named(n.into())
 }
 
-/// The program's record types and compilable function signatures.
+/// The program's record and enum types and compilable function signatures.
 struct Env<'p> {
     records: HashMap<&'p str, &'p [(String, Ty)]>,
+    enums: HashMap<&'p str, &'p [Variant]>,
     sigs: HashMap<&'p str, (Vec<Ty>, Ty)>,
 }
 
 impl<'p> Env<'p> {
     fn new(prog: &'p Program) -> Env<'p> {
         let records: HashMap<&str, &[(String, Ty)]> = prog.types.iter().map(|t| (t.name.as_str(), t.fields.as_slice())).collect();
-        let mut env = Env { records, sigs: HashMap::new() };
+        let enums: HashMap<&str, &[Variant]> = prog.enums.iter().map(|e| (e.name.as_str(), e.variants.as_slice())).collect();
+        let mut env = Env { records, enums, sigs: HashMap::new() };
         let mut sigs = HashMap::new();
         for f in &prog.fns {
             if f.name.contains(' ') {
@@ -505,13 +559,22 @@ impl<'p> Env<'p> {
         env
     }
 
-    /// Values native code may hold: Int, Bool, Text, Money, records and lists of them.
+    /// The fields of variant `variant` of enum `ty`.
+    fn variant(&self, ty: &str, variant: &str) -> Option<&'p [(String, Ty)]> {
+        self.enums.get(ty)?.iter().find(|v| v.name == variant).map(|v| v.fields.as_slice())
+    }
+
+    /// Values native code may hold: Int, Bool, Text, Money, and records, enums and
+    /// lists of them.
     fn allowed(&self, t: &Ty, depth: usize) -> bool {
         if depth > 16 {
             return false;
         }
         match t {
             Ty::Named(n) if ["Int", "Bool", "Text", "Money"].contains(&n.as_str()) => true,
+            Ty::Named(n) if self.enums.contains_key(n.as_str()) => self.enums[n.as_str()]
+                .iter()
+                .all(|v| v.fields.iter().all(|(_, ft)| self.allowed(ft, depth + 1))),
             Ty::Named(n) => self.records.get(n.as_str()).is_some_and(|fs| fs.iter().all(|(_, ft)| self.allowed(ft, depth + 1))),
             Ty::List(inner, _) => self.allowed(inner, depth + 1),
             Ty::Proposed(_) | Ty::Cap { .. } => false,
@@ -577,6 +640,19 @@ impl<'p> Env<'p> {
             }
             Expr::Record { ty, fields, .. } => {
                 let decl = self.records.get(ty.as_str())?;
+                if fields.len() != decl.len() {
+                    return None;
+                }
+                for (name, fe) in fields {
+                    let want = &decl.iter().find(|(f, _)| f == name)?.1;
+                    if self.ty(fe, var)? != *want {
+                        return None;
+                    }
+                }
+                named(ty)
+            }
+            Expr::Variant { ty, variant, fields, .. } => {
+                let decl = self.variant(ty, variant)?;
                 if fields.len() != decl.len() {
                     return None;
                 }
@@ -687,9 +763,28 @@ impl Check<'_, '_> {
                 self.scopes.pop();
                 ok
             }
+            Stmt::Match { value, arms, .. } => {
+                let Some(Ty::Named(ty)) = self.ty(value) else { return false };
+                if !self.env.enums.contains_key(ty.as_str()) {
+                    return false;
+                }
+                arms.iter().all(|arm| {
+                    let mut scope = HashMap::new();
+                    if let Pattern::Variant { name, binds, .. } = &arm.pattern {
+                        let Some(decl) = self.env.variant(&ty, name) else { return false };
+                        for (field, to) in binds {
+                            let Some((_, ft)) = decl.iter().find(|(f, _)| f == field) else { return false };
+                            scope.insert(to.clone(), ft.clone());
+                        }
+                    }
+                    self.scopes.push(scope);
+                    let ok = self.block(&arm.body);
+                    self.scopes.pop();
+                    ok
+                })
+            }
             Stmt::Break(_) | Stmt::Continue(_) => true,
-            // Enums run on the interpreter for now.
-            Stmt::Return(None, _) | Stmt::Match { .. } => false,
+            Stmt::Return(None, _) => false,
         }
     }
 }
@@ -780,6 +875,9 @@ struct Helpers {
     list_len: FuncId,
     list_get: FuncId,
     fail: FuncId,
+    variant: FuncId,
+    variant_index: FuncId,
+    no_arm: FuncId,
 }
 
 impl Native {
@@ -908,6 +1006,9 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("staal_rt_list_len", rt_list_len as *const u8),
     ("staal_rt_list_get", rt_list_get as *const u8),
     ("staal_rt_fail", rt_fail as *const u8),
+    ("staal_rt_variant", rt_variant as *const u8),
+    ("staal_rt_variant_index", rt_variant_index as *const u8),
+    ("staal_rt_no_arm", rt_no_arm as *const u8),
 ];
 
 /// The machine to generate code for: this one. `host_features`: use every feature
@@ -966,6 +1067,9 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
         list_len: helper(module, "staal_rt_list_len", 1, true)?,
         list_get: helper(module, "staal_rt_list_get", 2, true)?,
         fail: helper(module, "staal_rt_fail", 1, false)?,
+        variant: helper(module, "staal_rt_variant", 3, true)?,
+        variant_index: helper(module, "staal_rt_variant_index", 2, true)?,
+        no_arm: helper(module, "staal_rt_no_arm", 1, false)?,
     };
     // In program order, so the same program always gives the same code and tables.
     let fns: Vec<&FnDecl> = prog.fns.iter().filter(|f| set.contains(&f.name)).collect();
@@ -1048,7 +1152,7 @@ impl Tables {
                 _ => Err("native code: a constant that is neither Text nor Money".to_string()),
             })
             .collect::<Result<_, _>>()?;
-        Ok(json!({ "consts": consts, "records": self.records, "fields": self.fields }))
+        Ok(json!({ "consts": consts, "records": self.records, "fields": self.fields, "variants": self.variants, "enums": self.enums }))
     }
 
     fn from_json(j: &Json) -> Result<Tables, String> {
@@ -1063,7 +1167,9 @@ impl Tables {
         }
         let records: Vec<(String, Vec<String>)> = serde_json::from_value(j["records"].clone()).map_err(|_| bad())?;
         let fields: Vec<String> = serde_json::from_value(j["fields"].clone()).map_err(|_| bad())?;
-        Ok(Tables { consts, records, fields })
+        let variants: Vec<(String, String, Vec<String>)> = serde_json::from_value(j["variants"].clone()).map_err(|_| bad())?;
+        let enums: Vec<(String, Vec<String>)> = serde_json::from_value(j["enums"].clone()).map_err(|_| bad())?;
+        Ok(Tables { consts, records, fields, variants, enums })
     }
 }
 
@@ -1460,7 +1566,88 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 self.scopes.pop();
                 Ok(true)
             }
-            Stmt::Return(None, _) | Stmt::Match { .. } => Err("native code: statement not supported".into()),
+            Stmt::Match { value, arms, .. } => {
+                let Ty::Named(ty) = self.ty(value)? else { return Err("native code: `match` on a non-enum".into()) };
+                let names: Vec<String> = self
+                    .env
+                    .enums
+                    .get(ty.as_str())
+                    .ok_or("native code: `match` on a non-enum")?
+                    .iter()
+                    .map(|v| v.name.clone())
+                    .collect();
+                // The value, read in place from a variable as a field read is, or else
+                // evaluated into a handle this statement owns and drops before the arm.
+                let (h, owned) = match self.var_handle(value) {
+                    Some(v) => (v, false),
+                    None => (self.expr(value)?, true),
+                };
+                self.tables.enums.push((ty.clone(), names.clone()));
+                let eidx = self.b.ins().iconst(types::I64, (self.tables.enums.len() - 1) as i64);
+                let which = self.call_checked(self.h.variant_index, &[h, eidx]);
+                // The first arm whose pattern names the variant, or `_`, as the
+                // interpreter picks it.
+                let blocks: Vec<ir::Block> = arms.iter().map(|_| self.b.create_block()).collect();
+                let mut any = false;
+                for (arm, &target) in arms.iter().zip(&blocks) {
+                    match &arm.pattern {
+                        Pattern::Any(_) => {
+                            self.b.ins().jump(target, &[]);
+                            any = true;
+                            break;
+                        }
+                        Pattern::Variant { name, .. } => {
+                            let pos = names.iter().position(|n| n == name).ok_or("native code: unknown variant")?;
+                            let hit = self.b.ins().icmp_imm_s(IntCC::Equal, which, pos as i64);
+                            let next = self.b.create_block();
+                            self.b.ins().brif(hit, target, &[], next, &[]);
+                            self.b.switch_to_block(next);
+                        }
+                    }
+                }
+                if !any {
+                    // The checker makes the arms cover every variant; kept for parity.
+                    self.call0(self.h.no_arm, &[h]);
+                    self.fail_return();
+                }
+                let join = self.b.create_block();
+                let mut falls_any = false;
+                for (arm, &target) in arms.iter().zip(&blocks) {
+                    self.b.switch_to_block(target);
+                    // The bindings' scope, then the body's (`block` makes that one).
+                    self.scopes.push(Vec::new());
+                    let bind_scope = self.scopes.len() - 1;
+                    if let Pattern::Variant { name, binds, .. } = &arm.pattern {
+                        let decl = self.env.variant(&ty, name).ok_or("native code: unknown variant")?;
+                        for (field, to) in binds {
+                            let ft = decl.iter().find(|(f, _)| f == field).ok_or("native code: unknown field")?.1.clone();
+                            self.tables.fields.push(field.clone());
+                            let idx = self.b.ins().iconst(types::I64, (self.tables.fields.len() - 1) as i64);
+                            let fh = self.call_checked(self.h.field_ref, &[h, idx]);
+                            let fv = self.unhandle(fh, &ft);
+                            self.declare(to, fv, ft);
+                        }
+                    }
+                    if owned {
+                        self.call0(self.h.drop, &[h]);
+                    }
+                    let falls = self.block(&arm.body)?;
+                    if falls {
+                        self.drop_scopes_from(bind_scope);
+                        self.b.ins().jump(join, &[]);
+                        falls_any = true;
+                    }
+                    self.scopes.pop();
+                }
+                self.b.switch_to_block(join);
+                if !falls_any {
+                    // Nothing reaches here; end the block validly.
+                    self.b.ins().trap(ir::TrapCode::unwrap_user(1));
+                    return Ok(false);
+                }
+                Ok(true)
+            }
+            Stmt::Return(None, _) => Err("native code: statement not supported".into()),
         }
     }
 
@@ -1648,6 +1835,27 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 let argv = self.argv(&ordered);
                 let n = self.b.ins().iconst(types::I64, ordered.len() as i64);
                 Ok(self.call_checked(self.h.record, &[idx, argv, n]))
+            }
+            Expr::Variant { ty, variant, fields, .. } => {
+                // Evaluated in the order written, stored in declaration order.
+                let decl: Vec<(String, Ty)> = self.env.variant(ty, variant).ok_or("native code: unknown variant")?.to_vec();
+                let mut given: Vec<(String, ir::Value)> = Vec::with_capacity(fields.len());
+                for (name, fe) in fields {
+                    let t = self.ty(fe)?;
+                    let v = self.expr(fe)?;
+                    let h = self.as_handle(v, &t);
+                    given.push((name.clone(), h));
+                }
+                let mut ordered = Vec::with_capacity(decl.len());
+                for (fname, _) in &decl {
+                    let i = given.iter().position(|(n, _)| n == fname).ok_or("native code: a field is missing")?;
+                    ordered.push(given[i].1);
+                }
+                self.tables.variants.push((ty.clone(), variant.clone(), decl.iter().map(|(n, _)| n.clone()).collect()));
+                let idx = self.b.ins().iconst(types::I64, (self.tables.variants.len() - 1) as i64);
+                let argv = self.argv(&ordered);
+                let n = self.b.ins().iconst(types::I64, ordered.len() as i64);
+                Ok(self.call_checked(self.h.variant, &[idx, argv, n]))
             }
             Expr::List(items, _) => {
                 let mut hs = Vec::with_capacity(items.len());
@@ -1840,6 +2048,87 @@ fn first_with(words: List<Text, 10>, c: Text) -> Text {
         let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
         let r = native.call("first_with", &mut ctx, &[words, Value::Text("i".into())]).unwrap().unwrap();
         assert_eq!(r, Value::Text("bird".into()));
+        assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
+    }
+
+    /// Enums are built and matched in native code, and a `match` holds no more values
+    /// than its bindings: the matched value is read in place or dropped before the arm.
+    #[test]
+    fn enums_are_compiled_and_matching_drops_what_it_binds() {
+        let src = r#"enum Shape {
+    Dot,
+    Square { side: Int, name: Text },
+    Line { length: Int },
+}
+
+fn make(i: Int) -> Shape {
+    if i - i / 3 * 3 == 0 {
+        return Shape.Dot
+    }
+    if i - i / 3 * 3 == 1 {
+        return Shape.Square { name: "s", side: i }
+    }
+    return Shape.Line { length: i }
+}
+
+fn area(s: Shape) -> Int {
+    match s {
+        Square { side, .. } => {
+            return side * side
+        }
+        Line { .. } => {
+            return 0
+        }
+        Dot => {
+            return 1
+        }
+    }
+}
+
+fn total(n: Int) -> Int {
+    let sum = 0
+    let i = 0
+    loop {
+        if i == n {
+            return sum
+        }
+        set i = i + 1
+        match make(i) {
+            Dot => {
+                continue
+            }
+            Square { side: x, name } => {
+                if x > 1000 {
+                    break
+                }
+                set sum = sum + x + len(name)
+            }
+            _ => {}
+        }
+        set sum = sum + area(make(i))
+    }
+    return 0 - sum
+}
+"#;
+        let prog = crate::check_program(src).unwrap();
+        let native = Native::compile(&prog).unwrap();
+        assert_eq!(native.compiled(), ["area", "make", "total"]);
+        let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
+        let sq = native.call("make", &mut ctx, &[Value::Int(4)]).unwrap().unwrap();
+        let want = Value::Enum {
+            ty: "Shape".into(),
+            variant: "Square".into(),
+            fields: vec![("side".into(), Value::Int(4)), ("name".into(), Value::Text("s".into()))],
+        };
+        assert_eq!(sq, want);
+        assert_eq!(native.call("area", &mut ctx, &[sq]).unwrap().unwrap(), Value::Int(16));
+        // i = 1, 4, 7, ... are squares: each adds i + 1 and then i * i; lines add 0.
+        let squares: Vec<i64> = (1..=3000).filter(|i| i % 3 == 1).collect();
+        let before: i64 = squares.iter().filter(|i| **i <= 1000).map(|i| i + 1 + i * i).sum();
+        let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
+        let r = native.call("total", &mut ctx, &[Value::Int(3000)]).unwrap().unwrap();
+        assert_eq!(r, Value::Int(-before));
+        assert!(ctx.peak <= 8, "at most {} values were alive at once", ctx.peak);
         assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
     }
 }

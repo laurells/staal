@@ -1,0 +1,1 @@
+{"entry": "total", "inputs": {"ps": [{"kind": "Paid", "amount": {"amount": "1.00", "currency": "NGN"}, "reference": "a"}, {"kind": "Pending"}, {"kind": "Paid", "amount": {"amount": "1.00", "currency": "NGN"}, "reference": "a"}]}, "limits": {"max_steps": 11}, "expect": {"failure": "step_limit"}, "model": {"provider": "script", "responses": []}}

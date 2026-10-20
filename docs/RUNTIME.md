@@ -111,9 +111,8 @@ the variant; `match` (section 4) is the only way in. Two enum values are equal
 when they are the same variant with equal fields. Variant fields follow the rules
 for record fields: no `Secret`, `Header`, `Receipt`, `Outcome`, `Done` or
 capability, and no field called `kind`. `pub enum` exports one; another module
-writes `module.Payment.Paid { ... }`, or imports `Payment` by name. Enums run on
-the interpreter; a function that uses one is not compiled to native code yet
-(section 15).
+writes `module.Payment.Paid { ... }`, or imports `Payment` by name. Both engines
+run enums and `match` (section 15).
 
 No value can be created out of thin air: `Receipt` only by an action, `Done`
 only by `done(...)`, `Outcome` only by `try`, capabilities only by grants.
@@ -993,13 +992,14 @@ line, `engine` in the C interface), never in the run config.
   interpreter.
 
 A function qualifies when its parameters and result are `Int`, `Bool`, `Text`,
-`Money`, records whose fields are all of these, or lists of these, and its body uses
-only `let`, `set`, `if`, `repeat`, `loop`, `for`, `break`, `continue`, `return` with a value,
+`Money`, records whose fields are all of these, enums whose variants' fields are all
+of these, or lists of these, and its body uses only `let`, `set`, `if`, `match`,
+`repeat`, `loop`, `for`, `break`, `continue`, `return` with a value,
 `fail`, literals (an integer must fit an Int; a list must not be empty), arithmetic,
-unary `-`, comparisons, `and`, `or`, `not`, field reads, record literals, indexing,
+unary `-`, comparisons, `and`, `or`, `not`, field reads, record and variant literals, indexing,
 the built-in functions other than `header` and `fill_secret`, and calls to other
-qualifying functions. Enum values and `match` do not qualify yet. A function that
-calls one that does not qualify does not qualify. Native code is entered only from the interpreter, when it calls a compiled
+qualifying functions. A function that calls one that does not qualify does not
+qualify. Native code is entered only from the interpreter, when it calls a compiled
 function; model calls, actions, `try`, `parse`, `validate`, HTTP, files, budgets and
 the journal therefore never run in native code.
 

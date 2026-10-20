@@ -1,0 +1,1 @@
+{"entry": "double", "inputs": {"c": {"kind": "Zero"}}, "expect": {"result": 0}, "model": {"provider": "script", "responses": []}}

@@ -758,9 +758,9 @@ compares both with git. `git` must be installed to fetch.
 
 On the native engine, every pure function is compiled to machine code when the run
 starts (Cranelift, in memory): its parameters and result are Int, Bool, Text, Money,
-records or lists of these, and its body uses `let`, `set`, `if`, `repeat`, `loop`,
-`for`, `break`, `return`, `fail`, arithmetic, comparisons, field reads, record and
-list literals, indexing, the pure built-in functions, and calls to other such
+records, enums or lists of these, and its body uses `let`, `set`, `if`, `match`,
+`repeat`, `loop`, `for`, `break`, `continue`, `return`, `fail`, arithmetic,
+comparisons, field reads, record, variant and list literals, indexing, the pure built-in functions, and calls to other such
 functions. Everything else runs on the interpreter, which stays the reference.
 Model calls, actions, `try`, `parse`, `validate`, HTTP, files and the journal never
 run in native code. The full rules are in [RUNTIME.md](RUNTIME.md) section 15. In short:

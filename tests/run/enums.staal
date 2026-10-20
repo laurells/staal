@@ -102,3 +102,20 @@ fn first_pending(ps: List<Payment, 5>) -> Int {
     }
     return found
 }
+
+enum Count {
+    Many { n: Int },
+    Zero,
+}
+
+// An overflow inside an arm fails the run, with the same message on both engines.
+fn double(c: Count) -> Int {
+    match c {
+        Many { n } => {
+            return n * 2
+        }
+        Zero => {
+            return 0
+        }
+    }
+}
