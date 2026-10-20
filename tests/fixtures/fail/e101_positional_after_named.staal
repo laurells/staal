@@ -1,0 +1,9 @@
+// expect: E101
+// message: an argument without a name cannot follow a named one
+fn f(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+fn g() -> Int {
+    return f(a: 1, 2)
+}

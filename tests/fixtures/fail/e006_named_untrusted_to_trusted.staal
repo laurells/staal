@@ -1,0 +1,9 @@
+// expect: E006
+// A named argument meets its own parameter's rules: here, @trusted.
+fn ask(note: Text, rule: Text @trusted = "Be brief.") -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: rule, data: [note], tokens: 100)
+}
+
+fn g(ticket: Text) -> Text budget(calls: 1, tokens: 100) {
+    return ask(rule: ticket, note: "x")
+}

@@ -1,0 +1,9 @@
+// expect: E101
+// message: argument 'a' of 'f' is given twice
+fn f(a: Int, b: Int = 2) -> Int {
+    return a + b
+}
+
+fn g() -> Int {
+    return f(1, a: 3)
+}

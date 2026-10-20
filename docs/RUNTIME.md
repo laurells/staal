@@ -229,8 +229,17 @@ Evaluation is strictly left to right and statement by statement.
 - `break` leaves the innermost loop; `continue` goes on to its next iteration
   (for `repeat` and `for`, the next count or element). Each iteration costs one
   step either way. `return` leaves the function.
-- A function call evaluates its arguments left to right, then runs the callee
-  with a fresh scope containing only its parameters.
+- A function call evaluates its arguments left to right, in the order written,
+  then runs the callee with a fresh scope containing only its parameters.
+  `name: value` passes an argument to the parameter it names; arguments without
+  names come first, in parameter order. A parameter declared `name: T = value` may
+  be left out, and gets `value`, which is of the form of a constant's value (no
+  variable, not even another parameter, and no call); defaults come after the
+  parameters without one. A capability's action takes no defaults, and a
+  capability, secret, header or proof never has one. An unknown or repeated name, a
+  missing argument, or a named argument outside a call to a function is E101. The
+  compiler puts every call in its final form, so both engines see complete calls.
+  An entry function's parameter with a default may be left out of `inputs`.
 - Field access reads a field of a record or of an `Outcome` (`ok`, `error`).
 - Comparisons on `Text`, `Int`, `Bool` compare values; `Text` ordering is not
   allowed by the compiler. Money is described above. `==` on lists and records

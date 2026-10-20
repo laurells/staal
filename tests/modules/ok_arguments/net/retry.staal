@@ -1,0 +1,7 @@
+// A private constant as a default: the default belongs to the function, so callers
+// in other modules get its value without being able to name it.
+const TRIES = 3
+
+pub fn attempts(n: Int = TRIES, step: Int = 1) -> Int {
+    return n * step
+}

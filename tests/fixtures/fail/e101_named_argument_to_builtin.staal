@@ -1,0 +1,5 @@
+// expect: E101
+// message: `text: ...` names a parameter, which only calls to functions have
+fn f() -> Int {
+    return len(text: "abc")
+}

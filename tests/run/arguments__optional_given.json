@@ -1,0 +1,1 @@
+{"entry": "optional_default", "inputs": {"name": "ada"}, "expect": {"result": "ada"}, "model": {"provider": "script", "responses": []}}

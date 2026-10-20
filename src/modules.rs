@@ -298,6 +298,9 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
             for p in &mut f.params {
                 r.binder(&p.name, f.pos);
                 r.ty(&mut p.ty, f.pos);
+                if let Some(d) = &mut p.default {
+                    r.expr(d);
+                }
             }
             if let Some(t) = &mut f.ret {
                 r.ty(t, f.pos);
@@ -343,6 +346,10 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
         out.aliases.extend(m.prog.aliases);
     }
     let diags = crate::aliases::expand(&mut out);
+    if !diags.is_empty() {
+        return Err(diags);
+    }
+    let diags = crate::calls::complete(&mut out);
     if !diags.is_empty() {
         return Err(diags);
     }
@@ -655,7 +662,7 @@ impl Resolver<'_, '_, '_> {
                 None => format!("{p}{method}"),
             };
             let args = std::mem::take(args);
-            *e = Expr::Call { name, args, pos: *pos };
+            *e = Expr::Call { name, args, slots: Vec::new(), pos: *pos };
         }
         // `alias.NAME` is a constant of an imported module.
         if let Expr::Field { base, field, pos } = e
@@ -691,6 +698,7 @@ impl Resolver<'_, '_, '_> {
             | Expr::Neg(inner, _)
             | Expr::Not(inner, _)
             | Expr::SomeOf(inner, _) => self.expr(inner),
+            Expr::Named { value, .. } => self.expr(value),
             Expr::Parse { text, .. } => self.expr(text),
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 self.expr(left);

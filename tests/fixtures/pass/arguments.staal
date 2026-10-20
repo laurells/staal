@@ -1,0 +1,19 @@
+// Defaults and named arguments, with @trusted and @blind parameters.
+type Order { email: Text, name: Text }
+
+fn ask(note: Text, rule: Text @trusted = "Be brief.") -> Text budget(calls: 1, tokens: 100) {
+    return validate propose(Text, instruct: rule, data: [note], tokens: 100)
+}
+
+fn g(ticket: Text) -> Text budget(calls: 2, tokens: 200) {
+    let a = ask(ticket)
+    return ask(rule: "Be kind.", note: ticket)
+}
+
+fn greet(o: Order @blind(email), times: Int = 1) -> Text budget(calls: 1, tokens: 100) {
+    return ask(o.name)
+}
+
+fn h(o: Order) -> Text budget(calls: 1, tokens: 100) {
+    return greet(times: 2, o: o)
+}

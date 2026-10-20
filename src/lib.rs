@@ -1,6 +1,7 @@
 pub mod aliases;
 pub mod ast;
 pub mod budget;
+pub mod calls;
 pub mod capi;
 pub mod cli;
 pub mod checker;

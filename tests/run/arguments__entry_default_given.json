@@ -1,0 +1,1 @@
+{"entry": "entry_default", "inputs": {"to": "abc", "times": 3}, "expect": {"result": 9}, "model": {"provider": "script", "responses": []}}

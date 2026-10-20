@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Default values, `fn f(x: Int, tries: Int = 3)`, and named arguments,
+  `f(1, tries: 5)`. Defaults are constants; arguments are evaluated in the order
+  written and passed to the parameters they name, on both engines. An entry
+  parameter with a default may be left out of a run's `inputs`.
 - Type aliases, `type Amount = Money`: another name for any type, replaced by that
   type before checking, so the two are interchangeable everywhere. Aliases of
   records and enums build their records and variants. Cycles, clashing names and

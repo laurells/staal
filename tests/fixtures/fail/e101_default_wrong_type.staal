@@ -1,0 +1,5 @@
+// expect: E101
+// message: default of parameter 'a': expected Int, found Text
+fn f(a: Int = "three") -> Int {
+    return a
+}

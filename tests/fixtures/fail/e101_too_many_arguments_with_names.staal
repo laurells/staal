@@ -1,0 +1,9 @@
+// expect: E101
+// message: 'f' takes 1 argument(s) but 2 were given
+fn f(a: Int = 1) -> Int {
+    return a
+}
+
+fn g() -> Int {
+    return f(1, 2)
+}

@@ -1,0 +1,1 @@
+{"entry": "some_named", "expect": {"result": {"to": "ada", "body": "hello", "urgent": true}}, "model": {"provider": "script", "responses": []}, "inputs": {}}

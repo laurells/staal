@@ -1,0 +1,15 @@
+// expect: ok
+// Defaults and named arguments through an import, qualified or by name.
+import net.retry as r { attempts }
+
+fn a() -> Int {
+    return r.attempts()
+}
+
+fn b() -> Int {
+    return attempts(step: 2)
+}
+
+fn c() -> Int {
+    return r.attempts(step: 5, n: 1)
+}

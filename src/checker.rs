@@ -172,6 +172,7 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
             inexact(reveals(inner, env))
         }
         Expr::Parse { text, .. } => inexact(reveals(text, env)),
+        Expr::Named { value, .. } => reveals(value, env),
         // `some(x)` is x, wrapped: what is inside it is exactly x.
         Expr::SomeOf(inner, _) => reveals(inner, env),
         Expr::NoneLit(_) => Vec::new(),
@@ -226,6 +227,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Index { base, .. } => format!("{}[...]", expr_text(base)),
         Expr::SomeOf(inner, _) => format!("some({})", expr_text(inner)),
         Expr::NoneLit(_) => "none".into(),
+        Expr::Named { name, value, .. } => format!("{name}: {}", expr_text(value)),
         Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..) => "literal".into(),
     }
 }
@@ -408,6 +410,28 @@ pub fn check_with_bounds(prog: &Program) -> (Vec<Diagnostic>, HashMap<Pos, u64>)
         }
     }
     check_caps(&mut ctx, prog);
+    // A default is a constant: data, of its parameter's type, known when checked.
+    for f in &prog.fns {
+        for p in &f.params {
+            let Some(d) = &p.default else { continue };
+            if matches!(p.ty, Ty::Cap { .. })
+                || proof_or_authority(&p.ty).is_some()
+                || secret_inside(&ctx, &p.ty, &mut HashSet::new()).is_some()
+            {
+                ctx.err("E101", d.pos(), format!("parameter '{}' of type {} cannot have a default: a default is data", p.name, p.ty));
+                continue;
+            }
+            if let Some((t, _)) = type_of(&mut ctx, d, &Env::new())
+                && let Err((code, msg)) = assignable(&t, &p.ty)
+            {
+                ctx.err(code, d.pos(), format!("default of parameter '{}': {msg}", p.name));
+                continue;
+            }
+            if let Err(fl) = crate::interp::eval_const(d, prog) {
+                ctx.err("E101", d.pos(), format!("default of parameter '{}' cannot be computed: {}", p.name, fl.message));
+            }
+        }
+    }
     for f in &prog.fns {
         check_fn(&mut ctx, f, prog);
     }
@@ -1974,6 +1998,8 @@ fn record_fields(ctx: &mut Ctx, env: &Env, ty: &str, decl: &[(String, Ty)], fiel
 /// Returns the expression's type and whether its value is trusted.
 fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
     match e {
+        // `crate::calls` replaces every one; kept total.
+        Expr::Named { value, .. } => type_of(ctx, value, env),
         Expr::Str(..) => Some((named("Text"), true)),
         Expr::Money(..) => Some((named("Money"), true)),
         Expr::Int(n, pos) => {
@@ -2513,8 +2539,18 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 None
             }
         },
-        Expr::Call { name, args, pos } => {
-            let arg_tys: Vec<Option<(Ty, bool)>> = args.iter().map(|a| type_of(ctx, a, env)).collect();
+        Expr::Call { name, args, slots, pos } => {
+            // Typed in the order written; paired with parameters through `slots`.
+            let written: Vec<Option<(Ty, bool)>> = args.iter().map(|a| type_of(ctx, a, env)).collect();
+            let (args, arg_tys): (Vec<Expr>, Vec<Option<(Ty, bool)>>) = if slots.is_empty() {
+                (args.clone(), written)
+            } else {
+                let mut pairs: Vec<(usize, Expr, Option<(Ty, bool)>)> =
+                    slots.iter().zip(args.iter().cloned()).zip(written).map(|((s, a), t)| (*s, a, t)).collect();
+                pairs.sort_by_key(|p| p.0);
+                pairs.into_iter().map(|(_, a, t)| (a, t)).unzip()
+            };
+            let args = &args;
             let Some(sig) = ctx.sigs.get(name.as_str()) else {
                 ctx.err("E100", *pos, format!("undefined function '{name}'"));
                 return None;

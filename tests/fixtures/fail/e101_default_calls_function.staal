@@ -1,0 +1,9 @@
+// expect: E101
+// message: a default cannot call a function
+fn base() -> Int {
+    return 3
+}
+
+fn f(a: Int = base()) -> Int {
+    return a
+}

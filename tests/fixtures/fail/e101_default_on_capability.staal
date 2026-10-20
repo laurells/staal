@@ -1,0 +1,4 @@
+// expect: E101
+// message: cannot have a default: a default is data
+// Authority is never implicit: a capability is always passed.
+fn f(pay: cap payments.refund = 1) {}

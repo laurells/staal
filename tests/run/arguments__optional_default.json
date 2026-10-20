@@ -1,0 +1,1 @@
+{"entry": "optional_default", "expect": {"result": "anyone"}, "model": {"provider": "script", "responses": []}, "inputs": {}}

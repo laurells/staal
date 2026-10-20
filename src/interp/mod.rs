@@ -692,8 +692,12 @@ impl Setup {
                 }
                 ty => {
                     let at = format!("inputs.{}", p.name);
-                    let j = inputs.get(&p.name).ok_or(format!("{at}: missing"))?;
-                    args.push(Arg::Data(from_json(ty, j, &types, &at)?));
+                    match (inputs.get(&p.name), &p.default) {
+                        (Some(j), _) => args.push(Arg::Data(from_json(ty, j, &types, &at)?)),
+                        // Left out, with a default: the default, as a call would pass it.
+                        (None, Some(d)) => args.push(Arg::Data(eval_pure(d, &types).map_err(|f| format!("{at}: {}", f.message))?)),
+                        (None, None) => return Err(format!("{at}: missing")),
+                    }
                 }
             }
         }
@@ -1328,13 +1332,15 @@ impl<'p> Interp<'p> {
                 let r = self.eval(frame, right)?;
                 compare(*op, &l, &r).map(Value::Bool)
             }
-            Expr::Call { name, args, .. } => {
+            Expr::Call { name, args, slots, .. } => {
+                // Evaluated in the order written, passed in parameter order.
                 let mut vals = Vec::with_capacity(args.len());
                 for a in args {
                     vals.push(self.eval(frame, a)?);
                 }
-                self.call(name, vals)
+                self.call(name, in_slots(vals, slots)?)
             }
+            Expr::Named { .. } => internal("a named argument outside a call"),
             Expr::Action { receiver, method, args, .. } => {
                 let Value::Cap(h) = frame.get(receiver)? else {
                     return internal(format!("'{receiver}' is not a capability"));
@@ -2285,6 +2291,22 @@ fn receipt_count(v: &Value) -> usize {
 
 /// Receipts reachable from a Done: directly, through successful outcomes, and
 /// through nested Done values.
+/// Values evaluated in the order written, put in parameter order: value `i` is for
+/// parameter `slots[i]`. Empty `slots` means they are in order already.
+fn in_slots(vals: Vec<Value>, slots: &[usize]) -> Result<Vec<Value>, Failure> {
+    if slots.is_empty() {
+        return Ok(vals);
+    }
+    let mut out: Vec<Option<Value>> = (0..vals.len()).map(|_| None).collect();
+    for (v, &s) in vals.into_iter().zip(slots) {
+        match out.get_mut(s) {
+            Some(slot @ None) => *slot = Some(v),
+            _ => return internal("a call's arguments do not fit its parameters"),
+        }
+    }
+    out.into_iter().map(|v| v.ok_or_else(|| Failure { kind: FailKind::Internal, message: "a call's argument is missing".into() })).collect()
+}
+
 fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
     match v {
         Value::Receipt(r) => out.push(json!({ "receipt": r.id, "capability": r.capability, "method": r.method })),

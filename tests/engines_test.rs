@@ -144,6 +144,17 @@ fn the_alias_cases_really_run_native_code() {
     assert_eq!(got, ["capped", "closed", "contact", "first", "mail", "open_count", "owed"]);
 }
 
+#[test]
+fn the_argument_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/arguments.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    let want =
+        ["all_named", "boom", "consts", "defaults", "entry_default", "note", "optional_default", "order", "pair", "retries", "some_named"];
+    assert_eq!(got, want);
+}
+
 // ---------------------------------------------------------------------------------
 // Generated programs
 

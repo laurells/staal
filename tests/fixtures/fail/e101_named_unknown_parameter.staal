@@ -1,0 +1,9 @@
+// expect: E101
+// message: 'f' has no parameter named 'c'
+fn f(a: Int, b: Int = 2) -> Int {
+    return a + b
+}
+
+fn g() -> Int {
+    return f(1, c: 3)
+}

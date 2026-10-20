@@ -199,6 +199,9 @@ pub struct Param {
     /// paths inside this parameter that must never reach a model, here or in anything
     /// this function passes them to.
     pub blind: Vec<Vec<String>>,
+    /// `name: T = value`: what a call that leaves this parameter out passes. A value
+    /// of the same form as a constant's, known when the program is checked.
+    pub default: Option<Expr>,
 }
 
 #[derive(Debug)]
@@ -460,8 +463,14 @@ pub enum Expr {
     NoneLit(Pos),
     /// `xs[i]`
     Index { base: Box<Expr>, index: Box<Expr>, pos: Pos },
-    /// `name(args)` — a call to a function defined in the program
-    Call { name: String, args: Vec<Expr>, pos: Pos },
+    /// `name(args)` — a call to a function defined in the program. `args` are in the
+    /// order written, which is the order they are evaluated in. `slots` gives the
+    /// parameter each one is for; empty means in order (`crate::calls` fills it in for
+    /// named arguments and defaults).
+    Call { name: String, args: Vec<Expr>, slots: Vec<usize>, pos: Pos },
+    /// `name: value` among a call's arguments. Only the parser makes one, and
+    /// `crate::calls` replaces every one before checking.
+    Named { name: String, value: Box<Expr>, pos: Pos },
     /// `propose(T, instruct: E, data: [E, ...], blind_to: [path, ...], tokens: N)` — ask a model for a T.
     /// All options are optional. `instruct` must be trusted (E006); `data` may be anything
     /// except what `blind_to` names (E007). `tokens` is the most this one call may use.
@@ -499,6 +508,7 @@ impl Expr {
             | Expr::Neg(inner, _)
             | Expr::Not(inner, _)
             | Expr::SomeOf(inner, _) => vec![inner],
+            Expr::Named { value, .. } => vec![value],
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -525,6 +535,7 @@ impl Expr {
             | Expr::Neg(inner, _)
             | Expr::Not(inner, _)
             | Expr::SomeOf(inner, _) => vec![inner],
+            Expr::Named { value, .. } => vec![value],
             Expr::Parse { text, .. } => vec![text],
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 vec![left, right]
@@ -564,7 +575,7 @@ impl Expr {
             | Expr::Index { pos, .. } => *pos,
             Expr::Cmp { pos, .. } | Expr::Field { pos, .. } | Expr::Done { pos, .. } => *pos,
             Expr::Propose { pos, .. } | Expr::Parse { pos, .. } => *pos,
-            Expr::Action { pos, .. } | Expr::Call { pos, .. } => *pos,
+            Expr::Action { pos, .. } | Expr::Call { pos, .. } | Expr::Named { pos, .. } => *pos,
         }
     }
 }

@@ -1,0 +1,6 @@
+// expect: E101
+// message: 'a' is not a constant; a default is computed only from literals and other constants
+// A default is known when the program is checked: it cannot use another parameter.
+fn f(a: Int, b: Int = a) -> Int {
+    return a + b
+}

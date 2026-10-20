@@ -516,6 +516,7 @@ impl Parser {
                             target: false,
                             amount: false,
                             blind: Vec::new(),
+                            default: None,
                         });
                     }
                     actions.push(ActionDecl { name: aname, fn_name, declared, target, amount, pos: wpos });
@@ -539,7 +540,21 @@ impl Parser {
                 self.expect(Tok::Colon, "':'")?;
                 let ty = self.ty()?;
                 let m = self.param_marks()?;
-                params.push(Param { name: pname, ty, trusted: m.trusted, target: m.target, amount: m.amount, blind: m.blind });
+                let default = if *self.peek() == Tok::Eq {
+                    self.bump();
+                    Some(self.with_records(true, Self::expr)?)
+                } else {
+                    None
+                };
+                params.push(Param {
+                    name: pname,
+                    ty,
+                    trusted: m.trusted,
+                    target: m.target,
+                    amount: m.amount,
+                    blind: m.blind,
+                    default,
+                });
                 if *self.peek() == Tok::Comma {
                     self.bump();
                     if *self.peek() == Tok::RParen {
@@ -1060,7 +1075,7 @@ impl Parser {
                     if let Some(f) = Builtin::from_name(&name) {
                         return Ok(Expr::Builtin { f, args, pos });
                     }
-                    return Ok(Expr::Call { name, args, pos });
+                    return Ok(Expr::Call { name, args, slots: Vec::new(), pos });
                 }
                 if *self.peek() == Tok::LBrace && !self.no_record {
                     return self.record_literal(name, pos);
@@ -1150,7 +1165,17 @@ impl Parser {
         let mut args = Vec::new();
         if *self.peek() != Tok::RParen {
             loop {
-                args.push(self.expr()?);
+                // `name: value` names the parameter it is for.
+                let named = matches!(self.peek(), Tok::Ident(_)) && self.toks.get(self.i + 1).map(|t| &t.tok) == Some(&Tok::Colon);
+                if named {
+                    let pos = self.pos();
+                    let name = self.ident()?;
+                    self.bump(); // `:`
+                    let value = self.expr()?;
+                    args.push(Expr::Named { name, value: Box::new(value), pos });
+                } else {
+                    args.push(self.expr()?);
+                }
                 if *self.peek() == Tok::Comma {
                     self.bump();
                 } else {

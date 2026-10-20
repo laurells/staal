@@ -29,8 +29,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 36 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 362 invalid ones
+rejecting the programs it should. 37 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 377 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -130,6 +130,22 @@ is, so with `order: Order @blind(payment.reference)` an arm may still ask a mode
 about the amount, but binding `reference` there and passing it on is E007, and
 with the whole `payment` blinded, deciding a model call by the variant is E007
 too.
+
+### Default values and named arguments
+
+    fn notify(to: Text, body: Text = "Your order shipped.", urgent: Bool = false) { ... }
+
+    notify(customer.phone)
+    notify(customer.phone, urgent: true)
+    notify(urgent: true, to: customer.phone, body: note)
+
+A parameter with `= value` may be left out; the value is a constant, fixed when the
+program is checked, so leaving a parameter out can never fail or reveal anything.
+Parameters with defaults come last. A named argument goes to the parameter it
+names, wherever it is written, and every rule of that parameter applies to it:
+an untrusted value named for an `@trusted` parameter is still E006. Arguments are
+evaluated in the order written. A run can leave out an entry parameter that has a
+default.
 
 ### Type aliases
 

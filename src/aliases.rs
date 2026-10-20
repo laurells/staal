@@ -60,6 +60,9 @@ pub fn expand(prog: &mut Program) -> Vec<Diagnostic> {
     for f in &mut prog.fns {
         for p in &mut f.params {
             x.ty(&mut p.ty);
+            if let Some(d) = &mut p.default {
+                x.expr(d);
+            }
         }
         if let Some(t) = &mut f.ret {
             x.ty(t);

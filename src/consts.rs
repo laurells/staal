@@ -48,6 +48,11 @@ pub fn expand(prog: &mut Program) -> Vec<Diagnostic> {
         for s in &mut f.body {
             stmt(s, &values);
         }
+        for p in &mut f.params {
+            if let Some(d) = &mut p.default {
+                replace(d, &mut |n| values.get(n).cloned());
+            }
+        }
     }
     diags
 }
@@ -136,7 +141,7 @@ fn stmt(s: &mut Stmt, values: &HashMap<String, Expr>) {
 }
 
 /// Reports anything in a constant's value that is not known when the program is checked.
-fn form(e: &Expr, index: &HashMap<String, usize>, diags: &mut Vec<Diagnostic>) {
+pub(crate) fn form(e: &Expr, index: &HashMap<String, usize>, diags: &mut Vec<Diagnostic>) {
     let bad = match e {
         Expr::Var(name, _) if !index.contains_key(name) => {
             Some(format!("'{name}' is not a constant; a constant is computed only from literals and other constants"))

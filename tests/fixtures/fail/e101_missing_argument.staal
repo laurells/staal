@@ -1,0 +1,9 @@
+// expect: E101
+// message: the call to 'f' is missing argument 'a'
+fn f(a: Int, b: Int = 2) -> Int {
+    return a + b
+}
+
+fn g() -> Int {
+    return f(b: 1)
+}

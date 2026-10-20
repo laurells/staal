@@ -747,12 +747,13 @@ impl<'p> Env<'p> {
                     Builtin::Header | Builtin::FillSecret => return None,
                 }
             }
-            Expr::Call { name, args, .. } => {
+            Expr::Call { name, args, slots, .. } => {
                 let (params, ret) = self.sigs.get(name.as_str())?;
                 if params.len() != args.len() {
                     return None;
                 }
-                for (a, p) in args.iter().zip(params) {
+                for (i, a) in args.iter().enumerate() {
+                    let p = params.get(slots.get(i).copied().unwrap_or(i))?;
                     if !self.ty(a, var)?.fits(p) {
                         return None;
                     }
@@ -2065,10 +2066,23 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 };
                 Ok(self.unhandle(h, &t))
             }
-            Expr::Call { name, args, .. } => {
-                let mut vals = vec![self.ctx];
+            Expr::Call { name, args, slots, .. } => {
+                // Evaluated in the order written, passed in parameter order.
+                let mut written = Vec::with_capacity(args.len());
                 for a in args {
-                    vals.push(self.expr(a)?);
+                    written.push(self.expr(a)?);
+                }
+                let mut vals = vec![self.ctx];
+                if slots.is_empty() {
+                    vals.extend(written);
+                } else {
+                    let mut ordered: Vec<Option<ir::Value>> = vec![None; written.len()];
+                    for (v, &s) in written.into_iter().zip(slots) {
+                        *ordered.get_mut(s).ok_or("native code: an argument without a parameter")? = Some(v);
+                    }
+                    for v in ordered {
+                        vals.push(v.ok_or("native code: a missing argument")?);
+                    }
                 }
                 let id = *self.ids.get(name).ok_or(format!("native code: '{name}' is not compiled"))?;
                 // The interpreter's depth check, then depth + 1 around the call.

@@ -1,0 +1,5 @@
+// expect: E101
+// message: default of parameter 'a' cannot be computed
+fn f(a: Int = 9223372036854775807 + 1) -> Int {
+    return a
+}

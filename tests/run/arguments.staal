@@ -1,0 +1,56 @@
+// Default values and named arguments: filled in and put in order before checking,
+// evaluated in the order written, the same on both engines.
+const RETRIES = 3
+type Note { to: Text, body: Text, urgent: Bool }
+
+fn note(to: Text, body: Text = "hello", urgent: Bool = false) -> Note {
+    return Note { to: to, body: body, urgent: urgent }
+}
+
+fn retries(n: Int = RETRIES) -> Int {
+    return n
+}
+
+fn defaults() -> Note {
+    return note("ada")
+}
+
+fn some_named() -> Note {
+    return note("ada", urgent: true)
+}
+
+fn all_named() -> Note {
+    return note(urgent: true, body: "hi", to: "bo")
+}
+
+fn consts() -> Int {
+    return retries() + retries(n: 10)
+}
+
+// Arguments run in the order written: the first to fail is the first written.
+fn boom(n: Int) -> Int {
+    return n * 9223372036854775807
+}
+
+fn pair(a: Int, b: Int) -> Int {
+    return a - b
+}
+
+fn order(x: Int) -> Int {
+    return pair(b: boom(x + 1), a: boom(x))
+}
+
+fn optional_default(name: Optional<Text> = none) -> Text {
+    match name {
+        some(n) => {
+            return n
+        }
+        none => {
+            return "anyone"
+        }
+    }
+}
+
+fn entry_default(to: Text, times: Int = 2) -> Int {
+    return len(to) * times
+}

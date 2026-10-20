@@ -1,0 +1,11 @@
+// expect: E007
+// Blinding follows a named argument to the parameter it names.
+type Order { email: Text }
+
+fn send(a: Text = "x", b: Text = "y") budget(calls: 1, tokens: 10) {
+    let s = propose(Text, instruct: "Greet.", data: [b], tokens: 10)
+}
+
+fn f(order: Order @blind(email)) budget(calls: 1, tokens: 10) {
+    send(b: order.email)
+}
