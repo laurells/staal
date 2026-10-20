@@ -1995,6 +1995,9 @@ fn record_fields(ctx: &mut Ctx, env: &Env, ty: &str, decl: &[(String, Ty)], fiel
     ok.then_some(trusted)
 }
 
+/// An expression's type and whether its value is trusted.
+type Typed = (Ty, bool);
+
 /// Returns the expression's type and whether its value is trusted.
 fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
     match e {
@@ -2541,11 +2544,11 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
         },
         Expr::Call { name, args, slots, pos } => {
             // Typed in the order written; paired with parameters through `slots`.
-            let written: Vec<Option<(Ty, bool)>> = args.iter().map(|a| type_of(ctx, a, env)).collect();
-            let (args, arg_tys): (Vec<Expr>, Vec<Option<(Ty, bool)>>) = if slots.is_empty() {
+            let written: Vec<Option<Typed>> = args.iter().map(|a| type_of(ctx, a, env)).collect();
+            let (args, arg_tys): (Vec<Expr>, Vec<Option<Typed>>) = if slots.is_empty() {
                 (args.clone(), written)
             } else {
-                let mut pairs: Vec<(usize, Expr, Option<(Ty, bool)>)> =
+                let mut pairs: Vec<(usize, Expr, Option<Typed>)> =
                     slots.iter().zip(args.iter().cloned()).zip(written).map(|((s, a), t)| (*s, a, t)).collect();
                 pairs.sort_by_key(|p| p.0);
                 pairs.into_iter().map(|(_, a, t)| (a, t)).unzip()
