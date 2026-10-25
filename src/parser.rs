@@ -1,55 +1,5 @@
-// Hand-written recursive-descent parser.
-//
-// Grammar:
-//   program  := import* ("pub"? (typedecl | fndecl | capdecl))*
-//   capdecl  := "capability" IDENT ("." IDENT)* "{" need* (canonical | action)* "}"
-//   need     := "needs" IDENT ":" ty
-//   canonical:= "canonical" "(" param ")" "->" ty block
-//   action   := "action" IDENT "(" (param ("," param)*)? ")" "->" ty block
-//               (`needs`, `canonical` and `action` are words only inside a capability)
-//   import   := "import" IDENT ("." IDENT)* ("as" IDENT)? ("{" IDENT ("," IDENT)* ","? "}")?
-//   typedecl := "type" IDENT "{" (IDENT ":" ty ","?)* "}"
-//   fndecl   := "fn" IDENT "(" (param ("," param)*)? ")" ("->" ty ("@" "trusted")?)? budget? block
-//   budget   := "budget" "(" limit ("," limit)* ")"      limit := ("calls" | "tokens") ":" NUM
-//   param    := IDENT ":" ty mark*
-//   mark     := "@" "trusted" | "@" "blind" ("(" field_path ("," field_path)* ")")?
-//             | "@" "target" | "@" "amount"     (capability actions only)
-//   field_path := IDENT ("." IDENT)*
-//   ty       := "cap" IDENT ("." IDENT)* ("(" climit ("," climit)* ")")?
-//   climit   := ("max" | "each") ":" NUM IDENT? | "uses" ":" NUM | "only" ":" "[" (STRING ","?)* "]"
-//             | "List" "<" ty "," NUM ">" | "Proposed" "<" ty ">" | IDENT ("." IDENT)?
-//               (`m.T` is type T of the module imported as m)
-//   block    := "{" stmt* "}"
-//   stmt     := "let" IDENT (":" ty)? "=" expr | "set" IDENT "=" expr | "return" expr?
-//             | "fail" "(" expr ")"
-//             | "repeat" NUM block | "loop" block | "break"
-//             | "for" IDENT "in" expr* block
-//             | "if" expr* block ("else" (block | if-stmt))? | expr
-//   expr*    := an expr in which a record literal needs parentheses, so that in
-//               `if ready { ... }` the brace opens the block (as in Rust)
-//   expr     := and_expr ("or" and_expr)*
-//   and_expr := not_expr ("and" not_expr)*
-//   not_expr := "not" not_expr | cmp_expr
-//   cmp_expr := add_expr (("==" | "!=" | "<" | "<=" | ">" | ">=") add_expr)?   (not chained)
-//   add_expr := mul_expr (("+" | "-") mul_expr)*
-//   mul_expr := unary (("*" | "/") unary)*
-//   unary    := "-" unary | primary
-//   primary  := atom ("." IDENT | "[" expr "]")*     (field access, indexing)
-//   atom     := "(" expr ")" | "[" (expr ("," expr)*)? "]"
-//             | "propose" "(" ty ("," popt)* ")" | "validate" primary
-//             | "parse" "(" ty "," expr ")"   (JSON text as an unchecked Proposed<ty>)
-//             | "try" primary             (an action or call; failure becomes an Outcome)
-//             | "done" "(" "evidence" ":" list ")"
-//             | IDENT ("." IDENT)? "{" (IDENT ":" expr ","?)* "}"   (record literal)
-//             | BUILTIN args              (len, contains, starts_with, ends_with)
-//             | IDENT "." IDENT args      (an action through a capability variable, or
-//                                          a call to function IDENT of an imported module)
-//             | IDENT args                (call to a program function)
-//             | IDENT | STRING | NUM | money | "true" | "false"
-//   money    := (NUM | DECIMAL) CURRENCY      (on one line: `0 USD`, `12.50 NGN`)
-//   popt     := "instruct" ":" expr | "data" ":" list | "blind_to" ":" list | "tokens" ":" NUM
-//   list     := "[" (expr ("," expr)*)? "]"
-//   args     := "(" (expr ("," expr)*)? ")"
+// Hand-written recursive-descent parser. The grammar it accepts is docs/GRAMMAR.md,
+// which tests/grammar_test.rs keeps in step with this file and the lexer.
 
 use crate::ast::*;
 use crate::lexer::{Pos, Tok, Token};
@@ -295,6 +245,9 @@ impl Parser {
                 Tok::Ident(w) if w == "interface" => p.interfaces.push(self.interfacedecl(public)?),
                 Tok::Fn => p.fns.push(self.fndecl(public)?),
                 Tok::Ident(w) if w == "capability" => {
+                    if public {
+                        return Err((self.pos(), "a capability is named by its path, never imported, so it takes no `pub`".into()));
+                    }
                     let (cap, fns) = self.capdecl()?;
                     p.caps.push(cap);
                     p.fns.extend(fns);
@@ -657,13 +610,18 @@ impl Parser {
             if first != "self" {
                 return Err((spos, format!("a method's first parameter is `self`, the {t} it is called on")));
             }
+            let mpos = self.pos();
+            let marks = self.param_marks()?;
+            if marks.trusted || marks.target || marks.amount {
+                return Err((mpos, "only `@blind` applies to `self`".into()));
+            }
             params.push(Param {
                 name: "self".into(),
                 ty: Ty::Named(t),
                 trusted: false,
                 target: false,
                 amount: false,
-                blind: self.param_marks()?.blind,
+                blind: marks.blind,
                 default: None,
             });
             if *self.peek() == Tok::Comma {

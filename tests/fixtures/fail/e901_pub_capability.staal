@@ -1,0 +1,9 @@
+// expect: E901
+// message: a capability is named by its path, never imported, so it takes no `pub`
+pub capability a.b {
+    needs http: cap net.http.post
+    action go(t: Text) -> Text {
+        let r = http.post("https://example.com", t)
+        return r.body
+    }
+}

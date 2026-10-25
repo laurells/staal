@@ -105,6 +105,7 @@ continued.
 | --- | --- |
 | [docs/GUIDE.md](docs/GUIDE.md) | The language: rules, syntax, capabilities, packages, native code |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | The runtime specification: semantics, the journal, failure behaviour |
+| [docs/GRAMMAR.md](docs/GRAMMAR.md) | The complete syntax, checked against the parser by the tests |
 | [examples/README.md](examples/README.md) | Programs that call Claude and send real SMS and email, and how to run them with your keys |
 | [packages/README.md](packages/README.md) | The reference packages and how a service becomes a library |
 | [include/staal.h](include/staal.h) | The C interface |

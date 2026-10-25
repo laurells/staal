@@ -1,0 +1,8 @@
+// expect: E901
+// message: only `@blind` applies to `self`
+// A mark the language would ignore is refused, not silently dropped.
+type Line { price: Money }
+
+fn Line.total(self @trusted) -> Money {
+    return self.price
+}

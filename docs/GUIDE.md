@@ -1,7 +1,8 @@
 # The Staal language guide
 
 What Staal checks, how its programs are written, and how they run. The exact
-runtime semantics are in [RUNTIME.md](RUNTIME.md).
+runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
+[GRAMMAR.md](GRAMMAR.md).
 
 ## What it enforces today
 
@@ -30,7 +31,7 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md).
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
 rejecting the programs it should. 49 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 584 invalid ones
+including the two benchmark workflows (`workflow_*.staal`), and 586 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 

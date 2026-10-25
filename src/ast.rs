@@ -432,6 +432,69 @@ pub enum Builtin {
 }
 
 impl Builtin {
+    /// Every built-in function, once each.
+    pub const ALL: [Builtin; 59] = [
+        Builtin::Len,
+        Builtin::Contains,
+        Builtin::StartsWith,
+        Builtin::EndsWith,
+        Builtin::Header,
+        Builtin::Json,
+        Builtin::FillSecret,
+        Builtin::Replace,
+        Builtin::Lower,
+        Builtin::Trim,
+        Builtin::Form,
+        Builtin::MinorUnits,
+        Builtin::Currency,
+        Builtin::UrlSegment,
+        Builtin::Text,
+        Builtin::Get,
+        Builtin::Put,
+        Builtin::Remove,
+        Builtin::Keys,
+        Builtin::Values,
+        Builtin::Entries,
+        Builtin::Add,
+        Builtin::Items,
+        Builtin::ToSet,
+        Builtin::Upper,
+        Builtin::Slice,
+        Builtin::IndexOf,
+        Builtin::Split,
+        Builtin::Join,
+        Builtin::ToInt,
+        Builtin::Abs,
+        Builtin::Min,
+        Builtin::Max,
+        Builtin::Rem,
+        Builtin::Append,
+        Builtin::Reverse,
+        Builtin::Sort,
+        Builtin::Sum,
+        Builtin::Concat,
+        Builtin::Map,
+        Builtin::Filter,
+        Builtin::Any,
+        Builtin::All,
+        Builtin::Count,
+        Builtin::Fold,
+        Builtin::Sha256,
+        Builtin::Base64Encode,
+        Builtin::Base64Decode,
+        Builtin::HexEncode,
+        Builtin::HexDecode,
+        Builtin::FormatTime,
+        Builtin::ParseTime,
+        Builtin::MakeTime,
+        Builtin::DateParts,
+        Builtin::TimeParts,
+        Builtin::Weekday,
+        Builtin::Print,
+        Builtin::Now,
+        Builtin::RandomInt,
+    ];
+
     /// Whether it is an external operation, journaled (RUNTIME.md section 11).
     pub fn is_effect(self) -> bool {
         matches!(self, Builtin::Print | Builtin::Now | Builtin::RandomInt)
@@ -976,4 +1039,28 @@ pub struct Program {
     /// in it replaced, and no other part of the program names an alias.
     pub aliases: Vec<AliasDecl>,
     pub interfaces: Vec<InterfaceDecl>,
+}
+
+#[cfg(test)]
+mod builtin_tests {
+    use super::Builtin;
+
+    /// `Builtin::ALL` names every variant of `Builtin`, each once, and `from_name`
+    /// and `name` agree on every one.
+    #[test]
+    fn every_builtin_is_listed_once_and_named_both_ways() {
+        let src = include_str!("ast.rs");
+        let start = src.find("pub enum Builtin {").unwrap();
+        let end = start + src[start..].find("\n}\n").unwrap();
+        let declared: Vec<&str> = src[start..end]
+            .lines()
+            .filter_map(|l| l.strip_prefix("    ").and_then(|l| l.strip_suffix(',')))
+            .filter(|l| l.chars().next().is_some_and(|c| c.is_ascii_uppercase()) && l.chars().all(char::is_alphanumeric))
+            .collect();
+        let listed: Vec<String> = Builtin::ALL.iter().map(|b| format!("{b:?}")).collect();
+        assert_eq!(declared, listed);
+        for b in Builtin::ALL {
+            assert_eq!(Builtin::from_name(b.name()), Some(b));
+        }
+    }
 }

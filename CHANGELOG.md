@@ -7,6 +7,9 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `docs/GRAMMAR.md`: the complete syntax of Staal. A test keeps it exact: its
+  reserved words, contextual words and built-in functions are the compiler's, and
+  every example in it parses.
 - `print`, `now` and `random_int`: printing to standard output, the current time,
   and uniform random Ints from the operating system's random source. Each is an
   external operation in the journal (`print`, `clock`, `random`), so a run resumed
@@ -117,6 +120,8 @@ the language or its file formats.
   a separate statement.
 - A variable that has the name of a built-in function (`add`, `get`, ...) cannot be
   called: `add(x)` is the built-in, so with such a variable in scope it is E101.
+- `pub capability` and a mark other than `@blind` on a method's `self` are syntax
+  errors (E901). Both were accepted and silently had no effect.
 - The standard library's names are reserved: a function named `split`, `sum`,
   `min`, `max`, `map`, `any`, `all`, `count` or any other of them must be renamed.
 
