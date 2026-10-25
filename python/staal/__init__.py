@@ -4,7 +4,8 @@ This package holds no Staal logic: it passes strings to the C library and parses
 the JSON it returns. Staal itself contains no Python.
 
     import staal
-    lib = staal.Library("/path/to/libstaalc.so")   # or set STAAL_LIBRARY
+    lib = staal.Library()   # the library installed with this package; or give a
+                            # path, or set STAAL_LIBRARY
     out = lib.run("clinic.staal", {"entry": "book", ...}, journal="run.journal")
     if out["status"] == "done":
         print(out["result"])
@@ -15,15 +16,23 @@ Every call returns the JSON object described in include/staal.h, as a dict.
 import ctypes
 import json
 import os
+import sys
 
 __all__ = ["Library"]
 
 
+def bundled_library():
+    """The libstaalc installed with this package, or None."""
+    name = {"nt": "staalc.dll"}.get(os.name, "libstaalc.dylib" if sys.platform == "darwin" else "libstaalc.so")
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_bin", name)
+    return path if os.path.isfile(path) else None
+
+
 class Library:
     def __init__(self, path=None):
-        path = path or os.environ.get("STAAL_LIBRARY")
+        path = path or os.environ.get("STAAL_LIBRARY") or bundled_library()
         if not path:
-            raise ValueError("give the path to libstaalc, or set STAAL_LIBRARY")
+            raise ValueError("give the path to libstaalc, or set STAAL_LIBRARY: this staal package has none of its own")
         self._lib = ctypes.CDLL(path)
         # Returned strings are kept as raw pointers so they can be given back to
         # staal_free; c_char_p would copy them and lose the pointer.

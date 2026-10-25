@@ -6,6 +6,7 @@
 //   staalc profile <file.staal> --config <run.json> [--engine native] [-o <profile.json>]
 //   staalc debug   <file.staal> --config <run.json>
 //   staalc lsp
+//   staalc --version
 //   staalc repl    [--engine interpreter|native|both]
 //   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
 //   staalc fetch   [<project folder>]
@@ -39,6 +40,7 @@ const USAGE: &str = "usage:
   staalc profile <file.staal> --config <run.json> [--engine native] [-o <profile.json>]
   staalc debug   <file.staal> --config <run.json>   (commands: help)
   staalc lsp     (a language server for editors, on standard input and output)
+  staalc --version
   staalc repl    [--engine interpreter|native|both]
   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
   staalc fetch   [<project folder>]
@@ -71,6 +73,10 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
             Ok((None, _)) => u("check needs a file"),
             Err(e) => u(&e),
         },
+        "--version" | "version" if rest.is_empty() => {
+            println!("staalc {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
         "fmt" => fmt_cmd(rest),
         "test" => test_cmd(rest),
         "debug" => match parse(rest, &["--config"], &["--config"]) {

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "staal"
+# The same as staalc's own version (Cargo.toml); a test keeps them equal.
+version = "0.22.0"
+description = "The staalc compiler and runtime, and a Python interface to it"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: Other/Proprietary License",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.scripts]
+staalc = "staal._cli:main"
+
+[tool.setuptools]
+packages = ["staal"]
+
+[tool.setuptools.package-data]
+staal = ["_bin/*"]

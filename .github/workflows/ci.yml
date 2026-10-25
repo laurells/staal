@@ -27,5 +27,12 @@ jobs:
       - name: VS Code extension (grammar, client, and the server through VS Code's protocol library)
         working-directory: editors/vscode
         run: npm ci && npm test
+      - name: Python wheel, installed and used with no Rust
+        run: |
+          python3 -m venv "$RUNNER_TEMP/pyenv"
+          "$RUNNER_TEMP/pyenv/bin/pip" install --quiet build setuptools wheel
+          if [ "$(uname -s)" = Linux ]; then "$RUNNER_TEMP/pyenv/bin/pip" install --quiet auditwheel patchelf; fi
+          PYTHON="$RUNNER_TEMP/pyenv/bin/python" scripts/wheel.sh "$RUNNER_TEMP/wheels"
+          scripts/wheel_test.sh "$RUNNER_TEMP"/wheels/*.whl "$RUNNER_TEMP/wheel-test"
       - name: Clippy
         run: cargo clippy --all-targets --features failpoints -- -D warnings

@@ -69,7 +69,13 @@ evidence, modules, packages and the rest.
 
 ## Getting started
 
-Requirements: Rust 1.89 or newer ([rustup.rs](https://rustup.rs)), `git` to
+Without Rust, from a release: unpack the archive for your platform and run its
+`staalc`, or install the wheel with `pip install staal-X.Y.Z-py3-none-<platform>.whl`,
+which gives the `staalc` command and the `staal` Python package
+([docs/RELEASING.md](docs/RELEASING.md) says what a release holds). Releases are
+made for Linux (glibc 2.28 and later) and macOS so far.
+
+From source: Rust 1.89 or newer ([rustup.rs](https://rustup.rs)), `git` to
 fetch packages, and a C compiler (`cc`) to build executables. Developed and
 tested with Rust 1.97.0.
 
@@ -112,6 +118,7 @@ continued.
 | --- | --- |
 | [docs/GUIDE.md](docs/GUIDE.md) | The language: rules, syntax, capabilities, packages, native code |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | The runtime specification: semantics, the journal, failure behaviour |
+| [docs/RELEASING.md](docs/RELEASING.md) | How a release is made, and what it holds |
 | [editors/vscode](editors/vscode) | The VS Code extension: highlighting and the language server |
 | [docs/GRAMMAR.md](docs/GRAMMAR.md) | The complete syntax, checked against the parser by the tests |
 | [examples/README.md](examples/README.md) | Programs that call Claude and send real SMS and email, and how to run them with your keys |

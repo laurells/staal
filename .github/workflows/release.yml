@@ -1,0 +1,82 @@
+# A release, made when a version tag (v0.22.0) is pushed: on each platform the tests,
+# then the release archive and the Python wheel, the wheel installed and used with no
+# Rust (scripts/wheel_test.sh), and a draft GitHub release holding them, with the
+# changelog's notes for the version. Linux builds in a manylinux_2_28 container, so
+# what it makes runs on glibc 2.28 and later.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            python: /opt/python/cp312-cp312/bin/python3
+          - os: macos-15
+            python: python3
+            deployment: "11.0"
+          - os: macos-15-intel
+            python: python3
+            deployment: "10.12"
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment }}
+      PYTHON: ${{ github.workspace }}/../pyenv/bin/python
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag is this version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          test "${GITHUB_REF_NAME}" = "v${version}" || { echo "tag ${GITHUB_REF_NAME} is not v${version}"; exit 1; }
+      - name: Rust
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.0
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          else
+            rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
+          fi
+      - name: Python tools
+        run: |
+          "${{ matrix.python }}" -m venv "${{ github.workspace }}/../pyenv"
+          "$PYTHON" -m pip install --quiet build setuptools wheel
+          if [ "$(uname -s)" = Linux ]; then "$PYTHON" -m pip install --quiet auditwheel patchelf; fi
+      - name: Tests
+        run: cargo test --no-fail-fast
+      - name: Release archive
+        run: scripts/package.sh dist
+      - name: Python wheel
+        run: scripts/wheel.sh dist
+      - name: The wheel, installed and used with no Rust
+        run: PYTHON="${{ matrix.python }}" scripts/wheel_test.sh dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## " v " " {on=1; next} on && /^## / {exit} on {print}' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "no changelog entry for $version"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" --draft --title "staalc $version" --notes-file notes.md dist/*

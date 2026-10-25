@@ -7,6 +7,14 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Releases: `scripts/package.sh` (a release archive with its SHA-256),
+  `scripts/wheel.sh` (a Python wheel holding `staalc` and `libstaalc`, so `pip
+  install` needs no Rust) and `scripts/wheel_test.sh` (the wheel installed into a
+  clean environment and used with no Rust on PATH). A tag `vX.Y.Z` runs the release
+  workflow on Linux and both macOS kinds; CI builds and tests the wheel on every
+  push. `staalc --version`. `docs/RELEASING.md` says how to release; a test keeps
+  the version the same in staalc, the Python package, the VS Code extension and the
+  changelog. `staal.Library()` finds the library installed with the package.
 - `staalc debug`: breakpoints by line (in the program or a module), step, next,
   finish, and variables shown as JSON, on a run that is otherwise `staalc run`'s,
   on the interpreter.

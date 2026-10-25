@@ -1,6 +1,9 @@
 """Runs Staal programs through the C interface from Python.
 
 Usage: STAAL_LIBRARY=/path/to/libstaalc.so python3 -I python/tests/test_staal.py <repo root> <scratch dir>
+
+With STAAL_INSTALLED=1 it tests the staal package installed in this Python (a
+wheel), with the library installed with it, instead of the repository's.
 """
 
 import json
@@ -8,8 +11,17 @@ import os
 import sys
 
 root, scratch = sys.argv[1], sys.argv[2]
-sys.path.insert(0, os.path.join(root, "python"))
+installed = os.environ.get("STAAL_INSTALLED") == "1"
+if not installed:
+    sys.path.insert(0, os.path.join(root, "python"))
 import staal  # noqa: E402
+
+if installed:
+    expect_dir = os.path.join(root, "python")
+    if os.path.dirname(os.path.dirname(os.path.abspath(staal.__file__))) == expect_dir:
+        raise SystemExit("FAILED: the repository's staal was imported, not the installed one")
+    if os.environ.get("STAAL_LIBRARY") or not staal.bundled_library():
+        raise SystemExit("FAILED: the installed package must use its own library")
 
 lib = staal.Library()
 checks = 0
