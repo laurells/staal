@@ -9,6 +9,7 @@ pub mod consts;
 pub mod fmt;
 pub mod interp;
 pub mod lexer;
+pub mod lsp;
 pub mod modules;
 #[cfg(feature = "native")]
 pub mod native;
@@ -138,6 +139,17 @@ impl modules::Source for Replay<'_> {
 /// `check_path`, also returning what the program was loaded from.
 pub fn check_path_recorded(path: &Path) -> Result<(Checked, Recorded), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    check_text_at_recorded(path, text)
+}
+
+/// Checks `text` as the file at `path`, with the modules and packages it imports
+/// read from beside it, as `staalc check` does: the language server checks an
+/// editor's unsaved text this way, so both report the same errors.
+pub fn check_text_at(path: &Path, text: String) -> Result<Checked, String> {
+    check_text_at_recorded(path, text).map(|(c, _)| c)
+}
+
+fn check_text_at_recorded(path: &Path, text: String) -> Result<(Checked, Recorded), String> {
     let root = path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let root = if root.as_os_str().is_empty() { Path::new(".").to_path_buf() } else { root };
     let project = packages::Project::open(&root)?.map(std::rc::Rc::new);

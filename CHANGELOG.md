@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `staalc lsp`, a language server: errors as you type, completion and formatting,
+  for any editor with an LSP client. Its errors come from the same function as
+  `staalc check`, and the tests require them to be identical for every program in
+  the repository.
 - `staalc fmt [--check] <file>...`, the formatter. It changes only the whitespace
   between tokens and keeps every comment and line break, so it cannot change what a
   program means; it checks its own result before writing. The examples and packages

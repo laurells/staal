@@ -710,6 +710,22 @@ does not lex is left as it was (exit 2). The tests format every Staal file in th
 repository and check that each gives the same syntax tree and is stable when
 formatted again.
 
+## In an editor: `staalc lsp`
+
+    staalc lsp                             # a language server on standard input and output
+
+`staalc lsp` speaks the Language Server Protocol, so any editor with an LSP client
+can use it. It reports errors as you type, offers completions (the reserved words,
+the built-ins, and the names the open document declares), and formats a document as
+`staalc fmt` does. Its errors are not a second checker's: it runs the same function
+as `staalc check` on the unsaved text, with the document's own path, so modules
+beside it, the package manifest and its capability grants are read just as `check`
+reads them. An error in an imported module is shown in that module's file. A
+document that is not yet saved is checked as a program on its own. The tests open
+every Staal program in this repository in one server and require its errors to be
+exactly what `staalc check` prints for the same file: file, line, column, code and
+message.
+
 ## Running programs, and surviving crashes
 
     staalc run     prog.staal --config run.json --journal run.journal [--log run.jsonl]

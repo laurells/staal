@@ -2,6 +2,7 @@
 //
 //   staalc check   <file.staal>
 //   staalc fmt     [--check] <file.staal>...
+//   staalc lsp
 //   staalc fetch   [<project folder>]
 //   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
 //   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
@@ -29,6 +30,7 @@ use std::path::Path;
 const USAGE: &str = "usage:
   staalc check   <file.staal>
   staalc fmt     [--check] <file.staal>...
+  staalc lsp     (a language server for editors, on standard input and output)
   staalc fetch   [<project folder>]
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
@@ -60,6 +62,8 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
             Err(e) => u(&e),
         },
         "fmt" => fmt_cmd(rest),
+        "lsp" if rest.is_empty() => crate::lsp::serve(std::io::stdin().lock(), std::io::stdout().lock()),
+        "lsp" => u("lsp takes no arguments: an editor starts it and talks to it on standard input and output"),
         "fetch" => match parse(rest, &[], &[]) {
             Ok((dir, _)) => fetch(dir.as_deref().unwrap_or(".")),
             Err(e) => u(&e),

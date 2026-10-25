@@ -94,6 +94,8 @@ To build without the native compiler (smaller, interpreter only):
 | `staalc resolve --journal <run.journal> ...` | Records an operator's decision on an action left in doubt |
 | `staalc fetch [<project folder>]` | Fetches the packages named in `staal.json` and writes `staal.lock` |
 | `staalc build <file.staal> -o <app>` | Builds a standalone executable (Linux) |
+| `staalc fmt [--check] <file.staal>...` | Formats files in place, or lists those not formatted |
+| `staalc lsp` | A language server for editors: the same errors as `check`, completion, formatting |
 
 Exit codes: `0` success; `1` check errors or a failed run; `2` a usage, file,
 config or journal problem (nothing was run); `3` the run stopped and can be
