@@ -2,6 +2,7 @@
 //
 //   staalc check   <file.staal>
 //   staalc fmt     [--check] <file.staal>...
+//   staalc doc     <file.staal> [-o <out.md>]
 //   staalc lsp
 //   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
 //   staalc fetch   [<project folder>]
@@ -31,6 +32,7 @@ use std::path::Path;
 const USAGE: &str = "usage:
   staalc check   <file.staal>
   staalc fmt     [--check] <file.staal>...
+  staalc doc     <file.staal> [-o <out.md>]
   staalc lsp     (a language server for editors, on standard input and output)
   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
   staalc fetch   [<project folder>]
@@ -65,6 +67,11 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         },
         "fmt" => fmt_cmd(rest),
         "test" => test_cmd(rest),
+        "doc" => match parse(rest, &["-o"], &[]) {
+            Ok((Some(file), opts)) => doc_cmd(&file, opts.get("-o").map(String::as_str)),
+            Ok((None, _)) => u("doc needs a program file"),
+            Err(e) => u(&e),
+        },
         "lsp" if rest.is_empty() => crate::lsp::serve(std::io::stdin().lock(), std::io::stdout().lock()),
         "lsp" => u("lsp takes no arguments: an editor starts it and talks to it on standard input and output"),
         "fetch" => match parse(rest, &[], &[]) {
@@ -725,6 +732,45 @@ fn verdict(runs: &[(&str, RunResult)]) -> Result<(), String> {
         return Err(why);
     }
     outcome(first)
+}
+
+
+/// `staalc doc`: the program's documentation in Markdown, on standard output or in
+/// `-o`'s file. Only a program that passes every check is documented (exit 1
+/// otherwise, nothing written); exit 2 for a file that cannot be read or written.
+fn doc_cmd(file: &str, out: Option<&str>) -> u8 {
+    let checked = match crate::check_path(Path::new(file)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            return 2;
+        }
+    };
+    if let Err(diags) = &checked.result {
+        report(&checked.files, diags);
+        eprintln!("staalc: not documenting {file}: it has check errors");
+        return 1;
+    }
+    let text = match crate::doc::document(&checked.files) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            return 2;
+        }
+    };
+    match out {
+        None => {
+            print!("{text}");
+            0
+        }
+        Some(o) => match std::fs::write(o, &text) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("staalc: cannot write {o}: {e}");
+                2
+            }
+        },
+    }
 }
 
 #[cfg(test)]

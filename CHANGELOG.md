@@ -7,6 +7,9 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `staalc doc [-o <out.md>]`, generated documentation: each declaration as written
+  (signatures without bodies, a capability's `needs` and action signatures) with the
+  `//` block above it. Only a program that passes every check is documented.
 - `staalc test`, for tests written in Staal: every `test_` function of a test file
   runs as its own run in both engines, which must agree on the outcome and the log.
   `tests/staal` tests the standard library and the language this way, and `cargo

@@ -1,0 +1,38 @@
+// Notes: a small library.
+
+// A note to send.
+pub type Note { to: Text, body: Text }
+
+pub enum Priority {
+    Low,
+    High { why: Text },
+}
+
+// Not part of the library.
+fn private_helper() -> Int {
+    return 1
+}
+
+// The length of a note's body.
+pub fn size(n: Note) -> Int {
+    return len(n.body) + private_helper()
+}
+
+// Sends notes through a web service.
+capability notes.send {
+    needs post: cap net.http.post
+    // The service's address.
+    needs base: Text
+
+    canonical(to: Text) -> Text {
+        return lower(trim(to))
+    }
+
+    action deliver(to: Text @target, body: Text) -> Text {
+        let r = post.post(base + "/notes/" + url_segment(to), body)
+        if r.status != 200 {
+            fail("the service answered \(r.status)")
+        }
+        return r.body
+    }
+}

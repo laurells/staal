@@ -1,0 +1,28 @@
+// Sends one note.
+//
+// The program's own documentation.
+
+import lib
+
+// Most characters in a body.
+const LIMIT = 280
+
+type Body = Text
+
+// A note that fits.
+fn fits(
+    n: lib.Note,
+    most: Int,
+) -> Bool {
+    return lib.size(n) <= most // a remark, not documentation
+}
+
+// This block is separated from the next declaration by a blank line.
+
+fn main(to: Text, body: Body, sender: cap notes.send.deliver) -> Receipt {
+    let n = lib.Note { to: to, body: body }
+    if not fits(n, LIMIT) {
+        fail("too long")
+    }
+    return sender.deliver(to, body)
+}

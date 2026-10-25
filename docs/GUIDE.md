@@ -759,6 +759,24 @@ errors (printed as `staalc check` prints them) or no tests, or a folder has no t
 files; 2 for a usage, file or config problem. The standard library and the language
 are tested this way in `tests/staal`, which `cargo test` runs in each engine.
 
+## Documentation: `staalc doc`
+
+    staalc doc app.staal                   # Markdown on standard output
+    staalc doc app.staal -o API.md
+
+`staalc doc` writes a program's documentation in Markdown: its entry file, then each
+module it imports. A declaration's documentation is the block of `//` lines directly
+above it, with no blank line between; a block at the top of a file that is not
+directly above a declaration is the file's own; a comment after code on its line is
+a remark, not documentation. Each declaration is shown as written, laid out as
+`staalc fmt` lays it out: a function's signature without its body; a type, enum,
+interface or constant whole; a capability's `needs` (the authority an operator must
+grant it) and the signatures of its `canonical` and actions, without their code. The
+entry file's declarations are all shown; of a module, what it makes `pub` and its
+capabilities, which is everything another module can use. Only a program that
+passes every check is documented (exit 1, nothing written), so the page never
+describes code that cannot run. `tests/doc` holds a program and the page it gives.
+
 ## In an editor: `staalc lsp`
 
     staalc lsp                             # a language server on standard input and output
