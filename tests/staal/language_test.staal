@@ -1,0 +1,122 @@
+// The language itself: records, enums and match, optional values, methods,
+// interfaces, generics, function values, typed failures and loops.
+import check
+
+type Line { sku: Text, qty: Int, price: Money }
+
+enum Payment {
+    Pending,
+    Paid { amount: Money, reference: Text },
+    Refused { reason: Text },
+}
+
+enum ChargeError {
+    Declined { reason: Text },
+    Limit { over: Money },
+}
+
+interface Priced {
+    fn cost(self) -> Money
+}
+
+fn Line.cost(self) -> Money {
+    return self.price * self.qty
+}
+
+fn cheapest<T: Priced>(a: T, b: T) -> Money {
+    return min(a.cost(), b.cost())
+}
+
+fn first<T>(xs: List<T, 5>) -> Optional<T> {
+    if len(xs) == 0 {
+        return none
+    }
+    return some(xs[0])
+}
+
+fn describe(p: Payment) -> Text {
+    match p {
+        Pending => { return "pending" }
+        Paid { amount, reference: r } => { return "paid \(r)" }
+        _ => { return "other" }
+    }
+}
+
+fn charge(amount: Money) -> Money fails ChargeError {
+    if amount > 100.00 USD {
+        fail(ChargeError.Limit { over: amount - 100.00 USD })
+    }
+    return amount
+}
+
+fn twice(f: fn(Int) -> Int, x: Int) -> Int {
+    return f(f(x))
+}
+
+fn inc(n: Int) -> Int {
+    return n + 1
+}
+
+fn test_records_and_methods() {
+    let l = Line { sku: "a", qty: 3, price: 2.00 USD }
+    check.yes("cost", l.cost() == 6.00 USD)
+    let m = Line { sku: "b", qty: 1, price: 5.00 USD }
+    check.yes("generic with a bound", cheapest(l, m) == 5.00 USD)
+}
+
+fn test_enums_and_match() {
+    check.text("pending", describe(Payment.Pending), "pending")
+    check.text("paid", describe(Payment.Paid { amount: 1.00 USD, reference: "r1" }), "paid r1")
+    check.text("wildcard", describe(Payment.Refused { reason: "no" }), "other")
+}
+
+fn test_optional_values() {
+    match first([7, 8]) {
+        some(x) => { check.int("first", x, 7) }
+        none => { fail("first of two found nothing") }
+    }
+    let empty: List<Text, 5> = []
+    match first(empty) {
+        some(x) => { fail("first of nothing found \(x)") }
+        none => {}
+    }
+}
+
+fn test_typed_failures_are_caught_by_kind() {
+    let r = try charge(130.00 USD)
+    check.no("refused", r.ok)
+    match r.failure {
+        some(e) => {
+            match e {
+                Limit { over } => { check.yes("over", over == 30.00 USD) }
+                Declined { reason } => { fail("declined: \(reason)") }
+            }
+        }
+        none => { fail("no failure value") }
+    }
+    let fine = try charge(10.00 USD)
+    check.yes("within the limit", fine.ok)
+}
+
+fn test_function_values() {
+    check.int("twice", twice(inc, 1), 3)
+}
+
+fn test_loops() {
+    let n = 0
+    for i in [1, 2, 3, 4, 5] {
+        if i == 2 {
+            continue
+        }
+        if i == 5 {
+            break
+        }
+        set n = n + i
+    }
+    check.int("for with continue and break", n, 8)
+    let k = 0
+    repeat 4 {
+        set k = k + 1
+    }
+    check.int("repeat", k, 4)
+}

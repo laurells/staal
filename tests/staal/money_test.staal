@@ -1,0 +1,36 @@
+// Money: exact amounts in a currency.
+import check
+
+type Line { qty: Int, price: Money }
+
+fn total(ls: List<Line, 10>) -> Money {
+    let t = 0.00 NGN
+    for l in ls {
+        set t = t + l.price * l.qty
+    }
+    return t
+}
+
+fn test_amounts_are_exact() {
+    let t = total([Line { qty: 3, price: 0.10 NGN }, Line { qty: 1, price: 0.20 NGN }])
+    check.yes("0.30 + 0.20", t == 0.50 NGN)
+    check.int("minor units", minor_units(t), 50)
+    check.text("currency", currency(t), "NGN")
+    check.text("as text", to_text(t), to_text(0.50 NGN))
+}
+
+fn test_min_max_and_sort() {
+    check.yes("min", min(2.00 USD, 1.50 USD) == 1.50 USD)
+    check.yes("sorted", sort([3.00 USD, 1.00 USD])[0] == 1.00 USD)
+}
+
+fn subtract(a: Money, b: Money) -> Money {
+    return a - b
+}
+
+fn test_currencies_do_not_mix_and_money_is_never_below_zero() {
+    let mixed = try subtract(5.00 USD, 1.00 NGN)
+    check.no("mixed", mixed.ok)
+    let below = try subtract(1.00 USD, 2.00 USD)
+    check.no("below zero", below.ok)
+}

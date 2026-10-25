@@ -1,0 +1,49 @@
+// Dates and times, and hashing and encoding.
+import check
+
+fn test_make_format_and_parse_agree() {
+    let t = make_time(2026, 10, 25, 22, 8, 43)
+    check.text("format", format_time(t), "2026-10-25T22:08:43.000Z")
+    match parse_time("2026-10-25T23:08:43+01:00") {
+        some(p) => { check.int("parse with an offset", p, t) }
+        none => { fail("parse_time refused an offset") }
+    }
+    let (y, m, d) = date_parts(t)
+    check.int("year", y, 2026)
+    check.int("month", m, 10)
+    check.int("day", d, 25)
+    check.int("weekday", weekday(t), 7)
+    check.int("a day later", date_parts(t + 86400000).2, 26)
+}
+
+fn test_parse_time_refuses_what_rfc_3339_does_not_write() {
+    for bad in ["2026-10-25 22:08:43Z", "2026-10-25T22:08:43", "2026-10-25T22:08:43z", "2026-02-30T00:00:00Z", "2026-10-25T22:08:60Z"] {
+        match parse_time(bad) {
+            some(p) => { fail("parse_time(\"\(bad)\") gave \(p)") }
+            none => {}
+        }
+    }
+}
+
+fn test_the_epoch() {
+    check.text("epoch", format_time(0), "1970-01-01T00:00:00.000Z")
+    check.int("thursday", weekday(0), 4)
+}
+
+fn test_hashing_and_encoding() {
+    check.text("sha256", sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    check.text("base64", base64_encode("hé"), "aMOp")
+    check.text("hex", hex_encode("hé"), "68c3a9")
+    match base64_decode("aMOp") {
+        some(t) => { check.text("base64 back", t, "hé") }
+        none => { fail("base64_decode refused its own encoding") }
+    }
+    match base64_decode("aMOp=") {
+        some(t) => { fail("base64_decode took extra padding: \(t)") }
+        none => {}
+    }
+    match hex_decode("68C3A9") {
+        some(t) => { check.text("hex back, upper case", t, "hé") }
+        none => { fail("hex_decode refused upper case") }
+    }
+}

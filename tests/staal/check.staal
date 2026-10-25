@@ -1,0 +1,26 @@
+// What the tests in this folder share: comparisons that fail with what was expected
+// and what was found.
+
+pub fn int(what: Text, got: Int, want: Int) {
+    if got != want {
+        fail("\(what): expected \(want), got \(got)")
+    }
+}
+
+pub fn text(what: Text, got: Text, want: Text) {
+    if got != want {
+        fail("\(what): expected \"\(want)\", got \"\(got)\"")
+    }
+}
+
+pub fn yes(what: Text, got: Bool) {
+    if not got {
+        fail("\(what): expected true")
+    }
+}
+
+pub fn no(what: Text, got: Bool) {
+    if got {
+        fail("\(what): expected false")
+    }
+}

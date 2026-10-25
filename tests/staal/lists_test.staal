@@ -1,0 +1,95 @@
+// Lists, maps, sets and tuples.
+import check
+
+fn double(n: Int) -> Int {
+    return n * 2
+}
+
+fn even(n: Int) -> Bool {
+    return rem(n, 2) == 0
+}
+
+fn plus(a: Int, n: Int) -> Int {
+    return a + n
+}
+
+fn test_list_functions() {
+    let xs: List<Int, 5> = [3, 1, 2]
+    check.int("sum", sum(xs), 6)
+    check.int("sorted first", sort(xs)[0], 1)
+    check.int("reversed first", reverse(xs)[0], 2)
+    check.int("appended", len(append(xs, 4)), 4)
+    check.int("concat", len(concat(xs, [9, 9])), 5)
+    check.int("unchanged", len(xs), 3)
+    check.yes("contains", contains(xs, 2))
+}
+
+fn test_functions_on_items() {
+    let xs = [1, 2, 3, 4]
+    check.int("map", sum(map(xs, double)), 20)
+    check.int("filter", len(filter(xs, even)), 2)
+    check.int("count", count(xs, even), 2)
+    check.yes("any", any(xs, even))
+    check.no("all", all(xs, even))
+    check.int("fold", fold(xs, 10, plus), 20)
+    let empty: List<Int, 3> = []
+    check.no("any of nothing", any(empty, even))
+    check.yes("all of nothing", all(empty, even))
+}
+
+fn test_sort_orders_text_by_bytes() {
+    let s = sort(["b", "a", "B"])
+    check.text("sort", join(s, ""), "Bab")
+}
+
+fn test_maps() {
+    let m: Map<Text, Int, 4> = ["b": 2, "a": 1]
+    check.text("keys in order", join(keys(m), ","), "a,b")
+    let m2 = put(m, "c", 3)
+    check.int("put", len(m2), 3)
+    check.int("unchanged", len(m), 2)
+    match get(m2, "c") {
+        some(v) => { check.int("get", v, 3) }
+        none => { fail("get found nothing") }
+    }
+    check.no("removed", contains(remove(m2, "a"), "a"))
+    let total = 0
+    for (k, v) in entries(m2) {
+        set total = total + v
+    }
+    check.int("entries", total, 6)
+}
+
+fn test_a_full_map_refuses_another_entry() {
+    let r = try fill()
+    check.no("ok", r.ok)
+}
+
+fn fill() -> Int {
+    let m: Map<Int, Int, 2> = [1: 1, 2: 2]
+    return len(put(m, 3, 3))
+}
+
+fn test_sets() {
+    let s = to_set([3, 1, 3, 2])
+    check.int("distinct", len(s), 3)
+    check.int("first", items(s)[0], 1)
+    check.yes("added", contains(add(s, 9), 9))
+}
+
+fn test_tuples() {
+    let t = (1, "one")
+    let (n, word) = t
+    check.int("first", t.0, 1)
+    check.text("second", word, "one")
+    check.yes("equal", t == (n, "one"))
+}
+
+fn test_an_index_outside_the_list_fails() {
+    let r = try at([1, 2], 2)
+    check.no("ok", r.ok)
+}
+
+fn at(xs: List<Int, 2>, i: Int) -> Int {
+    return xs[i]
+}

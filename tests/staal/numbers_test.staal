@@ -1,0 +1,87 @@
+// Ints: arithmetic, its failures, and number functions. The Int functions here run
+// as native code under the native engine.
+import check
+
+fn gcd(a: Int, b: Int) -> Int {
+    let x = a
+    let y = b
+    loop {
+        if y == 0 {
+            return x
+        }
+        let r = rem(x, y)
+        set x = y
+        set y = r
+    }
+}
+
+fn fib(n: Int) -> Int {
+    let a = 0
+    let b = 1
+    let left = n
+    repeat 90 {
+        if left == 0 {
+            break
+        }
+        set left = left - 1
+        let c = a + b
+        set a = b
+        set b = c
+    }
+    return a
+}
+
+fn is_prime(n: Int) -> Bool {
+    if n < 2 {
+        return false
+    }
+    let d = 2
+    loop {
+        if d * d > n {
+            return true
+        }
+        if rem(n, d) == 0 {
+            return false
+        }
+        set d = d + 1
+    }
+}
+
+fn test_native_helpers() {
+    check.int("gcd", gcd(1071, 462), 21)
+    check.int("fib 90", fib(90), 2880067194370816120)
+    check.yes("97 is prime", is_prime(97))
+    check.no("91 is not", is_prime(91))
+}
+
+fn test_rem_takes_the_sign_of_the_left() {
+    check.int("rem", rem(-7, 2), -1)
+    check.int("rem of MIN by -1", rem(-9223372036854775807 - 1, -1), 0)
+}
+
+fn test_division_rounds_toward_zero() {
+    check.int("7 / 2", 7 / 2, 3)
+    check.int("-7 / 2", -7 / 2, -3)
+}
+
+fn test_abs_min_max() {
+    check.int("abs", abs(-5), 5)
+    check.int("min", min(3, -2), -2)
+    check.int("max", max(3, -2), 3)
+}
+
+fn divide(a: Int, b: Int) -> Int {
+    return a / b
+}
+
+fn sum2(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+fn test_overflow_and_division_by_zero_fail() {
+    let r = try divide(1, 0)
+    check.no("division by zero", r.ok)
+    let o = try sum2(9223372036854775807, 1)
+    check.no("overflow", o.ok)
+    check.yes("overflow says so", contains(o.error, "overflow"))
+}

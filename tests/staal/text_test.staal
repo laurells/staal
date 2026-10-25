@@ -1,0 +1,68 @@
+// The text functions of the standard library.
+import check
+
+fn test_length_counts_characters_not_bytes() {
+    check.int("len", len("héllo"), 5)
+    check.int("len of nothing", len(""), 0)
+    check.int("len of an emoji", len("😀"), 1)
+}
+
+fn test_case() {
+    check.text("upper", upper("straße"), "STRASSE")
+    check.text("lower", lower("ÀB"), "àb")
+}
+
+fn test_slice_and_index_of() {
+    check.text("slice", slice("abcdef", 1, 4), "bcd")
+    check.text("empty slice", slice("abc", 2, 2), "")
+    match index_of("banana", "na") {
+        some(i) => { check.int("index_of", i, 2) }
+        none => { fail("index_of found nothing") }
+    }
+    match index_of("banana", "x") {
+        some(i) => { fail("index_of found \(i) for a missing part") }
+        none => {}
+    }
+}
+
+fn test_a_slice_outside_the_text_fails() {
+    let r = try cut("abc", 2, 5)
+    check.no("ok", r.ok)
+}
+
+fn cut(t: Text, a: Int, b: Int) -> Text {
+    return slice(t, a, b)
+}
+
+fn test_split_and_join() {
+    let parts = split("a,,b", ",", 5)
+    check.int("parts", len(parts), 3)
+    check.text("middle", parts[1], "")
+    check.text("join", join(parts, "-"), "a--b")
+    check.int("split of nothing", len(split("", ",", 1)), 1)
+}
+
+fn test_to_int() {
+    match to_int("-42") {
+        some(n) => { check.int("to_int", n, -42) }
+        none => { fail("to_int refused -42") }
+    }
+    for bad in ["", "+1", "1.0", " 1", "99999999999999999999"] {
+        match to_int(bad) {
+            some(n) => { fail("to_int(\"\(bad)\") gave \(n)") }
+            none => {}
+        }
+    }
+}
+
+fn test_contains_starts_and_ends() {
+    check.yes("contains", contains("staal", "aa"))
+    check.yes("starts_with", starts_with("staal", "st"))
+    check.yes("ends_with", ends_with("staal", "al"))
+    check.no("not contained", contains("staal", "x"))
+}
+
+fn test_interpolation() {
+    let n = 3
+    check.text("interpolation", "\(n) of \(n + 1)", "3 of 4")
+}

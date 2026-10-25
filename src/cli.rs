@@ -3,6 +3,7 @@
 //   staalc check   <file.staal>
 //   staalc fmt     [--check] <file.staal>...
 //   staalc lsp
+//   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
 //   staalc fetch   [<project folder>]
 //   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
 //   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
@@ -31,6 +32,7 @@ const USAGE: &str = "usage:
   staalc check   <file.staal>
   staalc fmt     [--check] <file.staal>...
   staalc lsp     (a language server for editors, on standard input and output)
+  staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
   staalc fetch   [<project folder>]
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
@@ -62,6 +64,7 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
             Err(e) => u(&e),
         },
         "fmt" => fmt_cmd(rest),
+        "test" => test_cmd(rest),
         "lsp" if rest.is_empty() => crate::lsp::serve(std::io::stdin().lock(), std::io::stdout().lock()),
         "lsp" => u("lsp takes no arguments: an editor starts it and talks to it on standard input and output"),
         "fetch" => match parse(rest, &[], &[]) {
@@ -530,4 +533,233 @@ fn fmt_cmd(rest: &[String]) -> u8 {
         }
     }
     code
+}
+
+/// `staalc test`: runs each test in the files given, and in the `*_test.staal` files
+/// under the folders given. A test is a function of the file itself whose name starts
+/// with `test_`, with no parameters and no result; it passes if it returns, and fails
+/// if it fails (`fail("...")` is its assertion). Each runs alone, as the entry of its
+/// own run, without a journal, with the model and adapters of `--config` (by default a
+/// scripted model with no replies) and in both engines unless `--engine` says one;
+/// both must give the same result and the same log. Exit 0 when every test passes, 1
+/// when one fails or a file has check errors or no tests, 2 for a usage, file or
+/// config problem.
+fn test_cmd(rest: &[String]) -> u8 {
+    const U: &str = "usage: staalc test [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...";
+    let (mut paths, mut config, mut engine) = (Vec::new(), None, None);
+    let mut args = rest.iter();
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--config" | "--engine" => {
+                let Some(v) = args.next() else { return usage_error(U, &format!("{a} needs a value")) };
+                let slot = if a == "--config" { &mut config } else { &mut engine };
+                if slot.replace(v.clone()).is_some() {
+                    return usage_error(U, &format!("{a} is given twice"));
+                }
+            }
+            o if o.starts_with("--") => return usage_error(U, &format!("unknown option {o}")),
+            p => paths.push(p.to_string()),
+        }
+    }
+    if paths.is_empty() {
+        return usage_error(U, "test needs a file or a folder");
+    }
+    let engines: &[(Engine, &str)] = match engine.as_deref() {
+        None if cfg!(feature = "native") => &[(Engine::Interpreter, "interpreter"), (Engine::Native, "native")],
+        None | Some("interpreter") => &[(Engine::Interpreter, "interpreter")],
+        Some("native") => &[(Engine::Native, "native")],
+        Some("both") => &[(Engine::Interpreter, "interpreter"), (Engine::Native, "native")],
+        Some(o) => return usage_error(U, &format!("--engine is interpreter, native or both, not {o}")),
+    };
+    // The base of every test's run config: what --config gives, or a scripted model
+    // with no replies, so a test that asks a model fails instead of reaching one.
+    let mut base = serde_json::json!({ "model": { "provider": "script", "responses": [] } });
+    if let Some(c) = &config {
+        let parsed = std::fs::read_to_string(c).map_err(|e| format!("cannot read {c}: {e}")).and_then(|t| {
+            serde_json::from_str::<serde_json::Value>(&t).map_err(|e| format!("{c} is not valid JSON: {e}"))
+        });
+        match parsed {
+            Ok(serde_json::Value::Object(m)) => {
+                if let Some(k) = ["entry", "inputs", "grants", "secrets"].iter().find(|k| m.contains_key(**k)) {
+                    eprintln!("staalc: {c}: a test config cannot give \"{k}\": each test is its own entry and takes no parameters");
+                    return 2;
+                }
+                base = serde_json::Value::Object(m);
+            }
+            Ok(_) => {
+                eprintln!("staalc: {c}: expected a JSON object");
+                return 2;
+            }
+            Err(e) => {
+                eprintln!("staalc: {e}");
+                return 2;
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for p in &paths {
+        let path = Path::new(p);
+        if path.is_dir() {
+            match test_files(path) {
+                Ok(mut found) if !found.is_empty() => files.append(&mut found),
+                Ok(_) => {
+                    eprintln!("staalc: no *_test.staal files under {p}");
+                    return 1;
+                }
+                Err(e) => {
+                    eprintln!("staalc: {e}");
+                    return 2;
+                }
+            }
+        } else {
+            files.push(path.to_path_buf());
+        }
+    }
+    let (mut passed, mut failed) = (0usize, 0usize);
+    for file in &files {
+        let name = file.display().to_string();
+        let checked = match crate::check_path(file) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("staalc: {e}");
+                return 2;
+            }
+        };
+        let prog = match &checked.result {
+            Ok(p) => p,
+            Err(diags) => {
+                report(&checked.files, diags);
+                println!("FAIL {name}: it has check errors");
+                failed += 1;
+                continue;
+            }
+        };
+        let tests: Vec<&crate::ast::FnDecl> =
+            prog.fns.iter().filter(|f| f.pos.file == 0 && f.method_of.is_none() && f.name.starts_with("test_") && !f.name.contains(['.', ':', ' ', '<'])).collect();
+        if tests.is_empty() {
+            println!("FAIL {name}: no tests (functions named test_...)");
+            failed += 1;
+            continue;
+        }
+        for t in tests {
+            let id = format!("{name}::{}", t.name);
+            if !t.params.is_empty() || t.ret.is_some() || !t.generics.is_empty() {
+                println!("FAIL {id}: a test takes no parameters and gives no result");
+                failed += 1;
+                continue;
+            }
+            let mut cfg = base.clone();
+            cfg["entry"] = serde_json::json!(t.name);
+            let mut runs = Vec::new();
+            for (e, label) in engines {
+                match interp::run_config_engine(prog, &checked.fingerprint, &cfg, Durability::None, *e) {
+                    Ok(r) => runs.push((*label, r)),
+                    Err(e) => {
+                        eprintln!("staalc: {id}: {e}");
+                        return 2;
+                    }
+                }
+            }
+            match verdict(&runs) {
+                Ok(()) => {
+                    println!("ok   {id}");
+                    passed += 1;
+                }
+                Err(why) => {
+                    println!("FAIL {id}: {why}");
+                    failed += 1;
+                }
+            }
+        }
+    }
+    println!("{passed} passed, {failed} failed");
+    u8::from(failed > 0)
+}
+
+/// The `*_test.staal` files under `dir`, in order, outside hidden folders and `target`.
+fn test_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut out = Vec::new();
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?
+        .map(|e| e.map(|e| e.path()).map_err(|e| format!("cannot read {}: {e}", dir.display())))
+        .collect::<Result<_, _>>()?;
+    entries.sort();
+    for p in entries {
+        let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if p.is_dir() {
+            if !file_name.starts_with('.') && file_name != "target" && file_name != "node_modules" {
+                out.append(&mut test_files(&p)?);
+            }
+        } else if file_name.ends_with("_test.staal") {
+            out.push(p);
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a test passed, given its run on each engine: every engine must give the
+/// same outcome and the same log, and the outcome must be a return.
+fn verdict(runs: &[(&str, RunResult)]) -> Result<(), String> {
+    let outcome = |r: &RunResult| match &r.result {
+        Ok(_) => Ok(()),
+        Err(f) => Err(format!("{}: {}", f.kind, f.message)),
+    };
+    // Each run has its own random id, in its log and the keys made from it; the logs
+    // are compared with it replaced.
+    let log = |r: &RunResult| {
+        let text = serde_json::Value::Array(r.log.clone()).to_string();
+        match r.log.first().and_then(|e| e["run_id"].as_str()) {
+            Some(id) if !id.is_empty() => text.replace(id, "<run>"),
+            _ => text,
+        }
+    };
+    let Some(((first_label, first), rest)) = runs.split_first() else {
+        return Err("no engine ran it".into());
+    };
+    if let Some((label, r)) = rest.iter().find(|(_, r)| outcome(r) != outcome(first) || log(r) != log(first)) {
+        let show = |o: Result<(), String>| o.err().unwrap_or_else(|| "passed".into());
+        let mut why = format!("the engines disagree: {first_label} {}, {label} {}", show(outcome(first)), show(outcome(r)));
+        if outcome(r) == outcome(first) {
+            why.push_str(" (the same outcome, but different logs)");
+        }
+        return Err(why);
+    }
+    outcome(first)
+}
+
+#[cfg(test)]
+mod test_cmd_tests {
+    use super::verdict;
+    use crate::interp::{FailKind, Failure, RunResult};
+    use serde_json::json;
+
+    fn run(id: &str, result: Result<i64, &str>, extra: &str) -> RunResult {
+        RunResult {
+            result: result.map(|n| json!(n)).map_err(|m| Failure { kind: FailKind::Action, message: m.into(), raised: None }),
+            log: vec![json!({ "event": "run_start", "run_id": id }), json!({ "event": "x", "key": format!("{id}-1{extra}") })],
+        }
+    }
+
+    #[test]
+    fn engines_must_agree_on_the_outcome_and_on_the_log_apart_from_the_run_id() {
+        let both = |a: RunResult, b: RunResult| verdict(&[("interpreter", a), ("native", b)]);
+        // Different run ids, in the log and in keys made from them: the same.
+        assert_eq!(both(run("aa", Ok(1), ""), run("bb", Ok(1), "")), Ok(()));
+        assert_eq!(both(run("aa", Err("boom"), ""), run("bb", Err("boom"), "")), Err("action: boom".into()));
+        assert_eq!(
+            both(run("aa", Ok(1), ""), run("bb", Err("boom"), "")),
+            Err("the engines disagree: interpreter passed, native action: boom".into())
+        );
+        assert_eq!(
+            both(run("aa", Err("one"), ""), run("bb", Err("two"), "")),
+            Err("the engines disagree: interpreter action: one, native action: two".into())
+        );
+        assert_eq!(
+            both(run("aa", Ok(1), ""), run("bb", Ok(1), "x")),
+            Err("the engines disagree: interpreter passed, native passed (the same outcome, but different logs)".into())
+        );
+        // One engine alone decides by its outcome; none is never a pass.
+        assert_eq!(verdict(&[("interpreter", run("aa", Ok(1), ""))]), Ok(()));
+        assert!(verdict(&[]).is_err());
+    }
 }

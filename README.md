@@ -95,6 +95,7 @@ To build without the native compiler (smaller, interpreter only):
 | `staalc fetch [<project folder>]` | Fetches the packages named in `staal.json` and writes `staal.lock` |
 | `staalc build <file.staal> -o <app>` | Builds a standalone executable (Linux) |
 | `staalc fmt [--check] <file.staal>...` | Formats files in place, or lists those not formatted |
+| `staalc test [--config <test.json>] <file or folder>...` | Runs the tests written in Staal, in both engines |
 | `staalc lsp` | A language server for editors: the same errors as `check`, completion, formatting |
 
 Exit codes: `0` success; `1` check errors or a failed run; `2` a usage, file,

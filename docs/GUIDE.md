@@ -710,6 +710,55 @@ does not lex is left as it was (exit 2). The tests format every Staal file in th
 repository and check that each gives the same syntax tree and is stable when
 formatted again.
 
+## Testing: `staalc test`
+
+    staalc test tests/                     # every *_test.staal file under tests/
+    staalc test money_test.staal --config test.json --engine native
+
+A test is a function of a test file whose name starts with `test_`, with no
+parameters and no result. It passes if it returns and fails if it fails, so
+`fail("...")` is its assertion, and any failure counts: a value error such as
+an overflow, a typed failure, a model call that fails. Helpers that compare and fail
+are ordinary functions (`tests/staal/check.staal` is a small module of them).
+
+```staal
+import check
+
+fn total(xs: List<Int, 10>) -> Int {
+    return sum(xs)
+}
+
+fn test_total() {
+    check.int("total", total([1, 2, 3]), 6)
+}
+
+fn test_division_by_zero_fails() {
+    let r = try divide(1, 0)
+    if r.ok {
+        fail("1 / 0 gave a value")
+    }
+}
+
+fn divide(a: Int, b: Int) -> Int {
+    return a / b
+}
+```
+
+Each test runs alone, as the entry of its own run, in both engines (`--engine`
+chooses one), and passes only if both give the same outcome and the same log. A
+run has no journal. Its model and adapters come from `--config`, which may hold
+everything a run config holds except `entry`, `inputs`, `grants` and `secrets`;
+without one the model is scripted with no replies, so a test that asks a model fails
+rather than reaching one. With a config, every test in every engine starts from the
+config's first reply. A test that prints prints once for each engine. Functions of
+modules a test file imports are never its tests, whatever their names.
+
+The output is one line per test, `ok` or `FAIL` with the failure's kind and message,
+then the totals. Exit 0 when every test passes; 1 when one fails, a file has check
+errors (printed as `staalc check` prints them) or no tests, or a folder has no test
+files; 2 for a usage, file or config problem. The standard library and the language
+are tested this way in `tests/staal`, which `cargo test` runs in each engine.
+
 ## In an editor: `staalc lsp`
 
     staalc lsp                             # a language server on standard input and output

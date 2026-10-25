@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `staalc test`, for tests written in Staal: every `test_` function of a test file
+  runs as its own run in both engines, which must agree on the outcome and the log.
+  `tests/staal` tests the standard library and the language this way, and `cargo
+  test` runs it in each engine.
 - A VS Code extension in `editors/vscode`: a TextMate grammar and a client for
   `staalc lsp`. Its tests run the grammar with VS Code's tokenizer over every Staal
   file in the repository and the server with VS Code's protocol library; a cargo
