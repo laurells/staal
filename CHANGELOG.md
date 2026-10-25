@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- A VS Code extension in `editors/vscode`: a TextMate grammar and a client for
+  `staalc lsp`. Its tests run the grammar with VS Code's tokenizer over every Staal
+  file in the repository and the server with VS Code's protocol library; a cargo
+  test keeps its reserved words and built-ins identical to the compiler's.
 - `staalc lsp`, a language server: errors as you type, completion and formatting,
   for any editor with an LSP client. Its errors come from the same function as
   `staalc check`, and the tests require them to be identical for every program in

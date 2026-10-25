@@ -726,6 +726,9 @@ every Staal program in this repository in one server and require its errors to b
 exactly what `staalc check` prints for the same file: file, line, column, code and
 message.
 
+For VS Code, [editors/vscode](../editors/vscode) is an extension: highlighting, and
+this server for everything else. Its README says how to install it from the folder.
+
 ## Running programs, and surviving crashes
 
     staalc run     prog.staal --config run.json --journal run.journal [--log run.jsonl]

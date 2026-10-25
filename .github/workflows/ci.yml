@@ -19,10 +19,13 @@ jobs:
       - name: Rust
         run: rustup toolchain install 1.97.0 --profile minimal --component clippy && rustup default 1.97.0
       - name: Versions
-        run: rustc --version && cargo --version && git --version && python3 --version
+        run: rustc --version && cargo --version && git --version && python3 --version && node --version
       - name: Tests, with crash injection
         run: cargo test --features failpoints --no-fail-fast
       - name: Tests without native code
         run: cargo test --no-default-features --no-fail-fast
+      - name: VS Code extension (grammar, client, and the server through VS Code's protocol library)
+        working-directory: editors/vscode
+        run: npm ci && npm test
       - name: Clippy
         run: cargo clippy --all-targets --features failpoints -- -D warnings

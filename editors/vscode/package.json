@@ -1,0 +1,47 @@
+{
+  "name": "staal",
+  "displayName": "Staal",
+  "description": "Staal: highlighting, and errors, completion and formatting from staalc.",
+  "version": "0.22.0",
+  "private": true,
+  "publisher": "teamozy",
+  "license": "UNLICENSED",
+  "engines": { "vscode": "^1.82.0" },
+  "categories": ["Programming Languages", "Formatters"],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "staal",
+        "aliases": ["Staal", "staal"],
+        "extensions": [".staal"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      { "language": "staal", "scopeName": "source.staal", "path": "./syntaxes/staal.tmLanguage.json" }
+    ],
+    "configuration": {
+      "title": "Staal",
+      "properties": {
+        "staal.server.path": {
+          "type": "string",
+          "default": "staalc",
+          "description": "The staalc executable: a path, or a name found on PATH. The extension runs `<path> lsp`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  },
+  "devDependencies": {
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2",
+    "vscode-languageserver-protocol": "3.17.5"
+  }
+}

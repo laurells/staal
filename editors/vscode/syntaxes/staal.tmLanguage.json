@@ -1,0 +1,257 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Staal",
+  "scopeName": "source.staal",
+  "fileTypes": [
+    "staal"
+  ],
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#text-block"
+    },
+    {
+      "include": "#text"
+    },
+    {
+      "include": "#money"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#field"
+    },
+    {
+      "include": "#declaration"
+    },
+    {
+      "include": "#keyword"
+    },
+    {
+      "include": "#mark"
+    },
+    {
+      "include": "#type"
+    },
+    {
+      "include": "#call"
+    },
+    {
+      "include": "#operator"
+    },
+    {
+      "include": "#parens"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.double-slash.staal",
+      "match": "//.*$"
+    },
+    "escape": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.staal",
+          "match": "\\\\(?:[\"\\\\ntr]|u\\{[0-9A-Fa-f]{1,6}\\})"
+        },
+        {
+          "name": "meta.interpolation.staal",
+          "begin": "\\\\\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.begin.staal"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.end.staal"
+            }
+          },
+          "patterns": [
+            {
+              "include": "$self"
+            }
+          ]
+        },
+        {
+          "name": "invalid.illegal.escape.staal",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "text-block": {
+      "name": "string.quoted.triple.staal",
+      "begin": "\"\"\"",
+      "end": "^[ \\t]*\"\"\"",
+      "patterns": [
+        {
+          "include": "#escape"
+        }
+      ]
+    },
+    "text": {
+      "name": "string.quoted.double.staal",
+      "begin": "\"",
+      "end": "\"|$",
+      "patterns": [
+        {
+          "include": "#escape"
+        }
+      ]
+    },
+    "money": {
+      "match": "\\b(\\d+(?:\\.\\d+)?)[ \\t]*([A-Z]{3})\\b",
+      "captures": {
+        "1": {
+          "name": "constant.numeric.staal"
+        },
+        "2": {
+          "name": "support.constant.currency.staal"
+        }
+      }
+    },
+    "number": {
+      "name": "constant.numeric.staal",
+      "match": "\\b\\d+(?:\\.\\d+)?\\b"
+    },
+    "field": {
+      "comment": "A reserved word is a field name after a single dot or before a colon.",
+      "patterns": [
+        {
+          "match": "(?<!\\.)(\\.)\\s*([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.staal"
+            },
+            "2": {
+              "name": "variable.other.property.staal"
+            }
+          }
+        },
+        {
+          "match": "\\b(?:and|break|budget|cap|continue|done|else|false|fn|for|if|import|in|let|loop|not|or|propose|pub|repeat|return|set|true|try|type|validate)\\b(?=\\s*:)",
+          "name": "variable.other.property.staal"
+        }
+      ]
+    },
+    "declaration": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s+(?:(\\p{Lu}[\\p{L}\\p{N}_]*)(\\.))?([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.staal"
+            },
+            "2": {
+              "name": "entity.name.type.staal"
+            },
+            "3": {
+              "name": "punctuation.accessor.staal"
+            },
+            "4": {
+              "name": "entity.name.function.staal"
+            }
+          }
+        },
+        {
+          "match": "\\b(type)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.staal"
+            },
+            "2": {
+              "name": "entity.name.type.staal"
+            }
+          }
+        },
+        {
+          "match": "^\\s*(?:(pub)\\s+)?(enum|interface|const|capability)\\s+([\\p{L}_][\\p{L}\\p{N}_]*(?:\\.[\\p{L}_][\\p{L}\\p{N}_]*)*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.staal"
+            },
+            "2": {
+              "name": "storage.type.staal"
+            },
+            "3": {
+              "name": "entity.name.type.staal"
+            }
+          }
+        }
+      ]
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.staal",
+          "match": "\\b(?:break|continue|done|else|for|if|in|loop|repeat|return|try)\\b"
+        },
+        {
+          "name": "keyword.other.staal",
+          "match": "\\b(?:budget|cap|fn|import|let|propose|set|type|validate)\\b"
+        },
+        {
+          "name": "storage.modifier.staal",
+          "match": "\\bpub\\b"
+        },
+        {
+          "name": "keyword.operator.word.staal",
+          "match": "\\b(?:and|not|or)\\b"
+        },
+        {
+          "name": "constant.language.staal",
+          "match": "\\b(?:false|true)\\b"
+        },
+        {
+          "name": "variable.language.self.staal",
+          "match": "\\bself\\b"
+        }
+      ]
+    },
+    "mark": {
+      "name": "storage.modifier.mark.staal",
+      "match": "@[\\p{L}_][\\p{L}\\p{N}_]*"
+    },
+    "type": {
+      "patterns": [
+        {
+          "name": "support.type.staal",
+          "match": "\\b(?:Bool|Int|List|Map|Money|Optional|Proposed|Receipt|Set|Text|Unit)\\b"
+        },
+        {
+          "name": "entity.name.type.staal",
+          "match": "\\b\\p{Lu}[\\p{L}\\p{N}_]*\\b"
+        }
+      ]
+    },
+    "call": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.staal",
+          "match": "\\b(?:abs|add|all|any|append|base64_decode|base64_encode|concat|contains|count|currency|date_parts|ends_with|entries|fill_secret|filter|fold|form|format_time|get|header|hex_decode|hex_encode|index_of|items|join|json|keys|len|lower|make_time|map|max|min|minor_units|now|parse_time|print|put|random_int|rem|remove|replace|reverse|sha256|slice|sort|split|starts_with|sum|time_parts|to_int|to_set|to_text|trim|upper|url_segment|values|weekday)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "entity.name.function.call.staal",
+          "match": "\\b[\\p{L}_][\\p{L}\\p{N}_]*(?=\\s*\\()"
+        }
+      ]
+    },
+    "operator": {
+      "name": "keyword.operator.staal",
+      "match": "->|=>|==|!=|<=|>=|\\.\\.|[=<>+\\-*/]"
+    },
+    "parens": {
+      "begin": "\\(",
+      "end": "\\)",
+      "patterns": [
+        {
+          "include": "$self"
+        }
+      ]
+    }
+  }
+}
