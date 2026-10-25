@@ -135,16 +135,43 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (Pos, String)> {
 /// Lexes file number `file` of a program.
 pub fn lex_file(src: &str, file: u32) -> Result<Vec<Token>, (Pos, String)> {
     let chars: Vec<char> = src.chars().collect();
-    lex_chars(&chars, file, 1, 1)
+    lex_chars(&chars, file, 1, 1, None)
 }
 
-/// Lexes `chars`, the first of which is at `line`, `col` of `file`.
-fn lex_chars(chars: &[char], file: u32, line: usize, col: usize) -> Result<Vec<Token>, (Pos, String)> {
+/// Where each token and comment of a source text is, for tools that rewrite it (the
+/// formatter): positions are indices into the text's characters.
+#[derive(Debug, Default)]
+pub struct Spans {
+    /// One per token, Eof excepted: where its text starts and ends.
+    pub tokens: Vec<(usize, usize)>,
+    /// Each `//` comment: where it starts and ends (before the line break).
+    pub comments: Vec<(usize, usize)>,
+}
+
+/// Lexes a single-file program, and also gives where each token and comment is.
+pub fn lex_with_spans(src: &str) -> Result<(Vec<Token>, Spans), (Pos, String)> {
+    let chars: Vec<char> = src.chars().collect();
+    let mut spans = Spans::default();
+    let toks = lex_chars(&chars, 0, 1, 1, Some(&mut spans))?;
+    Ok((toks, spans))
+}
+
+/// Lexes `chars`, the first of which is at `line`, `col` of `file`. With `spans`,
+/// also records where each token and comment is.
+fn lex_chars(chars: &[char], file: u32, line: usize, col: usize, mut spans: Option<&mut Spans>) -> Result<Vec<Token>, (Pos, String)> {
     let mut i = 0;
     let (mut line, mut col) = (line, col);
     let mut out = Vec::new();
-
+    // Each pass of the loop makes at most one token; its span is from where the pass
+    // started to where the next one starts.
+    let mut start = 0;
     while i < chars.len() {
+        if let Some(s) = spans.as_deref_mut()
+            && s.tokens.len() < out.len()
+        {
+            s.tokens.push((start, i));
+        }
+        start = i;
         let c = chars[i];
         let pos = Pos { file, line, col };
 
@@ -163,6 +190,9 @@ fn lex_chars(chars: &[char], file: u32, line: usize, col: usize) -> Result<Vec<T
         if c == '/' && chars.get(i + 1) == Some(&'/') {
             while i < chars.len() && chars[i] != '\n' {
                 i += 1;
+            }
+            if let Some(s) = spans.as_deref_mut() {
+                s.comments.push((start, i));
             }
             continue;
         }
@@ -273,6 +303,11 @@ fn lex_chars(chars: &[char], file: u32, line: usize, col: usize) -> Result<Vec<T
         out.push(Token { tok, pos });
         i += 1;
         col += 1;
+    }
+    if let Some(s) = spans
+        && s.tokens.len() < out.len()
+    {
+        s.tokens.push((start, i));
     }
     out.push(Token { tok: Tok::Eof, pos: Pos { file, line, col } });
     Ok(out)
@@ -400,7 +435,7 @@ fn piece(
     if chars.get(*i + 1) == Some(&'(') {
         let open = *i + 2;
         let close = interpolation_end(chars, open).ok_or((at, "unterminated \\( in text: close it with ) on the same line".to_string()))?;
-        let tokens = lex_chars(&chars[open..close], file, line, *col + 2)?;
+        let tokens = lex_chars(&chars[open..close], file, line, *col + 2, None)?;
         if tokens.len() == 1 {
             return Err((at, "empty \\() in text".into()));
         }

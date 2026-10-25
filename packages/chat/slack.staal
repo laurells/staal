@@ -23,8 +23,8 @@ capability chat.slack {
 
     action post(channel: Text @target, text: Text) -> Text {
         let r = http.post("https://slack.com/api/chat.postMessage", json(Message { channel: trim(channel), text: text }),
-                          [header("Authorization", fill_secret("Bearer {secret}", token)),
-                           header("Content-Type", "application/json; charset=utf-8")])
+            [header("Authorization", fill_secret("Bearer {secret}", token)),
+                header("Content-Type", "application/json; charset=utf-8")])
         if r.status != 200 or not r.complete {
             fail("Slack answered " + json(r.status) + ": " + r.body)
         }

@@ -692,6 +692,24 @@ Other limits:
   is recognised as unable to affect later code, which removes the most common
   false alarm (send-then-return-either-way inside a retry loop).
 
+## Formatting: `staalc fmt`
+
+    staalc fmt app.staal lib/*.staal       # format in place
+    staalc fmt --check app.staal           # list what is not formatted; exit 1 if any
+
+Every Staal file can have one layout: four spaces of indentation for each open
+bracket, one more for a line that continues an expression, one space around
+operators and after commas and colons, none inside brackets, at most one blank
+line in a row. The formatter changes only whitespace between tokens: every token is
+kept exactly as written (text literals too, with their escapes, interpolations and
+lines), every comment is kept, and a line break between two tokens stays one, so it
+never changes what a program means and never joins or splits a line. Before it
+writes a file it lexes its result again, and leaves the file as it was unless the
+tokens, the comments and the line breaks are exactly the original's. A file that
+does not lex is left as it was (exit 2). The tests format every Staal file in this
+repository and check that each gives the same syntax tree and is stable when
+formatted again.
+
 ## Running programs, and surviving crashes
 
     staalc run     prog.staal --config run.json --journal run.journal [--log run.jsonl]

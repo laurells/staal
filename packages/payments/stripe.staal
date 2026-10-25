@@ -42,8 +42,8 @@ capability payments.stripe {
             fail("the payment is in " + intent.currency + ", the refund in " + currency(amount))
         }
         let p = post.post("https://api.stripe.com/v1/refunds", form(Refund { payment_intent: id, amount: minor_units(amount) }),
-                          [header("Authorization", fill_secret("Bearer {secret}", key)),
-                           header("Content-Type", "application/x-www-form-urlencoded")])
+            [header("Authorization", fill_secret("Bearer {secret}", key)),
+                header("Content-Type", "application/x-www-form-urlencoded")])
         if p.status != 200 or not p.complete {
             fail("Stripe answered " + json(p.status) + ": " + p.body)
         }

@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `staalc fmt [--check] <file>...`, the formatter. It changes only the whitespace
+  between tokens and keeps every comment and line break, so it cannot change what a
+  program means; it checks its own result before writing. The examples and packages
+  are formatted with it.
 - `docs/GRAMMAR.md`: the complete syntax of Staal. A test keeps it exact: its
   reserved words, contextual words and built-in functions are the compiler's, and
   every example in it parses.

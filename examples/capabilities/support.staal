@@ -9,8 +9,8 @@ import termii
 type Decision { refund: Bool, cents: Int, reason: Text }
 
 fn handle(complaint: Text, payment: Text, phone: Text,
-          refunds: cap stripe.refunds.create(max: 100 USD, each: 50 USD),
-          texts: cap termii.sms.send(uses: 1)) -> Text {
+    refunds: cap stripe.refunds.create(max: 100 USD, each: 50 USD),
+    texts: cap termii.sms.send(uses: 1)) -> Text {
     let proposed = propose(Decision,
         instruct: "Decide whether this complaint deserves a refund, and how many US cents, at most 5000.",
         data: [complaint])

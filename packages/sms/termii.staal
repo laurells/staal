@@ -20,7 +20,7 @@ capability sms.termii {
     action send(to: Text @target, text: Text) -> Text {
         let sms = Sms { to: number(to), from: sender, sms: text, type: "plain", channel: "generic", api_key: "{secret}" }
         let r = http.post("https://api.ng.termii.com/api/sms/send", fill_secret(json(sms), key),
-                          [header("Content-Type", "application/json")])
+            [header("Content-Type", "application/json")])
         if r.status != 200 or not r.complete {
             fail("Termii answered " + json(r.status) + ": " + r.body)
         }

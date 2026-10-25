@@ -7,10 +7,10 @@ type Sms { to: Text, from: Text, sms: Text, type: Text, channel: Text, api_key: 
 type SmsReply { message_id: Text, code: Text }
 
 fn send(to: Text, text: Text, sender: Text, channel: Text, key: Secret,
-        termii: cap net.http.post(only: ["https://api.ng.termii.com/api/sms/send"], uses: 1)) -> Text {
+    termii: cap net.http.post(only: ["https://api.ng.termii.com/api/sms/send"], uses: 1)) -> Text {
     let sms = Sms { to: to, from: sender, sms: text, type: "plain", channel: channel, api_key: "{secret}" }
     let r = termii.post("https://api.ng.termii.com/api/sms/send", fill_secret(json(sms), key),
-                        [header("Content-Type", "application/json")])
+        [header("Content-Type", "application/json")])
     if r.status != 200 or not r.complete {
         return "Termii answered " + json(r.status) + ": " + r.body
     }

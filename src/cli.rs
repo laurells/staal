@@ -1,6 +1,7 @@
 // The command line, shared by `staalc` and by executables `staalc build` makes.
 //
 //   staalc check   <file.staal>
+//   staalc fmt     [--check] <file.staal>...
 //   staalc fetch   [<project folder>]
 //   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
 //   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
@@ -27,6 +28,7 @@ use std::path::Path;
 
 const USAGE: &str = "usage:
   staalc check   <file.staal>
+  staalc fmt     [--check] <file.staal>...
   staalc fetch   [<project folder>]
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
@@ -57,6 +59,7 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
             Ok((None, _)) => u("check needs a file"),
             Err(e) => u(&e),
         },
+        "fmt" => fmt_cmd(rest),
         "fetch" => match parse(rest, &[], &[]) {
             Ok((dir, _)) => fetch(dir.as_deref().unwrap_or(".")),
             Err(e) => u(&e),
@@ -478,4 +481,49 @@ fn app_main(args: Vec<String>, bundle: &[u8], fns: &[usize]) -> u8 {
         let native = crate::native::Native::from_linked(prog, &compiled, fns, &b["tables"])?;
         interp::run_config_with_native(prog, fp, cfg, d, native)
     })
+}
+
+/// `staalc fmt [--check] <file.staal>...`: formats each file in place, or with
+/// `--check` changes nothing and lists those that are not formatted. Exit 0 when
+/// every file is (or now is) formatted, 1 when `--check` found one that is not, 2 for
+/// a file that cannot be read, written or formatted (it is left as it was).
+fn fmt_cmd(rest: &[String]) -> u8 {
+    let check = rest.iter().any(|a| a == "--check");
+    let files: Vec<&String> = rest.iter().filter(|a| *a != "--check").collect();
+    if let Some(bad) = files.iter().find(|f| f.starts_with('-')) {
+        return usage_error(USAGE, &format!("unknown option {bad}"));
+    }
+    if files.is_empty() {
+        return usage_error(USAGE, "fmt needs at least one file");
+    }
+    let mut code = 0;
+    for f in files {
+        let src = match std::fs::read_to_string(f) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("staalc: {f}: {e}");
+                code = 2;
+                continue;
+            }
+        };
+        let out = match crate::fmt::format(&src) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("staalc: {f}: {e}");
+                code = 2;
+                continue;
+            }
+        };
+        if out == src {
+            continue;
+        }
+        if check {
+            println!("{f}");
+            code = code.max(1);
+        } else if let Err(e) = std::fs::write(f, &out) {
+            eprintln!("staalc: {f}: {e}");
+            code = 2;
+        }
+    }
+    code
 }
