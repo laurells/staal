@@ -804,6 +804,23 @@ no capabilities, the model has no replies and there is no journal, so nothing
 reaches the world. Each input runs on both engines (`--engine` chooses one), which
 must agree unless the input reads the clock or draws a number.
 
+## Profiling: `staalc profile`
+
+    staalc profile app.staal --config run.json [--engine native] [-o profile.json]
+
+`staalc profile` runs a program as `staalc run` does, without a journal, and then
+shows on standard error what each function spent: its calls; its steps (the
+runtime's own count of statements and loop iterations, the one `max_steps` limits),
+in total and its own, without the functions it called; its time, the same two ways;
+and the model calls, tokens and actions it made itself. `-o` writes the same as JSON.
+The run's output, result and exit code are `run`'s.
+
+Steps, calls, model calls, tokens and actions are the same on every run of the same
+program and input; time is the clock's. A recursive function's total counts its
+outermost calls, so no step is counted twice. On the native engine, native code
+calls native code directly: a native function's calls to others are inside it, so
+`fib` calling itself is one call there, with the same steps as on the interpreter.
+
 ## In an editor: `staalc lsp`
 
     staalc lsp                             # a language server on standard input and output

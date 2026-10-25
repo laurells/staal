@@ -240,6 +240,28 @@ pub fn run_engine(
     run_impl(prog, source, config, durability, provider, adapter, Hooks { native, ..Hooks::default() })
 }
 
+/// Runs a checked program as `run_config_engine` does, without a journal, and
+/// gives what each function spent.
+pub fn run_config_profiled(
+    prog: &Program,
+    config: &Json,
+    engine: Engine,
+) -> Result<(RunResult, std::collections::BTreeMap<String, FnProfile>), String> {
+    let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
+    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
+    let provider = provider::from_config(model)?;
+    let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
+    let native = match engine {
+        Engine::Interpreter => None,
+        Engine::Native => Some(compile_native(prog)?),
+    };
+    let sink = std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
+    let hooks = Hooks { native, capture: None, profile: Some(sink.clone()) };
+    let r = run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)?;
+    let fns = sink.lock().map_err(|_| "the profile was lost; this is a bug in staalc".to_string())?.clone();
+    Ok((r, fns))
+}
+
 /// Whether two runs of the same program did the same: the same result or failure
 /// (kind and message) and the same log, apart from each run's own random id (which
 /// is in the log and in keys made from it). Both engines must give this.
@@ -271,7 +293,7 @@ pub fn run_config_capturing(prog: &Program, config: &Json, engine: Engine) -> Re
         Engine::Native => Some(compile_native(prog)?),
     };
     let printed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let hooks = Hooks { native, capture: Some(printed.clone()) };
+    let hooks = Hooks { native, capture: Some(printed.clone()), profile: None };
     let r = run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)?;
     let text = printed.lock().map_err(|_| "the printed text was lost; this is a bug in staalc".to_string())?.clone();
     Ok((r, text))
@@ -301,6 +323,8 @@ struct Hooks {
     native: Option<NativeCode>,
     /// Where `print` writes instead of standard output.
     capture: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+    /// Where a profiled run leaves what each function spent.
+    profile: Option<std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, FnProfile>>>>,
 }
 
 fn run_impl(
@@ -330,7 +354,16 @@ fn run_impl(
                 let mut it = Interp::new(prog, setup.limits, &setup.runtime, provider, adapter, journal);
                 it.native = hooks.native;
                 it.capture = hooks.capture;
-                it.run(&setup)
+                if hooks.profile.is_some() {
+                    it.profile = Some(Profiler::default());
+                }
+                let r = it.run(&setup);
+                if let (Some(sink), Some(p)) = (&hooks.profile, it.profile.take())
+                    && let Ok(mut fns) = sink.lock()
+                {
+                    *fns = p.fns;
+                }
+                r
             })
             .map_err(|e| format!("could not start the interpreter thread: {e}"))?
             .join()
@@ -930,6 +963,40 @@ struct Interp<'p> {
     native: Option<NativeCode>,
     /// Where `print` writes instead of standard output (the REPL's runs).
     capture: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+    /// What each function spent, when the run is profiled.
+    profile: Option<Profiler>,
+}
+
+/// What a profiled run spent in one function. Steps are the runtime's own count
+/// (RUNTIME.md section 4), the same on every run of the same program and input;
+/// time is the clock's. A total includes the functions it called; its own part does
+/// not. A recursive function's total counts its outermost calls.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FnProfile {
+    pub calls: u64,
+    pub steps: u64,
+    pub self_steps: u64,
+    pub nanos: u128,
+    pub self_nanos: u128,
+    /// Model calls answered, and the tokens they used, made in this function itself.
+    pub model_calls: u64,
+    pub tokens: u64,
+    /// Actions asked of the runtime's capabilities in this function itself.
+    pub actions: u64,
+}
+
+#[derive(Default)]
+struct Profiler {
+    fns: std::collections::BTreeMap<String, FnProfile>,
+    stack: Vec<OpenCall>,
+}
+
+struct OpenCall {
+    name: String,
+    steps_at: u64,
+    at: std::time::Instant,
+    child_steps: u64,
+    child_nanos: u128,
 }
 
 #[derive(Clone)]
@@ -993,6 +1060,7 @@ impl<'p> Interp<'p> {
             effects: 0,
             native: None,
             capture: None,
+            profile: None,
         }
     }
 
@@ -1002,6 +1070,20 @@ impl<'p> Interp<'p> {
         if let Some(obj) = fields.as_object_mut() {
             obj.insert("seq".into(), json!(self.log.len() + 1));
             obj.insert("event".into(), json!(event));
+        }
+        if let Some(p) = &mut self.profile
+            && let Some(top) = p.stack.last()
+        {
+            let e = p.fns.entry(top.name.clone()).or_default();
+            match event {
+                "model_reply" => {
+                    e.model_calls += 1;
+                    let n = |k: &str| fields[k].as_u64().unwrap_or(0);
+                    e.tokens += n("input_tokens").saturating_add(n("output_tokens"));
+                }
+                "action_requested" => e.actions += 1,
+                _ => {}
+            }
         }
         self.log.push(fields);
     }
@@ -1097,6 +1179,39 @@ impl<'p> Interp<'p> {
     }
 
     fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        if self.profile.is_none() {
+            return self.call_unprofiled(name, args);
+        }
+        let opened = OpenCall { name: name.to_string(), steps_at: self.steps, at: std::time::Instant::now(), child_steps: 0, child_nanos: 0 };
+        if let Some(p) = &mut self.profile {
+            p.stack.push(opened);
+        }
+        let r = self.call_unprofiled(name, args);
+        if let Some(p) = &mut self.profile
+            && let Some(o) = p.stack.pop()
+        {
+            let steps = self.steps.saturating_sub(o.steps_at);
+            let nanos = o.at.elapsed().as_nanos();
+            let recursive = p.stack.iter().any(|x| x.name == o.name);
+            let e = p.fns.entry(o.name).or_default();
+            e.calls += 1;
+            e.self_steps += steps.saturating_sub(o.child_steps);
+            e.self_nanos += nanos.saturating_sub(o.child_nanos);
+            // A recursive call is inside an outer one of the same function, whose
+            // total already holds it.
+            if !recursive {
+                e.steps += steps;
+                e.nanos += nanos;
+            }
+            if let Some(parent) = p.stack.last_mut() {
+                parent.child_steps += steps;
+                parent.child_nanos += nanos;
+            }
+        }
+        r
+    }
+
+    fn call_unprofiled(&mut self, name: &str, args: Vec<Value>) -> Result<Value, Failure> {
         let Some(&f) = self.fns.get(name) else { return internal(format!("undefined function '{name}'")) };
         if f.params.len() != args.len() {
             return internal(format!("'{name}' called with {} arguments, expects {}", args.len(), f.params.len()));

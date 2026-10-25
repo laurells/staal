@@ -3,6 +3,7 @@
 //   staalc check   <file.staal>
 //   staalc fmt     [--check] <file.staal>...
 //   staalc doc     <file.staal> [-o <out.md>]
+//   staalc profile <file.staal> --config <run.json> [--engine native] [-o <profile.json>]
 //   staalc lsp
 //   staalc repl    [--engine interpreter|native|both]
 //   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
@@ -34,6 +35,7 @@ const USAGE: &str = "usage:
   staalc check   <file.staal>
   staalc fmt     [--check] <file.staal>...
   staalc doc     <file.staal> [-o <out.md>]
+  staalc profile <file.staal> --config <run.json> [--engine native] [-o <profile.json>]
   staalc lsp     (a language server for editors, on standard input and output)
   staalc repl    [--engine interpreter|native|both]
   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
@@ -69,6 +71,18 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         },
         "fmt" => fmt_cmd(rest),
         "test" => test_cmd(rest),
+        "profile" => match parse(rest, &["--config", "--engine", "-o"], &["--config"]) {
+            Ok((Some(file), opts)) => {
+                let engine = match opts.get("--engine").map(String::as_str) {
+                    None | Some("interpreter") => Engine::Interpreter,
+                    Some("native") => Engine::Native,
+                    Some(other) => return u(&format!("--engine is native or interpreter, not {other}")),
+                };
+                profile_cmd(&file, &opts, engine)
+            }
+            Ok((None, _)) => u("profile needs a program file"),
+            Err(e) => u(&e),
+        },
         "repl" => match parse(rest, &["--engine"], &[]) {
             Ok((None, opts)) => {
                 let engines = match opts.get("--engine").map(String::as_str) {
@@ -781,6 +795,71 @@ fn doc_cmd(file: &str, out: Option<&str>) -> u8 {
             }
         },
     }
+}
+
+/// `staalc profile`: runs a program as `staalc run` does (without a journal) and shows
+/// what each function spent: calls, steps, time, model calls and tokens, actions. The
+/// run's output and result are as `run` gives them; the table is on standard error,
+/// and `-o` writes it as JSON. Exit codes are `run`'s.
+fn profile_cmd(file: &str, opts: &HashMap<String, String>, engine: Engine) -> u8 {
+    let checked = match crate::check_path(Path::new(file)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            return 2;
+        }
+    };
+    let mut fns = std::collections::BTreeMap::new();
+    let code = run(&checked, file, opts, false, |prog, _, cfg, _| {
+        let (r, f) = interp::run_config_profiled(prog, cfg, engine)?;
+        fns = f;
+        Ok(r)
+    });
+    if checked.result.is_err() || code == 2 {
+        return code;
+    }
+    let mut rows: Vec<(&String, &interp::FnProfile)> = fns.iter().collect();
+    rows.sort_by(|a, b| b.1.steps.cmp(&a.1.steps).then(a.0.cmp(b.0)));
+    let ms = |n: u128| format!("{:.3}", n as f64 / 1e6);
+    let width = rows.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0).max("function".len());
+    let mut table = format!(
+        "{:<width$}  {:>8}  {:>10}  {:>10}  {:>10}  {:>10}  {:>6}  {:>8}  {:>7}\n",
+        "function", "calls", "steps", "own steps", "ms", "own ms", "models", "tokens", "actions"
+    );
+    for (name, p) in &rows {
+        table.push_str(&format!(
+            "{:<width$}  {:>8}  {:>10}  {:>10}  {:>10}  {:>10}  {:>6}  {:>8}  {:>7}\n",
+            name,
+            p.calls,
+            p.steps,
+            p.self_steps,
+            ms(p.nanos),
+            ms(p.self_nanos),
+            p.model_calls,
+            p.tokens,
+            p.actions
+        ));
+    }
+    eprint!("{table}");
+    if let Some(out) = opts.get("-o") {
+        let json: serde_json::Map<String, serde_json::Value> = fns
+            .iter()
+            .map(|(n, p)| {
+                let v = serde_json::json!({
+                    "calls": p.calls, "steps": p.steps, "own_steps": p.self_steps,
+                    "nanos": p.nanos as u64, "own_nanos": p.self_nanos as u64,
+                    "model_calls": p.model_calls, "tokens": p.tokens, "actions": p.actions,
+                });
+                (n.clone(), v)
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&serde_json::Value::Object(json)).unwrap_or_default() + "\n";
+        if let Err(e) = std::fs::write(out, text) {
+            eprintln!("staalc: cannot write {out}: {e}");
+            return 2;
+        }
+    }
+    code
 }
 
 #[cfg(test)]

@@ -1,0 +1,32 @@
+// A program for the profiler's test: recursion, a function value, a model call and
+// actions, each in a function of its own.
+
+type Note { text: Text }
+
+fn fib(n: Int) -> Int {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn square(n: Int) -> Int {
+    return n * n
+}
+
+fn ask() -> Note {
+    return validate propose(Note, tokens: 400)
+}
+
+fn send(sms: cap twilio.message.send, to: Text) -> Receipt {
+    return sms.send(to)
+}
+
+fn work(sms: cap twilio.message.send) -> Int {
+    let f = fib(10)
+    let squares = map([1, 2, 3], square)
+    let n = ask()
+    let a = send(sms, "+2348000000001")
+    let b = send(sms, "+2348000000002")
+    return f + sum(squares) + len(n.text)
+}

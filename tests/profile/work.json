@@ -1,0 +1,5 @@
+{
+  "entry": "work",
+  "grants": { "sms": { "cap": "twilio.message.send" } },
+  "model": { "provider": "script", "responses": [{ "output": { "text": "hello" }, "output_tokens": 7 }] }
+}

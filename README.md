@@ -98,6 +98,7 @@ To build without the native compiler (smaller, interpreter only):
 | `staalc test [--config <test.json>] <file or folder>...` | Runs the tests written in Staal, in both engines |
 | `staalc doc <file.staal> [-o <out.md>]` | Writes the program's documentation in Markdown |
 | `staalc repl` | Runs Staal one input at a time |
+| `staalc profile <file.staal> --config <run.json>` | Runs a program and shows what each function spent |
 | `staalc lsp` | A language server for editors: the same errors as `check`, completion, formatting |
 
 Exit codes: `0` success; `1` check errors or a failed run; `2` a usage, file,

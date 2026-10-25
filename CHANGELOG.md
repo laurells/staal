@@ -7,6 +7,9 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `staalc profile`: per function, calls, steps and time (total and own), and the
+  model calls, tokens and actions it made, from a run that is otherwise `staalc
+  run`'s. The counts are the same on every run, and the steps on both engines.
 - `staalc repl`: declarations, statements and expressions one at a time, each checked
   and run as a whole program by the same checker and runtime as a file, on both
   engines. Inputs that read the clock, draw a random number or call a model are not
