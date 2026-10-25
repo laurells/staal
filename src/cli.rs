@@ -4,6 +4,7 @@
 //   staalc fmt     [--check] <file.staal>...
 //   staalc doc     <file.staal> [-o <out.md>]
 //   staalc profile <file.staal> --config <run.json> [--engine native] [-o <profile.json>]
+//   staalc debug   <file.staal> --config <run.json>
 //   staalc lsp
 //   staalc repl    [--engine interpreter|native|both]
 //   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
@@ -36,6 +37,7 @@ const USAGE: &str = "usage:
   staalc fmt     [--check] <file.staal>...
   staalc doc     <file.staal> [-o <out.md>]
   staalc profile <file.staal> --config <run.json> [--engine native] [-o <profile.json>]
+  staalc debug   <file.staal> --config <run.json>   (commands: help)
   staalc lsp     (a language server for editors, on standard input and output)
   staalc repl    [--engine interpreter|native|both]
   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
@@ -71,6 +73,11 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         },
         "fmt" => fmt_cmd(rest),
         "test" => test_cmd(rest),
+        "debug" => match parse(rest, &["--config"], &["--config"]) {
+            Ok((Some(file), opts)) => debug_cmd(&file, &opts),
+            Ok((None, _)) => u("debug needs a program file"),
+            Err(e) => u(&e),
+        },
         "profile" => match parse(rest, &["--config", "--engine", "-o"], &["--config"]) {
             Ok((Some(file), opts)) => {
                 let engine = match opts.get("--engine").map(String::as_str) {
@@ -275,6 +282,10 @@ fn run(
         Err(f) if matches!(f.kind, FailKind::InDoubt | FailKind::Journal) => {
             eprintln!("staalc: run stopped: {}: {}", f.kind, f.message);
             3
+        }
+        Err(f) if f.kind == FailKind::Internal && f.message == interp::STOPPED_IN_DEBUGGER => {
+            eprintln!("staalc: {}", f.message);
+            1
         }
         Err(f) => {
             eprintln!("staalc: run failed: {}: {}", f.kind, f.message);
@@ -860,6 +871,25 @@ fn profile_cmd(file: &str, opts: &HashMap<String, String>, engine: Engine) -> u8
         }
     }
     code
+}
+
+/// `staalc debug`: runs a program as `staalc run` does (without a journal), on the
+/// interpreter, stopping for the commands of `crate::debug` on standard input. Exit
+/// codes are `run`'s; a run stopped with `quit` is exit 1.
+fn debug_cmd(file: &str, opts: &HashMap<String, String>) -> u8 {
+    let checked = match crate::check_path(Path::new(file)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            return 2;
+        }
+    };
+    let files = checked.files.clone();
+    run(&checked, file, opts, false, move |prog, _, cfg, _| {
+        let input = Box::new(std::io::BufReader::new(std::io::stdin()));
+        let d = crate::debug::Debugger::new(prog, files, input, Box::new(std::io::stdout()));
+        interp::run_config_debugged(prog, cfg, Box::new(d))
+    })
 }
 
 #[cfg(test)]

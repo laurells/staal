@@ -1,0 +1,20 @@
+import lib
+
+type Line { sku: Text, qty: Int }
+
+fn total(lines: List<Line, 5>) -> Int {
+    let t = 0
+    for l in lines {
+        set t = t + lib.double(l.qty)
+    }
+    return t
+}
+
+fn main() -> Int {
+    let lines = [Line { sku: "a", qty: 1 }, Line { sku: "b", qty: 2 }]
+    let pick = fn(l: Line) -> Int { return l.qty }
+    let n = total(lines)
+    print("total \(n)")
+    if n > 0 { print("positive") }
+    return n + 1
+}

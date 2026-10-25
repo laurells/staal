@@ -821,6 +821,32 @@ outermost calls, so no step is counted twice. On the native engine, native code
 calls native code directly: a native function's calls to others are inside it, so
 `fib` calling itself is one call there, with the same steps as on the interpreter.
 
+## Debugging: `staalc debug`
+
+    $ staalc debug main.staal --config run.json
+    stopped at main.staal:14 in main
+      14 | let lines = [Line { sku: "a", qty: 1 }, Line { sku: "b", qty: 2 }]
+    (debug) break lib.staal:2
+    breakpoint at ./lib.staal:2
+    (debug) continue
+    stopped at ./lib.staal:2 in lib.double
+      2 | let d = n * 2
+    (debug) print n
+    1
+
+`staalc debug` runs a program as `staalc run` does, without a journal: its model
+calls and actions happen as they would there. It runs on the interpreter, where
+every statement can be stopped at (native code runs a function whole, and gives the
+same results). It stops before the first statement, so breakpoints can be set, and
+then takes these commands: `break LINE` or `break FILE:LINE` (refused on a line
+where no statement starts; FILE is a module's file or the end of its path),
+`delete`, `breaks`, `continue` (`c`), `step` (`s`, into calls), `next` (`n`, over
+them), `finish` (to the next statement shallower than this one), `print NAME`
+(`p`, as JSON), `locals`, `where` (`bt`), `list`, `quit` (`q`) and `help`. A
+breakpoint stops once on entering its line, not again for each statement on it. A
+secret is shown by name only, as in the log. When the input ends the run goes on to
+its end; `quit` stops it (exit 1).
+
 ## In an editor: `staalc lsp`
 
     staalc lsp                             # a language server on standard input and output

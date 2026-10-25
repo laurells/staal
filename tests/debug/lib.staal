@@ -1,0 +1,4 @@
+pub fn double(n: Int) -> Int {
+    let d = n * 2
+    return d
+}

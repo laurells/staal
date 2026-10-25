@@ -697,6 +697,21 @@ impl Builtin {
 }
 
 impl Stmt {
+    /// Where the statement starts.
+    pub fn pos(&self) -> Pos {
+        match self {
+            Stmt::Let { pos, .. }
+            | Stmt::Repeat { pos, .. }
+            | Stmt::Loop { pos, .. }
+            | Stmt::If { pos, .. }
+            | Stmt::Match { pos, .. }
+            | Stmt::For { pos, .. }
+            | Stmt::Set { pos, .. } => *pos,
+            Stmt::Return(_, pos) | Stmt::Break(pos) | Stmt::Continue(pos) | Stmt::Fail(_, pos) => *pos,
+            Stmt::Expr(e) => e.pos(),
+        }
+    }
+
     /// The expressions this statement evaluates itself (not those in nested blocks).
     pub fn exprs(&self) -> Vec<&Expr> {
         match self {

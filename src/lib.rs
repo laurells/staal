@@ -6,6 +6,7 @@ pub mod capi;
 pub mod cli;
 pub mod checker;
 pub mod consts;
+pub mod debug;
 pub mod doc;
 pub mod fmt;
 pub mod interp;

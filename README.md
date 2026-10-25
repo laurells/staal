@@ -99,6 +99,7 @@ To build without the native compiler (smaller, interpreter only):
 | `staalc doc <file.staal> [-o <out.md>]` | Writes the program's documentation in Markdown |
 | `staalc repl` | Runs Staal one input at a time |
 | `staalc profile <file.staal> --config <run.json>` | Runs a program and shows what each function spent |
+| `staalc debug <file.staal> --config <run.json>` | Runs a program, stopping at breakpoints and steps |
 | `staalc lsp` | A language server for editors: the same errors as `check`, completion, formatting |
 
 Exit codes: `0` success; `1` check errors or a failed run; `2` a usage, file,

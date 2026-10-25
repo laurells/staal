@@ -256,11 +256,34 @@ pub fn run_config_profiled(
         Engine::Native => Some(compile_native(prog)?),
     };
     let sink = std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
-    let hooks = Hooks { native, capture: None, profile: Some(sink.clone()) };
+    let hooks = Hooks { native, capture: None, profile: Some(sink.clone()), debug: None };
     let r = run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)?;
     let fns = sink.lock().map_err(|_| "the profile was lost; this is a bug in staalc".to_string())?.clone();
     Ok((r, fns))
 }
+
+/// What a debugger is given before each statement of a run: where the statement is,
+/// the calls that led to it (outermost first, each function's name and the statement
+/// it is at), and a way to read the variables in scope (innermost last). It answers
+/// whether the run goes on.
+pub trait DebugHook: Send {
+    fn before(&mut self, at: crate::lexer::Pos, stack: &[(String, crate::lexer::Pos)], vars: &dyn Fn() -> Vec<(String, Json)>) -> bool;
+}
+
+/// Runs a checked program on the interpreter, without a journal, stopping before each
+/// statement for `hook`. A run the hook stops fails with an `internal` failure whose
+/// message says so.
+pub fn run_config_debugged(prog: &Program, config: &Json, hook: Box<dyn DebugHook>) -> Result<RunResult, String> {
+    let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
+    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
+    let provider = provider::from_config(model)?;
+    let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
+    let hooks = Hooks { native: None, capture: None, profile: None, debug: Some(hook) };
+    run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)
+}
+
+/// The message of the failure a run stopped in the debugger ends with.
+pub const STOPPED_IN_DEBUGGER: &str = "the run was stopped in the debugger";
 
 /// Whether two runs of the same program did the same: the same result or failure
 /// (kind and message) and the same log, apart from each run's own random id (which
@@ -293,7 +316,7 @@ pub fn run_config_capturing(prog: &Program, config: &Json, engine: Engine) -> Re
         Engine::Native => Some(compile_native(prog)?),
     };
     let printed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let hooks = Hooks { native, capture: Some(printed.clone()), profile: None };
+    let hooks = Hooks { native, capture: Some(printed.clone()), profile: None, debug: None };
     let r = run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)?;
     let text = printed.lock().map_err(|_| "the printed text was lost; this is a bug in staalc".to_string())?.clone();
     Ok((r, text))
@@ -325,6 +348,8 @@ struct Hooks {
     capture: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     /// Where a profiled run leaves what each function spent.
     profile: Option<std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, FnProfile>>>>,
+    /// A debugger, told before each statement.
+    debug: Option<Box<dyn DebugHook>>,
 }
 
 fn run_impl(
@@ -354,6 +379,7 @@ fn run_impl(
                 let mut it = Interp::new(prog, setup.limits, &setup.runtime, provider, adapter, journal);
                 it.native = hooks.native;
                 it.capture = hooks.capture;
+                it.debug = hooks.debug;
                 if hooks.profile.is_some() {
                     it.profile = Some(Profiler::default());
                 }
@@ -965,6 +991,9 @@ struct Interp<'p> {
     capture: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     /// What each function spent, when the run is profiled.
     profile: Option<Profiler>,
+    /// A debugger, and the calls it is shown: each function and its statement now.
+    debug: Option<Box<dyn DebugHook>>,
+    debug_stack: Vec<(String, crate::lexer::Pos)>,
 }
 
 /// What a profiled run spent in one function. Steps are the runtime's own count
@@ -1061,6 +1090,8 @@ impl<'p> Interp<'p> {
             native: None,
             capture: None,
             profile: None,
+            debug: None,
+            debug_stack: Vec::new(),
         }
     }
 
@@ -1247,7 +1278,13 @@ impl<'p> Interp<'p> {
             self.meters.push(Meter { calls_left: b.calls, tokens_left: b.tokens });
         }
         self.depth += 1;
+        if self.debug.is_some() {
+            self.debug_stack.push((name.to_string(), f.pos));
+        }
         let flow = self.exec_block(&mut frame, &f.body);
+        if self.debug.is_some() {
+            self.debug_stack.pop();
+        }
         self.depth -= 1;
         if metered {
             self.meters.pop();
@@ -1439,6 +1476,30 @@ impl<'p> Interp<'p> {
 
     fn exec_stmt(&mut self, frame: &mut Frame, s: &Stmt) -> Result<Flow, Failure> {
         self.tick()?;
+        if let Some(mut hook) = self.debug.take() {
+            let at = s.pos();
+            if let Some(top) = self.debug_stack.last_mut() {
+                top.1 = at;
+            }
+            let vars = || {
+                let mut seen = std::collections::BTreeMap::new();
+                for scope in &frame.scopes {
+                    for (k, v) in scope {
+                        let shown = match v {
+                            Value::Func { name, .. } => json!(format!("<function {name}>")),
+                            v => to_json(v, false).unwrap_or_else(|e| json!(format!("<{e}>"))),
+                        };
+                        seen.insert(k.clone(), shown);
+                    }
+                }
+                seen.into_iter().collect()
+            };
+            let go_on = hook.before(at, &self.debug_stack, &vars);
+            self.debug = Some(hook);
+            if !go_on {
+                return internal(STOPPED_IN_DEBUGGER);
+            }
+        }
         match s {
             Stmt::Let { name, ty, value, .. } => {
                 let mut v = self.eval(frame, value)?;

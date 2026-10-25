@@ -7,6 +7,9 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `staalc debug`: breakpoints by line (in the program or a module), step, next,
+  finish, and variables shown as JSON, on a run that is otherwise `staalc run`'s,
+  on the interpreter.
 - `staalc profile`: per function, calls, steps and time (total and own), and the
   model calls, tokens and actions it made, from a run that is otherwise `staalc
   run`'s. The counts are the same on every run, and the steps on both engines.
