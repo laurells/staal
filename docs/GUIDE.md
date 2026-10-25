@@ -777,6 +777,33 @@ capabilities, which is everything another module can use. Only a program that
 passes every check is documented (exit 1, nothing written), so the page never
 describes code that cannot run. `tests/doc` holds a program and the page it gives.
 
+## Trying things: `staalc repl`
+
+    $ staalc repl
+    > let price = 12.50 NGN
+    > price * 3
+    {"amount":"37.50","currency":"NGN"}
+    > fn half(n: Int) -> Int {
+    .     return n / 2
+    . }
+    > half(9)
+    4
+
+The REPL takes one input at a time: a declaration (kept once the session with it
+passes every check), a statement such as `let` or `set` (run, and kept if it
+succeeds), or an expression (run, and its value shown as JSON; nothing is kept). An
+input goes on over several lines while a bracket or a `"""` text is open. Each
+input is checked and run as a whole program made of what is kept, by the same
+checker and runtime as a file, so it accepts exactly what a file would; an error
+shows its line and column in the input. Modules are found in the folder it runs in.
+
+Every input runs the kept statements again, so a kept input must do the same each
+time: a statement that reads the clock, draws a random number or calls a model is
+run and shown but not kept, and what kept statements print is shown once. There are
+no capabilities, the model has no replies and there is no journal, so nothing
+reaches the world. Each input runs on both engines (`--engine` chooses one), which
+must agree unless the input reads the clock or draws a number.
+
 ## In an editor: `staalc lsp`
 
     staalc lsp                             # a language server on standard input and output

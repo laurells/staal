@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `staalc repl`: declarations, statements and expressions one at a time, each checked
+  and run as a whole program by the same checker and runtime as a file, on both
+  engines. Inputs that read the clock, draw a random number or call a model are not
+  kept, and nothing reaches the world.
 - `staalc doc [-o <out.md>]`, generated documentation: each declaration as written
   (signatures without bodies, a capability's `needs` and action signatures) with the
   `//` block above it. Only a program that passes every check is documented.

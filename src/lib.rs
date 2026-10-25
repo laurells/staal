@@ -11,6 +11,7 @@ pub mod fmt;
 pub mod interp;
 pub mod lexer;
 pub mod lsp;
+pub mod repl;
 pub mod modules;
 #[cfg(feature = "native")]
 pub mod native;

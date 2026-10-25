@@ -237,7 +237,44 @@ pub fn run_engine(
         Engine::Interpreter => None,
         Engine::Native => Some(compile_native(prog)?),
     };
-    run_impl(prog, source, config, durability, provider, adapter, native)
+    run_impl(prog, source, config, durability, provider, adapter, Hooks { native, ..Hooks::default() })
+}
+
+/// Whether two runs of the same program did the same: the same result or failure
+/// (kind and message) and the same log, apart from each run's own random id (which
+/// is in the log and in keys made from it). Both engines must give this.
+pub fn same_run(a: &RunResult, b: &RunResult) -> bool {
+    let result = |r: &RunResult| match &r.result {
+        Ok(v) => Ok(v.clone()),
+        Err(f) => Err((f.kind, f.message.clone())),
+    };
+    let log = |r: &RunResult| {
+        let text = Json::Array(r.log.clone()).to_string();
+        match r.log.first().and_then(|e| e["run_id"].as_str()) {
+            Some(id) if !id.is_empty() => text.replace(id, "<run>"),
+            _ => text,
+        }
+    };
+    result(a) == result(b) && log(a) == log(b)
+}
+
+/// Runs a checked program without a journal, as `run_config_engine` does, keeping
+/// what it prints instead of writing it to standard output: for the REPL, which runs
+/// a session again for each input and shows only what is new.
+pub fn run_config_capturing(prog: &Program, config: &Json, engine: Engine) -> Result<(RunResult, String), String> {
+    let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
+    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
+    let provider = provider::from_config(model)?;
+    let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
+    let native = match engine {
+        Engine::Interpreter => None,
+        Engine::Native => Some(compile_native(prog)?),
+    };
+    let printed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let hooks = Hooks { native, capture: Some(printed.clone()) };
+    let r = run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)?;
+    let text = printed.lock().map_err(|_| "the printed text was lost; this is a bug in staalc".to_string())?.clone();
+    Ok((r, text))
 }
 
 /// Runs a checked program with native code made before the run: the code linked into
@@ -254,7 +291,16 @@ pub fn run_config_with_native(
     let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
     let provider = provider::from_config(model)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
-    run_impl(prog, source, config, durability, provider, Box::new(adapter), Some(native))
+    run_impl(prog, source, config, durability, provider, Box::new(adapter), Hooks { native: Some(native), ..Hooks::default() })
+}
+
+/// What a tool attaches to a run beyond the program and its world.
+#[derive(Default)]
+struct Hooks {
+    /// Native code for the functions that have it, on the native engine.
+    native: Option<NativeCode>,
+    /// Where `print` writes instead of standard output.
+    capture: Option<std::sync::Arc<std::sync::Mutex<String>>>,
 }
 
 fn run_impl(
@@ -264,7 +310,7 @@ fn run_impl(
     durability: Durability,
     provider: Box<dyn Provider + Send>,
     adapter: Box<dyn Adapter + Send>,
-    native: Option<NativeCode>,
+    hooks: Hooks,
 ) -> Result<RunResult, String> {
     // Validate everything first: a bad config must not even create a journal.
     let setup = Setup::from_config(prog, config)?;
@@ -282,7 +328,8 @@ fn run_impl(
             .stack_size(INTERP_STACK_BYTES)
             .spawn_scoped(s, move || {
                 let mut it = Interp::new(prog, setup.limits, &setup.runtime, provider, adapter, journal);
-                it.native = native;
+                it.native = hooks.native;
+                it.capture = hooks.capture;
                 it.run(&setup)
             })
             .map_err(|e| format!("could not start the interpreter thread: {e}"))?
@@ -881,6 +928,8 @@ struct Interp<'p> {
     effects: u64,
     /// Native code for the functions that have it, on the native engine.
     native: Option<NativeCode>,
+    /// Where `print` writes instead of standard output (the REPL's runs).
+    capture: Option<std::sync::Arc<std::sync::Mutex<String>>>,
 }
 
 #[derive(Clone)]
@@ -943,6 +992,7 @@ impl<'p> Interp<'p> {
             performed: 0,
             effects: 0,
             native: None,
+            capture: None,
         }
     }
 
@@ -1108,8 +1158,19 @@ impl<'p> Interp<'p> {
     fn effect(&mut self, f: Builtin, vals: Vec<Value>) -> Result<Value, Failure> {
         match (f, vals.as_slice()) {
             (Builtin::Print, [Value::Text(t)]) => {
+                let capture = self.capture.clone();
                 let (answer, replayed) = self.external("print", json!({ "text": t }), true, "print", |_, _| {
                     use std::io::Write;
+                    if let Some(c) = &capture {
+                        return match c.lock() {
+                            Ok(mut text) => {
+                                text.push_str(t);
+                                text.push('\n');
+                                Answer::Done(Ok(Json::Null))
+                            }
+                            Err(_) => Answer::Unknown("the printed text was lost".into()),
+                        };
+                    }
                     let mut out = std::io::stdout().lock();
                     match writeln!(out, "{t}").and_then(|_| out.flush()) {
                         Ok(()) => Answer::Done(Ok(Json::Null)),
@@ -2948,5 +3009,30 @@ mod tests {
         for k in [FailKind::StepLimit, FailKind::DepthLimit, FailKind::Internal] {
             assert!(!k.catchable(), "{k} must not be catchable");
         }
+    }
+}
+
+#[cfg(test)]
+mod same_run_tests {
+    use super::{same_run, FailKind, Failure, RunResult};
+    use serde_json::json;
+
+    fn run(id: &str, result: Result<i64, (FailKind, &str)>, key: &str) -> RunResult {
+        RunResult {
+            result: result.map(|n| json!(n)).map_err(|(kind, m)| Failure { kind, message: m.into(), raised: None }),
+            log: vec![json!({ "event": "run_start", "run_id": id }), json!({ "event": "x", "key": format!("{id}-{key}") })],
+        }
+    }
+
+    #[test]
+    fn runs_are_the_same_apart_from_their_ids() {
+        assert!(same_run(&run("aa", Ok(1), "1"), &run("bb", Ok(1), "1")));
+        assert!(!same_run(&run("aa", Ok(1), "1"), &run("bb", Ok(2), "1")));
+        assert!(!same_run(&run("aa", Ok(1), "1"), &run("bb", Ok(1), "2")));
+        let fail = |k, m| run("aa", Err((k, m)), "1");
+        assert!(same_run(&fail(FailKind::Value, "x"), &run("cc", Err((FailKind::Value, "x")), "1")));
+        assert!(!same_run(&fail(FailKind::Value, "x"), &fail(FailKind::Action, "x")));
+        assert!(!same_run(&fail(FailKind::Value, "x"), &fail(FailKind::Value, "y")));
+        assert!(!same_run(&fail(FailKind::Value, "x"), &run("aa", Ok(1), "1")));
     }
 }

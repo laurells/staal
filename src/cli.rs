@@ -4,6 +4,7 @@
 //   staalc fmt     [--check] <file.staal>...
 //   staalc doc     <file.staal> [-o <out.md>]
 //   staalc lsp
+//   staalc repl    [--engine interpreter|native|both]
 //   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
 //   staalc fetch   [<project folder>]
 //   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
@@ -34,6 +35,7 @@ const USAGE: &str = "usage:
   staalc fmt     [--check] <file.staal>...
   staalc doc     <file.staal> [-o <out.md>]
   staalc lsp     (a language server for editors, on standard input and output)
+  staalc repl    [--engine interpreter|native|both]
   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
   staalc fetch   [<project folder>]
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
@@ -67,6 +69,23 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         },
         "fmt" => fmt_cmd(rest),
         "test" => test_cmd(rest),
+        "repl" => match parse(rest, &["--engine"], &[]) {
+            Ok((None, opts)) => {
+                let engines = match opts.get("--engine").map(String::as_str) {
+                    None if cfg!(feature = "native") => vec![Engine::Interpreter, Engine::Native],
+                    None | Some("interpreter") => vec![Engine::Interpreter],
+                    Some("native") => vec![Engine::Native],
+                    Some("both") => vec![Engine::Interpreter, Engine::Native],
+                    Some(o) => return u(&format!("--engine is interpreter, native or both, not {o}")),
+                };
+                use std::io::IsTerminal;
+                let stdin = std::io::stdin();
+                let prompt = stdin.is_terminal();
+                crate::repl::serve(stdin.lock(), std::io::stdout().lock(), prompt, engines)
+            }
+            Ok((Some(f), _)) => u(&format!("repl takes no file (found {f}): it reads its input")),
+            Err(e) => u(&e),
+        },
         "doc" => match parse(rest, &["-o"], &[]) {
             Ok((Some(file), opts)) => doc_cmd(&file, opts.get("-o").map(String::as_str)),
             Ok((None, _)) => u("doc needs a program file"),
@@ -711,19 +730,10 @@ fn verdict(runs: &[(&str, RunResult)]) -> Result<(), String> {
         Ok(_) => Ok(()),
         Err(f) => Err(format!("{}: {}", f.kind, f.message)),
     };
-    // Each run has its own random id, in its log and the keys made from it; the logs
-    // are compared with it replaced.
-    let log = |r: &RunResult| {
-        let text = serde_json::Value::Array(r.log.clone()).to_string();
-        match r.log.first().and_then(|e| e["run_id"].as_str()) {
-            Some(id) if !id.is_empty() => text.replace(id, "<run>"),
-            _ => text,
-        }
-    };
     let Some(((first_label, first), rest)) = runs.split_first() else {
         return Err("no engine ran it".into());
     };
-    if let Some((label, r)) = rest.iter().find(|(_, r)| outcome(r) != outcome(first) || log(r) != log(first)) {
+    if let Some((label, r)) = rest.iter().find(|(_, r)| !interp::same_run(r, first)) {
         let show = |o: Result<(), String>| o.err().unwrap_or_else(|| "passed".into());
         let mut why = format!("the engines disagree: {first_label} {}, {label} {}", show(outcome(first)), show(outcome(r)));
         if outcome(r) == outcome(first) {
