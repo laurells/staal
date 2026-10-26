@@ -192,6 +192,76 @@ fn talk<S: Read + Write>(
     }
 }
 
+/// The listening side of `net.tcp.accept` and `net.tcp.reply`: each address listened
+/// on, and each accepted connection not yet answered, by its id. A run's tasks share
+/// one; nothing in it survives the process, so a connection open when a run stops is
+/// lost.
+#[derive(Default)]
+pub struct Server {
+    listeners: std::collections::HashMap<String, std::net::TcpListener>,
+    open: std::collections::HashMap<String, TcpStream>,
+}
+
+/// Waits for one connection on `address` (listening on it from the first accept on),
+/// and reads its request: until it ends with `until`, or until the client closes its
+/// sending side. Gives the request, and keeps the connection, as `id`, for `reply`.
+pub fn accept(server: &std::sync::Mutex<Server>, address: &str, until: Option<&str>, s: &Settings, id: &str) -> Result<String, String> {
+    let listener = {
+        let mut srv = server.lock().map_err(|_| "the listening sockets were lost".to_string())?;
+        if !srv.listeners.contains_key(address) {
+            let l = std::net::TcpListener::bind(address).map_err(|e| format!("cannot listen on {address}: {e}"))?;
+            srv.listeners.insert(address.to_string(), l);
+        }
+        srv.listeners[address].try_clone().map_err(|e| format!("{address}: {e}"))?
+    };
+    // Waiting for a client has no time limit; reading its request has the run's.
+    let (mut st, peer) = listener.accept().map_err(|e| format!("accepting on {address}: {e}"))?;
+    let deadline = Instant::now() + s.timeout;
+    let mut request: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        if let Some(u) = until
+            && request.ends_with(u.as_bytes())
+        {
+            break;
+        }
+        let d = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| format!("the request from {peer} did not arrive within {} ms", s.timeout.as_millis()))?;
+        st.set_read_timeout(Some(d)).map_err(|e| format!("{peer}: {e}"))?;
+        match st.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                request.extend_from_slice(&chunk[..n]);
+                if request.len() as u64 > s.max_reply_bytes {
+                    return Err(format!("the request from {peer} is longer than {} bytes", s.max_reply_bytes));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(format!("reading the request from {peer}: {e}")),
+        }
+    }
+    let text = String::from_utf8(request).map_err(|_| format!("the request from {peer} is not UTF-8 text"))?;
+    server.lock().map_err(|_| "the open connections were lost".to_string())?.open.insert(id.to_string(), st);
+    Ok(text)
+}
+
+/// Sends `data` on connection `id` and closes it.
+pub fn reply(server: &std::sync::Mutex<Server>, id: &str, data: &[u8], s: &Settings) -> Result<(), String> {
+    let st = server.lock().map_err(|_| "the open connections were lost".to_string())?.open.remove(id);
+    let Some(mut st) = st else {
+        return Err(format!(
+            "connection {id} is not open: it was answered already, or the run stopped since it was accepted (a reply \
+             made just before the run stopped may have reached the client)"
+        ));
+    };
+    st.set_write_timeout(Some(s.timeout)).map_err(|e| format!("connection {id}: {e}"))?;
+    st.write_all(data).and_then(|_| st.flush()).map_err(|e| format!("replying on connection {id}: {e}"))?;
+    let _ = st.shutdown(Shutdown::Both);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

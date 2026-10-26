@@ -663,6 +663,97 @@ fn a_tcp_exchange_is_never_made_twice_whatever_the_crash() {
     }
 }
 
+/// Serving: three requests accepted and answered. A crash can lose a connection (it
+/// does not outlive the process), never answer a request twice: after any crash the
+/// resumed run ends as an uninterrupted one, or, when a request it had accepted is
+/// left unanswered, fails saying so rather than answering again.
+#[test]
+fn a_served_request_is_never_answered_twice_whatever_the_crash() {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let addr = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let answered = std::sync::Arc::new(AtomicUsize::new(0));
+    // Clients keep coming, one at a time, whether or not a run is listening.
+    for _ in 0..2 {
+        let (addr, answered) = (addr.clone(), answered.clone());
+        std::thread::spawn(move || loop {
+            let Ok(mut c) = std::net::TcpStream::connect(&addr) else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                continue;
+            };
+            let _ = c.write_all(b"hi\n");
+            let _ = c.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+            let mut got = String::new();
+            let _ = c.read_to_string(&mut got);
+            if !got.is_empty() {
+                assert_eq!(got, "+hi\n");
+                answered.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+    }
+    let case = |name: &str| -> (PathBuf, Vec<String>, Vec<String>) {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("crash-serve").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = serde_json::json!({
+            "entry": "serve", "inputs": { "address": addr },
+            "grants": { "listen": { "cap": "net.tcp.accept", "only": ["127.0.0.1:*"] }, "answer": { "cap": "net.tcp.reply" } },
+            "model": { "provider": "script", "responses": [] },
+        });
+        std::fs::write(dir.join("cfg.json"), cfg.to_string()).unwrap();
+        let p = format!("{ROOT}/tests/serve/serve.staal");
+        let (c, j) = (dir.join("cfg.json").to_string_lossy().to_string(), dir.join("journal").to_string_lossy().to_string());
+        (dir, vec!["run".into(), p.clone(), "--config".into(), c.clone(), "--journal".into(), j.clone()], vec!["resume".into(), p, "--config".into(), c, "--journal".into(), j])
+    };
+    // Answers counted once every client in flight has read its answer.
+    let settled = || {
+        let mut last = answered.load(Ordering::SeqCst);
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let now = answered.load(Ordering::SeqCst);
+            if now == last {
+                return now;
+            }
+            last = now;
+        }
+    };
+    let (dir, run, _) = case("baseline");
+    let before = settled();
+    let out = staalc(&run.iter().map(String::as_str).collect::<Vec<_>>(), None);
+    assert_eq!((out.code, out.stdout.as_str()), (Some(0), "3"), "{}", out.stderr);
+    assert_eq!(settled() - before, 3);
+    let writes = std::fs::read_to_string(dir.join("journal")).unwrap().lines().count();
+    let mut points: Vec<String> = (1..=writes).map(|k| format!("after_write:{k}")).collect();
+    points.extend((1..=6).map(|n| format!("before_result:{n}")));
+    let (mut lost, mut whole) = (0, 0);
+    for fp in &points {
+        let (dir, run, resume) = case(&fp.replace(':', "-"));
+        let before = settled();
+        let crashed = staalc(&run.iter().map(String::as_str).collect::<Vec<_>>(), Some(fp));
+        assert_eq!(crashed.code, None, "{fp}: {}", crashed.stderr);
+        let out = staalc(&resume.iter().map(String::as_str).collect::<Vec<_>>(), None);
+        let delivered = settled() - before;
+        let lines: Vec<Json> = std::fs::read_to_string(dir.join("journal")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let reply_intents: Vec<u64> = lines.iter().filter(|r| r["j"] == "intent" && r["body"]["capability"] == "net.tcp.reply").map(|r| r["n"].as_u64().unwrap()).collect();
+        let reply_ok = lines.iter().filter(|r| r["j"] == "result" && r.get("ok").is_some() && reply_intents.contains(&r["n"].as_u64().unwrap())).count();
+        // Every answer a client got is one the journal records an attempt at, and no
+        // reply was ever attempted twice.
+        assert!(delivered <= reply_intents.len(), "{fp}: {delivered} answers for {} replies", reply_intents.len());
+        assert!(delivered >= reply_ok, "{fp}: {reply_ok} replies recorded, {delivered} answers");
+        if out.code == Some(0) {
+            assert_eq!(out.stdout, "3", "{fp}");
+            assert_eq!((reply_ok, delivered), (3, 3), "{fp}");
+            whole += 1;
+        } else {
+            assert!(out.stderr.contains("is not open"), "{fp}: {}", out.stderr);
+            lost += 1;
+        }
+    }
+    // Both endings are reached: a crash before or after a request's whole exchange
+    // costs nothing; one between its accept and its reply loses that request.
+    assert!(whole > 0 && lost > 0, "{whole} whole, {lost} lost");
+}
+
 /// Concurrency: three actions and three model calls in concurrent tasks, then one more
 /// action.
 const PARALLEL: Scenario = Scenario { program: "tests/crash/parallel.staal", config: "tests/crash/parallel.json", actions: 4 };

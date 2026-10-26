@@ -211,7 +211,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
                 _ => Err(expected("a whole number")),
             },
             "Money" => money_from_json(json, path).map(Value::Money),
-            "Receipt" | "Outcome" | "Done" | "Response" => {
+            "Receipt" | "Outcome" | "Done" | "Response" | "Incoming" => {
                 Err(format!("{path}: a {n} can only be created by the runtime, never supplied from outside"))
             }
             "Secret" | "Header" => Err(format!(

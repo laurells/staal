@@ -1,0 +1,7 @@
+// expect: E006
+// message: untrusted value used as SQL
+// A client's request cannot become SQL: values from outside are parameters.
+fn f(l: cap net.tcp.accept, db: cap db.sqlite.execute) -> Receipt {
+    let r = l.accept("127.0.0.1:8080", "\n")
+    return db.execute("/data/app.db", r.data)
+}

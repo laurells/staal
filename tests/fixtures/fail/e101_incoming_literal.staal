@@ -1,0 +1,7 @@
+// expect: E101
+// message: an Incoming cannot be built in code
+// A request is made by the runtime, not built in code: a reply goes only to a
+// connection the run accepted.
+fn f() -> Incoming {
+    return Incoming { connection: "1", data: "hi" }
+}

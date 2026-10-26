@@ -1,0 +1,6 @@
+// expect: E101
+// message: reply(connection: Text, data: Text)
+fn f(l: cap net.tcp.accept, a: cap net.tcp.reply) -> Receipt {
+    let r = l.accept("127.0.0.1:8080")
+    return a.reply(r.connection)
+}

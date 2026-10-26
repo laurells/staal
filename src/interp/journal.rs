@@ -222,6 +222,13 @@ impl Journal {
             ));
         }
         let n = intent["n"].as_u64().unwrap_or_default(); // checked by check_body
+        // Actions always safe to make again: resume makes them again, and a result
+        // recorded here could not take the form the program reads.
+        if let Some(c @ ("fs.read" | "fs.write" | "db.sqlite.query" | "net.tcp.accept" | "net.tcp.reply")) =
+            intent["body"]["capability"].as_str()
+        {
+            return Err(format!("operation {} in doubt is {c}, which resume makes again by itself; nothing to resolve", op_id(&task, n)));
+        }
         let what = format!(
             "{}.{}",
             intent["body"]["capability"].as_str().unwrap_or("?"),
@@ -921,5 +928,21 @@ mod tests {
         let mut r = Journal::resume(&p, "P", "C").unwrap();
         let step = r.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap();
         assert_eq!(step, Step::Replay(json!({ "j": "result", "n": 1, "ok": { "receipt": "re_123" } })));
+    }
+
+    #[test]
+    fn an_action_resume_makes_again_is_never_resolved() {
+        for cap in ["fs.read", "fs.write", "db.sqlite.query", "net.tcp.accept", "net.tcp.reply"] {
+            let p = tmp(&format!("again-{cap}"));
+            let mut j = Journal::create(&p, "P", "C").unwrap();
+            j.begin("", "action", json!({ "capability": cap, "method": "m" })).unwrap();
+            drop(j);
+            let before = std::fs::read_to_string(&p).unwrap();
+            for r in [Resolution::Performed { receipt: "x".into() }, Resolution::Retry] {
+                let e = Journal::resolve(&p, r, None).unwrap_err();
+                assert!(e.contains("resume makes again by itself") && e.contains(cap), "{e}");
+            }
+            assert_eq!(std::fs::read_to_string(&p).unwrap(), before, "{cap}: the journal changed");
+        }
     }
 }

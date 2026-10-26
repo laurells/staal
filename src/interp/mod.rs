@@ -527,8 +527,10 @@ fn parse_grant(
         for (i, pat) in limits.only.iter().flatten().enumerate() {
             let checked = if http {
                 crate::targets::check_url_pattern(pat)
-            } else if want == "net.tcp.exchange" || want == "net.tls.exchange" {
+            } else if want == "net.tcp.exchange" || want == "net.tls.exchange" || want == "net.tcp.accept" {
                 crate::targets::check_address_pattern(pat)
+            } else if want == "net.tcp.reply" {
+                Err("`only` limits which addresses net.tcp.accept listens on; a reply goes to a connection accepted there".into())
             } else {
                 crate::targets::check_path_pattern(pat)
             };
@@ -880,6 +882,7 @@ impl Setup {
 fn types_of(prog: &Program) -> Types {
     let mut t = Types::new();
     t.insert("Outcome".into(), vec![("ok".into(), Ty::Named("Bool".into())), ("error".into(), Ty::Named("Text".into()))]);
+    t.insert("Incoming".into(), vec![("connection".into(), Ty::Named("Text".into())), ("data".into(), Ty::Named("Text".into()))]);
     t.insert(
         "Response".into(),
         vec![
@@ -996,6 +999,8 @@ struct Interp<'p> {
     limits: Limits,
     http: http::Client,
     tcp: tcp::Settings,
+    /// Listening sockets and accepted connections, shared with the run's tasks.
+    server: Shared<tcp::Server>,
     fs_max_read_bytes: usize,
     secrets: Vec<String>,
     /// Library capabilities' actions, by the path programs use (`termii.sms.send`).
@@ -1120,6 +1125,7 @@ impl<'p> Interp<'p> {
                 max_reply_bytes: runtime.net.max_response_bytes,
                 tls: runtime.tls.clone(),
             },
+            server: Default::default(),
             fs_max_read_bytes: runtime.fs_max_read_bytes,
             secrets: runtime.secrets.clone(),
             lib: prog
@@ -1752,6 +1758,7 @@ impl<'p> Interp<'p> {
             limits: Limits { max_steps: self.limits.max_steps.saturating_sub(self.steps), ..self.limits },
             http: self.http.clone(),
             tcp: self.tcp.clone(),
+            server: self.server.clone(),
             fs_max_read_bytes: self.fs_max_read_bytes,
             secrets: self.secrets.clone(),
             lib: self.lib.clone(),
@@ -2157,6 +2164,9 @@ impl<'p> Interp<'p> {
         if path == "net.tcp.exchange" || path == "net.tls.exchange" {
             return self.tcp_action(h, &path, method, args);
         }
+        if path == "net.tcp.accept" || path == "net.tcp.reply" {
+            return self.serve_action(h, &path, method, args);
+        }
         if path.starts_with("net.http.") {
             return self.http_action(h, &path, method, args);
         }
@@ -2543,6 +2553,81 @@ impl<'p> Interp<'p> {
                 if !msg.starts_with(NOT_SENT) {
                     self.effects += 1;
                 }
+                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
+                fail(FailKind::Action, msg)
+            }
+        }
+    }
+
+    /// `net.tcp.accept`: the next client's request on an address the run listens on, and
+    /// `net.tcp.reply`: the answer to it (RUNTIME.md section 12). Both are safe to make
+    /// again after a crash: an accept in doubt takes the next client, and a connection
+    /// does not outlive the process that accepted it, so a reply in doubt fails plainly
+    /// on resume instead of answering twice.
+    fn serve_action(&mut self, h: usize, path: &str, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        let what;
+        let (answer, replayed, target) = if path == "net.tcp.accept" {
+            let Some(Value::Text(raw)) = args.first() else { return internal("net.tcp.accept without an address") };
+            let until = match args.get(1) {
+                None => None,
+                Some(Value::Text(u)) if u.is_empty() => return self.refuse(path, method, FailKind::Value, "an empty delimiter would end every request at once".into()),
+                Some(Value::Text(u)) => Some(u.clone()),
+                Some(_) => return internal("net.tcp.accept delimiter that is not text"),
+            };
+            let address = match crate::targets::canonical_address(raw) {
+                Ok(a) => a,
+                Err(e) => return self.refuse(path, method, FailKind::Capability, e),
+            };
+            self.emit("action_requested", json!({ "capability": path, "method": method, "target": address }));
+            let authorized = self.broker().authorize(h, None, Some(&address));
+            if let Err(why) = authorized {
+                return self.refuse(path, method, FailKind::Capability, why);
+            }
+            self.broker().count_use(h).or_else(internal)?;
+            let jbody = json!({ "capability": path, "method": method, "target": address, "until": until });
+            what = format!("action {path} {address}");
+            let (a, r) = self.external("action", jbody, true, &what, |it, key| {
+                let got = tcp::accept(&it.server, &address, until.as_deref(), &it.tcp, key);
+                Answer::Done(got.map(|t| json!({ "connection": key, "data": scrub_text(&it.secrets, &t) })))
+            })?;
+            (a, r, address)
+        } else {
+            let (Some(Value::Text(id)), Some(Value::Text(data))) = (args.first(), args.get(1)) else {
+                return internal("net.tcp.reply without a connection or data");
+            };
+            self.emit("action_requested", json!({ "capability": path, "method": method, "target": id }));
+            let authorized = self.broker().authorize(h, None, None);
+            if let Err(why) = authorized {
+                return self.refuse(path, method, FailKind::Capability, why);
+            }
+            self.broker().count_use(h).or_else(internal)?;
+            let jbody = json!({ "capability": path, "method": method, "target": id,
+                                "data_sha256": journal::sha256_hex(data.as_bytes()) });
+            what = format!("action {path} {id}");
+            let (a, r) = self.external("action", jbody, true, &what, |it, _key| {
+                Answer::Done(tcp::reply(&it.server, id, data.as_bytes(), &it.tcp).map(|()| json!({ "receipt": format!("reply:{id}") })))
+            })?;
+            self.effects += 1;
+            (a, r, id.clone())
+        };
+        match answer {
+            Ok(v) => {
+                let value = if path == "net.tcp.accept" {
+                    let (Some(c), Some(d)) = (v["connection"].as_str(), v["data"].as_str()) else {
+                        return fail(FailKind::Journal, format!("malformed accept result in the journal: {v}"));
+                    };
+                    Value::Record { ty: "Incoming".into(), fields: vec![("connection".into(), Value::Text(c.into())), ("data".into(), Value::Text(d.into()))] }
+                } else {
+                    let Some(r) = v["receipt"].as_str() else {
+                        return fail(FailKind::Journal, format!("malformed reply result in the journal: {v}"));
+                    };
+                    self.performed += 1;
+                    Value::Receipt(Receipt { id: r.to_string(), capability: path.to_string(), method: method.to_string() })
+                };
+                self.emit("action_performed", json!({ "capability": path, "method": method, "target": target, "replayed": replayed }));
+                Ok(value)
+            }
+            Err(msg) => {
                 self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
                 fail(FailKind::Action, msg)
             }

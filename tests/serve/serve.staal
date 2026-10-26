@@ -1,0 +1,39 @@
+// The program the net.tcp.accept tests run: requests read one line at a time, each
+// answered with `+` and the line.
+fn handle(listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -> Receipt {
+    let request = listen.accept(address, "\n")
+    return answer.reply(request.connection, "+" + trim(request.data) + "\n")
+}
+
+// Three requests, one after another.
+fn serve(listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -> Int {
+    let n = 0
+    repeat 3 {
+        let r = handle(listen, answer, address)
+        set n = n + 1
+    }
+    return n
+}
+
+fn handle_one(i: Int, listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -> Receipt {
+    return handle(listen, answer, address)
+}
+
+// Three requests at once, each in its own task.
+fn serve_parallel(listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -> Int {
+    return len(parallel([1, 2, 3], handle_one, listen, answer, address))
+}
+
+// What the client sent, without answering.
+fn peek(listen: cap net.tcp.accept, address: Text) -> Text {
+    let request = listen.accept(address)
+    return request.data
+}
+
+// One request answered twice: the second reply has no connection to go to.
+fn twice(listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -> Text {
+    let request = listen.accept(address, "\n")
+    let first = answer.reply(request.connection, "one\n")
+    let second = try answer.reply(request.connection, "two\n")
+    return second.error
+}

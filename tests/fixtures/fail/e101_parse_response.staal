@@ -1,0 +1,7 @@
+// expect: E101
+// message: text from outside cannot be parsed into a Response
+// A response comes from the server the runtime asked, not from text.
+fn f(t: Text) -> Int {
+    let r = validate parse(Response, t)
+    return r.status
+}

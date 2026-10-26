@@ -1,0 +1,5 @@
+// expect: E101
+// message: address pattern "*.example.com:25"
+fn f(l: cap net.tcp.accept(only: ["*.example.com:25"])) -> Text {
+    return l.accept("mail.example.com:25").data
+}

@@ -7,6 +7,13 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `net.tcp.accept` and `net.tcp.reply`: listening. `accept` waits for the next client
+  on an address `only` allows and gives its request as an `Incoming`; `reply` answers
+  that connection and closes it. Tasks made by `parallel` serve clients at once. The
+  request is untrusted. Both are made again after a crash and never twice; a request
+  accepted but not answered when a run stopped is lost with its connection, and the
+  resumed run's reply fails saying so. A crash test checks it at every crash point.
+  Plain TCP, not encrypted.
 - `net.tls.exchange`: the TCP exchange over TLS, its certificate always verified
   against Mozilla's roots and the operator's extra ones and against the host. A failed
   handshake is `not sent`; a reply the peer did not end with close_notify is refused
@@ -181,6 +188,8 @@ the language or its file formats.
 - `extra_root_certificates` for the Claude provider, as for `net.http`.
 
 ### Changed
+- A `Response` (and the new `Incoming`) can no longer be proposed by a model or
+  parsed from text, as they could not be built in code (E101).
 - Any expression followed by arguments is a call of the function value it gives:
   `f(1)(2)` is one call of what `f(1)` returns, where before the `(2)` was read as
   a separate statement.
@@ -192,6 +201,10 @@ the language or its file formats.
   `min`, `max`, `map`, `any`, `all`, `count` or any other of them must be renamed.
 
 ### Fixed
+- `staalc resolve` refuses an operation that resume makes again by itself (`fs.read`,
+  `fs.write`, `db.sqlite.query`, `net.tcp.accept`, `net.tcp.reply`). Before, it could
+  record a receipt for an `fs.read` or a `db.sqlite.query`, and the resumed run then
+  failed on a result it could not read.
 - `put` and `add` were not counted as operations that can fail, so whether code
   after a full map or set ran was not tracked as depending on their inputs (E007).
 

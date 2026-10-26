@@ -1,0 +1,6 @@
+// expect: E101
+// message: a reply goes to a connection accepted there
+fn f(l: cap net.tcp.accept, a: cap net.tcp.reply(only: ["127.0.0.1:*"])) -> Receipt {
+    let r = l.accept("127.0.0.1:8080")
+    return a.reply(r.connection, "ok")
+}

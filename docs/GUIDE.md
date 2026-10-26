@@ -30,8 +30,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 50 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 601 invalid ones
+rejecting the programs it should. 51 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 609 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -1074,6 +1074,34 @@ the run stops until an operator records the reply (`staalc resolve --reply`).
 `net.tls.exchange` is the same over TLS, with the certificate always verified
 (Mozilla's roots and any the operator adds); `net.tcp.exchange` is plain TCP, not
 encrypted. RUNTIME.md section 12 has the details.
+
+## Listening: `net.tcp.accept` and `net.tcp.reply`
+
+```staal
+fn handle(i: Int, listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -> Receipt {
+    let request = listen.accept(address, "\n")
+    return answer.reply(request.connection, "+" + trim(request.data) + "\n")
+}
+
+fn serve(listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -> Int {
+    return len(parallel([1, 2, 3, 4], handle, listen, answer, address))
+}
+```
+
+    "grants": {
+      "listen": { "cap": "net.tcp.accept", "only": ["127.0.0.1:8080"] },
+      "answer": { "cap": "net.tcp.reply" }
+    }
+
+`accept` waits for the next client on an address its grant allows and reads its
+request, to a delimiter or to the end; `reply` answers that connection and closes
+it. The request is untrusted. Tasks made by `parallel` serve clients at once, each
+answering its own. A bad request (too slow, too long, not text) fails that `accept`,
+so a program meant to outlive one wraps it in `try`. Each request is answered at
+most once, even across a crash, but a connection does not survive one: a request
+accepted and not yet answered when the run stopped is lost, and the resumed run's
+`reply` fails saying so. Nothing is encrypted. RUNTIME.md section 12 has the
+details.
 
 ## Databases: `db.sqlite`
 

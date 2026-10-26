@@ -1,0 +1,5 @@
+// expect: E101
+// message: accept(address: Text) or accept(address, until: Text)
+fn f(l: cap net.tcp.accept) -> Text {
+    return l.accept("127.0.0.1:8080", "\n", "x").data
+}

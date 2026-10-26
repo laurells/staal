@@ -775,9 +775,11 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
     ctx.known.insert("Done".into()); // built-in; made only by `done(evidence: [...])`
     ctx.fields.insert("Outcome".into(), vec![("ok".into(), named("Bool")), ("error".into(), named("Text"))]);
     // Built-in for net.http: a secret from the run config, a header, and a response.
-    for t in ["Secret", "Header", "Response"] {
+    for t in ["Secret", "Header", "Response", "Incoming"] {
         ctx.known.insert(t.into());
     }
+    // Built-in for net.tcp.accept: one client's request, and the connection to answer.
+    ctx.fields.insert("Incoming".into(), vec![("connection".into(), named("Text")), ("data".into(), named("Text"))]);
     ctx.fields.insert(
         "Response".into(),
         vec![("status".into(), named("Int")), ("body".into(), named("Text")), ("complete".into(), named("Bool"))],
@@ -1108,6 +1110,9 @@ enum RuntimeCap {
     DbExecute,
     /// `net.tcp.exchange` and `net.tls.exchange`: data sent to an address, its reply read.
     Tcp,
+    /// `net.tcp.accept`: one client's request; `net.tcp.reply`: its answer.
+    Accept,
+    Reply,
 }
 
 const HTTP_METHODS: &[&str] = &["get", "post", "put", "patch", "delete"];
@@ -1118,6 +1123,8 @@ fn runtime_cap(path: &[String]) -> Option<RuntimeCap> {
         ["fs", "read"] => Some(RuntimeCap::FsRead),
         ["fs", "write"] => Some(RuntimeCap::FsWrite),
         ["net", "tcp" | "tls", "exchange"] => Some(RuntimeCap::Tcp),
+        ["net", "tcp", "accept"] => Some(RuntimeCap::Accept),
+        ["net", "tcp", "reply"] => Some(RuntimeCap::Reply),
         ["db", "sqlite", "query"] => Some(RuntimeCap::DbQuery),
         ["db", "sqlite", "execute"] => Some(RuntimeCap::DbExecute),
         _ => None,
@@ -1397,7 +1404,8 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                         pos,
                         format!(
                             "`cap {p}` is not a runtime capability; there are net.http.get, net.http.post, \
-                             net.http.put, net.http.patch, net.http.delete, net.tcp.exchange, net.tls.exchange, fs.read, \
+                             net.http.put, net.http.patch, net.http.delete, net.tcp.exchange, net.tls.exchange, \
+                             net.tcp.accept, net.tcp.reply, fs.read, \
                              fs.write, db.sqlite.query and db.sqlite.execute"
                         ),
                     ),
@@ -1412,7 +1420,8 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                         for pat in limits.only.iter().flatten() {
                             let checked = match kind {
                                 RuntimeCap::Http { .. } => crate::targets::check_url_pattern(pat),
-                                RuntimeCap::Tcp => crate::targets::check_address_pattern(pat),
+                                RuntimeCap::Tcp | RuntimeCap::Accept => crate::targets::check_address_pattern(pat),
+                                RuntimeCap::Reply => Err("`only` limits which addresses net.tcp.accept listens on; a reply goes to a connection accepted there".into()),
                                 RuntimeCap::FsRead | RuntimeCap::FsWrite | RuntimeCap::DbQuery | RuntimeCap::DbExecute => {
                                     crate::targets::check_path_pattern(pat)
                                 }
@@ -1989,7 +1998,7 @@ fn check_fn_as(ctx: &mut Ctx, f: &FnDecl, action: Option<(&CapDecl, &ActionDecl)
     // `fails E`: E is data a caller reads back, so a declared record or enum.
     if let Some(t) = &f.fails {
         check_ty_known(ctx, t, f.pos);
-        let declared = matches!(t, Ty::Named(n) if n != "Outcome" && n != "Response" && (ctx.fields.contains_key(n) || ctx.enums.contains_key(n)));
+        let declared = matches!(t, Ty::Named(n) if n != "Outcome" && n != "Response" && n != "Incoming" && (ctx.fields.contains_key(n) || ctx.enums.contains_key(n)));
         let unknown = matches!(t, Ty::Named(n) if !ctx.known.contains(n));
         if !declared && !unknown {
             ctx.err("E101", f.pos, format!("'{}' declares `fails {t}`; a function fails with a declared record or enum type", f.name));
@@ -2141,7 +2150,7 @@ fn outcome_holds_evidence(ctx: &Ctx, value: &Expr, env: &Env) -> bool {
             // An action holds a receipt unless it is one of the runtime's that returns data.
             Expr::Action { receiver, .. } => match env.get(receiver).map(|b| &b.ty) {
                 Some(Ty::Cap { path, .. }) => {
-                    !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead | RuntimeCap::DbQuery | RuntimeCap::Tcp))
+                    !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead | RuntimeCap::DbQuery | RuntimeCap::Tcp | RuntimeCap::Accept))
                 }
                 _ => false,
             },
@@ -3059,7 +3068,8 @@ fn check_call_blind(ctx: &mut Ctx, name: &str, args: &[Expr], params: &[(Ty, boo
     }
 }
 
-/// The first runtime-only type (Receipt, Outcome, Done, a capability) found anywhere
+/// The first runtime-only type (Receipt, Outcome, Done, Response, Incoming, a
+/// capability, a function value) found anywhere
 /// inside `ty`, following record fields. `seen` guards against recursive types.
 fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option<String> {
     match ty {
@@ -3069,7 +3079,7 @@ fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option
         Ty::Map(k, v, _) => runtime_only_inside(ctx, k, seen).or_else(|| runtime_only_inside(ctx, v, seen)),
         Ty::Set(t, _) => runtime_only_inside(ctx, t, seen),
         Ty::Func(..) => Some("function value".into()),
-        Ty::Named(n) if n == "Receipt" || n == "Outcome" || n == "Done" => Some(n.clone()),
+        Ty::Named(n) if matches!(n.as_str(), "Receipt" | "Outcome" | "Done" | "Response" | "Incoming") => Some(n.clone()),
         Ty::Named(n) => {
             if !seen.insert(n.clone()) {
                 return None;
@@ -3702,7 +3712,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 }
                 Builtin::Form => {
                     let fields = match &tys[0].0 {
-                        Ty::Named(n) if n != "Outcome" && n != "Response" => ctx.fields.get(n).cloned(),
+                        Ty::Named(n) if n != "Outcome" && n != "Response" && n != "Incoming" => ctx.fields.get(n).cloned(),
                         _ => None,
                     };
                     let simple = |t: &Ty| *t == text || *t == named("Int") || *t == named("Bool");
@@ -3887,7 +3897,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
         Expr::Parse { ty, text, pos } => {
             check_ty_known(ctx, ty, *pos);
             if let Some(bad) = runtime_only_inside(ctx, ty, &mut HashSet::new()) {
-                ctx.err("E101", *pos, format!("text from outside cannot be parsed into a {bad}: only the runtime creates one"));
+                ctx.err("E101", *pos, format!("text from outside cannot be parsed into {}: only the runtime creates one", if bad.starts_with(['A', 'E', 'I', 'O', 'U']) { format!("an {bad}") } else { format!("a {bad}") }));
             }
             if let Some(bad) = secret_inside(ctx, ty, &mut HashSet::new()) {
                 ctx.err("E101", *pos, format!("text cannot be parsed into a {bad}"));
@@ -3904,12 +3914,13 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
         Expr::Record { ty, fields, pos } => {
             // Outcome is a built-in record made only by `try`; other built-ins have no fields.
             let decl = match ctx.fields.get(ty) {
-                Some(d) if ty != "Outcome" && ty != "Response" => d.clone(),
+                Some(d) if ty != "Outcome" && ty != "Response" && ty != "Incoming" => d.clone(),
                 _ => {
                     if ctx.enums.contains_key(ty) {
                         ctx.err("E101", *pos, format!("{ty} is an enum; build one of its variants, as {ty}.Variant {{ ... }}"));
                     } else if ctx.known.contains(ty) {
-                        ctx.err("E101", *pos, format!("a {ty} cannot be built in code; only the runtime makes one"));
+                        let article = if ty.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" };
+                        ctx.err("E101", *pos, format!("{article} {ty} cannot be built in code; only the runtime makes one"));
                     } else {
                         ctx.err("E102", *pos, format!("unknown type '{ty}'"));
                     }
@@ -4161,8 +4172,9 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     "E101",
                     *pos,
                     format!(
-                        "a model cannot produce a {bad}: only the runtime creates receipts, outcomes and \
-                         Done values, so model output of type {ty} could forge one"
+                        "a model cannot produce {}: only the runtime creates receipts, outcomes, Done values, \
+                         HTTP responses and accepted requests, so model output of type {ty} could forge one",
+                        if bad.starts_with(['A', 'E', 'I', 'O', 'U']) { format!("an {bad}") } else { format!("a {bad}") }
                     ),
                 );
             }
@@ -4432,6 +4444,16 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     (tys.len() == 2 || tys.len() == 3) && tys.iter().all(|t| *t == text),
                     "exchange(address: Text, data: Text) or exchange(address, data, until: Text)".to_string(),
                     text.clone(),
+                ),
+                RuntimeCap::Accept => (
+                    (tys.len() == 1 || tys.len() == 2) && tys.iter().all(|t| *t == text),
+                    "accept(address: Text) or accept(address, until: Text)".to_string(),
+                    named("Incoming"),
+                ),
+                RuntimeCap::Reply => (
+                    tys.len() == 2 && tys.iter().all(|t| *t == text),
+                    "reply(connection: Text, data: Text)".to_string(),
+                    named("Receipt"),
                 ),
                 RuntimeCap::FsWrite => (
                     tys.len() == 2 && tys.iter().all(|t| *t == text),

@@ -796,6 +796,10 @@ doubt**: it may or may not have happened.
     attempt, recorded before it is made: if that attempt is itself interrupted,
     the action is in doubt again and must be resolved again.
 
+  An action that is always safe to make again (`fs.read`, `fs.write`,
+  `db.sqlite.query`, `net.tcp.accept`, `net.tcp.reply`) is never resolved: resume
+  makes it again, and `staalc resolve` refuses it.
+
 The run id is 128 bits from the operating system's random source, so keys
 never collide with another run's. A predictable or reused key could make a
 service return a *different* run's receipt.
@@ -856,12 +860,14 @@ the journal like any other action. Capability paths starting with `net.`, `fs.` 
 | `net.http.get`, `net.http.delete` | `c.get(url)`, `c.get(url, headers)` | `Response` |
 | `net.http.post`, `net.http.put`, `net.http.patch` | `c.post(url, body)`, `c.post(url, body, headers)` | `Response` |
 | `net.tcp.exchange`, `net.tls.exchange` | `c.exchange(address, data)`, `c.exchange(address, data, until)` | `Text` |
+| `net.tcp.accept` | `c.accept(address)`, `c.accept(address, until)` | `Incoming` |
+| `net.tcp.reply` | `c.reply(connection, data)` | `Receipt` |
 | `fs.read` | `c.read(path)` | `Text` |
 | `fs.write` | `c.write(path, content)` | `Receipt` |
 | `db.sqlite.query` | `c.query(database, sql)`, `c.query(database, sql, params)` | `Text` (JSON rows) |
 | `db.sqlite.execute` | `c.execute(database, sql)`, `c.execute(database, sql, params)` | `Receipt` |
 
-`url`, `path`, `content`, `address`, `data`, `until`, `database` and `sql` are `Text`; `params` is a
+`url`, `path`, `content`, `address`, `data`, `until`, `connection`, `database` and `sql` are `Text`; `params` is a
 `List<Text, N>`. A `body` is `Text` or a `Secret` (below).
 `headers` is a `List<Header, N>`. `uses` and `only` apply as to any capability;
 `max` and `each` do not (no money the runtime can measure is spent), and are
@@ -869,10 +875,13 @@ refused (E101, or a config error on a grant).
 
 ### Built-in types and functions
 
-- `Response { status: Int, body: Text, complete: Bool }`, made only by the runtime.
+- `Response { status: Int, body: Text, complete: Bool }`, made only by the runtime:
+  it cannot be built in code, proposed by a model or parsed from text (E101).
   Any status is a response, not a failure: a 500 or a 404 is data for the program.
   `complete` is false when the body was larger than `net.max_response_bytes`, was
   cut off, or was not UTF-8; `body` is then empty. The request still happened.
+- `Incoming { connection: Text, data: Text }`, a request `net.tcp.accept` read
+  (Listening, below), made only by the runtime as a `Response` is.
 - `Secret`: a value from the environment (below). It cannot become `Text`, be
   compared, be stored in a record, be sent to a model, be encoded by `json`, or be
   passed to any action other than as part of an HTTP request (E101). Its value is
@@ -971,6 +980,36 @@ and resume stops until an operator records what the peer answered (`staalc
 resolve --reply <text>`), or `--failed`, or `--retry`. The journal records a hash
 of the data sent, never the data, and the reply itself, so a resumed run gets it
 without connecting. A crash test checks this at every crash point.
+
+### Listening
+
+`net.tcp.accept` listens on `address` and gives the next client's request as an
+`Incoming { connection: Text, data: Text }`; `net.tcp.reply` sends `data` on that
+connection and closes it, with the receipt `reply:<connection>`. A run starts
+listening on an address at its first `accept` there and stops when it ends; every
+`accept` on one address, in any task, takes clients from the same queue, so tasks
+made by `parallel` can serve several clients at once. The address and `only` are as
+for `net.tcp.exchange`; the host is where the run listens (`127.0.0.1:8080` takes
+connections only from the same machine, `0.0.0.0:8080` from any). `only` limits
+`net.tcp.accept`; `net.tcp.reply` takes no `only` (E101, or a config error on a
+grant), since it answers only a connection the run accepted, and a connection that
+is not open (answered already, or never accepted by this process) fails (`action`).
+Waiting for a client has no time limit. Without `until` the request ends when the
+client closes its sending side; with `until` it ends when the request ends with it.
+Reading it must finish within `net.timeout_ms` and `net.max_response_bytes`, and it
+must be UTF-8 text, or the accept fails (`action`) and that client is dropped, so a
+program that must outlive one bad client catches it with `try`. Writing the reply
+has the same time limit. The request is untrusted (E006). An `Incoming` cannot be
+built in code, proposed by a model or parsed from text (E101). Nothing is encrypted.
+
+The journal records each request and a hash of each reply, never the reply. Both
+are made again after a crash, and neither is ever made twice. A connection does not
+outlive the process that accepted it: when a run stops between a request's `accept`
+and its `reply`, that client's connection is lost, and the resumed run's `reply`
+fails, saying so, rather than answer anything (a reply made just before the run
+stopped may have reached the client). An `accept` cut short takes the next client
+on resume. `staalc resolve` has nothing to record for either. A crash test checks
+this at every crash point.
 
 ### Databases
 

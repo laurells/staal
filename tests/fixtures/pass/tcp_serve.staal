@@ -1,0 +1,5 @@
+// A request answered on the connection it came on.
+fn serve(l: cap net.tcp.accept(only: ["127.0.0.1:8080"]), a: cap net.tcp.reply) -> Receipt {
+    let r = l.accept("127.0.0.1:8080", "\n")
+    return a.reply(r.connection, "+" + trim(r.data) + "\n")
+}

@@ -1,0 +1,7 @@
+// expect: E101
+// message: a model cannot produce an Incoming
+// A model cannot make up a request, or choose the connection a reply goes to.
+fn f() -> Text budget(calls: 1, tokens: 300) {
+    let r = validate propose(Incoming, tokens: 300)
+    return r.connection
+}
