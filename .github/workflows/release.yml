@@ -1,4 +1,4 @@
-# A release, made when a version tag (v0.22.0) is pushed: on each platform the tests,
+# A release, made when a version tag (v0.23.0) is pushed: on each platform the tests,
 # then the release archive and the Python wheel, the wheel installed and used with no
 # Rust (scripts/wheel_test.sh), and a draft GitHub release holding them, with the
 # changelog's notes for the version. Linux builds in a manylinux_2_28 container, so

@@ -2,7 +2,7 @@
   "name": "staal",
   "displayName": "Staal",
   "description": "Staal: highlighting, and errors, completion and formatting from staalc.",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "private": true,
   "publisher": "teamozy",
   "license": "Apache-2.0 WITH LLVM-exception",

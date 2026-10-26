@@ -4,7 +4,7 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
-## Unreleased
+## 0.23.0 — 2026-10-26
 
 ### Added
 - Release archives and wheels carry `LICENSE-THIRD-PARTY.txt`, the licences of every
