@@ -60,11 +60,7 @@ keys, mutations caught, and documented.
 ## Before the repository is public
 
 The reference package repositories (staal-sms, staal-payments, staal-email,
-staal-chat) need the same LICENSE and NOTICE as this one. Release archives and
-wheels hold staalc's binaries, which contain the code of its dependencies (MIT,
-Apache-2.0, ISC, BSD, Zlib, Unicode-3.0 and CDLA-Permissive-2.0 licensed): each
-release must also carry those licences' notices, generated from `cargo metadata`
-(for example with cargo-about) and checked by the release test.
+staal-chat) need the same LICENSE and NOTICE as this one.
 
 ## Phase 10 (platforms and distribution), blocked
 
