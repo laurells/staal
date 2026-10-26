@@ -1076,10 +1076,12 @@ fn expr_can_fail_itself(e: &Expr) -> bool {
                     | Builtin::DateParts
                     | Builtin::TimeParts
                     | Builtin::Weekday
-                    // The journal can fail to record them; `random_int` fails if lo > hi.
+                    // The journal can fail to record them; `random_int` fails if lo > hi;
+                    // `read_line` on a line too long or not UTF-8 text.
                     | Builtin::Print
                     | Builtin::Now
-                    | Builtin::RandomInt,
+                    | Builtin::RandomInt
+                    | Builtin::ReadLine,
                 ..
             }
     )
@@ -3731,6 +3733,9 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     let result = if *f == Builtin::Print { named("Unit") } else { named("Int") };
                     return Some((result, true));
                 }
+                // What a person types is from outside: untrusted, like a model's output.
+                // (Its arguments, none, are counted with every built-in's.)
+                Builtin::ReadLine => return Some((Ty::Optional(Box::new(text.clone())), false)),
                 _ => {}
             }
             if *f == Builtin::Contains && secret_inside(ctx, &tys[0].0, &mut HashSet::new()).is_some() {
@@ -3801,7 +3806,8 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 | Builtin::Weekday
                 | Builtin::Print
                 | Builtin::Now
-                | Builtin::RandomInt => true,
+                | Builtin::RandomInt
+                | Builtin::ReadLine => true,
             };
             if !ok {
                 let found: Vec<String> = tys.iter().map(|(t, _)| t.to_string()).collect();

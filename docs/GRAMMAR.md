@@ -322,7 +322,7 @@ and `name(...)` with one of them always calls the built-in:
     items to_set upper slice index_of split join to_int abs min max rem append
     reverse sort sum concat map filter any all count fold sha256 base64_encode
     base64_decode hex_encode hex_decode format_time parse_time make_time date_parts
-    time_parts weekday print now random_int
+    time_parts weekday print now random_int read_line
 
 `parse`, `some` and `none` are part of the grammar above. What each built-in takes
 and gives is in RUNTIME.md, sections 2, 4 and 12.

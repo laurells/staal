@@ -7,6 +7,9 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `read_line()`: console input, `some` of the next line or `none` at the end. It is
+  journaled (`input`): a resumed run replays the lines it recorded and reads only the
+  rest, which a crash test checks at every crash point. Its text is untrusted.
 - Releases: `scripts/package.sh` (a release archive with its SHA-256),
   `scripts/wheel.sh` (a Python wheel holding `staalc` and `libstaalc`, so `pip
   install` needs no Rust) and `scripts/wheel_test.sh` (the wheel installed into a

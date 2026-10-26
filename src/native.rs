@@ -1005,7 +1005,7 @@ impl<'p> Env<'p> {
                     Builtin::Upper | Builtin::Join | Builtin::Sha256 | Builtin::Base64Encode | Builtin::HexEncode => named("Text"),
                     Builtin::Base64Decode | Builtin::HexDecode => Ty::Optional(Box::new(named("Text"))),
                     // Journaled external operations, which only the interpreter makes.
-                    Builtin::Print | Builtin::Now | Builtin::RandomInt => return None,
+                    Builtin::Print | Builtin::Now | Builtin::RandomInt | Builtin::ReadLine => return None,
                     Builtin::FormatTime => named("Text"),
                     Builtin::ParseTime => Ty::Optional(Box::new(named("Int"))),
                     Builtin::MakeTime | Builtin::Weekday => named("Int"),

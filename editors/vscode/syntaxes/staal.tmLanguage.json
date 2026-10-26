@@ -232,7 +232,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.staal",
-          "match": "\\b(?:abs|add|all|any|append|base64_decode|base64_encode|concat|contains|count|currency|date_parts|ends_with|entries|fill_secret|filter|fold|form|format_time|get|header|hex_decode|hex_encode|index_of|items|join|json|keys|len|lower|make_time|map|max|min|minor_units|now|parse_time|print|put|random_int|rem|remove|replace|reverse|sha256|slice|sort|split|starts_with|sum|time_parts|to_int|to_set|to_text|trim|upper|url_segment|values|weekday)\\b(?=\\s*\\()"
+          "match": "\\b(?:abs|add|all|any|append|base64_decode|base64_encode|concat|contains|count|currency|date_parts|ends_with|entries|fill_secret|filter|fold|form|format_time|get|header|hex_decode|hex_encode|index_of|items|join|json|keys|len|lower|make_time|map|max|min|minor_units|now|parse_time|print|put|random_int|read_line|rem|remove|replace|reverse|sha256|slice|sort|split|starts_with|sum|time_parts|to_int|to_set|to_text|trim|upper|url_segment|values|weekday)\\b(?=\\s*\\()"
         },
         {
           "name": "entity.name.function.call.staal",

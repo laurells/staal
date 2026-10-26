@@ -31,7 +31,7 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
 rejecting the programs it should. 49 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 586 invalid ones
+including the two benchmark workflows (`workflow_*.staal`), and 588 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -235,7 +235,9 @@ times, on a time written as an Int of milliseconds since 1970 in UTC, `format_ti
 `parse_time`, `make_time`, `date_parts`, `time_parts` and `weekday`. `print`,
 `now` and `random_int` differ between runs, so each is journaled: a run resumed
 after a crash uses the time and the numbers the first run recorded, and prints
-nothing twice. Every list keeps its maximum: `append` to a full list fails, `split`
+nothing twice. `read_line()` reads a line of console input (`none` at its end), and
+is journaled the same way: a resumed run reads again only the lines it had not
+recorded. What it reads is untrusted, as a model's output is. Every list keeps its maximum: `append` to a full list fails, `split`
 takes the most parts it may give, and `concat` gives room for both lists. Positions
 count characters, so text in any language slices the same way. A result is as
 trusted as its arguments and reveals what they reveal; a function that can fail

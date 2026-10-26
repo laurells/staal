@@ -1,0 +1,10 @@
+// expect: E006
+// message: instruct
+// What a person types at the console is from outside the program: it cannot become
+// a model's instruction.
+fn ask() -> Text budget(calls: 1, tokens: 100) {
+    match read_line() {
+        some(line) => { return validate propose(Text, instruct: line, tokens: 100) }
+        none => { return "" }
+    }
+}

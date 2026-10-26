@@ -429,11 +429,12 @@ pub enum Builtin {
     Print,
     Now,
     RandomInt,
+    ReadLine,
 }
 
 impl Builtin {
     /// Every built-in function, once each.
-    pub const ALL: [Builtin; 59] = [
+    pub const ALL: [Builtin; 60] = [
         Builtin::Len,
         Builtin::Contains,
         Builtin::StartsWith,
@@ -493,11 +494,12 @@ impl Builtin {
         Builtin::Print,
         Builtin::Now,
         Builtin::RandomInt,
+        Builtin::ReadLine,
     ];
 
     /// Whether it is an external operation, journaled (RUNTIME.md section 11).
     pub fn is_effect(self) -> bool {
-        matches!(self, Builtin::Print | Builtin::Now | Builtin::RandomInt)
+        matches!(self, Builtin::Print | Builtin::Now | Builtin::RandomInt | Builtin::ReadLine)
     }
 
     /// Whether it calls a function value it is given.
@@ -566,6 +568,7 @@ impl Builtin {
             "print" => Some(Builtin::Print),
             "now" => Some(Builtin::Now),
             "random_int" => Some(Builtin::RandomInt),
+            "read_line" => Some(Builtin::ReadLine),
             _ => None,
         }
     }
@@ -631,6 +634,7 @@ impl Builtin {
             Builtin::Print => "print",
             Builtin::Now => "now",
             Builtin::RandomInt => "random_int",
+            Builtin::ReadLine => "read_line",
         }
     }
 
@@ -668,7 +672,7 @@ impl Builtin {
             | Builtin::TimeParts
             | Builtin::Weekday
             | Builtin::Print => 1,
-            Builtin::Now => 0,
+            Builtin::Now | Builtin::ReadLine => 0,
             Builtin::Contains
             | Builtin::StartsWith
             | Builtin::EndsWith

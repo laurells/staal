@@ -425,7 +425,7 @@ fn check_body(records: &[Json], path: &Path) -> Result<(VecDeque<Json>, Option<J
                 if n != Some(expect_n) {
                     return Err(bad(i, format!("expected operation {expect_n}, found {}", rec["n"])));
                 }
-                let op_ok = matches!(rec["op"].as_str(), Some("count" | "model" | "action" | "print" | "clock" | "random"));
+                let op_ok = matches!(rec["op"].as_str(), Some("count" | "model" | "action" | "print" | "clock" | "random" | "input"));
                 if !op_ok || !rec["key"].is_string() || rec.get("body").is_none() {
                     return Err(bad(i, "malformed intent record".into()));
                 }

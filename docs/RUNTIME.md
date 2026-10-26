@@ -433,6 +433,17 @@ Evaluation is strictly left to right and statement by statement.
   and so it makes whether later code runs depend on its text, as any operation that
   might not finish does (E007). None of the three is a constant or a default (E101),
   none runs as native code, and a function value cannot use one.
+- Console input. `read_line()` is `some` of the next line of standard input, without
+  its line break (`\n` or `\r\n`), or `none` when the input has ended. It fails
+  (kind `value`) for a line longer than a text may be or not UTF-8 text, after reading
+  that line to its end, so the next read starts at the next line. It is an external
+  operation like the three above (`input` in the journal and the log): a resumed run
+  uses the lines the first run recorded and reads only those it did not, so a line
+  read just before a crash and not yet recorded is read again. What a person types is
+  from outside the program, so it is untrusted (E006). The REPL and the debugger read
+  their own commands from standard input, so there it fails (kind `action`). Like the
+  three above it is not a constant or a default, does not run as native code, and a
+  function value cannot use it.
 - What a standard library function gives is trusted only if everything it is given
   is, and reveals everything it is given (E006, E007). Those that can fail make
   whether later code runs depend on their arguments, as other failing operations

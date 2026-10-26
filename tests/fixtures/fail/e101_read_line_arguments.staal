@@ -1,0 +1,5 @@
+// expect: E101
+// message: `read_line` takes 0 argument(s) but 1 were given
+fn f() -> Optional<Text> {
+    return read_line("prompt")
+}

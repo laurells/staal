@@ -1,0 +1,1 @@
+{"entry": "greet", "grants": {"mail": {"cap": "email.send"}}, "model": {"provider": "script", "responses": []}, "adapters": {"simulated": {}}}

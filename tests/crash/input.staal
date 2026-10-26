@@ -1,0 +1,17 @@
+// A crash-test scenario for console input: each line read is carried out into the
+// world. After a crash at any point, the resumed run must use the lines the journal
+// recorded, read only the ones it did not, and send each message once.
+
+fn greet(mail: cap email.send(uses: 5)) -> Text {
+    let names = ""
+    repeat 3 {
+        match read_line() {
+            some(n) => {
+                let sent = mail.send("hello " + n)
+                set names = names + n + ";"
+            }
+            none => { break }
+        }
+    }
+    return names
+}

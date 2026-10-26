@@ -1378,6 +1378,60 @@ impl<'p> Interp<'p> {
                 self.emit("random", json!({ "lo": lo, "hi": hi, "value": n, "replayed": replayed }));
                 Ok(Value::Int(n))
             }
+            (Builtin::ReadLine, []) => {
+                // The REPL and the debugger read their own commands from standard input.
+                if self.capture.is_some() || self.debug.is_some() {
+                    let tool = if self.debug.is_some() { "the debugger" } else { "the REPL" };
+                    return fail(FailKind::Action, format!("`read_line` cannot read the console under {tool}, which reads its own commands there"));
+                }
+                // A line read but not recorded before a crash is read again on resume: the
+                // run never saw it.
+                let (answer, replayed) = self.external("input", json!({}), true, "console read", |_, _| {
+                    use std::io::{BufRead, Read};
+                    let mut bytes = Vec::new();
+                    let stdin = std::io::stdin();
+                    let mut input = stdin.lock();
+                    match (&mut input).take(MAX_TEXT_BYTES as u64 + 2).read_until(b'\n', &mut bytes) {
+                        Err(e) => Answer::Unknown(format!("standard input: {e}")),
+                        Ok(0) => Answer::Done(Ok(Json::Null)),
+                        Ok(_) => {
+                            if bytes.last() == Some(&b'\n') {
+                                bytes.pop();
+                                if bytes.last() == Some(&b'\r') {
+                                    bytes.pop();
+                                }
+                            } else if bytes.len() > MAX_TEXT_BYTES {
+                                // The rest of the line is read too, so the next read starts
+                                // at the next line.
+                                let mut rest = Vec::new();
+                                loop {
+                                    rest.clear();
+                                    match (&mut input).take(1 << 16).read_until(b'\n', &mut rest) {
+                                        Ok(0) => break,
+                                        Ok(_) if rest.last() == Some(&b'\n') => break,
+                                        Ok(_) => {}
+                                        Err(e) => return Answer::Unknown(format!("standard input: {e}")),
+                                    }
+                                }
+                                return Answer::Done(Err(format!("a line of console input is longer than {MAX_TEXT_BYTES} bytes")));
+                            }
+                            match String::from_utf8(bytes) {
+                                Ok(t) if t.len() <= MAX_TEXT_BYTES => Answer::Done(Ok(json!(t))),
+                                Ok(_) => Answer::Done(Err(format!("a line of console input is longer than {MAX_TEXT_BYTES} bytes"))),
+                                Err(_) => Answer::Done(Err("a line of console input is not UTF-8 text".into())),
+                            }
+                        }
+                    }
+                })?;
+                let line = match answer {
+                    Ok(Json::Null) => None,
+                    Ok(Json::String(t)) => Some(t),
+                    Ok(v) => return fail(FailKind::Journal, format!("malformed console input in the journal: {v}")),
+                    Err(e) => return fail(FailKind::Value, e),
+                };
+                self.emit("input", json!({ "text": line, "replayed": replayed }));
+                Ok(Value::Opt(line.map(|t| Box::new(Value::Text(t)))))
+            }
             _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
         }
     }

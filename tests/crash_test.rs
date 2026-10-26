@@ -427,3 +427,88 @@ fn native_code_recovers_from_a_crash_on_either_engine() {
         crash_everywhere_on(&WORKFLOW, "workflow", false, engines);
     }
 }
+
+/// Each line typed, sent on in a message: three lines, three actions.
+const INPUT: Scenario = Scenario { program: "tests/crash/input.staal", config: "tests/crash/input.json", actions: 3 };
+
+/// Runs staalc with `stdin` as its standard input.
+fn staalc_with_input(args: &[String], failpoint: Option<&str>, stdin: &str) -> Out {
+    use std::io::Write;
+    let mut cmd = Command::new(BIN);
+    cmd.args(args).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    match failpoint {
+        Some(fp) => cmd.env("STAALC_FAILPOINT", fp),
+        None => cmd.env_remove("STAALC_FAILPOINT"),
+    };
+    let mut child = cmd.spawn().expect("run staalc");
+    // The process may die before it reads everything: a closed pipe is expected then.
+    let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
+    let o = child.wait_with_output().expect("run staalc");
+    Out {
+        code: o.status.code(),
+        stdout: String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        stderr: String::from_utf8_lossy(&o.stderr).trim().to_string(),
+    }
+}
+
+#[test]
+fn console_input_is_replayed_and_only_what_was_not_recorded_is_read_again() {
+    let lines = ["ada", "bola", "chidi"];
+    let all = lines.join("\n") + "\n";
+    for idempotent in [true, false] {
+        let mode = format!("input-{}", if idempotent { "idempotent" } else { "plain" });
+        let base = Case::of(&INPUT, &format!("{mode}-baseline"), idempotent);
+        let out = staalc_with_input(&base.args("run"), None, &all);
+        assert_eq!(out.code, Some(0), "baseline: {}", out.stderr);
+        assert_eq!(out.stdout, "\"ada;bola;chidi;\"");
+        let journal = base.journal_lines();
+        let ops = journal.iter().filter(|r| r["j"] == "intent").count();
+        let inputs = journal.iter().filter(|r| r["j"] == "intent" && r["op"] == "input").count();
+        assert_eq!(inputs, 3, "three lines read");
+        let world = base.world();
+        assert_eq!(world.len(), INPUT.actions);
+        let mut points: Vec<String> = (1..=journal.len()).map(|k| format!("after_write:{k}")).collect();
+        points.extend((1..=ops).map(|n| format!("before_result:{n}")));
+        for fp in &points {
+            let label = format!("{mode} {fp}");
+            let c = Case::of(&INPUT, &format!("{mode}-{}", fp.replace(':', "-")), idempotent);
+            let crashed = staalc_with_input(&c.args("run"), Some(fp), &all);
+            assert_eq!(crashed.code, None, "{label}: the injected crash did not happen: {}", crashed.stderr);
+            let mut finished = None;
+            for _ in 0..10 {
+                // As a person would: type again only what the run has not recorded.
+                let recorded = c.journal_lines().iter().filter(|r| r["j"] == "result" && is_input(&c, r)).count();
+                let rest: String = lines[recorded..].iter().map(|l| format!("{l}\n")).collect();
+                let out = staalc_with_input(&c.args("resume"), None, &rest);
+                match out.code {
+                    Some(0) => {
+                        finished = Some(out);
+                        break;
+                    }
+                    Some(3) => {
+                        let key = c.doubtful_key();
+                        let done = c.world_entries().into_iter().find(|e| e["key"] == key);
+                        let r = match done {
+                            Some(e) => c.resolve(&["--performed", e["receipt"].as_str().unwrap()]),
+                            None => c.resolve(&["--retry"]),
+                        };
+                        assert_eq!(r.code, Some(0), "{label}: resolve failed: {}", r.stderr);
+                    }
+                    other => panic!("{label}: resume exited {other:?}: {}", out.stderr),
+                }
+            }
+            let out = finished.unwrap_or_else(|| panic!("{label}: the run did not finish"));
+            assert_eq!(out.stdout, "\"ada;bola;chidi;\"", "{label}");
+            assert_eq!(c.world(), world, "{label}: the world differs from the uninterrupted run");
+            c.assert_no_duplicates(&label);
+            // A finished run replays: it reads nothing, even with nothing to read.
+            let again = staalc_with_input(&c.args("resume"), None, "");
+            assert_eq!((again.code, again.stdout.as_str()), (Some(0), "\"ada;bola;chidi;\""), "{label}: {}", again.stderr);
+        }
+    }
+}
+
+/// Whether a result record is for a console read.
+fn is_input(c: &Case, result: &Json) -> bool {
+    c.journal_lines().iter().any(|r| r["j"] == "intent" && r["n"] == result["n"] && r["op"] == "input")
+}
