@@ -45,6 +45,17 @@ one. The runtime never answers twice and says plainly when a request was lost
 idempotency key. If wanted, document that pattern with an example; there is nothing
 to fix in the runtime.
 
+## Before the repository is public
+
+CODE_OF_CONDUCT.md names the maintainer but not yet the address reports go to:
+the owner gives it, and it replaces the note in its "Enforcement" section. The
+reference package repositories (staal-sms, staal-payments, staal-email,
+staal-chat) need the same LICENSE and NOTICE as this one. Release archives and
+wheels hold staalc's binaries, which contain the code of its dependencies (MIT,
+Apache-2.0, ISC, BSD, Zlib, Unicode-3.0 and CDLA-Permissive-2.0 licensed): each
+release must also carry those licences' notices, generated from `cargo metadata`
+(for example with cargo-about) and checked by the release test.
+
 ## Phase 10 (platforms and distribution), blocked
 
 Blocked on GitHub Actions billing (CI does not run) and on this workspace being

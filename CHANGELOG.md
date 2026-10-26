@@ -7,6 +7,12 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Licensed under the Apache License 2.0 with the LLVM Exceptions (LICENSE, NOTICE).
+- docs/TUTORIAL.md, "Staal in one hour", checked by a test that follows it in an
+  empty folder and compares every command's output.
+- CONTRIBUTING.md and CODE_OF_CONDUCT.md (Contributor Covenant 2.1).
+- Fuzzers for program text, the formatter, journals, run configs and package files
+  (fuzz/, `cargo fuzz` on stable Rust).
 - C libraries: `foreign ffi.<library> { fn ... }` declares C functions with C types
   (integers, `bool`, `text`, at most six arguments), each the capability
   `ffi.<library>.<function>`. A grant names the library file and its SHA-256, checked

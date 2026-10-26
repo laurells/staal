@@ -906,7 +906,9 @@ pub struct Entry {
     pub yanked: bool,
 }
 
-fn parse_entries(text: &str, name: &str, at: &str) -> Result<Vec<Entry>, String> {
+/// A registry's `packages/<name>.json`, checked: every version once, each a version,
+/// a git location, a commit and a digest.
+pub fn parse_entries(text: &str, name: &str, at: &str) -> Result<Vec<Entry>, String> {
     let v: Json = serde_json::from_str(text).map_err(|e| format!("{at}: not valid JSON: {e}"))?;
     let obj = v.as_object().ok_or(format!("{at}: expected an object"))?;
     for k in obj.keys() {

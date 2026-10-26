@@ -22,6 +22,9 @@ case "$(uname -s)" in
     Darwin) cp "$rel/staalc" "$rel/libstaalc.dylib" "$rel/libstaalc.a" "$bin/" ;;
     *) echo "wheel.sh: no wheel layout for $(uname -s) yet" >&2; exit 2 ;;
 esac
+# The licence goes in the wheel's metadata: setuptools takes LICENSE and NOTICE from
+# beside pyproject.toml.
+cp "$root/LICENSE" "$root/NOTICE" "$root/python/"
 raw=$(mktemp -d)
 "$python" -m build --wheel --outdir "$raw" "$root/python"
 case "$(uname -s)" in
@@ -29,5 +32,5 @@ case "$(uname -s)" in
     Linux) PATH="$(dirname "$(command -v "$python")"):$PATH" "$python" -m auditwheel repair --wheel-dir "$out" "$raw"/*.whl ;;
     *) cp "$raw"/*.whl "$out/" ;;
 esac
-rm -rf "$raw" "$bin" "$root/python/build" "$root/python"/*.egg-info
+rm -rf "$raw" "$bin" "$root/python/build" "$root/python"/*.egg-info "$root/python/LICENSE" "$root/python/NOTICE"
 ls "$out"

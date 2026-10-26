@@ -119,6 +119,7 @@ continued.
 
 | Document | Contents |
 | --- | --- |
+| [docs/TUTORIAL.md](docs/TUTORIAL.md) | Staal in one hour: from install to a program that sends messages and asks a model |
 | [docs/GUIDE.md](docs/GUIDE.md) | The language: rules, syntax, capabilities, packages, native code |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | The runtime specification: semantics, the journal, failure behaviour |
 | [docs/RELEASING.md](docs/RELEASING.md) | How a release is made, and what it holds |
@@ -179,6 +180,8 @@ scripts/audit.sh                     # dependency advisories (needs network)
 `tests/fixtures/fail/` programs that must be rejected, each starting with
 `// expect: CODE`. To add a rule, write the failing program first, then make the
 checker reject it. CI runs every test on Linux, Apple Silicon and Intel macOS.
+[CONTRIBUTING.md](CONTRIBUTING.md) says what a change needs, and
+[fuzz/README.md](fuzz/README.md) how to run the fuzzers.
 
 ## Related repositories
 
@@ -191,5 +194,10 @@ on them by git URL and commit:
 
 ## License
 
-Private and unlicensed: no permission is granted to use, copy or distribute this
-code. A license will be chosen before any public release.
+Copyright 2026 Laurels Ozy Echichinwo. Licensed under the
+[Apache License, Version 2.0, with the LLVM Exceptions](LICENSE)
+(`Apache-2.0 WITH LLVM-exception`), as LLVM, Cranelift and Wasmtime are. The
+exceptions mean an executable `staalc build` makes, which holds parts of the
+runtime, needs no attribution, and that the code can be combined with GPLv2
+software. Contributions are made under the same terms ([CONTRIBUTING.md](CONTRIBUTING.md)).
+The licence grants no right to the name "Staal".

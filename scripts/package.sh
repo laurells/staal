@@ -3,7 +3,8 @@
 #
 #   target/dist/staalc-<version>-<target>.tar.gz   staalc, libstaalc (to load), its
 #                                                   static form (for `staalc build`),
-#                                                   include/staal.h, README and CHANGELOG
+#                                                   include/staal.h, README, CHANGELOG,
+#                                                   LICENSE and NOTICE
 #   target/dist/staalc-<version>-<target>.tar.gz.sha256
 #
 #   scripts/package.sh [output folder]
@@ -24,7 +25,7 @@ case "$(uname -s)" in
     *) echo "package.sh: no package layout for $(uname -s) yet" >&2; exit 2 ;;
 esac
 cp "$root/include/staal.h" "$stage/$name/include/"
-cp "$root/README.md" "$root/CHANGELOG.md" "$stage/$name/"
+cp "$root/README.md" "$root/CHANGELOG.md" "$root/LICENSE" "$root/NOTICE" "$stage/$name/"
 tar -C "$stage" -czf "$out/$name.tar.gz" "$name"
 rm -rf "$stage"
 cd "$out"

@@ -114,7 +114,9 @@ test('every Staal file in the repository ends with nothing open', async () => {
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const p = path.join(d, e.name);
-      if (e.isDirectory() && !['target', 'node_modules', '.git'].includes(e.name)) walk(p);
+      // Fuzz corpora and findings are copies and mutations, never committed.
+      const fuzzData = path.basename(d) === 'fuzz' && ['corpus', 'artifacts'].includes(e.name);
+      if (e.isDirectory() && !['target', 'node_modules', '.git'].includes(e.name) && !fuzzData) walk(p);
       else if (e.isFile() && e.name.endsWith('.staal')) files.push(p);
     }
   };
