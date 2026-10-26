@@ -1095,6 +1095,9 @@ enum RuntimeCap {
     Http { body: bool },
     FsRead,
     FsWrite,
+    /// `db.sqlite.query`, which only reads, and `db.sqlite.execute`, which changes.
+    DbQuery,
+    DbExecute,
 }
 
 const HTTP_METHODS: &[&str] = &["get", "post", "put", "patch", "delete"];
@@ -1104,6 +1107,8 @@ fn runtime_cap(path: &[String]) -> Option<RuntimeCap> {
         ["net", "http", m] if HTTP_METHODS.contains(m) => Some(RuntimeCap::Http { body: matches!(*m, "post" | "put" | "patch") }),
         ["fs", "read"] => Some(RuntimeCap::FsRead),
         ["fs", "write"] => Some(RuntimeCap::FsWrite),
+        ["db", "sqlite", "query"] => Some(RuntimeCap::DbQuery),
+        ["db", "sqlite", "execute"] => Some(RuntimeCap::DbExecute),
         _ => None,
     }
 }
@@ -1371,17 +1376,18 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                     format!("`max: {m}` and `each: {e}` use different units, so no action could satisfy both"),
                 );
             }
-            // `net` and `fs` belong to the runtime (RUNTIME.md section 12).
+            // `net`, `fs` and `db` belong to the runtime (RUNTIME.md section 12).
             let p = path.join(".");
             let family = path.first().map(String::as_str);
-            if matches!(family, Some("net") | Some("fs")) {
+            if matches!(family, Some("net") | Some("fs") | Some("db")) {
                 match runtime_cap(path) {
                     None => ctx.err(
                         "E101",
                         pos,
                         format!(
                             "`cap {p}` is not a runtime capability; there are net.http.get, net.http.post, \
-                             net.http.put, net.http.patch, net.http.delete, fs.read and fs.write"
+                             net.http.put, net.http.patch, net.http.delete, fs.read, fs.write, \
+                             db.sqlite.query and db.sqlite.execute"
                         ),
                     ),
                     Some(kind) => {
@@ -1395,7 +1401,9 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                         for pat in limits.only.iter().flatten() {
                             let checked = match kind {
                                 RuntimeCap::Http { .. } => crate::targets::check_url_pattern(pat),
-                                RuntimeCap::FsRead | RuntimeCap::FsWrite => crate::targets::check_path_pattern(pat),
+                                RuntimeCap::FsRead | RuntimeCap::FsWrite | RuntimeCap::DbQuery | RuntimeCap::DbExecute => {
+                                    crate::targets::check_path_pattern(pat)
+                                }
                             };
                             if let Err(e) = checked {
                                 ctx.err("E101", pos, format!("in `cap {p}`: {e}"));
@@ -2121,7 +2129,7 @@ fn outcome_holds_evidence(ctx: &Ctx, value: &Expr, env: &Env) -> bool {
             // An action holds a receipt unless it is one of the runtime's that returns data.
             Expr::Action { receiver, .. } => match env.get(receiver).map(|b| &b.ty) {
                 Some(Ty::Cap { path, .. }) => {
-                    !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead))
+                    !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead | RuntimeCap::DbQuery))
                 }
                 _ => false,
             },
@@ -4372,6 +4380,23 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     "write(path: Text, content: Text)".to_string(),
                     named("Receipt"),
                 ),
+                RuntimeCap::DbQuery | RuntimeCap::DbExecute => {
+                    let params = |t: &Ty| matches!(t, Ty::List(el, _) if **el == text);
+                    let ok = (tys.len() == 2 || tys.len() == 3) && tys[0] == text && tys[1] == text && tys.get(2).is_none_or(params);
+                    // The SQL is an instruction to the database: like a model's instruction,
+                    // it cannot come from outside. Values from outside are parameters.
+                    if let Some(Some((t, false))) = arg_tys.get(1)
+                        && *t == text
+                    {
+                        ctx.err(
+                            "E006",
+                            args[1].pos(),
+                            format!("untrusted value used as SQL in '{receiver}.{method}'; pass values from outside as parameters (?1, ?2, ...) instead"),
+                        );
+                    }
+                    let result = if kind == RuntimeCap::DbQuery { text.clone() } else { named("Receipt") };
+                    (ok, format!("{method}(database: Text, sql: Text) or {method}(database, sql, params: List<Text, N>)"), result)
+                }
             };
             if !ok && arg_tys.iter().all(Option::is_some) {
                 let found: Vec<String> = tys.iter().map(|t| t.to_string()).collect();

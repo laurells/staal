@@ -13,7 +13,7 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
 | E003 | A capability is widened: passed, assigned or returned with more authority than it holds |
 | E004 | A function's worst-case model use can exceed its declared `budget(...)` |
 | E005 | A model call (direct or through a called function) is inside an unbounded `loop` |
-| E006 | An untrusted value is used as a model instruction, or flows into an `@trusted` slot |
+| E006 | An untrusted value is used as a model instruction or as SQL, or flows into an `@trusted` slot |
 | E007 | Blinded data can reach a model: through a call's inputs, through the decision to make the call, or through a function that does not promise to keep it blinded |
 | E008 | `done(evidence: [...])` cites something that is not proof of this function's own work |
 | E100 | Undefined name or function |
@@ -30,8 +30,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 49 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 588 invalid ones
+rejecting the programs it should. 50 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 592 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -1024,6 +1024,35 @@ are not TLS) stays in doubt. An organisation's own authority can be added with
 
 What these tests do not cover: real services. `examples/` holds Termii SMS and
 Resend email programs with instructions to run them with your own keys.
+
+## Databases: `db.sqlite`
+
+```staal
+type Order { id: Int, item: Text, qty: Int }
+
+fn record(db: cap db.sqlite.execute, read: cap db.sqlite.query, path: Text, item: Text) -> Int {
+    let added = db.execute(path, "INSERT INTO orders (item, qty) VALUES (?1, ?2)", [item, "1"])
+    let rows = validate parse(List<Order, 100>, read.query(path, "SELECT id, item, qty FROM orders"))
+    return len(rows)
+}
+```
+
+    "grants": {
+      "db":   { "cap": "db.sqlite.execute", "only": ["/srv/shop/*.db"], "idempotency_key": true },
+      "read": { "cap": "db.sqlite.query",   "only": ["/srv/shop/*.db"] }
+    }
+
+A database is an SQLite file, named by path and limited by `only` as files are. A
+`query` capability can only read: it opens the database read-only, whatever its SQL
+says. Its rows come back as JSON text, untrusted, for `parse` and `validate`. An
+`execute` capability changes the database, one statement at a time, each in a
+transaction that is on disk when it returns. The SQL must be the program's own
+(E006 otherwise); values from outside, such as a request or a model's answer, are
+parameters (`?1`, `?2`), never part of the SQL, so they can never change what it
+does. A resumed run replays its queries from the journal, and a statement a crash
+left in doubt is never made twice: with `"idempotency_key": true` the runtime keeps
+each statement's key in the database, in the same transaction, and checks it;
+without it the run stops for an operator. RUNTIME.md section 12 has the details.
 
 ## Capabilities from libraries
 

@@ -1,0 +1,9 @@
+// A crash-test scenario for db.sqlite: three statements and a query. After a crash at
+// any point, the resumed run must leave each row in the database exactly once.
+
+fn store(db: cap db.sqlite.execute, read: cap db.sqlite.query, path: Text) -> Text {
+    let t = db.execute(path, "CREATE TABLE IF NOT EXISTS items (name TEXT NOT NULL)")
+    let a = db.execute(path, "INSERT INTO items (name) VALUES (?1)", ["a"])
+    let b = db.execute(path, "INSERT INTO items (name) VALUES (?1)", ["b"])
+    return read.query(path, "SELECT name FROM items ORDER BY name")
+}

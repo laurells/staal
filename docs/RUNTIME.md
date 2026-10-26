@@ -838,12 +838,13 @@ sensitive data. Like the log, it must never be given to a model as context.
 - An adapter that declares an action idempotent must, given a key it has seen,
   not perform the action again and must return the original receipt.
 
-## 12. The runtime's own capabilities: `net.http` and `fs`
+## 12. The runtime's own capabilities: `net.http`, `fs` and `db.sqlite`
 
-Most capabilities are performed by an adapter and return a `Receipt`. Two families
+Most capabilities are performed by an adapter and return a `Receipt`. Three families
 belong to the runtime itself, which performs them, checks them, and records them in
-the journal like any other action. Capability paths starting with `net.` or `fs.` are
-reserved for them; any other path under those names is a compile error (E101).
+the journal like any other action. Capability paths starting with `net.`, `fs.` or
+`db.` are reserved for them; any other path under those names is a compile error
+(E101).
 
 | Capability | Action | Result |
 | --- | --- | --- |
@@ -851,8 +852,11 @@ reserved for them; any other path under those names is a compile error (E101).
 | `net.http.post`, `net.http.put`, `net.http.patch` | `c.post(url, body)`, `c.post(url, body, headers)` | `Response` |
 | `fs.read` | `c.read(path)` | `Text` |
 | `fs.write` | `c.write(path, content)` | `Receipt` |
+| `db.sqlite.query` | `c.query(database, sql)`, `c.query(database, sql, params)` | `Text` (JSON rows) |
+| `db.sqlite.execute` | `c.execute(database, sql)`, `c.execute(database, sql, params)` | `Receipt` |
 
-`url`, `path` and `content` are `Text`. A `body` is `Text` or a `Secret` (below).
+`url`, `path`, `content`, `database` and `sql` are `Text`; `params` is a
+`List<Text, N>`. A `body` is `Text` or a `Secret` (below).
 `headers` is a `List<Header, N>`. `uses` and `only` apply as to any capability;
 `max` and `each` do not (no money the runtime can measure is spent), and are
 refused (E101, or a config error on a grant).
@@ -932,6 +936,45 @@ its permissions, and another hard link to it keeps its own contents. A write
 returns a `Receipt` whose id is derived from the content's SHA-256.
 
 Linux and macOS only; on other systems every file action fails.
+
+### Databases
+
+`db.sqlite.query` and `db.sqlite.execute` act on SQLite database files. The
+database is a path, made canonical and checked against `only` as a file's is, and
+checked as `fs` checks a path (each folder in turn, no link followed, a regular file
+with one name), with no link where SQLite keeps its journal (`-journal`, `-wal`,
+`-shm`); SQLite then opens it refusing any link in its path. SQLite opens files by
+path, so a process that can rename folders inside the granted ones could race that
+check: those folders should be writable only by whoever runs the program.
+
+- `query` opens the database read-only and runs one statement that reads. Whatever
+  its SQL says, it cannot change the file. It gives the rows as JSON text, for
+  `parse` and `validate`: an array with one object per row, by column name, INTEGER
+  as a number, TEXT as a string, NULL as null, and REAL as the shortest decimal text
+  that reads back as the same number. A BLOB, two columns of one name, more than
+  10,000 rows or more than `fs.max_read_bytes` of JSON fail (`action`). The database
+  must exist.
+- `execute` runs one statement that changes the database, in a transaction with
+  `synchronous=FULL`: once it returns, the change is on disk, and if it fails
+  nothing is changed. It creates the database if it does not exist. Its receipt is
+  `sqlite:N`, N the rows changed.
+- Either takes exactly one statement, refuses ATTACH (which would open another
+  file), and runs schema code without side effects (`trusted_schema=OFF`). The SQL
+  must be trusted text (E006), the program's own: values from outside are passed as
+  `params`, bound to `?1`, `?2`, ..., never spliced into the SQL. Parameters are
+  text, which SQLite converts by each column's affinity (`"2"` matches an INTEGER
+  2), and their number must be the statement's.
+- In the journal a query is recorded with its rows, so a resumed run gets them
+  again without opening the database, and is safe to make again if a crash leaves
+  it in doubt. A statement is recorded with hashes of its SQL and parameters, never
+  their values, and is not safe to repeat: left in doubt, it stops the run for an
+  operator (`staalc resolve`), unless its grant says `"idempotency_key": true`.
+  Then each statement's key is written, in the same transaction, to a table
+  `_staal_keys` in the database itself, and a statement left in doubt is resolved
+  by looking for its key: it happened exactly when its key is there. The crash tests
+  check both, at every crash point.
+
+Linux only so far; elsewhere every database action fails.
 
 ### HTTP requests
 

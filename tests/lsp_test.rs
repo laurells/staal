@@ -181,7 +181,7 @@ fn editor(published: &[Json]) -> BTreeSet<Diag> {
 
 fn programs() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for dir in ["tests/fixtures/pass", "tests/fixtures/fail", "tests/run", "tests/crash", "tests/staal", "tests/doc", "tests/debug", "tests/profile"] {
+    for dir in ["tests/fixtures/pass", "tests/fixtures/fail", "tests/run", "tests/crash", "tests/staal", "tests/doc", "tests/debug", "tests/profile", "tests/db"] {
         for e in fs::read_dir(Path::new(ROOT).join(dir)).unwrap() {
             let p = e.unwrap().path();
             if p.extension().is_some_and(|x| x == "staal") {

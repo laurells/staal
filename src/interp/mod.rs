@@ -10,6 +10,7 @@
 
 pub mod adapter;
 pub mod broker;
+pub mod db;
 pub mod fsx;
 pub mod http;
 pub mod journal;
@@ -515,11 +516,11 @@ fn parse_grant(
             let checked = if http { crate::targets::check_url_pattern(pat) } else { crate::targets::check_path_pattern(pat) };
             checked.map_err(|e| format!("{at}.only[{i}]: {e}"))?;
         }
-        if idempotency_key && (!http || want == "net.http.get") {
-            return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete"));
+        if idempotency_key && !((http && want != "net.http.get") || want == "db.sqlite.execute") {
+            return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, and db.sqlite.execute"));
         }
     } else if idempotency_key {
-        return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete"));
+        return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, and db.sqlite.execute"));
     }
     // The slot's own limits narrow the grant when the run starts. Money limits in
     // different currencies could never both be met: refuse now.
@@ -585,7 +586,7 @@ const MIN_SECRET_BYTES: usize = 8;
 
 /// Whether `path` is one of the runtime's own capabilities (`net.http.*`, `fs.*`).
 fn is_runtime_cap(path: &str) -> bool {
-    path.starts_with("net.") || path.starts_with("fs.")
+    path.starts_with("net.") || path.starts_with("fs.") || path.starts_with("db.")
 }
 
 /// Replaces every secret value in `text` with a marker.
@@ -1928,6 +1929,9 @@ impl<'p> Interp<'p> {
         if path.starts_with("fs.") {
             return self.fs_action(h, &path, method, args);
         }
+        if path.starts_with("db.") {
+            return self.db_action(h, &path, method, args);
+        }
         if let Some(la) = self.lib.get(&path).cloned() {
             return self.library_action(h, &path, method, args, la);
         }
@@ -2245,6 +2249,74 @@ impl<'p> Interp<'p> {
                         Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
                     }
                     _ => fail(FailKind::Journal, format!("malformed file result in the journal: {v}")),
+                }
+            }
+            Err(msg) => {
+                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
+                fail(FailKind::Action, msg)
+            }
+        }
+    }
+
+    /// A `db.sqlite` action: a query, which only reads and is safe to make again after a
+    /// crash, or a statement that changes the database, which is not, unless the grant
+    /// keeps idempotency keys in the database itself (RUNTIME.md section 12).
+    fn db_action(&mut self, h: usize, path: &str, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        let (Some(Value::Text(raw)), Some(Value::Text(sql))) = (args.first(), args.get(1)) else {
+            return internal("db.sqlite without a database or SQL");
+        };
+        let params: Vec<String> = match args.get(2) {
+            None => Vec::new(),
+            Some(Value::List(items)) => {
+                let mut ps = Vec::new();
+                for i in items {
+                    let Value::Text(t) = i else { return internal("db.sqlite parameters that are not text") };
+                    ps.push(t.clone());
+                }
+                ps
+            }
+            Some(_) => return internal("db.sqlite parameters that are not a list"),
+        };
+        let file = match crate::targets::canonical_path(raw) {
+            Ok(f) => f,
+            Err(e) => return self.refuse(path, method, FailKind::Capability, e),
+        };
+        self.emit("action_requested", json!({ "capability": path, "method": method, "target": file }));
+        if let Err(why) = self.broker.authorize(h, None, Some(&file)) {
+            return self.refuse(path, method, FailKind::Capability, why);
+        }
+        self.broker.count_use(h).or_else(internal)?;
+        let what = format!("action {path} {file}");
+        // The journal records hashes of the SQL and its parameters, not the values: on
+        // resume the program computes them again, and the hashes detect a difference.
+        let params_json = json!(params).to_string();
+        let jbody = json!({ "capability": path, "method": method, "target": file,
+                            "sql_sha256": journal::sha256_hex(sql.as_bytes()),
+                            "params_sha256": journal::sha256_hex(params_json.as_bytes()) });
+        let keyed = self.broker.idempotency_key(h).or_else(internal)?;
+        let (answer, replayed) = match method {
+            "query" => self.external("action", jbody, true, &what, |it, _key| {
+                Answer::Done(db::query(&file, sql, &params, it.fs_max_read_bytes).map(|rows| json!({ "text": scrub_text(&it.secrets, &rows.to_string()) })))
+            })?,
+            "execute" => {
+                self.effects += 1;
+                self.external("action", jbody, keyed, &what, |_it, key| {
+                    let changed = db::execute(&file, sql, &params, keyed.then_some(key));
+                    Answer::Done(changed.map(|n| json!({ "receipt": format!("sqlite:{n}") })))
+                })?
+            }
+            other => return internal(format!("db.sqlite has no method '{other}'")),
+        };
+        match answer {
+            Ok(v) => {
+                self.performed += 1;
+                self.emit("action_performed", json!({ "capability": path, "method": method, "target": file, "replayed": replayed }));
+                match (method, v["text"].as_str(), v["receipt"].as_str()) {
+                    ("query", Some(t), _) => Ok(Value::Text(t.to_string())),
+                    ("execute", _, Some(id)) => {
+                        Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
+                    }
+                    _ => fail(FailKind::Journal, format!("malformed database result in the journal: {v}")),
                 }
             }
             Err(msg) => {

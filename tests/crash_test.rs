@@ -512,3 +512,92 @@ fn console_input_is_replayed_and_only_what_was_not_recorded_is_read_again() {
 fn is_input(c: &Case, result: &Json) -> bool {
     c.journal_lines().iter().any(|r| r["j"] == "intent" && r["n"] == result["n"] && r["op"] == "input")
 }
+
+/// A database scenario's directory: its config (with `idempotency_key` on the execute
+/// grant or not), its database and its journal.
+fn db_case(name: &str, keyed: bool) -> (PathBuf, Vec<String>, Vec<String>) {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("crash-db").join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::fs::canonicalize(&dir).unwrap();
+    let only = format!("{}/*.db", dir.display());
+    let cfg = serde_json::json!({
+        "entry": "store",
+        "inputs": { "path": format!("{}/items.db", dir.display()) },
+        "grants": {
+            "db": { "cap": "db.sqlite.execute", "only": [only], "idempotency_key": keyed },
+            "read": { "cap": "db.sqlite.query", "only": [only] },
+        },
+        "model": { "provider": "script", "responses": [] },
+    });
+    std::fs::write(dir.join("cfg.json"), cfg.to_string()).unwrap();
+    let program = format!("{ROOT}/tests/crash/db.staal");
+    let (c, j) = (dir.join("cfg.json").to_string_lossy().to_string(), dir.join("journal").to_string_lossy().to_string());
+    let run = vec!["run".into(), program.clone(), "--config".into(), c.clone(), "--journal".into(), j.clone()];
+    let resume = vec!["resume".into(), program, "--config".into(), c, "--journal".into(), j];
+    (dir, run, resume)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn every_crash_point_leaves_each_row_once() {
+    let names = |dir: &Path| -> Vec<String> {
+        let Ok(c) = rusqlite::Connection::open(dir.join("items.db")) else { return Vec::new() };
+        let Ok(mut s) = c.prepare("SELECT name FROM items ORDER BY rowid") else { return Vec::new() };
+        s.query_map([], |r| r.get::<_, String>(0)).unwrap().map(Result::unwrap).collect()
+    };
+    for keyed in [true, false] {
+        let mode = if keyed { "keyed" } else { "plain" };
+        let (dir, run, _) = db_case(&format!("{mode}-baseline"), keyed);
+        let out = staalc(&run.iter().map(String::as_str).collect::<Vec<_>>(), None);
+        assert_eq!(out.code, Some(0), "{mode} baseline: {}", out.stderr);
+        assert_eq!(out.stdout, "\"[{\\\"name\\\":\\\"a\\\"},{\\\"name\\\":\\\"b\\\"}]\"");
+        let journal: Vec<Json> =
+            std::fs::read_to_string(dir.join("journal")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let ops = journal.iter().filter(|r| r["j"] == "intent").count();
+        assert_eq!(ops, 4, "three statements and a query");
+        let mut points: Vec<String> = (1..=journal.len()).map(|k| format!("after_write:{k}")).collect();
+        points.extend((1..=ops).map(|n| format!("before_result:{n}")));
+        for fp in &points {
+            let label = format!("{mode} {fp}");
+            let (dir, run, resume) = db_case(&format!("{mode}-{}", fp.replace(':', "-")), keyed);
+            let crashed = staalc(&run.iter().map(String::as_str).collect::<Vec<_>>(), Some(fp));
+            assert_eq!(crashed.code, None, "{label}: the injected crash did not happen: {}", crashed.stderr);
+            let mut finished = None;
+            for _ in 0..10 {
+                let out = staalc(&resume.iter().map(String::as_str).collect::<Vec<_>>(), None);
+                match out.code {
+                    Some(0) => {
+                        finished = Some(out);
+                        break;
+                    }
+                    Some(3) => {
+                        // Only a statement without a key is ever left for an operator.
+                        assert!(!keyed, "{label}: a keyed statement was left in doubt: {}", out.stderr);
+                        // As a correct operator would: look in the database.
+                        let lines = std::fs::read_to_string(dir.join("journal")).unwrap();
+                        let intent: Json = lines.lines().rev().map(|l| serde_json::from_str::<Json>(l).unwrap()).find(|r| r["j"] == "intent").unwrap();
+                        let n = intent["n"].as_u64().unwrap();
+                        let have = names(&dir);
+                        let happened = match n {
+                            1 => dir.join("items.db").exists() && rusqlite::Connection::open(dir.join("items.db")).unwrap().prepare("SELECT 1 FROM items").is_ok(),
+                            2 => have.contains(&"a".to_string()),
+                            3 => have.contains(&"b".to_string()),
+                            other => panic!("{label}: operation {other} in doubt; a query is never left for an operator"),
+                        };
+                        let j = dir.join("journal").to_string_lossy().to_string();
+                        let how: &[&str] = if happened { &["--performed", "sqlite:1"] } else { &["--retry"] };
+                        let mut args = vec!["resolve", "--journal", j.as_str()];
+                        args.extend_from_slice(how);
+                        let r = staalc(&args, None);
+                        assert_eq!(r.code, Some(0), "{label}: resolve failed: {}", r.stderr);
+                    }
+                    other => panic!("{label}: resume exited {other:?}: {}", out.stderr),
+                }
+            }
+            let out = finished.unwrap_or_else(|| panic!("{label}: the run did not finish"));
+            assert_eq!(out.stdout, "\"[{\\\"name\\\":\\\"a\\\"},{\\\"name\\\":\\\"b\\\"}]\"", "{label}");
+            assert_eq!(names(&dir), ["a", "b"], "{label}: the database differs from an uninterrupted run");
+        }
+    }
+}

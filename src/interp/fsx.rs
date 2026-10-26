@@ -127,6 +127,37 @@ mod imp {
         String::from_utf8(buf).map_err(|_| format!("'{shown}' is not UTF-8 text"))
     }
 
+    /// For SQLite, which opens its files itself, by path: checks the database at
+    /// canonical `path` as every `fs` path is checked (each folder opened in turn, no
+    /// link followed anywhere), that it is a regular file with one name (or absent, when
+    /// `create`), and that no link stands where SQLite would put its journal. SQLite
+    /// then opens the same path refusing any link in it (SQLITE_OPEN_NOFOLLOW).
+    #[cfg(target_os = "linux")]
+    pub fn database_check(path: &str, create: bool) -> Result<(), String> {
+        let (dir, name, shown) = open_parent(path)?;
+        let leaf = name.to_str().map_err(|_| format!("'{shown}' is not a valid name"))?.to_string();
+        match stat_at(dir.as_raw_fd(), &name) {
+            Some(st) if is_link(&st) => return Err(format!("'{shown}' is a symbolic link; links are never followed")),
+            Some(st) if !is_reg(&st) => return Err(format!("'{shown}' is not a regular file")),
+            Some(st) if st.st_nlink > 1 => {
+                return Err(format!(
+                    "'{shown}' has {} hard links; a file with other names could be a file outside the allowed folders",
+                    st.st_nlink
+                ));
+            }
+            Some(_) => {}
+            None if create => {}
+            None => return Err(format!("'{shown}' does not exist")),
+        }
+        for suffix in ["-journal", "-wal", "-shm"] {
+            let side = c(&format!("{leaf}{suffix}"))?;
+            if stat_at(dir.as_raw_fd(), &side).is_some_and(|st| is_link(&st)) {
+                return Err(format!("'{shown}{suffix}' is a symbolic link; links are never followed"));
+            }
+        }
+        Ok(())
+    }
+
     pub fn write(path: &str, content: &[u8]) -> Result<(), String> {
         let (dir, name, shown) = open_parent(path)?;
         let leaf = name.to_str().map_err(|_| format!("'{shown}' is not a valid name"))?.to_string();
@@ -186,6 +217,9 @@ mod imp {
         Ok(())
     }
 }
+
+#[cfg(target_os = "linux")]
+pub use imp::database_check;
 
 #[cfg(not(unix))]
 mod imp {

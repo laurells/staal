@@ -7,6 +7,13 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `db.sqlite.query` and `db.sqlite.execute`: SQLite databases as runtime
+  capabilities. A query opens the database read-only and gives its rows as JSON for
+  `parse`; a statement runs in a durable transaction. SQL must be trusted (E006);
+  values from outside are bound parameters. Paths are checked as `fs` checks them.
+  Queries replay from the journal; a statement left in doubt stops for an operator,
+  or with `"idempotency_key": true` is resolved by a key kept in the database in the
+  same transaction, which the crash tests check at every crash point. Linux only.
 - `read_line()`: console input, `some` of the next line or `none` at the end. It is
   journaled (`input`): a resumed run replays the lines it recorded and reads only the
   rest, which a crash test checks at every crash point. Its text is untrusted.

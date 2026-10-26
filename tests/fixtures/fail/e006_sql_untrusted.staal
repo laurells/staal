@@ -1,0 +1,9 @@
+// expect: E006
+// message: untrusted value used as SQL
+// A model's answer cannot become SQL: values from outside are parameters.
+type Q { sql: Text }
+
+fn run(db: cap db.sqlite.execute) -> Receipt budget(calls: 1, tokens: 300) {
+    let q = validate propose(Q, tokens: 300)
+    return db.execute("/data/app.db", q.sql)
+}

@@ -1,0 +1,6 @@
+// expect: E002
+// message: does not permit 'execute'
+// A capability to read a database cannot change it.
+fn change(db: cap db.sqlite.query) -> Text {
+    return db.execute("/data/app.db", "DELETE FROM orders")
+}

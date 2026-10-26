@@ -1,0 +1,10 @@
+// The database capabilities: SQL is the program's own, values from outside are
+// parameters, and what a query gives is validated like any outside data.
+type Order { id: Int, item: Text, qty: Int }
+
+fn record(db: cap db.sqlite.execute(only: ["/data/*.db"]), read: cap db.sqlite.query, path: Text, item: Text, qty: Int) -> Int {
+    let made = db.execute(path, "CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, item TEXT NOT NULL, qty INTEGER NOT NULL)")
+    let added = db.execute(path, "INSERT INTO orders (item, qty) VALUES (?1, ?2)", [item, to_text(qty)])
+    let rows = validate parse(List<Order, 100>, read.query(path, "SELECT id, item, qty FROM orders ORDER BY id"))
+    return len(rows)
+}
