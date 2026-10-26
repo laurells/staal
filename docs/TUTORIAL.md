@@ -7,8 +7,15 @@ so what you see is what you will get.
 
 ## 1. Install
 
-Staal's compiler, `staalc`, is built from source with Rust. Install Rust from
-[rustup.rs](https://rustup.rs) (one command), and `git`. Then:
+On Linux (x86_64) or a Mac, one command installs Staal's compiler, `staalc`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh
+```
+
+It puts `staalc` in `~/.local/bin`, and tells you if that folder is not yet on your
+`PATH`. On any other machine, build it from source with Rust: install Rust from
+[rustup.rs](https://rustup.rs) and `git`, then
 
 ```sh
 git clone https://github.com/laurells/staal.git
@@ -16,8 +23,7 @@ cd staal
 cargo install --path . --locked
 ```
 
-The build takes a few minutes. It puts `staalc` in `~/.cargo/bin`, which rustup
-already added to your `PATH`. Check it worked:
+which takes a few minutes and puts `staalc` in `~/.cargo/bin`. Check it worked:
 
 ```sh
 staalc --version

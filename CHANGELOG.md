@@ -7,6 +7,11 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Release archives and wheels carry `LICENSE-THIRD-PARTY.txt`, the licences of every
+  crate the binaries contain (`scripts/third_party_licenses.py`), with LICENSE and
+  NOTICE.
+- `install.sh`: installs the latest release for Linux x86_64 or macOS with one
+  command, checking the archive's SHA-256, into `~/.staal` and `~/.local/bin`.
 - PostgreSQL: `db.postgres.query` and `db.postgres.execute`. A grant names the
   databases it reaches (server, database, user, password from the environment);
   TLS is required and verified, except to a server on this machine. Queries run in a

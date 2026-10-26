@@ -12,6 +12,27 @@ fn read(p: &str) -> String {
     fs::read_to_string(Path::new(ROOT).join(p)).unwrap()
 }
 
+/// Every release archive and wheel carries the licences of the code it contains: the
+/// script that writes them covers each crate staalc links, and both packaging scripts
+/// run it.
+#[test]
+fn a_release_carries_the_licences_of_what_it_contains() {
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("LICENSE-THIRD-PARTY.txt");
+    let o = Command::new("python3").arg(Path::new(ROOT).join("scripts/third_party_licenses.py")).arg(&out).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let text = fs::read_to_string(&out).unwrap();
+    let count: usize = text.lines().find_map(|l| l.strip_suffix(" crates.")?.parse().ok()).unwrap();
+    let listed = text.lines().filter(|l| l.contains(": ") && !l.starts_with("---") && l.split(' ').nth(1).is_some_and(|v| v.ends_with(':') && v.chars().next().is_some_and(|c| c.is_ascii_digit()))).count();
+    assert_eq!(listed, count, "every crate is listed once");
+    for name in ["rustls ", "ring ", "rusqlite ", "libsqlite3-sys ", "cranelift-codegen ", "postgres ", "ureq ", "serde_json ", "sha2 "] {
+        assert!(text.lines().any(|l| l.starts_with(name)), "{name}is missing");
+    }
+    assert!(text.contains("Permission is hereby granted") && text.contains("Apache License"), "the licence texts themselves");
+    for script in ["scripts/package.sh", "scripts/wheel.sh"] {
+        assert!(read(script).contains("third_party_licenses.py"), "{script} does not include the licences");
+    }
+}
+
 #[test]
 fn every_part_of_a_release_has_staalcs_version() {
     let o = Command::new(env!("CARGO_BIN_EXE_staalc")).arg("--version").output().unwrap();

@@ -69,7 +69,15 @@ evidence, modules, packages and the rest.
 
 ## Getting started
 
-Without Rust, from a release: unpack the archive for your platform and run its
+Without Rust, from a release, on Linux (x86_64) or macOS:
+
+```
+curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh
+```
+
+[install.sh](install.sh) downloads the latest release's archive for your machine,
+refuses it unless its SHA-256 matches the release's, unpacks it into `~/.staal`, and
+links `staalc` into `~/.local/bin`. Or unpack the archive yourself and run its
 `staalc`, or install the wheel with `pip install staal-X.Y.Z-py3-none-<platform>.whl`,
 which gives the `staalc` command and the `staal` Python package
 ([docs/RELEASING.md](docs/RELEASING.md) says what a release holds). Releases are
