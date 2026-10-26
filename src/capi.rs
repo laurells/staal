@@ -255,7 +255,7 @@ pub unsafe extern "C" fn staal_resolve(journal_path: *const c_char, resolution_j
             }
             _ => return error("resolution_json must have exactly one of performed, status (with body), failed or retry: true"),
         };
-        match journal::Journal::resolve(Path::new(&j), resolution) {
+        match journal::Journal::resolve(Path::new(&j), resolution, None) {
             Ok(summary) => json!({ "status": "resolved", "summary": summary }),
             Err(e) => error(e),
         }

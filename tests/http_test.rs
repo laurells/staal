@@ -234,8 +234,8 @@ fn a_post_without_an_answer_stops_the_run_in_doubt() {
     assert_eq!(s.requests().len(), 1, "resume must not repeat the request");
     // A receipt is the wrong answer for an HTTP request; the operator records the response.
     use staalc::interp::journal::{Journal, Resolution};
-    assert!(Journal::resolve(&journal, Resolution::Performed { receipt: "x".into() }).unwrap_err().contains("--status"));
-    Journal::resolve(&journal, Resolution::Responded { status: 200, body: "{}".into() }).unwrap();
+    assert!(Journal::resolve(&journal, Resolution::Performed { receipt: "x".into() }, None).unwrap_err().contains("--status"));
+    Journal::resolve(&journal, Resolution::Responded { status: 200, body: "{}".into() }, None).unwrap();
     let out = run_config_durable(&p, &src, &cfg, Durability::Resume(&journal)).unwrap();
     assert_eq!(out.result.unwrap(), json!(1));
     assert_eq!(s.requests().len(), 1);

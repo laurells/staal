@@ -1003,6 +1003,9 @@ struct Interp<'p> {
     /// A debugger, and the calls it is shown: each function and its statement now.
     debug: Option<Box<dyn DebugHook>>,
     debug_stack: Vec<(String, crate::lexer::Pos)>,
+    /// The concurrent task this interpreter runs ("" for the program itself): its
+    /// operations are a stream of their own in the journal.
+    task: String,
 }
 
 /// What a profiled run spent in one function. Steps are the runtime's own count
@@ -1106,6 +1109,7 @@ impl<'p> Interp<'p> {
             profile: None,
             debug: None,
             debug_stack: Vec::new(),
+            task: String::new(),
         }
     }
 
@@ -2400,6 +2404,12 @@ impl<'p> Interp<'p> {
     /// and for one left in doubt by a crash only when `retry_in_doubt` holds; an
     /// operation in doubt that cannot be retried stops the run (`in_doubt`), named by
     /// `what`. Returns the answer and whether it came from the journal.
+    /// An operation's number as the log shows it: a number for the program's own, its
+    /// id (`task:n`) for a task's.
+    fn op_json(&self, n: u64) -> Json {
+        if self.task.is_empty() { json!(n) } else { json!(journal::op_id(&self.task, n)) }
+    }
+
     fn external(
         &mut self,
         op: &str,
@@ -2408,7 +2418,7 @@ impl<'p> Interp<'p> {
         what: &str,
         live: impl FnOnce(&mut Self, &str) -> Answer,
     ) -> Result<(Result<Json, String>, bool), Failure> {
-        let step = match self.journal.begin(op, body) {
+        let step = match self.journal.begin(&self.task, op, body) {
             Ok(step) => step,
             Err(e) => return fail(FailKind::Journal, e),
         };
@@ -2423,21 +2433,23 @@ impl<'p> Interp<'p> {
             }
             Step::Perform { n, key } => (n, key),
             Step::InDoubt { n, key } if retry_in_doubt => {
-                self.emit("retrying_in_doubt", json!({ "operation": n, "what": what, "key": key }));
+                self.emit("retrying_in_doubt", json!({ "operation": self.op_json(n), "what": what, "key": key }));
                 (n, key)
             }
             Step::InDoubt { n, .. } => {
-                self.emit("in_doubt", json!({ "operation": n, "what": what }));
+                let id = journal::op_id(&self.task, n);
+                self.emit("in_doubt", json!({ "operation": self.op_json(n), "what": what }));
                 return fail(
                     FailKind::InDoubt,
                     format!(
-                        "{what} (operation {n}) may or may not have happened before the run stopped, and it cannot \
+                        "{what} (operation {id}) may or may not have happened before the run stopped, and it cannot \
                          be safely retried. Check whether it happened, record the answer with `staalc resolve` \
                          (--performed <receipt>, --failed <reason>, or --retry if it did not happen), then resume"
                     ),
                 );
             }
         };
+        let id = journal::op_id(&self.task, n);
         let answer = match live(self, &key) {
             Answer::Done(a) => a,
             // Exactly as if the process had died here: the intent is recorded, the result
@@ -2445,31 +2457,31 @@ impl<'p> Interp<'p> {
             // An operation that is safe to repeat is made again when the run resumes:
             // nothing needs resolving first.
             Answer::Unknown(e) if retry_in_doubt => {
-                self.emit("in_doubt", json!({ "operation": n, "what": what, "error": e, "retry_on_resume": true }));
+                self.emit("in_doubt", json!({ "operation": self.op_json(n), "what": what, "error": e, "retry_on_resume": true }));
                 return fail(
                     FailKind::InDoubt,
-                    format!("{what} (operation {n}) did not complete ({e}). Resume the run to make it again"),
+                    format!("{what} (operation {id}) did not complete ({e}). Resume the run to make it again"),
                 );
             }
             Answer::Unknown(e) => {
-                self.emit("in_doubt", json!({ "operation": n, "what": what, "error": e }));
+                self.emit("in_doubt", json!({ "operation": self.op_json(n), "what": what, "error": e }));
                 return fail(
                     FailKind::InDoubt,
                     format!(
-                        "{what} (operation {n}) may or may not have happened ({e}), and it cannot be safely \
+                        "{what} (operation {id}) may or may not have happened ({e}), and it cannot be safely \
                          retried. Check whether it happened, record the answer with `staalc resolve`, then resume"
                     ),
                 );
             }
         };
-        if let Err(e) = self.journal.finish(n, answer.clone()) {
+        if let Err(e) = self.journal.finish(&self.task, n, answer.clone()) {
             // The operation happened but is not durably recorded. Keep it in the log, then
             // stop: resume will find it in doubt.
             let shown = match &answer {
                 Ok(v) => json!({ "ok": v }),
                 Err(msg) => json!({ "err": msg }),
             };
-            self.emit("journal_write_failed", json!({ "operation": n, "op": op, "answer": shown, "error": e }));
+            self.emit("journal_write_failed", json!({ "operation": self.op_json(n), "op": op, "answer": shown, "error": e }));
             return fail(FailKind::Journal, e);
         }
         Ok((answer, false))

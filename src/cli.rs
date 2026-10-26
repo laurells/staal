@@ -15,6 +15,7 @@
 //   staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
 //   staalc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
 //                                            | --reply <text> | --failed <reason> | --retry)
+//                                           [--operation <id>]   (when several are in doubt)
 //
 // A built executable takes the same commands without the program file:
 //
@@ -48,7 +49,8 @@ const USAGE: &str = "usage:
   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
   staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
   staalc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
-                                           | --reply <text> | --failed <reason> | --retry)";
+                                           | --reply <text> | --failed <reason> | --retry)
+                                          [--operation <id>]   (when several are in doubt)";
 
 #[cfg(feature = "native")]
 const APP_USAGE: &str = "usage:
@@ -322,7 +324,7 @@ fn fetch(dir: &str) -> u8 {
 
 fn resolve_cmd(rest: &[String], usage: &str) -> u8 {
     let u = |m: &str| usage_error(usage, m);
-    let opts = match parse(rest, &["--journal", "--performed", "--status", "--body", "--reply", "--failed", "--retry"], &["--journal"]) {
+    let opts = match parse(rest, &["--journal", "--performed", "--status", "--body", "--reply", "--failed", "--retry", "--operation"], &["--journal"]) {
         Ok((None, opts)) => opts,
         Ok((Some(extra), _)) => return u(&format!("unexpected argument {extra}")),
         Err(e) => return u(&e),
@@ -346,7 +348,7 @@ fn resolve_cmd(rest: &[String], usage: &str) -> u8 {
     } else {
         journal::Resolution::Retry
     };
-    match journal::Journal::resolve(Path::new(&opts["--journal"]), resolution) {
+    match journal::Journal::resolve(Path::new(&opts["--journal"]), resolution, opts.get("--operation").map(String::as_str)) {
         Ok(summary) => {
             println!("{summary}; now resume the run");
             0
