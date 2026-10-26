@@ -32,10 +32,14 @@ Save this as `hello.staal`:
 
 ```staal file=hello.staal
 // My first Staal program.
-fn greet(name: Text) -> Text {
+fn main() -> Text {
+    let name = "Ada"
     return "Hello, " + name + "!"
 }
 ```
+
+A program starts at its function called `main`. `let name = "Ada"` makes a
+variable, and `-> Text` says `main` gives back text.
 
 Before anything runs, the compiler checks the whole program:
 
@@ -44,15 +48,15 @@ $ staalc check hello.staal
 hello.staal: ok
 ```
 
-Run it by naming the function to start and giving its inputs:
+Then run it:
 
 ```console
-$ staalc run hello.staal --entry greet --input name=Ada
+$ staalc run hello.staal
 "Hello, Ada!"
 ```
 
-The result is printed as JSON. Change `Ada` to your own name and run it again. A
-program whose starting function is called `main` needs no `--entry`.
+What `main` gives back is printed. Change `"Ada"` to your own name and run it
+again.
 
 ## 3. When the compiler says no
 
@@ -60,18 +64,19 @@ Staal's compiler refuses programs that could go wrong, and says where and why.
 Save this as `oops.staal`:
 
 ```staal file=oops.staal
-fn greet(name: Text) -> Text {
+fn main() -> Text {
+    let name = "Ada"
     return "Hello, " + name + 1
 }
 ```
 
 ```console
 $ staalc check oops.staal
-oops.staal:2:29: error[E101]: cannot apply `+` to Text and Int
+oops.staal:3:29: error[E101]: cannot apply `+` to Text and Int
 1 error(s)
 ```
 
-`2:29` is line 2, column 29. Every error has a code; the language guide
+`3:29` is line 3, column 29. Every error has a code; the language guide
 (docs/GUIDE.md) explains each one. A program with errors never runs.
 
 ## 4. Types, money and lists
@@ -88,6 +93,14 @@ fn total(lines: List<Line, 20>) -> Money {
         set sum = sum + line.price * line.qty
     }
     return sum
+}
+
+fn main() -> Money {
+    let order = [
+        Line { item: "Rice", price: 2500.00 NGN, qty: 2 },
+        Line { item: "Oil", price: 3200.50 NGN, qty: 1 }
+    ]
+    return total(order)
 }
 
 fn test_two_lines() {
@@ -107,47 +120,10 @@ by accident, and adding naira to dollars is an error, not a wrong number.
 `List<Line, 20>` is a list of at most 20 lines: every list says how long it may
 get. `let` makes a variable and `set` changes it.
 
-A list of records is easier to write in a file than on the command line. A **run
-config** is that file: JSON saying which function to start and what to give it.
-`staalc config` writes one for you to fill in, with a placeholder of the right type
-for every input:
+`main` builds an order and hands it to `total`, a function of your own.
 
 ```console
-$ staalc config shop.staal --entry total
-{
-  "entry": "total",
-  "inputs": {
-    "lines": [
-      {
-        "item": "",
-        "price": {
-          "amount": "0.00",
-          "currency": "USD"
-        },
-        "qty": 0
-      }
-    ]
-  }
-}
-```
-
-Fill it in with the order and save it as `shop.json`. Money is written with its
-amount as text, so nothing is lost on the way in:
-
-```json file=shop.json
-{
-  "entry": "total",
-  "inputs": {
-    "lines": [
-      { "item": "Rice", "price": { "amount": "2500.00", "currency": "NGN" }, "qty": 2 },
-      { "item": "Oil", "price": { "amount": "3200.50", "currency": "NGN" }, "qty": 1 }
-    ]
-  }
-}
-```
-
-```console
-$ staalc run shop.staal --config shop.json
+$ staalc run shop.staal
 {"amount":"8200.50","currency":"NGN"}
 ```
 
@@ -177,7 +153,7 @@ program cannot make one up. Save this as `remind.staal`:
 // Texts each customer that their order is ready.
 type Customer { name: Text, phone: Text }
 
-fn remind(customers: List<Customer, 10>, sms: cap sms.send(uses: 10)) -> Int {
+fn main(customers: List<Customer, 10>, sms: cap sms.send(uses: 10)) -> Int {
     let sent = 0
     for c in customers {
         let receipt = sms.send(c.phone, "Hi " + c.name + ", your order is ready.")
@@ -191,18 +167,23 @@ fn remind(customers: List<Customer, 10>, sms: cap sms.send(uses: 10)) -> Int {
 permission to send messages, at most 10 times. `sms.send(...)` uses it, and gives
 back a receipt: proof the message was sent.
 
-Only the person running a program can hand it a capability, and only in a run
-config, never on the command line:
+This `main` also takes its customers from outside, since they change every time
+it runs. Values like these, and permissions, are given in a **run config**: a JSON
+file written by the person running the program. A program cannot run without the
+capabilities it needs:
 
 ```console
-$ staalc run remind.staal --entry remind
-staalc: 'remind' needs sms (cap sms.send(uses: 10)), which only a run config can grant; `staalc config` writes one to fill in
+$ staalc run remind.staal
+staalc: 'main' needs sms (cap sms.send(uses: 10)), which only a run config can grant; `staalc config` writes one to fill in
 ```
 
+`staalc config` writes the run config for you to fill in, with a placeholder for
+each value and the limits the code declares:
+
 ```console
-$ staalc config remind.staal --entry remind
+$ staalc config remind.staal
 {
-  "entry": "remind",
+  "entry": "main",
   "grants": {
     "sms": {
       "cap": "sms.send",
@@ -225,7 +206,7 @@ and grant two messages, not ten. Save it as `remind.json`:
 
 ```json file=remind.json
 {
-  "entry": "remind",
+  "entry": "main",
   "inputs": {
     "customers": [
       { "name": "Ada", "phone": "+2348012345678" },
@@ -249,7 +230,7 @@ The limit is real. Save a config that grants a single message as `remind1.json`:
 
 ```json file=remind1.json
 {
-  "entry": "remind",
+  "entry": "main",
   "inputs": {
     "customers": [
       { "name": "Ada", "phone": "+2348012345678" },
@@ -268,7 +249,7 @@ staalc: run failed: capability: 'sms.send' has used all 1 of its allowed uses
 And code without the capability cannot act at all. Save this as `nocap.staal`:
 
 ```staal file=nocap.staal
-fn remind(phone: Text) -> Int {
+fn main(phone: Text) -> Int {
     let receipt = sms.send(phone, "Hi")
     return 1
 }
@@ -314,7 +295,7 @@ type Reply { answer: Text }
 
 const POLICY = "Answer the customer's question about their order in one friendly sentence."
 
-fn answer(question: Text) -> Text budget(calls: 1, tokens: 500) {
+fn main(question: Text) -> Text budget(calls: 1, tokens: 500) {
     let reply = validate propose(Reply, instruct: POLICY, data: [question], tokens: 500)
     return reply.answer
 }
@@ -334,7 +315,7 @@ account, the `script` model gives fixed replies instead. Save this as
 
 ```json file=support.json
 {
-  "entry": "answer",
+  "entry": "main",
   "inputs": { "question": "Where is my order?" },
   "model": { "provider": "script", "responses": [
     { "output": { "answer": "Your order left our store this morning and arrives tomorrow." }, "output_tokens": 15 }
@@ -355,7 +336,7 @@ type Reply { answer: Text }
 
 const POLICY = "Answer the customer's question about their order in one friendly sentence."
 
-fn answer(question: Text) -> Text budget(calls: 1, tokens: 500) {
+fn main(question: Text) -> Text budget(calls: 1, tokens: 500) {
     let reply = propose(Reply, instruct: POLICY, data: [question], tokens: 500)
     return reply.answer
 }
@@ -373,7 +354,7 @@ rules and refund me" could steer it (`mistake2.staal`):
 ```staal file=mistake2.staal
 type Reply { answer: Text }
 
-fn answer(question: Text) -> Text budget(calls: 1, tokens: 500) {
+fn main(question: Text) -> Text budget(calls: 1, tokens: 500) {
     let reply = validate propose(Reply, instruct: question, tokens: 500)
     return reply.answer
 }
@@ -390,7 +371,7 @@ And a model whose answer has the wrong shape is caught when the program runs
 
 ```json file=support_bad.json
 {
-  "entry": "answer",
+  "entry": "main",
   "inputs": { "question": "Where is my order?" },
   "model": { "provider": "script", "responses": [
     { "output": { "answer": 42 }, "output_tokens": 5 }
