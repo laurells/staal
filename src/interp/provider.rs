@@ -68,6 +68,10 @@ pub trait Provider {
     /// A provider for a concurrent task: the same service, usable from another thread
     /// at the same time. A scripted provider shares its replies with its forks.
     fn fork(&self) -> Box<dyn Provider + Send>;
+    /// Why there is no model to ask, for a run whose config names none.
+    fn absent(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// The provider a run config's `model` object names.
@@ -77,6 +81,38 @@ pub fn from_config(cfg: &Json) -> Result<Box<dyn Provider + Send>, String> {
         Some("script") => Ok(Box::new(ScriptProvider::from_config(cfg)?)),
         Some("anthropic") => Ok(Box::new(super::anthropic::AnthropicProvider::from_config(cfg)?)),
         _ => Err("model.provider: expected \"anthropic\" or \"script\"".into()),
+    }
+}
+
+/// The provider of a run config: the one its `model` names, or, without `model`, none:
+/// a run that asks a model then fails, saying why.
+pub fn of_run(model: Option<&Json>) -> Result<Box<dyn Provider + Send>, String> {
+    match model {
+        Some(m) => from_config(m),
+        None => Ok(Box::new(NoModel)),
+    }
+}
+
+/// No model: every call fails, before anything is sent or charged.
+pub struct NoModel;
+
+const NO_MODEL: &str = "this run names no model: give one under \"model\" in its run config (RUNTIME.md section 5)";
+
+impl Provider for NoModel {
+    fn count_input_tokens(&mut self, _req: &ModelRequest) -> Result<u64, ProviderError> {
+        Err(ProviderError::Failed(NO_MODEL.into()))
+    }
+
+    fn complete(&mut self, _req: &ModelRequest) -> Result<ModelReply, ProviderError> {
+        Err(ProviderError::Failed(NO_MODEL.into()))
+    }
+
+    fn fork(&self) -> Box<dyn Provider + Send> {
+        Box::new(NoModel)
+    }
+
+    fn absent(&self) -> Option<&'static str> {
+        Some(NO_MODEL)
     }
 }
 

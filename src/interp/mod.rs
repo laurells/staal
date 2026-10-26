@@ -216,8 +216,7 @@ pub fn run_config_engine(
     engine: Engine,
 ) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
-    let provider = provider::from_config(model)?;
+    let provider = provider::of_run(cfg.get("model"))?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     run_engine(prog, source, config, durability, provider, Box::new(adapter), engine)
 }
@@ -269,8 +268,7 @@ pub fn run_config_profiled(
     engine: Engine,
 ) -> Result<(RunResult, std::collections::BTreeMap<String, FnProfile>), String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
-    let provider = provider::from_config(model)?;
+    let provider = provider::of_run(cfg.get("model"))?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     let native = match engine {
         Engine::Interpreter => None,
@@ -299,8 +297,7 @@ pub trait DebugHook: Send {
 /// message says so.
 pub fn run_config_debugged(prog: &Program, config: &Json, hook: Box<dyn DebugHook>) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
-    let provider = provider::from_config(model)?;
+    let provider = provider::of_run(cfg.get("model"))?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     let hooks = Hooks { native: None, capture: None, profile: None, debug: Some(hook) };
     run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)
@@ -332,8 +329,7 @@ pub fn same_run(a: &RunResult, b: &RunResult) -> bool {
 /// a session again for each input and shows only what is new.
 pub fn run_config_capturing(prog: &Program, config: &Json, engine: Engine) -> Result<(RunResult, String), String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
-    let provider = provider::from_config(model)?;
+    let provider = provider::of_run(cfg.get("model"))?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     let native = match engine {
         Engine::Interpreter => None,
@@ -357,8 +353,7 @@ pub fn run_config_with_native(
     native: crate::native::Native,
 ) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let model = cfg.get("model").ok_or("run config: missing \"model\"")?;
-    let provider = provider::from_config(model)?;
+    let provider = provider::of_run(cfg.get("model"))?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     run_impl(prog, source, config, durability, provider, Box::new(adapter), Hooks { native: Some(native), ..Hooks::default() })
 }
@@ -2947,6 +2942,11 @@ impl<'p> Interp<'p> {
             let why = "no model calls left in the budget".to_string();
             self.emit("model_refused", json!({ "reason": why }));
             return fail(FailKind::Budget, why);
+        }
+        // Without a model, nothing is sent, counted or recorded.
+        if let Some(why) = self.provider.absent() {
+            self.emit("model_refused", json!({ "reason": why }));
+            return fail(FailKind::Provider, why.to_string());
         }
         let mut req =
             ModelRequest { instruction, data, output_schema: schema(ty, &self.types), max_output_tokens: 0 };

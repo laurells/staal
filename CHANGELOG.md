@@ -7,6 +7,16 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- A program that needs no grants runs without a config file:
+  `staalc run prog.staal [--entry <function>] [--input <name>=<value>]...` (`main`
+  by default; Text inputs as written, others as JSON), for `run`, `resume`, `profile`
+  and `debug`. Capabilities and Secrets still come only from a config file.
+- `staalc config prog.staal [--entry <function>]` prints a run config to fill in:
+  placeholders of the right type for every input, grants with the limits the code
+  declares (and what library capabilities need), secrets, and a model when the
+  function can ask one.
+- `"model"` may be left out of a run config; a model call then fails, saying so,
+  before anything is sent or recorded.
 - Licensed under the Apache License 2.0 with the LLVM Exceptions (LICENSE, NOTICE).
 - docs/TUTORIAL.md, "Staal in one hour", checked by a test that follows it in an
   empty folder and compares every command's output.

@@ -49,5 +49,5 @@ fn the_tutorial_works_as_written() {
         }
     }
     // Every program and config the tutorial has, and every command, was used.
-    assert_eq!((files, commands), (14, 14));
+    assert_eq!((files, commands), (13, 17));
 }

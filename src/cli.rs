@@ -3,8 +3,8 @@
 //   staalc check   <file.staal>
 //   staalc fmt     [--check] <file.staal>...
 //   staalc doc     <file.staal> [-o <out.md>]
-//   staalc profile <file.staal> --config <run.json> [--engine native] [-o <profile.json>]
-//   staalc debug   <file.staal> --config <run.json>
+//   staalc profile <file.staal> (--config <run.json> | ...as run) [--engine native] [-o <profile.json>]
+//   staalc debug   <file.staal> (--config <run.json> | ...as run)
 //   staalc lsp
 //   staalc --version
 //   staalc repl    [--engine interpreter|native|both]
@@ -14,8 +14,10 @@
 //   staalc publish --registry <registry folder> --git <location> --commit <id>
 //   staalc yank    --registry <registry folder> --package <name> --version <version> [--undo]
 //   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
-//   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
-//   staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
+//   staalc config  <file.staal> [--entry <function>]
+//   staalc run     <file.staal> (--config <run.json> | [--entry <function>] [--input <name>=<value>]...)
+//                  [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
+//   staalc resume  <file.staal> (--config <run.json> | ...as run) --journal <run.journal> [--log <run.jsonl>] [--engine native]
 //   staalc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
 //                                            | --reply <text> | --failed <reason> | --retry)
 //                                           [--operation <id>]   (when several are in doubt)
@@ -41,8 +43,8 @@ const USAGE: &str = "usage:
   staalc check   <file.staal>
   staalc fmt     [--check] <file.staal>...
   staalc doc     <file.staal> [-o <out.md>]
-  staalc profile <file.staal> --config <run.json> [--engine native] [-o <profile.json>]
-  staalc debug   <file.staal> --config <run.json>   (commands: help)
+  staalc profile <file.staal> (--config <run.json> | ...as run) [--engine native] [-o <profile.json>]
+  staalc debug   <file.staal> (--config <run.json> | ...as run)   (commands: help)
   staalc lsp     (a language server for editors, on standard input and output)
   staalc --version
   staalc repl    [--engine interpreter|native|both]
@@ -52,8 +54,10 @@ const USAGE: &str = "usage:
   staalc publish --registry <registry folder> --git <location> --commit <id>
   staalc yank    --registry <registry folder> --package <name> --version <version> [--undo]
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
-  staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
-  staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
+  staalc config  <file.staal> [--entry <function>]      (prints a run config to fill in)
+  staalc run     <file.staal> (--config <run.json> | [--entry <function>] [--input <name>=<value>]...)
+                 [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
+  staalc resume  <file.staal> (--config <run.json> | ...as run) --journal <run.journal> [--log <run.jsonl>] [--engine native]
   staalc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
                                            | --reply <text> | --failed <reason> | --retry)
                                           [--operation <id>]   (when several are in doubt)";
@@ -87,12 +91,12 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         }
         "fmt" => fmt_cmd(rest),
         "test" => test_cmd(rest),
-        "debug" => match parse(rest, &["--config"], &["--config"]) {
+        "debug" => match parse(&with_inputs(rest), &["--config", "--entry", "--input"], &[]) {
             Ok((Some(file), opts)) => debug_cmd(&file, &opts),
             Ok((None, _)) => u("debug needs a program file"),
             Err(e) => u(&e),
         },
-        "profile" => match parse(rest, &["--config", "--engine", "-o"], &["--config"]) {
+        "profile" => match parse(&with_inputs(rest), &["--config", "--engine", "-o", "--entry", "--input"], &[]) {
             Ok((Some(file), opts)) => {
                 let engine = match opts.get("--engine").map(String::as_str) {
                     None | Some("interpreter") => Engine::Interpreter,
@@ -128,6 +132,11 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         },
         "lsp" if rest.is_empty() => crate::lsp::serve(std::io::stdin().lock(), std::io::stdout().lock()),
         "lsp" => u("lsp takes no arguments: an editor starts it and talks to it on standard input and output"),
+        "config" => match parse(rest, &["--entry"], &[]) {
+            Ok((Some(file), opts)) => config_cmd(&file, opts.get("--entry").map(String::as_str)),
+            Ok((None, _)) => u("config needs a program file"),
+            Err(e) => u(&e),
+        },
         "fetch" => match parse(rest, &[], &[]) {
             Ok((dir, _)) => fetch(dir.as_deref().unwrap_or("."), crate::packages::Update::Nothing),
             Err(e) => u(&e),
@@ -159,8 +168,8 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         },
         "run" | "resume" => {
             let resume = cmd == "resume";
-            let required: &[&str] = if resume { &["--config", "--journal"] } else { &["--config"] };
-            match parse(rest, &["--config", "--journal", "--log", "--engine"], required) {
+            let required: &[&str] = if resume { &["--journal"] } else { &[] };
+            match parse(&with_inputs(rest), &["--config", "--journal", "--log", "--engine", "--entry", "--input"], required) {
                 Ok((Some(file), opts)) => {
                     let engine = match opts.get("--engine").map(String::as_str) {
                         None | Some("interpreter") => Engine::Interpreter,
@@ -187,6 +196,44 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
 
 /// Options that take no value.
 const FLAGS: &[&str] = &["--retry", "--undo"];
+
+/// The arguments with every `--input name=value` gathered into one `--input`, its
+/// values separated by NUL (which no argument can hold), so `parse` takes it once.
+fn with_inputs(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inputs: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--input" && i + 1 < args.len() {
+            inputs.push(args[i + 1].clone());
+            i += 2;
+        } else {
+            out.push(args[i].clone());
+            i += 1;
+        }
+    }
+    if !inputs.is_empty() {
+        out.push("--input".into());
+        out.push(inputs.join("\0"));
+    }
+    out
+}
+
+/// The run config: the file `--config` names, or one made from `--entry` and
+/// `--input` (crate::runconfig), never both.
+fn run_config_of(prog: &crate::ast::Program, opts: &HashMap<String, String>) -> Result<serde_json::Value, String> {
+    let inputs: Vec<String> = opts.get("--input").map(|s| s.split('\0').map(str::to_string).collect()).unwrap_or_default();
+    match opts.get("--config") {
+        Some(config) => {
+            if opts.contains_key("--entry") || !inputs.is_empty() {
+                return Err(format!("{config} already says what to run and with what: give --entry and --input without --config, or put them in it"));
+            }
+            let text = std::fs::read_to_string(config).map_err(|e| format!("cannot read {config}: {e}"))?;
+            serde_json::from_str(&text).map_err(|e| format!("{config} is not valid JSON: {e}"))
+        }
+        None => crate::runconfig::from_command_line(prog, opts.get("--entry").map(String::as_str), &inputs),
+    }
+}
 
 /// Parses `[file] (--option value | --flag)*`. Each option may appear once;
 /// `required` options must be present.
@@ -270,18 +317,10 @@ fn run(
             return 1;
         }
     };
-    let config = &opts["--config"];
-    let cfg_text = match std::fs::read_to_string(config) {
-        Ok(s) => s,
+    let cfg = match run_config_of(prog, opts) {
+        Ok(c) => c,
         Err(e) => {
-            eprintln!("staalc: cannot read {config}: {e}");
-            return 2;
-        }
-    };
-    let cfg: serde_json::Value = match serde_json::from_str(&cfg_text) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("staalc: {config} is not valid JSON: {e}");
+            eprintln!("staalc: {e}");
             return 2;
         }
     };
@@ -331,6 +370,35 @@ fn run(
         Err(f) => {
             eprintln!("staalc: run failed: {}: {}", f.kind, f.message);
             1
+        }
+    }
+}
+
+/// Prints a run config to fill in for the program's entry function.
+fn config_cmd(file: &str, entry: Option<&str>) -> u8 {
+    let checked = match crate::check_path(Path::new(file)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            return 2;
+        }
+    };
+    let prog = match &checked.result {
+        Ok(p) => p,
+        Err(diags) => {
+            report(&checked.files, diags);
+            eprintln!("staalc: {file} has check errors");
+            return 1;
+        }
+    };
+    match crate::runconfig::skeleton(prog, entry) {
+        Ok(cfg) => {
+            println!("{}", serde_json::to_string_pretty(&cfg).expect("serialisable"));
+            0
+        }
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            2
         }
     }
 }

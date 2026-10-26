@@ -128,7 +128,10 @@ fn quit_stops_the_run_and_a_program_with_errors_never_starts() {
     let o = Command::new(BIN).args(["debug", "bad.staal", "--config", "run.json"]).current_dir(&dir).stdin(Stdio::null()).output().unwrap();
     assert_eq!(o.status.code(), Some(1));
     assert!(o.stdout.is_empty());
-    assert!(Command::new(BIN).args(["debug", "bad.staal"]).current_dir(&dir).output().unwrap().status.code() == Some(2));
+    // Without a config the program is still checked first, and does not start.
+    let o = Command::new(BIN).args(["debug", "bad.staal"]).current_dir(&dir).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(o.stdout.is_empty());
 }
 
 #[test]

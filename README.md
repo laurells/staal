@@ -95,7 +95,9 @@ To build without the native compiler (smaller, interpreter only):
 | Command | What it does |
 | --- | --- |
 | `staalc check <file.staal>` | Checks a program and reports errors by code |
-| `staalc run <file.staal> --config <run.json>` | Runs a program; add `--journal` for crash-safe runs and `--engine native` for native code |
+| `staalc run <file.staal> [--entry <fn>] [--input <name>=<value>]...` | Runs a program that needs no grants, from the command line |
+| `staalc run <file.staal> --config <run.json>` | Runs a program with the inputs, grants and model a run config gives; add `--journal` for crash-safe runs and `--engine native` for native code |
+| `staalc config <file.staal> [--entry <fn>]` | Prints a run config to fill in for a program |
 | `staalc resume <file.staal> --config <run.json> --journal <run.journal>` | Continues a run that stopped or crashed |
 | `staalc resolve --journal <run.journal> ...` | Records an operator's decision on an action left in doubt |
 | `staalc fetch [<project folder>]` | Fetches the packages named in `staal.json` and writes `staal.lock` |

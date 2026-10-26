@@ -870,10 +870,19 @@ this server for everything else. Its README says how to install it from the fold
 
 ## Running programs, and surviving crashes
 
+    staalc run     prog.staal --entry greet --input name=Ada
+    staalc config  prog.staal --entry remind > run.json      # a config to fill in
     staalc run     prog.staal --config run.json --journal run.journal [--log run.jsonl]
     staalc resume  prog.staal --config run.json --journal run.journal
     staalc resolve --journal run.journal (--performed <receipt> | --status <code> [--body <text>]
                                           | --reply <text> | --failed <reason> | --retry)
+
+A program that needs nothing an operator must grant runs straight from the command
+line: `--entry` names the function (`main` if left out) and each `--input` gives a
+parameter, as written for Text and as JSON for anything else. A program that acts on
+the world, reads a Secret or asks a model runs with a run config, the operator's
+file of inputs, grants, secrets and model; `staalc config` writes one with
+placeholders for every input and the limits the code declares (RUNTIME.md section 1).
 
 The reference interpreter runs checked programs. Model calls go to Claude
 (`"provider": "anthropic"`) or, in tests, to a scripted model; actions go through

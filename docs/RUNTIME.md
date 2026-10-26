@@ -36,7 +36,9 @@ A run is described by a **run config** (JSON):
   variable to read it from; `net` and `fs` configure the runtime's own
   capabilities (both in section 12).
 - `model` names the model provider: `"anthropic"` for Claude, or `"script"`
-  for fixed replies in tests (section 5).
+  for fixed replies in tests (section 5). Without `model`, a model call fails
+  (`provider`, "this run names no model") before anything is sent, counted or
+  recorded.
 - Every capability parameter must appear in `grants`. Grants are how the
   person deploying the program hands out authority; nothing else can create a
   capability.
@@ -47,6 +49,36 @@ A run is described by a **run config** (JSON):
 
 The result is either the entry function's return value or a failure
 (section 8), plus the execution log (section 10).
+
+### Without a config file
+
+`staalc run`, `resume`, `profile` and `debug` take a config file with `--config`,
+or make one from the command line:
+
+    staalc run prog.staal [--entry <function>] [--input <name>=<value>]...
+
+The entry is `--entry`, or `main`. Each `--input` gives one parameter: a `Text`
+parameter takes the value exactly as written, any other parameter the value as
+JSON (`--input count=3`, `--input 'tags=["a", "b"]'`), checked as `inputs` are. A
+parameter with a default may be left out. The config made is `{"entry": ...,
+"inputs": {...}}`, with no grants, secrets or model, and is treated exactly as a
+file holding it would be: `resume` must be given the same entry and inputs (the
+journal records the config's hash). An entry function with a capability or Secret
+parameter is refused before anything runs: only a config file can grant those.
+`--config` with `--entry` or `--input` is refused.
+
+`staalc config prog.staal [--entry <function>]` prints a config to fill in for
+that function: every input without a default, as a placeholder of its type (empty
+text, 0, false, `{"amount": "0.00", "currency": "USD"}`, a record's fields, an
+enum's first variant, a list of one, none, an empty set or map); a grant for every
+capability with the limits the code declares (for a library capability, what it
+needs, its Secrets as environment variables named after the capability, such as
+`TERMII_SMS_KEY`; for a C function, an empty `library` and `sha256`); every Secret
+parameter as an environment variable of its name in capitals; and, if the function
+can reach a model call (through what it calls, function values it names, or library
+capabilities it is given), Claude, with its key from `ANTHROPIC_API_KEY`. The
+placeholders are values of their types; what they should be is for the operator to
+write.
 
 ## 2. Values
 

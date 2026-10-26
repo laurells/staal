@@ -44,25 +44,15 @@ $ staalc check hello.staal
 hello.staal: ok
 ```
 
-A program does not read its inputs from the keyboard or the command line. It is
-run with a **run config**, a small JSON file saying which function to start, what
-to give it, and which AI model it may use. This one uses no model, so it names the
-`script` model with no replies. Save it as `hello.json`:
-
-```json file=hello.json
-{
-  "entry": "greet",
-  "inputs": { "name": "Ada" },
-  "model": { "provider": "script", "responses": [] }
-}
-```
+Run it by naming the function to start and giving its inputs:
 
 ```console
-$ staalc run hello.staal --config hello.json
+$ staalc run hello.staal --entry greet --input name=Ada
 "Hello, Ada!"
 ```
 
-The result is printed as JSON. Change `"Ada"` to your own name and run it again.
+The result is printed as JSON. Change `Ada` to your own name and run it again. A
+program whose starting function is called `main` needs no `--entry`.
 
 ## 3. When the compiler says no
 
@@ -117,8 +107,32 @@ by accident, and adding naira to dollars is an error, not a wrong number.
 `List<Line, 20>` is a list of at most 20 lines: every list says how long it may
 get. `let` makes a variable and `set` changes it.
 
-The config gives the order as JSON. Money is written with its amount as text, so
-nothing is lost on the way in:
+A list of records is easier to write in a file than on the command line. A **run
+config** is that file: JSON saying which function to start and what to give it.
+`staalc config` writes one for you to fill in, with a placeholder of the right type
+for every input:
+
+```console
+$ staalc config shop.staal --entry total
+{
+  "entry": "total",
+  "inputs": {
+    "lines": [
+      {
+        "item": "",
+        "price": {
+          "amount": "0.00",
+          "currency": "USD"
+        },
+        "qty": 0
+      }
+    ]
+  }
+}
+```
+
+Fill it in with the order and save it as `shop.json`. Money is written with its
+amount as text, so nothing is lost on the way in:
 
 ```json file=shop.json
 {
@@ -128,8 +142,7 @@ nothing is lost on the way in:
       { "item": "Rice", "price": { "amount": "2500.00", "currency": "NGN" }, "qty": 2 },
       { "item": "Oil", "price": { "amount": "3200.50", "currency": "NGN" }, "qty": 1 }
     ]
-  },
-  "model": { "provider": "script", "responses": [] }
+  }
 }
 ```
 
@@ -176,8 +189,39 @@ fn remind(customers: List<Customer, 10>, sms: cap sms.send(uses: 10)) -> Int {
 
 `sms: cap sms.send(uses: 10)` is a parameter like any other, but its value is the
 permission to send messages, at most 10 times. `sms.send(...)` uses it, and gives
-back a receipt: proof the message was sent. The config **grants** the capability,
-and can narrow it further. Here, to two messages:
+back a receipt: proof the message was sent.
+
+Only the person running a program can hand it a capability, and only in a run
+config, never on the command line:
+
+```console
+$ staalc run remind.staal --entry remind
+staalc: 'remind' needs sms (cap sms.send(uses: 10)), which only a run config can grant; `staalc config` writes one to fill in
+```
+
+```console
+$ staalc config remind.staal --entry remind
+{
+  "entry": "remind",
+  "grants": {
+    "sms": {
+      "cap": "sms.send",
+      "uses": 10
+    }
+  },
+  "inputs": {
+    "customers": [
+      {
+        "name": "",
+        "phone": ""
+      }
+    ]
+  }
+}
+```
+
+The grant can narrow what the code allows. Fill this one in with two customers,
+and grant two messages, not ten. Save it as `remind.json`:
 
 ```json file=remind.json
 {
@@ -188,8 +232,7 @@ and can narrow it further. Here, to two messages:
       { "name": "Bayo", "phone": "+2348098765432" }
     ]
   },
-  "grants": { "sms": { "cap": "sms.send", "uses": 2 } },
-  "model": { "provider": "script", "responses": [] }
+  "grants": { "sms": { "cap": "sms.send", "uses": 2 } }
 }
 ```
 
@@ -213,8 +256,7 @@ The limit is real. Save a config that grants a single message as `remind1.json`:
       { "name": "Bayo", "phone": "+2348098765432" }
     ]
   },
-  "grants": { "sms": { "cap": "sms.send", "uses": 1 } },
-  "model": { "provider": "script", "responses": [] }
+  "grants": { "sms": { "cap": "sms.send", "uses": 1 } }
 }
 ```
 
@@ -285,7 +327,9 @@ shape of a `Reply` before the program may use it. `budget(calls: 1, tokens: 500)
 caps what the function may spend on models, and the compiler proves it cannot
 spend more.
 
-To try it without an account, the `script` model gives fixed replies. Save this as
+A program that asks a model needs a run config naming the model. `staalc config`
+fills in Claude, reading your API key from the environment. To try it without an
+account, the `script` model gives fixed replies instead. Save this as
 `support.json`:
 
 ```json file=support.json

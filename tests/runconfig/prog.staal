@@ -1,0 +1,31 @@
+// The program the run config tests use: inputs of many types, a default, a
+// capability, a secret, a model call and a `main`.
+type Item { name: Text, price: Money }
+
+enum Size {
+    Small,
+    Large { extra: Int },
+}
+
+fn main() -> Int {
+    return 42
+}
+
+fn describe(name: Text, count: Int, urgent: Bool, note: Text = "none") -> Text {
+    return name + " x\(count) urgent=\(urgent) note=" + note
+}
+
+fn shapes(items: List<Item, 5>, size: Size, maybe: Optional<Int>, pair: (Int, Text), tags: Set<Text, 3>, stock: Map<Text, Int, 4>) -> Int {
+    return len(items)
+}
+
+fn send(to: Text, mail: cap email.send(uses: 3), key: Secret) -> Receipt {
+    return mail.send(to)
+}
+
+type Answer { text: Text }
+
+fn ask(q: Text) -> Text budget(calls: 1, tokens: 400) {
+    let a = validate propose(Answer, instruct: "Answer briefly.", data: [q], tokens: 400)
+    return a.text
+}
