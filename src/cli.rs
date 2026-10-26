@@ -297,6 +297,13 @@ fn run(
             return 2;
         }
     };
+    let unchecked = out.unchecked();
+    if !unchecked.is_empty() {
+        eprintln!(
+            "staalc: this run is unchecked: it loaded C code for {}, which can do anything the process can; the broker cannot check it",
+            unchecked.join(", ")
+        );
+    }
     if let Some(log) = opts.get("--log") {
         let mut text = String::new();
         for event in &out.log {

@@ -1,0 +1,10 @@
+// expect: E006
+// message: untrusted value used as SQL
+// What C returns is from outside the program: it cannot become SQL.
+foreign ffi.m {
+    fn query() -> text
+}
+
+fn f(c: cap ffi.m.query, db: cap db.sqlite.execute) -> Receipt {
+    return db.execute("/data/app.db", c.query())
+}

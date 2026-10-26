@@ -388,6 +388,7 @@ fn resolve(mut modules: Vec<Module>, index: &HashMap<Vec<String>, usize>) -> Res
         out.enums.extend(m.prog.enums);
         out.aliases.extend(m.prog.aliases);
         out.interfaces.extend(m.prog.interfaces);
+        out.foreign.extend(m.prog.foreign);
     }
     let diags = crate::aliases::expand(&mut out);
     if !diags.is_empty() {

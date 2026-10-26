@@ -52,6 +52,12 @@ unable to download other Rust targets. Remaining: Windows builds and tests, proo
 macOS, cross-compiling, wasm. Needs CI working again or a linked machine. Still open:
 whether to publish the wheel to PyPI (the owner's decision).
 
+## C libraries (`cap ffi`) on macOS and aarch64
+
+Built and tested on Linux x86_64 only. The code supports macOS and aarch64 (loading
+by path on macOS, after hashing), but no test has run there: needs CI working again
+or a linked machine. Until then, treat those as unproven.
+
 ## Reliability, to do before more features
 
 Everything has been tested on one Linux machine only. Not yet done: fuzzing (first

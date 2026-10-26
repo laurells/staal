@@ -1,0 +1,15 @@
+// expect: E008
+// message: does not hold proof of work
+// A C call returns a value, not proof that anything was done.
+foreign ffi.m {
+    fn send() -> i64
+}
+
+fn f(c: cap ffi.m.send, mail: cap email.send) -> Done {
+    let r = try c.send()
+    if r.ok {
+        return done(evidence: [r])
+    }
+    let x = mail.send("fallback")
+    return done(evidence: [x])
+}

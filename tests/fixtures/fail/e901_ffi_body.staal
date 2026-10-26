@@ -1,0 +1,7 @@
+// expect: E901
+// message: a foreign function has no body
+foreign ffi.m {
+    fn f() -> i64 {
+        return 1
+    }
+}

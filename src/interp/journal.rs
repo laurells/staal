@@ -234,6 +234,13 @@ impl Journal {
             intent["body"]["capability"].as_str().unwrap_or("?"),
             intent["body"]["method"].as_str().unwrap_or("?")
         );
+        // A C call's result is a value nobody outside the process saw: an operator can
+        // only say it failed, or have it made again.
+        if intent["body"]["capability"].as_str().is_some_and(|c| c.starts_with("ffi."))
+            && !matches!(resolution, Resolution::Failed { .. } | Resolution::Retry)
+        {
+            return Err(format!("{what} is a call of a C function: record --failed <reason>, or --retry to call it again"));
+        }
         let http = intent["body"]["capability"].as_str().is_some_and(|c| c.starts_with("net.http."));
         let tcp = matches!(intent["body"]["capability"].as_str(), Some("net.tcp.exchange" | "net.tls.exchange"));
         let mut j = Journal::with(Some(file), String::new(), BTreeMap::new(), None);

@@ -1,0 +1,103 @@
+// The program the ffi tests run, against tests/ffi/staaltest.c.
+foreign ffi.staaltest {
+    fn add64(a: i64, b: i64) -> i64
+    fn neg32(x: i32) -> i32
+    fn take_i8(x: i8) -> i32
+    fn take_u16(x: u16) -> i32
+    fn low_byte(x: u32) -> u8
+    fn as_i8(x: i32) -> i8
+    fn too_big() -> u64
+    fn is_even(x: i64) -> bool
+    fn text_len(s: text) -> u64
+    fn greeting() -> text
+    fn no_text() -> text
+    fn not_utf8() -> text
+    fn sum6(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) -> i64
+    fn append_line(path: text, line: text) -> i64
+    fn next() -> i64
+    fn crash() -> i64
+    fn missing() -> i64
+}
+
+type Numbers { sum: Int, neg: Int, i8: Int, u16: Int, low: Int, wrapped: Int, even: Bool, odd: Bool, len: Int, hello: Text, six: Int }
+
+fn numbers(
+    add: cap ffi.staaltest.add64,
+    neg: cap ffi.staaltest.neg32,
+    i8: cap ffi.staaltest.take_i8,
+    u16: cap ffi.staaltest.take_u16,
+    low: cap ffi.staaltest.low_byte,
+    wrap: cap ffi.staaltest.as_i8,
+    even: cap ffi.staaltest.is_even,
+    len: cap ffi.staaltest.text_len,
+    hello: cap ffi.staaltest.greeting,
+    six: cap ffi.staaltest.sum6
+) -> Numbers {
+    return Numbers {
+        sum: add.add64(9007199254740993, -3),
+        neg: neg.neg32(-2147483647),
+        i8: i8.take_i8(-128),
+        u16: u16.take_u16(65535),
+        low: low.low_byte(511),
+        wrapped: wrap.as_i8(200),
+        even: even.is_even(4),
+        odd: even.is_even(-3),
+        len: len.text_len("h\u{e9}llo"),
+        hello: hello.greeting(),
+        six: six.sum6(1, 2, 3, 4, 5, 6)
+    }
+}
+
+fn narrow(i8: cap ffi.staaltest.take_i8, n: Int) -> Int {
+    return i8.take_i8(n)
+}
+
+fn too_big(big: cap ffi.staaltest.too_big) -> Int {
+    return big.too_big()
+}
+
+fn no_text(t: cap ffi.staaltest.no_text) -> Text {
+    return t.no_text()
+}
+
+fn not_utf8(t: cap ffi.staaltest.not_utf8) -> Text {
+    return t.not_utf8()
+}
+
+fn length(len: cap ffi.staaltest.text_len, s: Text) -> Int {
+    return len.text_len(s)
+}
+
+// Two lines appended, then the counter read: effects the journal must not repeat.
+fn effects(append: cap ffi.staaltest.append_line, next: cap ffi.staaltest.next, path: Text) -> Int {
+    let a = append.append_line(path, "one")
+    let b = append.append_line(path, "two")
+    return next.next()
+}
+
+fn take_next(i: Int, next: cap ffi.staaltest.next) -> Int {
+    return next.next()
+}
+
+// Calls from concurrent tasks are made one at a time.
+fn counts(next: cap ffi.staaltest.next) -> Int {
+    let got = parallel([1, 2, 3, 4, 5, 6, 7, 8], take_next, next)
+    return sum(got)
+}
+
+fn twice(next: cap ffi.staaltest.next) -> Int {
+    let a = next.next()
+    return next.next()
+}
+
+fn crash(c: cap ffi.staaltest.crash) -> Int {
+    return c.crash()
+}
+
+fn missing(m: cap ffi.staaltest.missing) -> Int {
+    return m.missing()
+}
+
+fn plain() -> Int {
+    return 1
+}

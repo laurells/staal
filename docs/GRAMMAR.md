@@ -47,7 +47,7 @@ since JSON from outside often has such fields.
 
 **Contextual words** have a meaning only where the grammar below says, and are
 identifiers everywhere else: `action`, `as`, `canonical`, `capability`, `const`,
-`enum`, `evidence`, `fail`, `fails`, `interface`, `match`, `needs`, `none`,
+`enum`, `evidence`, `fail`, `fails`, `foreign`, `interface`, `match`, `needs`, `none`,
 `parallel`, `parse`, `self`, `some` and `_`; the budget limits `calls` and `tokens`; the
 options of a propose call `instruct`, `data`, `blind_to` and `tokens`; the capability
 limits `max`, `each`, `uses` and `only`; the parameter marks `trusted`, `blind`,
@@ -83,6 +83,7 @@ A character that is none of these, and starts no other token, is a lexer error.
     program    := import* decl*
     decl       := "pub"? ( alias | record | enum | interface | const | function )
                 | capability                  -- never `pub`: a capability is named by its path
+                | foreign                     -- never `pub`, likewise
 
     import     := "import" path ( "as" IDENT )? ( "{" IDENT ( "," IDENT )* ","? "}" )?
     path       := IDENT ( "." IDENT )*
@@ -169,6 +170,26 @@ capability sms.termii {
     action send(to: Text @target, text: Text) -> Receipt {
         return http.post("https://api.ng.termii.com/api/sms/send", json(to))
     }
+}
+```
+
+## C libraries
+
+    foreign    := "foreign" path "{" cfunction* "}"
+    cfunction  := "fn" IDENT "(" ( IDENT ":" ctype ( "," IDENT ":" ctype )* ","? )? ")" ( "->" ctype )?
+    ctype      := "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "bool" | "text" | "void"
+
+A C function has no body. Without `->` it returns nothing (`void`). The C type
+names are words only here. Which paths, types and numbers of arguments are allowed
+is the checker's to say (RUNTIME.md section 19).
+
+```staal
+foreign ffi.zlib {
+    fn crc32(crc: u64, data: text, length: u32) -> u64
+}
+
+fn checksum(c: cap ffi.zlib.crc32, data: Text) -> Int {
+    return c.crc32(0, data, len(data))
 }
 ```
 

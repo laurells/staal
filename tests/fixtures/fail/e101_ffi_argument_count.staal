@@ -1,0 +1,9 @@
+// expect: E101
+// message: takes 3 argument(s) but 2 were given
+foreign ffi.zlib {
+    fn crc32(crc: u64, data: text, length: u32) -> u64
+}
+
+fn f(c: cap ffi.zlib.crc32) -> Int {
+    return c.crc32(0, "abc")
+}

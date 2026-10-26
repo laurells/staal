@@ -1,0 +1,11 @@
+// expect: E101
+// message: `net`, `fs`, `db` and `ffi` belong to the runtime
+// A library capability cannot pose as a C function, or as the runtime's.
+capability ffi.m {
+    needs http: cap net.http.post(uses: 1)
+
+    action send(text: Text) -> Text {
+        let r = http.post("https://x.org/send", text)
+        return r.body
+    }
+}

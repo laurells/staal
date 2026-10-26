@@ -1050,6 +1050,84 @@ pub struct AliasDecl {
     pub pos: Pos,
 }
 
+/// A C type in a `foreign` declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CType {
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    Bool,
+    Text,
+    Void,
+}
+
+impl CType {
+    pub const ALL: [CType; 11] =
+        [CType::I8, CType::I16, CType::I32, CType::I64, CType::U8, CType::U16, CType::U32, CType::U64, CType::Bool, CType::Text, CType::Void];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CType::I8 => "i8",
+            CType::I16 => "i16",
+            CType::I32 => "i32",
+            CType::I64 => "i64",
+            CType::U8 => "u8",
+            CType::U16 => "u16",
+            CType::U32 => "u32",
+            CType::U64 => "u64",
+            CType::Bool => "bool",
+            CType::Text => "text",
+            CType::Void => "void",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<CType> {
+        CType::ALL.into_iter().find(|t| t.name() == s)
+    }
+
+    /// The Staal type of a value of this C type.
+    pub fn staal(self) -> Ty {
+        Ty::Named(
+            match self {
+                CType::Bool => "Bool",
+                CType::Text => "Text",
+                CType::Void => "Unit",
+                _ => "Int",
+            }
+            .into(),
+        )
+    }
+}
+
+/// One C function in a `foreign` declaration.
+#[derive(Debug, Clone)]
+pub struct ForeignFn {
+    pub name: String,
+    pub params: Vec<(String, CType)>,
+    pub ret: CType,
+    pub pos: Pos,
+}
+
+/// `foreign ffi.<library> { fn ... }`: the C functions a program calls, each the
+/// capability `ffi.<library>.<function>`.
+#[derive(Debug, Clone)]
+pub struct ForeignDecl {
+    pub path: Vec<String>,
+    pub fns: Vec<ForeignFn>,
+    pub pos: Pos,
+}
+
+impl ForeignDecl {
+    pub fn fn_path(&self, f: &ForeignFn) -> String {
+        format!("{}.{}", self.path.join("."), f.name)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Program {
     /// The imports of a single parsed file. Empty after modules are resolved into one
@@ -1064,6 +1142,7 @@ pub struct Program {
     /// in it replaced, and no other part of the program names an alias.
     pub aliases: Vec<AliasDecl>,
     pub interfaces: Vec<InterfaceDecl>,
+    pub foreign: Vec<ForeignDecl>,
 }
 
 #[cfg(test)]

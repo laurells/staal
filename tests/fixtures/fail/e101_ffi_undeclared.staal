@@ -1,0 +1,6 @@
+// expect: E101
+// message: names no C function this program declares
+// A C function is reachable only through one the program declares.
+fn f(c: cap ffi.zlib.crc32) -> Receipt {
+    return c.crc32(0, "abc", 3)
+}

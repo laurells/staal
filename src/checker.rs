@@ -123,6 +123,8 @@ struct Ctx<'a> {
     /// Actions of library capabilities, by the path programs use (`termii.sms.send`):
     /// the types of the parameters a program passes.
     lib_actions: HashMap<String, Vec<Ty>>,
+    /// C functions (`foreign`), by capability path: their parameters' and result's types.
+    foreign: HashMap<String, (Vec<CType>, CType)>,
     /// The body of a capability action being checked: what must reach a request.
     flow: Option<ActionFlow>,
     /// Functions that may fail: an action, or a call to a failing function, not under `try`.
@@ -764,6 +766,7 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
         generic_bounds: Vec::new(),
         interfaces: HashMap::new(),
         lib_actions: HashMap::new(),
+        foreign: HashMap::new(),
         flow: None,
         pure_fns: find_pure_fns(prog),
         lambdas: HashMap::new(),
@@ -857,6 +860,7 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
         }
         ctx.enums.insert(e.name.clone(), e.variants.iter().map(|v| (v.name.clone(), v.fields.clone())).collect());
     }
+    check_foreign(&mut ctx, prog);
     for i in &prog.interfaces {
         let mut names = HashSet::new();
         for m in &i.methods {
@@ -1394,9 +1398,17 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                     format!("`max: {m}` and `each: {e}` use different units, so no action could satisfy both"),
                 );
             }
-            // `net`, `fs` and `db` belong to the runtime (RUNTIME.md section 12).
+            // `net`, `fs` and `db` belong to the runtime (RUNTIME.md section 12), and
+            // `ffi` to the C functions a program declares (section 19).
             let p = path.join(".");
             let family = path.first().map(String::as_str);
+            if family == Some("ffi") {
+                if !ctx.foreign.contains_key(&p) {
+                    ctx.err("E101", pos, format!("`cap {p}` names no C function this program declares; declare it in `foreign {}`", path[..path.len().saturating_sub(1).max(1)].join(".")));
+                } else if limits.max.is_some() || limits.each.is_some() || limits.only.is_some() {
+                    ctx.err("E101", pos, format!("`cap {p}` is a C function: it spends no money the runtime can measure and has no target, so only `uses` limits it"));
+                }
+            }
             if matches!(family, Some("net") | Some("fs") | Some("db")) {
                 match runtime_cap(path) {
                     None => ctx.err(
@@ -1885,12 +1897,56 @@ fn narrow_money(name: &str, from: &Option<Limit>, to: &Option<Limit>, path: &[St
 }
 
 /// The rules for capabilities a library declares (RUNTIME.md section 13).
+/// `foreign ffi.<library> { ... }`: each C function becomes the capability
+/// `ffi.<library>.<function>`, typed by its declaration (RUNTIME.md section 19).
+fn check_foreign(ctx: &mut Ctx, prog: &Program) {
+    let mut libraries = HashSet::new();
+    for d in &prog.foreign {
+        let p = d.path.join(".");
+        let named_ok = d.path.len() == 2
+            && d.path[0] == "ffi"
+            && d.path[1].chars().next().is_some_and(|c| c.is_ascii_lowercase())
+            && d.path[1].chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if !named_ok {
+            ctx.err("E101", d.pos, format!("`foreign {p}`: a C library is declared as ffi.<name>, the name in lowercase letters, digits and _"));
+            continue;
+        }
+        if !libraries.insert(p.clone()) {
+            ctx.err("E101", d.pos, format!("`foreign {p}` is declared twice; declare all its functions in one place"));
+            continue;
+        }
+        let mut names = HashSet::new();
+        for f in &d.fns {
+            if !names.insert(f.name.as_str()) {
+                ctx.err("E101", f.pos, format!("`foreign {p}` declares '{}' twice", f.name));
+                continue;
+            }
+            if f.params.len() > crate::interp::ffi::MAX_ARGS {
+                ctx.err("E101", f.pos, format!("{p}.{}: a C function here takes at most {} arguments", f.name, crate::interp::ffi::MAX_ARGS));
+            }
+            let mut pnames = HashSet::new();
+            for (n, t) in &f.params {
+                if *t == CType::Void {
+                    ctx.err("E101", f.pos, format!("{p}.{}: parameter '{n}' cannot be void", f.name));
+                }
+                if !pnames.insert(n.as_str()) {
+                    ctx.err("E101", f.pos, format!("{p}.{}: parameter '{n}' is declared twice", f.name));
+                }
+            }
+            ctx.foreign.insert(d.fn_path(f), (f.params.iter().map(|(_, t)| *t).collect(), f.ret));
+        }
+        if d.fns.is_empty() {
+            ctx.err("E101", d.pos, format!("`foreign {p}` declares no function"));
+        }
+    }
+}
+
 fn check_caps(ctx: &mut Ctx, prog: &Program) {
     let mut seen_paths = HashSet::new();
     for cap in &prog.caps {
         let p = cap.path.join(".");
-        if matches!(cap.path.first().map(String::as_str), Some("net") | Some("fs")) {
-            ctx.err("E101", cap.pos, format!("capability {p}: `net` and `fs` belong to the runtime"));
+        if matches!(cap.path.first().map(String::as_str), Some("net" | "fs" | "db" | "ffi")) {
+            ctx.err("E101", cap.pos, format!("capability {p}: `net`, `fs`, `db` and `ffi` belong to the runtime"));
         }
         if !seen_paths.insert(p.clone()) {
             ctx.err("E101", cap.pos, format!("capability {p} is declared twice"));
@@ -2151,6 +2207,7 @@ fn outcome_holds_evidence(ctx: &Ctx, value: &Expr, env: &Env) -> bool {
             Expr::Action { receiver, .. } => match env.get(receiver).map(|b| &b.ty) {
                 Some(Ty::Cap { path, .. }) => {
                     !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead | RuntimeCap::DbQuery | RuntimeCap::Tcp | RuntimeCap::Accept))
+                        && !ctx.foreign.contains_key(&path.join("."))
                 }
                 _ => false,
             },
@@ -4390,6 +4447,23 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                         format!("unvalidated Proposed<{inner}> passed to action '{receiver}.{method}'; use `validate` first"),
                     );
                 }
+            }
+            // A C function: typed by its `foreign` declaration; what it returns is
+            // untrusted, like anything from outside.
+            if let Some((params, ret)) = cap_path.as_ref().and_then(|p| ctx.foreign.get(&p.join("."))).cloned() {
+                let p = cap_path.as_ref().map(|p| p.join(".")).unwrap_or_default();
+                if params.len() != args.len() {
+                    ctx.err("E101", *pos, format!("C function '{p}' takes {} argument(s) but {} were given", params.len(), args.len()));
+                } else {
+                    for ((a, t), want) in args.iter().zip(&arg_tys).zip(&params) {
+                        if let Some((t, _)) = t
+                            && *t != want.staal()
+                        {
+                            ctx.err("E101", a.pos(), format!("C function '{p}' takes a {} ({}) here, found {t}", want.name(), want.staal()));
+                        }
+                    }
+                }
+                return Some((ret.staal(), false));
             }
             // An action of a library's capability: typed by its declaration.
             if let Some(params) = cap_path.as_ref().and_then(|p| ctx.lib_actions.get(&p.join("."))).cloned() {

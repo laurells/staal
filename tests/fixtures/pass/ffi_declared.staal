@@ -1,0 +1,11 @@
+// A C library's functions, each a capability granted on its own.
+foreign ffi.zlib {
+    fn crc32(crc: u64, data: text, length: u32) -> u64
+    fn zlibVersion() -> text
+    fn reset()
+}
+
+fn checksum(c: cap ffi.zlib.crc32(uses: 1), version: cap ffi.zlib.zlibVersion, data: Text) -> Int {
+    let v = version.zlibVersion()
+    return c.crc32(0, data, len(data))
+}

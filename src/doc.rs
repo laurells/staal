@@ -16,7 +16,7 @@ use crate::lexer::{lex_with_spans, Tok, Token};
 /// One documented declaration.
 #[derive(Debug, PartialEq)]
 pub struct Item {
-    /// "type", "enum", "interface", "fn", "const" or "capability".
+    /// "type", "enum", "interface", "fn", "const", "capability" or "foreign".
     pub kind: &'static str,
     /// As written after its keyword: `Line`, `Line.cost`, `sms.termii`.
     pub name: String,
@@ -114,7 +114,7 @@ fn starts_decl(toks: &[Token], i: usize) -> bool {
     match &toks[i].tok {
         Tok::Pub | Tok::Fn | Tok::Type | Tok::Import => true,
         Tok::Ident(w) => {
-            matches!(w.as_str(), "enum" | "interface" | "const" | "capability")
+            matches!(w.as_str(), "enum" | "interface" | "const" | "capability" | "foreign")
                 && matches!(toks.get(i + 1).map(|t| &t.tok), Some(Tok::Ident(_)))
                 && (i == 0 || matches!(toks[i - 1].tok, Tok::RBrace | Tok::Pub) || toks[i - 1].pos.line < toks[i].pos.line)
         }
@@ -146,9 +146,10 @@ fn kind_and_name(toks: &[Token], k: usize) -> Option<(&'static str, String)> {
                 "interface" => "interface",
                 "const" => "const",
                 "capability" => "capability",
+                "foreign" => "foreign",
                 _ => return None,
             };
-            Some((kind, if kind == "capability" { path(k + 1)? } else { ident(k + 1)? }))
+            Some((kind, if kind == "capability" || kind == "foreign" { path(k + 1)? } else { ident(k + 1)? }))
         }
         _ => None,
     }
@@ -205,7 +206,7 @@ pub fn document(files: &[crate::SourceFile]) -> Result<String, String> {
     for (i, f) in files.iter().enumerate() {
         let d = file_doc(&f.text).map_err(|e| format!("{}:{e}", f.name))?;
         // A capability is never `pub`: it is named by its path, from any module.
-        let items: Vec<&Item> = d.items.iter().filter(|it| i == 0 || it.public || it.kind == "capability").collect();
+        let items: Vec<&Item> = d.items.iter().filter(|it| i == 0 || it.public || it.kind == "capability" || it.kind == "foreign").collect();
         if i == 0 {
             out.push_str(&format!("# {}\n", f.name));
         } else {
@@ -219,12 +220,19 @@ pub fn document(files: &[crate::SourceFile]) -> Result<String, String> {
             ("Constants", &["const"][..]),
             ("Functions", &["fn"][..]),
             ("Capabilities", &["capability"][..]),
+            ("C libraries (unchecked)", &["foreign"][..]),
         ] {
             let these: Vec<&&Item> = items.iter().filter(|it| kinds.contains(&it.kind)).collect();
             if these.is_empty() {
                 continue;
             }
             out.push_str(&format!("\n## {title}\n"));
+            if kinds == ["foreign"] {
+                out.push_str(
+                    "\nC code can do anything the process can, so the runtime cannot check these functions. \
+                     A run granted any of them is marked unchecked.\n",
+                );
+            }
             for it in these {
                 out.push_str(&format!("\n### `{}`\n\n```staal\n{}\n```\n", it.name, it.code));
                 if !it.doc.is_empty() {

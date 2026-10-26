@@ -1,0 +1,6 @@
+// expect: E101
+// message: takes at most 6 arguments
+// Seven arguments would not all travel in registers on every supported machine.
+foreign ffi.m {
+    fn seven(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64) -> i64
+}

@@ -1,0 +1,5 @@
+// expect: E101
+// message: parameter 'x' cannot be void
+foreign ffi.m {
+    fn f(x: void) -> i64
+}

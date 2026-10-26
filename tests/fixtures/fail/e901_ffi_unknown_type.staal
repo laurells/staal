@@ -1,0 +1,5 @@
+// expect: E901
+// message: 'int' is not a C type here
+foreign ffi.m {
+    fn f(x: int) -> i64
+}

@@ -1,0 +1,9 @@
+// expect: E101
+// message: is declared twice
+foreign ffi.m {
+    fn f() -> i64
+}
+
+foreign ffi.m {
+    fn g() -> i64
+}

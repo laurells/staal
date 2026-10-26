@@ -1,0 +1,5 @@
+// expect: E101
+// message: a C library is declared as ffi.<name>
+foreign zlib {
+    fn crc32(crc: u64, data: text, length: u32) -> u64
+}

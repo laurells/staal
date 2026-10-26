@@ -7,6 +7,15 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- C libraries: `foreign ffi.<library> { fn ... }` declares C functions with C types
+  (integers, `bool`, `text`, at most six arguments), each the capability
+  `ffi.<library>.<function>`. A grant names the library file and its SHA-256, checked
+  before the run starts; on Linux the library is loaded through the descriptor that
+  was hashed. Every run granted one is marked unchecked: an `unchecked` event in the
+  log, a warning from `staalc run`, `"unchecked"` in the C interface's result, and a
+  section in `staalc doc`. Arguments are checked against the declaration before the
+  call; calls are journaled, replayed, made one at a time per library, and a call cut
+  short by a crash is made again only when the grant says `"repeatable": true`.
 - Version ranges for dependencies: `{"git": ..., "version": "^1.2"}` takes the newest
   release tag of that repository within the range, and `{"version": "~0.3"}` the
   newest version the project's registry lists. Ranges are Semantic Versioning
@@ -213,8 +222,9 @@ the language or its file formats.
   `min`, `max`, `map`, `any`, `all`, `count` or any other of them must be renamed.
 
 ### Fixed
-- A package could be named `db` or `ffi`, capability families of the runtime; both
-  are refused now, as `net` and `fs` were.
+- A package could be named `db` or `ffi`, and a library capability declared under
+  `db.`, capability families of the runtime; all are refused now, as `net` and `fs`
+  were.
 - `staalc resolve` refuses an operation that resume makes again by itself (`fs.read`,
   `fs.write`, `db.sqlite.query`, `net.tcp.accept`, `net.tcp.reply`). Before, it could
   record a receipt for an `fs.read` or a `db.sqlite.query`, and the resumed run then

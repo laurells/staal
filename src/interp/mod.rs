@@ -11,6 +11,7 @@
 pub mod adapter;
 pub mod broker;
 pub mod db;
+pub mod ffi;
 pub mod fsx;
 pub mod http;
 pub mod journal;
@@ -159,6 +160,18 @@ const MAX_PARALLEL: usize = 16;
 pub struct RunResult {
     pub result: Result<Json, Failure>,
     pub log: Vec<Json>,
+}
+
+impl RunResult {
+    /// The C functions the run loaded (RUNTIME.md section 19): non-empty means the run
+    /// is unchecked, since the broker cannot check what C code does.
+    pub fn unchecked(&self) -> Vec<String> {
+        self.log
+            .iter()
+            .filter(|e| e["event"] == "unchecked")
+            .filter_map(|e| e["capability"].as_str().map(str::to_string))
+            .collect()
+    }
 }
 
 /// Which engine runs the program. Both give the same results, logs and journals: a
@@ -442,11 +455,13 @@ struct RuntimeSettings {
     fs_max_read_bytes: usize,
     /// Every secret value of the run, removed from anything recorded or shown.
     secrets: Vec<String>,
+    /// The C libraries the run's grants load, each once.
+    libraries: Vec<std::sync::Arc<ffi::Library>>,
 }
 
 enum Arg {
     Data(Value),
-    Grant { path: String, limits: broker::Limits, idempotency_key: bool, needs: Vec<NeedArg> },
+    Grant { path: String, limits: broker::Limits, idempotency_key: bool, needs: Vec<NeedArg>, foreign: Option<std::sync::Arc<ffi::Function>> },
 }
 
 /// What a library capability's grant supplies for one of its `needs`.
@@ -462,6 +477,8 @@ struct ParsedGrant {
     limits: broker::Limits,
     idempotency_key: bool,
     needs: Vec<NeedArg>,
+    /// For `ffi.*`: the C function the grant loads.
+    foreign: Option<std::sync::Arc<ffi::Function>>,
 }
 
 /// How a net.http failure that certainly sent nothing begins, in results and journals.
@@ -501,11 +518,14 @@ fn parse_grant(
     declared: &CapLimits,
     types: &Types,
     prog: &Program,
-    secrets: &mut Vec<String>,
+    runtime: &mut RuntimeSettings,
 ) -> Result<ParsedGrant, String> {
     let g = g.as_object().ok_or(format!("{at}: expected an object"))?;
+    let c_function = want.starts_with("ffi.");
     for k in g.keys() {
-        if !["cap", "max", "each", "uses", "only", "idempotency_key", "needs"].contains(&k.as_str()) {
+        let known = ["cap", "max", "each", "uses", "only", "idempotency_key", "needs"].contains(&k.as_str())
+            || (c_function && ["library", "sha256", "repeatable"].contains(&k.as_str()));
+        if !known {
             return Err(format!("{at}: unknown key '{k}'"));
         }
     }
@@ -525,7 +545,9 @@ fn parse_grant(
         }
         let http = want.starts_with("net.http.");
         for (i, pat) in limits.only.iter().flatten().enumerate() {
-            let checked = if http {
+            let checked = if c_function {
+                Err("a C function has no target for `only` to limit".to_string())
+            } else if http {
                 crate::targets::check_url_pattern(pat)
             } else if want == "net.tcp.exchange" || want == "net.tls.exchange" || want == "net.tcp.accept" {
                 crate::targets::check_address_pattern(pat)
@@ -575,7 +597,7 @@ fn parse_grant(
                 match t {
                     Ty::Cap { path, limits: nd } => {
                         let np = path.join(".");
-                        let inner = parse_grant(v, &nat, &np, nd, types, prog, secrets)?;
+                        let inner = parse_grant(v, &nat, &np, nd, types, prog, runtime)?;
                         needs.push(NeedArg::Cap {
                             path: np,
                             limits: inner.limits,
@@ -585,7 +607,7 @@ fn parse_grant(
                     }
                     Ty::Named(x) if x == "Secret" => {
                         let secret = load_secret(v, &nat)?;
-                        secrets.push(secret.value.clone());
+                        runtime.secrets.push(secret.value.clone());
                         needs.push(NeedArg::Data(Value::Secret(secret)));
                     }
                     Ty::Named(x) if x == "Text" => {
@@ -597,7 +619,39 @@ fn parse_grant(
             }
         }
     }
-    Ok(ParsedGrant { limits, idempotency_key, needs })
+    let foreign = if c_function { Some(load_c_function(g, at, want, prog, &mut runtime.libraries)?) } else { None };
+    Ok(ParsedGrant { limits, idempotency_key, needs, foreign })
+}
+
+/// The C function an `ffi.*` grant names: its library file, pinned by SHA-256, loaded,
+/// and the function found in it with the signature the program declares.
+fn load_c_function(
+    g: &Map<String, Json>,
+    at: &str,
+    want: &str,
+    prog: &Program,
+    libraries: &mut Vec<std::sync::Arc<ffi::Library>>,
+) -> Result<std::sync::Arc<ffi::Function>, String> {
+    let f = prog
+        .foreign
+        .iter()
+        .find_map(|d| d.fns.iter().find(|f| d.fn_path(f) == want))
+        .ok_or(format!("{at}: the program declares no C function {want}"))?;
+    let library = g.get("library").and_then(Json::as_str).ok_or(format!("{at}.library: the C library's file, an absolute path"))?;
+    let path = crate::targets::canonical_path(library).map_err(|e| format!("{at}.library: {e}"))?;
+    let sha = g.get("sha256").and_then(Json::as_str).ok_or(format!("{at}.sha256: the SHA-256 of the library file, in lowercase hex"))?;
+    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return Err(format!("{at}.sha256: expected 64 lowercase hex digits"));
+    }
+    let repeatable = match g.get("repeatable") {
+        None => false,
+        Some(Json::Bool(b)) => *b,
+        Some(_) => return Err(format!("{at}.repeatable: expected true or false")),
+    };
+    let lib = ffi::load(&path, sha, libraries).map_err(|e| format!("{at}: {e}"))?;
+    let params: Vec<CType> = f.params.iter().map(|(_, t)| *t).collect();
+    let func = ffi::function(&lib, &f.name, &params, f.ret, repeatable).map_err(|e| format!("{at}: {e}"))?;
+    Ok(std::sync::Arc::new(func))
 }
 
 /// The shortest secret accepted: a shorter one would be found by accident in ordinary
@@ -606,7 +660,7 @@ const MIN_SECRET_BYTES: usize = 8;
 
 /// Whether `path` is one of the runtime's own capabilities (`net.http.*`, `fs.*`).
 fn is_runtime_cap(path: &str) -> bool {
-    path.starts_with("net.") || path.starts_with("fs.") || path.starts_with("db.")
+    path.starts_with("net.") || path.starts_with("fs.") || path.starts_with("db.") || path.starts_with("ffi.")
 }
 
 /// Replaces every secret value in `text` with a marker.
@@ -690,7 +744,7 @@ fn runtime_settings(cfg: &Map<String, Json>) -> Result<RuntimeSettings, String> 
         }
     }
     let tls = tcp::tls_config(&net.extra_roots)?;
-    Ok(RuntimeSettings { net, fs_max_read_bytes, secrets: Vec::new(), tls })
+    Ok(RuntimeSettings { net, fs_max_read_bytes, secrets: Vec::new(), tls, libraries: Vec::new() })
 }
 
 /// Converts a limit written in source (`max: 500 USD`) to money.
@@ -832,8 +886,8 @@ impl Setup {
                     let at = format!("grants.{}", p.name);
                     let g = grants.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this capability"))?;
                     let want = path.join(".");
-                    let pg = parse_grant(g, &at, &want, declared, &types, prog, &mut runtime.secrets)?;
-                    args.push(Arg::Grant { path: want, limits: pg.limits, idempotency_key: pg.idempotency_key, needs: pg.needs });
+                    let pg = parse_grant(g, &at, &want, declared, &types, prog, &mut runtime)?;
+                    args.push(Arg::Grant { path: want, limits: pg.limits, idempotency_key: pg.idempotency_key, needs: pg.needs, foreign: pg.foreign });
                 }
                 Ty::Proposed(_) => {
                     return Err(format!("inputs.{}: an entry parameter cannot be Proposed; only model calls produce those", p.name))
@@ -1001,6 +1055,8 @@ struct Interp<'p> {
     tcp: tcp::Settings,
     /// Listening sockets and accepted connections, shared with the run's tasks.
     server: Shared<tcp::Server>,
+    /// The C function each `ffi.*` grant loaded, by the grant's broker handle.
+    foreign: HashMap<usize, std::sync::Arc<ffi::Function>>,
     fs_max_read_bytes: usize,
     secrets: Vec<String>,
     /// Library capabilities' actions, by the path programs use (`termii.sms.send`).
@@ -1126,6 +1182,7 @@ impl<'p> Interp<'p> {
                 tls: runtime.tls.clone(),
             },
             server: Default::default(),
+            foreign: HashMap::new(),
             fs_max_read_bytes: runtime.fs_max_read_bytes,
             secrets: runtime.secrets.clone(),
             lib: prog
@@ -1187,8 +1244,17 @@ impl<'p> Interp<'p> {
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
-                Arg::Grant { path, limits, idempotency_key, needs } => {
+                Arg::Grant { path, limits, idempotency_key, needs, foreign } => {
                     let h = self.broker().grant(path, limits.clone());
+                    if let Some(f) = foreign {
+                        // C code the broker cannot check: the run says so, first.
+                        self.emit(
+                            "unchecked",
+                            json!({ "capability": path, "library": f.lib.path, "sha256": f.lib.sha256,
+                                    "why": "a C library can do anything the process can; the broker cannot check it" }),
+                        );
+                        self.foreign.insert(h, f.clone());
+                    }
                     if *idempotency_key {
                         self.broker().set_idempotency_key(h).unwrap_or_default();
                     }
@@ -1759,6 +1825,7 @@ impl<'p> Interp<'p> {
             http: self.http.clone(),
             tcp: self.tcp.clone(),
             server: self.server.clone(),
+            foreign: self.foreign.clone(),
             fs_max_read_bytes: self.fs_max_read_bytes,
             secrets: self.secrets.clone(),
             lib: self.lib.clone(),
@@ -2167,6 +2234,9 @@ impl<'p> Interp<'p> {
         if path == "net.tcp.accept" || path == "net.tcp.reply" {
             return self.serve_action(h, &path, method, args);
         }
+        if path.starts_with("ffi.") {
+            return self.c_action(h, &path, method, args);
+        }
         if path.starts_with("net.http.") {
             return self.http_action(h, &path, method, args);
         }
@@ -2553,6 +2623,82 @@ impl<'p> Interp<'p> {
                 if !msg.starts_with(NOT_SENT) {
                     self.effects += 1;
                 }
+                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
+                fail(FailKind::Action, msg)
+            }
+        }
+    }
+
+    /// `ffi.<library>.<function>`: a call of a C function (RUNTIME.md section 19). Its
+    /// arguments are checked against the declaration before anything is recorded; the
+    /// journal holds a hash of them and the value returned. A call cut short by a crash
+    /// is in doubt unless the grant says the function is `repeatable`.
+    fn c_action(&mut self, h: usize, path: &str, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        let root = self.broker().root(h).or_else(internal)?;
+        let Some(f) = self.foreign.get(&root).cloned() else {
+            return internal(format!("{path} was granted without its C function"));
+        };
+        let mut cargs = Vec::with_capacity(args.len());
+        for a in &args {
+            cargs.push(match a {
+                Value::Int(n) => ffi::CValue::Int(*n),
+                Value::Bool(b) => ffi::CValue::Bool(*b),
+                Value::Text(t) => ffi::CValue::Text(t.clone()),
+                other => return internal(format!("{path} given {other:?}; the checker should have refused it")),
+            });
+        }
+        self.emit("action_requested", json!({ "capability": path, "method": method }));
+        if let Err(e) = f.check(&cargs) {
+            return self.refuse(path, method, FailKind::Value, e);
+        }
+        let authorized = self.broker().authorize(h, None, None);
+        if let Err(why) = authorized {
+            return self.refuse(path, method, FailKind::Capability, why);
+        }
+        self.broker().count_use(h).or_else(internal)?;
+        let shown: Vec<Json> = cargs
+            .iter()
+            .map(|c| match c {
+                ffi::CValue::Int(n) => json!(n),
+                ffi::CValue::Bool(b) => json!(b),
+                ffi::CValue::Text(t) => json!(t),
+                ffi::CValue::Unit => Json::Null,
+            })
+            .collect();
+        let jbody = json!({ "capability": path, "method": method, "library_sha256": f.lib.sha256,
+                            "args_sha256": journal::sha256_hex(Json::Array(shown).to_string().as_bytes()) });
+        let what = format!("action {path}");
+        // C code can change anything: every call counts as an effect.
+        self.effects += 1;
+        let (answer, replayed) = self.external("action", jbody, f.repeatable, &what, |it, _key| {
+            Answer::Done(f.call(&cargs).map(|v| {
+                json!({ "value": match v {
+                    ffi::CValue::Int(n) => json!(n),
+                    ffi::CValue::Bool(b) => json!(b),
+                    ffi::CValue::Text(t) => json!(scrub_text(&it.secrets, &t)),
+                    ffi::CValue::Unit => Json::Null,
+                } })
+            }))
+        })?;
+        match answer {
+            Ok(v) => {
+                let got = match (f.ret, &v["value"]) {
+                    (CType::Bool, Json::Bool(b)) => Value::Bool(*b),
+                    (CType::Text, Json::String(t)) => Value::Text(t.clone()),
+                    (CType::Void, Json::Null) => Value::Unit,
+                    (CType::Bool | CType::Text | CType::Void, _) => {
+                        return fail(FailKind::Journal, format!("malformed C result in the journal: {v}"));
+                    }
+                    (_, j) => match j.as_i64() {
+                        Some(n) => Value::Int(n),
+                        None => return fail(FailKind::Journal, format!("malformed C result in the journal: {v}")),
+                    },
+                };
+                self.performed += 1;
+                self.emit("action_performed", json!({ "capability": path, "method": method, "replayed": replayed }));
+                Ok(got)
+            }
+            Err(msg) => {
                 self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
                 fail(FailKind::Action, msg)
             }

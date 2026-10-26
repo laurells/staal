@@ -1566,3 +1566,93 @@ nothing is done once per task but the call itself.
   simulated service follow the order tasks reached it, as a real service's would.
 - Under the debugger and in the REPL, which show one thing at a time, tasks run one
   after another in the list's order; the debugger names the task it stops in.
+
+## 19. C libraries: `cap ffi.<library>.<function>`
+
+A program can call a function of a C library, only through a capability the
+operator grants, and every run granted one is marked unchecked: C code can do
+anything the process can, so the broker cannot check what it does.
+
+### Declaring
+
+    foreign ffi.zlib {
+        fn crc32(crc: u64, data: text, length: u32) -> u64
+        fn zlibVersion() -> text
+    }
+
+    fn checksum(c: cap ffi.zlib.crc32, data: Text) -> Int {
+        return c.crc32(0, data, len(data))
+    }
+
+Each function of `foreign ffi.<library>` is the capability
+`ffi.<library>.<function>`, called as `c.<function>(...)`. The library's name is
+lowercase letters, digits and `_`; a library is declared once in a program, each
+function once, with at most six parameters. A `cap ffi.*` names a declared function
+(E101 otherwise). The C types and the Staal values they take and give:
+
+| C type | Staal | Passed | Returned |
+| --- | --- | --- | --- |
+| `i8`, `i16`, `i32`, `i64` | `Int` | must fit the type, or the call is refused | sign-extended |
+| `u8`, `u16`, `u32` | `Int` | must fit the type | zero-extended |
+| `u64` | `Int` | 0 to 2^63-1 | must be at most 2^63-1, or the call fails |
+| `bool` | `Bool` | 0 or 1 | any nonzero low byte is true |
+| `text` | `Text` | a NUL-terminated copy, valid during the call only; text with a NUL is refused | a NUL-terminated string, copied (at most 1 MiB, UTF-8) and never freed: for strings the library keeps, such as a version |
+| `void` | `Unit` | (not a parameter) | the default without `->` |
+
+There are no floating-point numbers, pointers, buffers, structs, callbacks or
+variadic functions. With only these types every argument travels in an integer
+register, extended to 64 bits as its type requires, which is what the C calling
+conventions of x86_64 and aarch64 on Linux and macOS expect; on any other machine a
+grant is refused. Nothing checks the declaration against the library: a wrong
+declaration is wrong code, which is what makes the run unchecked.
+
+Limits on the capability: `uses` only. `max` and `each` (nothing measurable is
+spent) and `only` (there is no target) are refused (E101, or a config error on a
+grant). What a C function returns is untrusted (E006). An Outcome of `try` around
+one holds no receipt (E008). A package may declare only `foreign ffi.<its name>`,
+and must list each function it uses as `"ffi.<name>.<function>": "any"` in its
+`authority` (E108). Library capabilities cannot be named `ffi.*`.
+
+### Granting
+
+    "crc": { "cap": "ffi.zlib.crc32",
+             "library": "/usr/lib/x86_64-linux-gnu/libz.so.1.3",
+             "sha256": "<64 lowercase hex digits>",
+             "repeatable": true }
+
+`library` is the file's absolute path and `sha256` its SHA-256, both required. When
+the run starts, before anything else, the file is opened, refused if it is not a
+regular file or if any user may write to it, read, hashed, and refused unless the
+hash matches; then it is loaded and every granted function looked up. Any failure
+is a config error (exit 2): nothing runs. On Linux the library is loaded through
+the descriptor that was hashed (`/proc/self/fd`), so what is loaded is what was
+hashed even if the path is changed meanwhile; on macOS it is loaded by path after
+hashing, and a file replaced in that moment would not be noticed. Only that file is
+pinned: libraries it depends on are found by the system's loader as usual, and a
+library that finds others relative to its own location may not find them. Loading
+runs the library's initialisers. A library is never unloaded.
+
+### Unchecked
+
+For each `ffi.*` grant, the run's log holds, before anything the program does, an
+event `{"event": "unchecked", "capability", "library", "sha256", "why"}`. `staalc run`
+and `resume` print `this run is unchecked: it loaded C code for ...` to standard
+error; the C interface's result carries `"unchecked": [capabilities]`; and
+`RunResult::unchecked()` lists them. `staalc doc` shows `foreign` declarations
+under "C libraries (unchecked)".
+
+### Calls and the journal
+
+The arguments are checked against the declaration before anything is recorded. A
+call is then an action: authorized (`uses`), journaled with a hash of its arguments
+and of the library, made, and its value recorded, so a resumed run replays it
+without calling C. Calls into one library are made one at a time, whichever tasks
+make them, since whether its functions are safe to call from several threads is
+not known.
+
+A call cut short by a crash (including a crash inside the C function) is in doubt.
+It is made again on resume only when the grant says `"repeatable": true` (the
+function changes nothing, or changing it twice is harmless). Otherwise resume stops,
+and `staalc resolve` accepts only `--failed <reason>` or `--retry`: the value a C
+function returned was seen by nobody outside the process, so it cannot be recorded
+for it.

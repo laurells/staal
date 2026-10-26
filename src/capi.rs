@@ -142,13 +142,19 @@ fn run_program(program: String, config: String, journal_path: Option<String>, re
         Ok(r) => r,
         Err(e) => return error(e),
     };
-    match res.result {
+    let unchecked = res.unchecked();
+    let mut out = match res.result {
         Ok(v) => json!({ "status": "done", "result": v, "log": res.log }),
         Err(f) => {
             let status = if matches!(f.kind, FailKind::InDoubt | FailKind::Journal) { "stopped" } else { "failed" };
             json!({ "status": status, "failure": { "kind": f.kind.to_string(), "message": f.message }, "log": res.log })
         }
+    };
+    // A run that loaded C code says so (RUNTIME.md section 19).
+    if !unchecked.is_empty() {
+        out["unchecked"] = json!(unchecked);
     }
+    out
 }
 
 /// # Safety

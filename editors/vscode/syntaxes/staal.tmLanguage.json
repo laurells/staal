@@ -169,7 +169,7 @@
           }
         },
         {
-          "match": "^\\s*(?:(pub)\\s+)?(enum|interface|const|capability)\\s+([\\p{L}_][\\p{L}\\p{N}_]*(?:\\.[\\p{L}_][\\p{L}\\p{N}_]*)*)",
+          "match": "^\\s*(?:(pub)\\s+)?(enum|interface|const|capability|foreign)\\s+([\\p{L}_][\\p{L}\\p{N}_]*(?:\\.[\\p{L}_][\\p{L}\\p{N}_]*)*)",
           "captures": {
             "1": {
               "name": "storage.modifier.staal"

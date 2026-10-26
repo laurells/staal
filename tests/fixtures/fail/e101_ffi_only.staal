@@ -1,0 +1,9 @@
+// expect: E101
+// message: only `uses` limits it
+foreign ffi.m {
+    fn f() -> i64
+}
+
+fn g(c: cap ffi.m.f(only: ["x"])) -> Int {
+    return c.f()
+}

@@ -252,6 +252,12 @@ impl Parser {
                     p.caps.push(cap);
                     p.fns.extend(fns);
                 }
+                Tok::Ident(w) if w == "foreign" => {
+                    if public {
+                        return Err((self.pos(), "a foreign declaration is named by its capability path, never imported, so it takes no `pub`".into()));
+                    }
+                    p.foreign.push(self.foreigndecl()?);
+                }
                 // `const` is a word only here, so it stays usable as a name elsewhere.
                 Tok::Ident(w) if w == "const" => p.consts.push(self.constdecl(public)?),
                 Tok::Eof if !public => return Ok(p),
@@ -560,6 +566,66 @@ impl Parser {
             }
         }
         Ok((CapDecl { path, needs, actions, canonical, pos }, fns))
+    }
+
+    /// `foreign ffi.<library> { fn name(p: ctype, ...) -> ctype ... }`: C functions,
+    /// each with only C types and no body.
+    fn foreigndecl(&mut self) -> PResult<ForeignDecl> {
+        let pos = self.pos();
+        self.bump(); // `foreign`
+        let mut path = vec![self.ident()?];
+        while *self.peek() == Tok::Dot {
+            self.bump();
+            path.push(self.ident()?);
+        }
+        self.expect(Tok::LBrace, "'{'")?;
+        let ctype = |p: &mut Self| -> PResult<CType> {
+            let tpos = p.pos();
+            let t = p.ident()?;
+            CType::parse(&t).ok_or_else(|| {
+                let all: Vec<&str> = CType::ALL.iter().map(|t| t.name()).collect();
+                (tpos, format!("'{t}' is not a C type here; the C types are {}", all.join(", ")))
+            })
+        };
+        let mut fns = Vec::new();
+        loop {
+            let fpos = self.pos();
+            match self.peek() {
+                Tok::RBrace => {
+                    self.bump();
+                    break;
+                }
+                Tok::Fn => {
+                    self.bump();
+                    let name = self.ident()?;
+                    self.expect(Tok::LParen, "'('")?;
+                    let mut params = Vec::new();
+                    while *self.peek() != Tok::RParen {
+                        let pname = self.ident()?;
+                        self.expect(Tok::Colon, "':'")?;
+                        params.push((pname, ctype(self)?));
+                        if *self.peek() == Tok::Comma {
+                            self.bump();
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(Tok::RParen, "')'")?;
+                    let ret = if *self.peek() == Tok::Arrow {
+                        self.bump();
+                        ctype(self)?
+                    } else {
+                        CType::Void
+                    };
+                    if *self.peek() == Tok::LBrace {
+                        return Err((self.pos(), "a foreign function has no body: its code is in the C library".into()));
+                    }
+                    fns.push(ForeignFn { name, params, ret, pos: fpos });
+                }
+                other => return Err((fpos, format!("expected `fn` or '}}' in a foreign declaration, found {other:?}"))),
+            }
+        }
+        Ok(ForeignDecl { path, fns, pos })
     }
 
     /// The rest of a function after its name: parameters, return type, budget, body.

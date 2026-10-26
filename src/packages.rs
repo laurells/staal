@@ -160,6 +160,9 @@ fn check_commit(c: &str, at: &str) -> Result<(), String> {
 }
 
 fn check_pattern(path: &str, p: &str) -> Result<(), String> {
+    if path.starts_with("ffi.") {
+        return Err("a C function has no targets to list; give \"any\"".into());
+    }
     crate::pattern::validate(p)?;
     if path.starts_with("net.http.") {
         crate::targets::check_url_pattern(p)
@@ -680,6 +683,13 @@ pub fn check_authority(prog: &Program, module_of: &[Vec<String>], project: &Proj
         }
         for (_, t, pos) in &c.needs {
             check_ty(t, *pos, p, &mut diags);
+        }
+    }
+    // A package's C library is named after it, so it cannot pose as another's.
+    for d in &prog.foreign {
+        let Some(p) = pkg(d.pos) else { continue };
+        if d.path.get(1) != Some(&p.name) {
+            diags.push(e108(d.pos, format!("package {} declares `foreign {}`; a package's C library must be ffi.{}", p.name, d.path.join("."), p.name)));
         }
     }
     // An action's needs are also its last parameters; they are checked once, above.

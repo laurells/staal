@@ -30,8 +30,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 51 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 609 invalid ones
+rejecting the programs it should. 52 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 623 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -1290,6 +1290,46 @@ shared one needs its changes reviewed.
 Packages are fetched from any git host over HTTPS or SSH, GitHub included. Whoever can edit both `staal.lock` and `.staal/packages/` controls the
 code, as with any lockfile: `staalc check` trusts the lock, and `staalc fetch`
 compares both with git. `git` must be installed to fetch.
+
+## C libraries: `foreign` and `cap ffi`
+
+```staal
+foreign ffi.zlib {
+    fn crc32(crc: u64, data: text, length: u32) -> u64
+}
+
+fn checksum(c: cap ffi.zlib.crc32, data: Text) -> Int {
+    return c.crc32(0, data, len(data))
+}
+```
+
+    "grants": {
+      "c": { "cap": "ffi.zlib.crc32", "library": "/usr/lib/x86_64-linux-gnu/libz.so.1.3", "sha256": "<its SHA-256>" }
+    }
+
+A program declares the C functions it calls and their C types (integers, `bool`,
+`text`), and each is a capability the operator grants with the library file and its
+SHA-256: a different file is refused before the run starts. Values are checked at
+the boundary (an argument that does not fit its C type is refused before the call;
+a result that does not fit `Int`, or text that is not UTF-8, fails), and what C
+returns is untrusted. Calls are journaled and replayed; one cut short by a crash is
+made again only if the grant says `"repeatable": true`.
+
+Nothing checks what C code does, so **every run granted a C function is marked
+unchecked**: in its log, on the command line, and in the C interface's result. Use
+it for what Staal cannot do itself, keep the declaration exact (a wrong one is wrong
+code), and prefer a runtime capability when one exists. Linux and macOS on x86_64
+and aarch64 only (tested so far on Linux x86_64). RUNTIME.md section 19 has the
+details.
+
+How this is tested: ten tests call a C library built from `tests/ffi/staaltest.c` on
+both engines: every integer width and sign, bool, text both ways and six arguments;
+values that do not fit refused before the call; a wrong hash, path, key or limit, a
+missing function and a library anyone may change refused; the unchecked marks; replay
+without calling again; a call cut short by a crash, and a C function that aborts, left
+in doubt; `repeatable`; `uses`; and concurrent calls made one at a time. Fourteen
+invalid programs and three package cases cover the checker. Eighteen mutations are
+each caught.
 
 ## Native code and the C interface
 
