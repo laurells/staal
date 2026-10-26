@@ -1098,6 +1098,8 @@ enum RuntimeCap {
     /// `db.sqlite.query`, which only reads, and `db.sqlite.execute`, which changes.
     DbQuery,
     DbExecute,
+    /// `net.tcp.exchange`: data sent to an address, its reply read.
+    Tcp,
 }
 
 const HTTP_METHODS: &[&str] = &["get", "post", "put", "patch", "delete"];
@@ -1107,6 +1109,7 @@ fn runtime_cap(path: &[String]) -> Option<RuntimeCap> {
         ["net", "http", m] if HTTP_METHODS.contains(m) => Some(RuntimeCap::Http { body: matches!(*m, "post" | "put" | "patch") }),
         ["fs", "read"] => Some(RuntimeCap::FsRead),
         ["fs", "write"] => Some(RuntimeCap::FsWrite),
+        ["net", "tcp", "exchange"] => Some(RuntimeCap::Tcp),
         ["db", "sqlite", "query"] => Some(RuntimeCap::DbQuery),
         ["db", "sqlite", "execute"] => Some(RuntimeCap::DbExecute),
         _ => None,
@@ -1386,8 +1389,8 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                         pos,
                         format!(
                             "`cap {p}` is not a runtime capability; there are net.http.get, net.http.post, \
-                             net.http.put, net.http.patch, net.http.delete, fs.read, fs.write, \
-                             db.sqlite.query and db.sqlite.execute"
+                             net.http.put, net.http.patch, net.http.delete, net.tcp.exchange, fs.read, \
+                             fs.write, db.sqlite.query and db.sqlite.execute"
                         ),
                     ),
                     Some(kind) => {
@@ -1401,6 +1404,7 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                         for pat in limits.only.iter().flatten() {
                             let checked = match kind {
                                 RuntimeCap::Http { .. } => crate::targets::check_url_pattern(pat),
+                                RuntimeCap::Tcp => crate::targets::check_address_pattern(pat),
                                 RuntimeCap::FsRead | RuntimeCap::FsWrite | RuntimeCap::DbQuery | RuntimeCap::DbExecute => {
                                     crate::targets::check_path_pattern(pat)
                                 }
@@ -2129,7 +2133,7 @@ fn outcome_holds_evidence(ctx: &Ctx, value: &Expr, env: &Env) -> bool {
             // An action holds a receipt unless it is one of the runtime's that returns data.
             Expr::Action { receiver, .. } => match env.get(receiver).map(|b| &b.ty) {
                 Some(Ty::Cap { path, .. }) => {
-                    !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead | RuntimeCap::DbQuery))
+                    !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead | RuntimeCap::DbQuery | RuntimeCap::Tcp))
                 }
                 _ => false,
             },
@@ -4375,6 +4379,11 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     (ok, want, named("Response"))
                 }
                 RuntimeCap::FsRead => (tys.len() == 1 && tys[0] == text, "read(path: Text)".to_string(), text.clone()),
+                RuntimeCap::Tcp => (
+                    (tys.len() == 2 || tys.len() == 3) && tys.iter().all(|t| *t == text),
+                    "exchange(address: Text, data: Text) or exchange(address, data, until: Text)".to_string(),
+                    text.clone(),
+                ),
                 RuntimeCap::FsWrite => (
                     tys.len() == 2 && tys.iter().all(|t| *t == text),
                     "write(path: Text, content: Text)".to_string(),

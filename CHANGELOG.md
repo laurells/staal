@@ -7,6 +7,11 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `net.tcp.exchange`: a TCP request and its reply, read to the peer's close or to a
+  delimiter, to the addresses `only` allows (canonical `host:port`, `host:*` or `*`).
+  An exchange that may have reached the peer is never repeated: it is left for an
+  operator, who records the reply with the new `staalc resolve --reply <text>`. A
+  crash test checks it at every crash point. Plain TCP, not encrypted.
 - `db.sqlite.query` and `db.sqlite.execute`: SQLite databases as runtime
   capabilities. A query opens the database read-only and gives its rows as JSON for
   `parse`; a statement runs in a durable transaction. SQL must be trusted (E006);

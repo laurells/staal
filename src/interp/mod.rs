@@ -14,6 +14,7 @@ pub mod db;
 pub mod fsx;
 pub mod http;
 pub mod journal;
+pub mod tcp;
 pub mod money;
 pub mod anthropic;
 pub mod provider;
@@ -513,7 +514,13 @@ fn parse_grant(
         }
         let http = want.starts_with("net.http.");
         for (i, pat) in limits.only.iter().flatten().enumerate() {
-            let checked = if http { crate::targets::check_url_pattern(pat) } else { crate::targets::check_path_pattern(pat) };
+            let checked = if http {
+                crate::targets::check_url_pattern(pat)
+            } else if want == "net.tcp.exchange" {
+                crate::targets::check_address_pattern(pat)
+            } else {
+                crate::targets::check_path_pattern(pat)
+            };
             checked.map_err(|e| format!("{at}.only[{i}]: {e}"))?;
         }
         if idempotency_key && !((http && want != "net.http.get") || want == "db.sqlite.execute") {
@@ -973,6 +980,7 @@ struct Interp<'p> {
     depth: usize,
     limits: Limits,
     http: http::Client,
+    tcp: tcp::Settings,
     fs_max_read_bytes: usize,
     secrets: Vec<String>,
     /// Library capabilities' actions, by the path programs use (`termii.sms.send`).
@@ -1068,6 +1076,11 @@ impl<'p> Interp<'p> {
             depth: 0,
             limits,
             http: http::Client::new(&runtime.net),
+            tcp: tcp::Settings {
+                connect_timeout: runtime.net.connect_timeout,
+                timeout: runtime.net.timeout,
+                max_reply_bytes: runtime.net.max_response_bytes,
+            },
             fs_max_read_bytes: runtime.fs_max_read_bytes,
             secrets: runtime.secrets.clone(),
             lib: prog
@@ -1923,6 +1936,9 @@ impl<'p> Interp<'p> {
     fn action(&mut self, h: usize, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
         let path = self.broker.path(h).or_else(internal)?.to_string();
         // The runtime's own capabilities never reach an adapter.
+        if path == "net.tcp.exchange" {
+            return self.tcp_action(h, &path, method, args);
+        }
         if path.starts_with("net.http.") {
             return self.http_action(h, &path, method, args);
         }
@@ -2252,6 +2268,58 @@ impl<'p> Interp<'p> {
                 }
             }
             Err(msg) => {
+                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
+                fail(FailKind::Action, msg)
+            }
+        }
+    }
+
+    /// `net.tcp.exchange`: data sent to an address and the reply read (tcp.rs). Never
+    /// safe to repeat: one the run cannot be sure was not sent is left in doubt.
+    fn tcp_action(&mut self, h: usize, path: &str, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        let (Some(Value::Text(raw)), Some(Value::Text(data))) = (args.first(), args.get(1)) else {
+            return internal("net.tcp without an address or data");
+        };
+        let until = match args.get(2) {
+            None => None,
+            Some(Value::Text(u)) if u.is_empty() => return self.refuse(path, method, FailKind::Value, "an empty delimiter would end every reply at once".into()),
+            Some(Value::Text(u)) => Some(u.clone()),
+            Some(_) => return internal("net.tcp delimiter that is not text"),
+        };
+        let address = match crate::targets::canonical_address(raw) {
+            Ok(a) => a,
+            Err(e) => return self.refuse(path, method, FailKind::Capability, e),
+        };
+        self.emit("action_requested", json!({ "capability": path, "method": method, "target": address }));
+        if let Err(why) = self.broker.authorize(h, None, Some(&address)) {
+            return self.refuse(path, method, FailKind::Capability, why);
+        }
+        self.broker.count_use(h).or_else(internal)?;
+        let jbody = json!({ "capability": path, "method": method, "target": address,
+                            "data_sha256": journal::sha256_hex(data.as_bytes()), "until": until });
+        let what = format!("action {path} {address}");
+        let (answer, replayed) = self.external("action", jbody, false, &what, |it, _key| {
+            match tcp::exchange(&address, data.as_bytes(), until.as_deref(), &it.tcp) {
+                tcp::Outcome::Reply(t) => Answer::Done(Ok(json!({ "text": scrub_text(&it.secrets, &t) }))),
+                tcp::Outcome::NotSent(e) => Answer::Done(Err(format!("{NOT_SENT}{e}"))),
+                tcp::Outcome::Unusable(e) => Answer::Done(Err(e)),
+                tcp::Outcome::Unknown(e) => Answer::Unknown(e),
+            }
+        })?;
+        match answer {
+            Ok(v) => {
+                let Some(t) = v["text"].as_str() else {
+                    return fail(FailKind::Journal, format!("malformed TCP result in the journal: {v}"));
+                };
+                self.performed += 1;
+                self.effects += 1;
+                self.emit("action_performed", json!({ "capability": path, "method": method, "target": address, "replayed": replayed }));
+                Ok(Value::Text(t.to_string()))
+            }
+            Err(msg) => {
+                if !msg.starts_with(NOT_SENT) {
+                    self.effects += 1;
+                }
                 self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
                 fail(FailKind::Action, msg)
             }

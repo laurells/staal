@@ -64,6 +64,9 @@ pub enum Resolution {
     /// An HTTP request happened and was answered with this status and body (only for
     /// `net.http` actions, whose result is a response rather than a receipt).
     Responded { status: u16, body: String },
+    /// A TCP exchange happened and the peer answered this (only for `net.tcp`, whose
+    /// result is the reply).
+    Replied { text: String },
     /// Treat it as failed: the program sees an action failure.
     Failed { message: String },
     /// It did not happen: perform it on resume. The authorization covers one attempt;
@@ -178,6 +181,7 @@ impl Journal {
             intent["body"]["method"].as_str().unwrap_or("?")
         );
         let http = intent["body"]["capability"].as_str().is_some_and(|c| c.starts_with("net.http."));
+        let tcp = intent["body"]["capability"] == "net.tcp.exchange";
         let mut j = Journal::with(Some(file), String::new(), VecDeque::new(), None);
         let (result, summary) = match resolution {
             Resolution::Performed { .. } if http => {
@@ -185,9 +189,19 @@ impl Journal {
                     "{what} is an HTTP request: record what the server answered with --status <code> [--body <text>]"
                 ))
             }
+            Resolution::Performed { .. } | Resolution::Responded { .. } if tcp => {
+                return Err(format!("{what} is a TCP exchange: record what the peer answered with --reply <text>"))
+            }
             Resolution::Responded { .. } if !http => {
                 return Err(format!("{what} is not an HTTP request: record it with --performed <receipt>"))
             }
+            Resolution::Replied { .. } if !tcp => {
+                return Err(format!("{what} is not a TCP exchange: record it with {}", if http { "--status <code> [--body <text>]" } else { "--performed <receipt>" }))
+            }
+            Resolution::Replied { text } => (
+                Ok(json!({ "text": text })),
+                format!("recorded {what} (operation {n}) as answered"),
+            ),
             Resolution::Responded { status, body } => {
                 if !(100..=599).contains(&status) {
                     return Err(format!("--status {status} is not an HTTP status code"));

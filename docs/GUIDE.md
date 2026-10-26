@@ -31,7 +31,7 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
 rejecting the programs it should. 50 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 592 invalid ones
+including the two benchmark workflows (`workflow_*.staal`), and 594 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -872,7 +872,8 @@ this server for everything else. Its README says how to install it from the fold
 
     staalc run     prog.staal --config run.json --journal run.journal [--log run.jsonl]
     staalc resume  prog.staal --config run.json --journal run.journal
-    staalc resolve --journal run.journal (--performed <receipt> | --failed <reason> | --retry)
+    staalc resolve --journal run.journal (--performed <receipt> | --status <code> [--body <text>]
+                                          | --reply <text> | --failed <reason> | --retry)
 
 The reference interpreter runs checked programs. Model calls go to Claude
 (`"provider": "anthropic"`) or, in tests, to a scripted model; actions go through
@@ -1024,6 +1025,21 @@ are not TLS) stays in doubt. An organisation's own authority can be added with
 
 What these tests do not cover: real services. `examples/` holds Termii SMS and
 Resend email programs with instructions to run them with your own keys.
+
+## Sockets: `net.tcp.exchange`
+
+```staal
+fn ping(conn: cap net.tcp.exchange, address: Text) -> Text {
+    return trim(conn.exchange(address, "PING\r\n", "\r\n"))
+}
+```
+
+One exchange connects to a `host:port` the grant's `only` allows (`"127.0.0.1:*"`,
+`"cache.internal:6379"`), sends the data, and reads the reply: to the end when the
+peer closes, or to a delimiter given as the third argument. The reply is untrusted
+text. An exchange is never repeated after a crash: if it may have reached the peer,
+the run stops until an operator records the reply (`staalc resolve --reply`).
+RUNTIME.md section 12 has the details. Plain TCP only: nothing is encrypted.
 
 ## Databases: `db.sqlite`
 

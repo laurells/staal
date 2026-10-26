@@ -1,0 +1,5 @@
+// expect: E101
+// message: exchange(address: Text, data: Text) or exchange(address, data, until: Text)
+fn send(c: cap net.tcp.exchange) -> Text {
+    return c.exchange("example.com:7")
+}

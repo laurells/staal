@@ -1,0 +1,15 @@
+// The program the net.tcp tests run: one line sent, one line of reply read, on a
+// connection the peer may keep open.
+fn ask(conn: cap net.tcp.exchange, address: Text, word: Text) -> Text {
+    let reply = conn.exchange(address, "ECHO " + word + "\r\n", "\r\n")
+    return trim(reply)
+}
+
+// The same, catching a failure as a value.
+fn try_ask(conn: cap net.tcp.exchange, address: Text) -> Text {
+    let r = try conn.exchange(address, "ECHO x\r\n", "\r\n")
+    if r.ok {
+        return "answered"
+    }
+    return r.error
+}

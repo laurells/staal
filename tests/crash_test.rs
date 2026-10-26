@@ -601,3 +601,64 @@ fn every_crash_point_leaves_each_row_once() {
         }
     }
 }
+
+/// net.tcp.exchange after a crash at any point: the exchange is made once, or left
+/// for an operator, who records the reply the server really gave.
+#[test]
+fn a_tcp_exchange_is_never_made_twice_whatever_the_crash() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    let seen = std::sync::Arc::new(AtomicUsize::new(0));
+    let count = seen.clone();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            let Ok(mut c) = c else { continue };
+            count.fetch_add(1, Ordering::SeqCst);
+            let mut line = String::new();
+            if BufReader::new(&c).read_line(&mut line).is_ok() {
+                let _ = c.write_all(b"+hello\r\n");
+            }
+        }
+    });
+    let case = |name: &str| -> (PathBuf, Vec<String>, Vec<String>) {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("crash-tcp").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = serde_json::json!({
+            "entry": "ask", "inputs": { "address": addr, "word": "hello" },
+            "grants": { "conn": { "cap": "net.tcp.exchange", "only": ["127.0.0.1:*"] } },
+            "model": { "provider": "script", "responses": [] },
+        });
+        std::fs::write(dir.join("cfg.json"), cfg.to_string()).unwrap();
+        let p = format!("{ROOT}/tests/tcp/echo.staal");
+        let (c, j) = (dir.join("cfg.json").to_string_lossy().to_string(), dir.join("journal").to_string_lossy().to_string());
+        (dir, vec!["run".into(), p.clone(), "--config".into(), c.clone(), "--journal".into(), j.clone()], vec!["resume".into(), p, "--config".into(), c, "--journal".into(), j])
+    };
+    let (dir, run, _) = case("baseline");
+    let out = staalc(&run.iter().map(String::as_str).collect::<Vec<_>>(), None);
+    assert_eq!(out.code, Some(0), "{}", out.stderr);
+    let writes = std::fs::read_to_string(dir.join("journal")).unwrap().lines().count();
+    let mut points: Vec<String> = (1..=writes).map(|k| format!("after_write:{k}")).collect();
+    points.push("before_result:1".into());
+    for fp in &points {
+        let (dir, run, resume) = case(&fp.replace(':', "-"));
+        let before = seen.load(Ordering::SeqCst);
+        let crashed = staalc(&run.iter().map(String::as_str).collect::<Vec<_>>(), Some(fp));
+        assert_eq!(crashed.code, None, "{fp}: {}", crashed.stderr);
+        let mut out = staalc(&resume.iter().map(String::as_str).collect::<Vec<_>>(), None);
+        if out.code == Some(3) {
+            // The server did answer; the operator records what it said.
+            let j = dir.join("journal").to_string_lossy().to_string();
+            let r = staalc(&["resolve", "--journal", &j, "--reply", "+hello\r\n"], None);
+            assert_eq!(r.code, Some(0), "{fp}: {}", r.stderr);
+            out = staalc(&resume.iter().map(String::as_str).collect::<Vec<_>>(), None);
+        }
+        assert_eq!((out.code, out.stdout.as_str()), (Some(0), "\"+hello\""), "{fp}: {}", out.stderr);
+        let made = seen.load(Ordering::SeqCst) - before;
+        // A crash before the intent was recorded is the only one after which the
+        // exchange is made again: the first attempt never began.
+        assert!(made <= 1, "{fp}: the exchange was made {made} times");
+    }
+}

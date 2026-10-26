@@ -788,7 +788,9 @@ doubt**: it may or may not have happened.
   with a failure of kind `in_doubt`, naming the action, and does nothing
   until an operator checks the real world and records the answer with
   `staalc resolve`:
-  - `--performed <receipt>`: it happened; the program continues with that receipt;
+  - `--performed <receipt>`: it happened; the program continues with that receipt
+    (an HTTP request takes `--status <code> [--body <text>]` and a TCP exchange
+    `--reply <text>` instead, since their results are a response and a reply);
   - `--failed <reason>`: the program sees it as a failed action;
   - `--retry`: it did not happen; resume performs it. This authorizes **one**
     attempt, recorded before it is made: if that attempt is itself interrupted,
@@ -850,12 +852,13 @@ the journal like any other action. Capability paths starting with `net.`, `fs.` 
 | --- | --- | --- |
 | `net.http.get`, `net.http.delete` | `c.get(url)`, `c.get(url, headers)` | `Response` |
 | `net.http.post`, `net.http.put`, `net.http.patch` | `c.post(url, body)`, `c.post(url, body, headers)` | `Response` |
+| `net.tcp.exchange` | `c.exchange(address, data)`, `c.exchange(address, data, until)` | `Text` |
 | `fs.read` | `c.read(path)` | `Text` |
 | `fs.write` | `c.write(path, content)` | `Receipt` |
 | `db.sqlite.query` | `c.query(database, sql)`, `c.query(database, sql, params)` | `Text` (JSON rows) |
 | `db.sqlite.execute` | `c.execute(database, sql)`, `c.execute(database, sql, params)` | `Receipt` |
 
-`url`, `path`, `content`, `database` and `sql` are `Text`; `params` is a
+`url`, `path`, `content`, `address`, `data`, `until`, `database` and `sql` are `Text`; `params` is a
 `List<Text, N>`. A `body` is `Text` or a `Secret` (below).
 `headers` is a `List<Header, N>`. `uses` and `only` apply as to any capability;
 `max` and `each` do not (no money the runtime can measure is spent), and are
@@ -936,6 +939,28 @@ its permissions, and another hard link to it keeps its own contents. A write
 returns a `Receipt` whose id is derived from the content's SHA-256.
 
 Linux and macOS only; on other systems every file action fails.
+
+### TCP
+
+`net.tcp.exchange` connects to `address` (`host:port`), sends `data`, and gives
+the reply as text. Without `until` it closes its sending side after the data, which
+tells the peer the request is complete, and reads until the peer closes; with
+`until` (a delimiter such as `"\r\n"`) it reads until the reply ends with it, for
+protocols that keep the connection open. The connection is plain TCP: nothing is
+encrypted. Addresses are canonical (the host as the URL Standard writes it, lowercased
+and in ASCII, IPv6 in brackets; the port 1 to 65535), and an `only` pattern is an
+address, `host:*` (any port of one host) or `*`: a `*` never stands for part of a
+host. The time limit is `net.timeout_ms` for the whole exchange, the connect limit
+`net.connect_timeout_ms`, and a reply longer than `net.max_response_bytes` or not
+UTF-8 text fails (`action`) though the exchange happened.
+
+An exchange that certainly sent nothing (no such host, connection refused, connect
+timeout) fails with a message beginning `not sent:`. Once data may have reached the
+peer, a broken connection or a timeout leaves it in doubt: it is never repeated,
+and resume stops until an operator records what the peer answered (`staalc
+resolve --reply <text>`), or `--failed`, or `--retry`. The journal records a hash
+of the data sent, never the data, and the reply itself, so a resumed run gets it
+without connecting. A crash test checks this at every crash point.
 
 ### Databases
 

@@ -1,0 +1,5 @@
+// expect: E101
+// message: address pattern "*.example.com:25"
+fn send(c: cap net.tcp.exchange(only: ["*.example.com:25"])) -> Text {
+    return c.exchange("mail.example.com:25", "QUIT\r\n")
+}

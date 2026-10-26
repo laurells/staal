@@ -14,7 +14,7 @@
 //   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
 //   staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
 //   staalc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
-//                                            | --failed <reason> | --retry)
+//                                            | --reply <text> | --failed <reason> | --retry)
 //
 // A built executable takes the same commands without the program file:
 //
@@ -48,7 +48,7 @@ const USAGE: &str = "usage:
   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
   staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
   staalc resolve --journal <run.journal> (--performed <receipt> | --status <code> [--body <text>]
-                                           | --failed <reason> | --retry)";
+                                           | --reply <text> | --failed <reason> | --retry)";
 
 #[cfg(feature = "native")]
 const APP_USAGE: &str = "usage:
@@ -322,14 +322,14 @@ fn fetch(dir: &str) -> u8 {
 
 fn resolve_cmd(rest: &[String], usage: &str) -> u8 {
     let u = |m: &str| usage_error(usage, m);
-    let opts = match parse(rest, &["--journal", "--performed", "--status", "--body", "--failed", "--retry"], &["--journal"]) {
+    let opts = match parse(rest, &["--journal", "--performed", "--status", "--body", "--reply", "--failed", "--retry"], &["--journal"]) {
         Ok((None, opts)) => opts,
         Ok((Some(extra), _)) => return u(&format!("unexpected argument {extra}")),
         Err(e) => return u(&e),
     };
-    let given = ["--performed", "--status", "--failed", "--retry"].iter().filter(|k| opts.contains_key(**k)).count();
+    let given = ["--performed", "--status", "--reply", "--failed", "--retry"].iter().filter(|k| opts.contains_key(**k)).count();
     if given != 1 {
-        return u("resolve needs exactly one of --performed <receipt>, --status <code>, --failed <reason> or --retry");
+        return u("resolve needs exactly one of --performed <receipt>, --status <code>, --reply <text>, --failed <reason> or --retry");
     }
     if opts.contains_key("--body") && !opts.contains_key("--status") {
         return u("--body goes with --status");
@@ -339,6 +339,8 @@ fn resolve_cmd(rest: &[String], usage: &str) -> u8 {
     } else if let Some(code) = opts.get("--status") {
         let Ok(status) = code.parse::<u16>() else { return u("--status needs an HTTP status code such as 200") };
         journal::Resolution::Responded { status, body: opts.get("--body").cloned().unwrap_or_default() }
+    } else if let Some(text) = opts.get("--reply") {
+        journal::Resolution::Replied { text: text.clone() }
     } else if let Some(reason) = opts.get("--failed") {
         journal::Resolution::Failed { message: reason.clone() }
     } else {

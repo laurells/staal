@@ -173,9 +173,72 @@ pub fn check_path_pattern(p: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A TCP address, `host:port`, in one form: the host as the URL Standard writes it (a
+/// domain lowercased and in ASCII, an IPv4 address in dotted decimal, an IPv6 address
+/// in brackets, compressed), the port as a decimal number from 1 to 65535.
+pub fn canonical_address(s: &str) -> Result<String, String> {
+    let (host, port) = s.rsplit_once(':').ok_or_else(|| format!("'{s}' is not host:port"))?;
+    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("'{s}': the port must be a number"));
+    }
+    let port: u16 = port.parse().ok().filter(|p| *p > 0).ok_or_else(|| format!("'{s}': the port must be from 1 to 65535"))?;
+    if host.is_empty() {
+        return Err(format!("'{s}' names no host"));
+    }
+    let h = url::Host::parse(host).map_err(|e| format!("'{s}': {e}"))?;
+    let host = match h {
+        url::Host::Domain(d) => d,
+        url::Host::Ipv4(a) => a.to_string(),
+        url::Host::Ipv6(a) => format!("[{a}]"),
+    };
+    Ok(format!("{host}:{port}"))
+}
+
+/// Checks that an `only` pattern for `net.tcp` is a canonical address, `host:*` (any
+/// port of one host), or `*`: a `*` can never stand for part of a host.
+pub fn check_address_pattern(p: &str) -> Result<(), String> {
+    if p == "*" {
+        return Ok(());
+    }
+    let probe = match p.strip_suffix(":*") {
+        Some(host) if !host.contains('*') => format!("{host}:1"),
+        _ if p.contains('*') => return Err(format!("address pattern \"{p}\": a `*` may only be the whole port (host:*) or the whole pattern")),
+        _ => p.to_string(),
+    };
+    let c = canonical_address(&probe)?;
+    if c != probe {
+        let want = if probe != p { format!("\"{}:*\"", c.rsplit_once(':').map_or(c.as_str(), |(h, _)| h)) } else { format!("\"{c}\"") };
+        return Err(format!("address pattern \"{p}\" is not canonical; write {want}"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn addresses_have_one_spelling() {
+        for (given, want) in [
+            ("Example.COM:25", "example.com:25"),
+            ("127.0.0.1:080", "127.0.0.1:80"),
+            ("[::1]:6379", "[::1]:6379"),
+            ("[0:0:0:0:0:0:0:1]:6379", "[::1]:6379"),
+            ("bücher.example:70", "xn--bcher-kva.example:70"),
+        ] {
+            assert_eq!(canonical_address(given).as_deref(), Ok(want), "{given}");
+        }
+        for bad in ["example.com", "example.com:", "example.com:0", "example.com:65536", "example.com:x", ":25", "exa mple.com:25", "::1:25"] {
+            assert!(canonical_address(bad).is_err(), "{bad}");
+        }
+        assert_eq!(check_address_pattern("example.com:25"), Ok(()));
+        assert_eq!(check_address_pattern("example.com:*"), Ok(()));
+        assert_eq!(check_address_pattern("*"), Ok(()));
+        for bad in ["*.example.com:25", "example.com:2*", "ex*:25", "Example.com:25", "Example.com:*"] {
+            assert!(check_address_pattern(bad).is_err(), "{bad}");
+        }
+        assert!(check_address_pattern("Example.com:*").unwrap_err().contains("\"example.com:*\""));
+    }
 
     #[test]
     fn urls_have_one_spelling() {
