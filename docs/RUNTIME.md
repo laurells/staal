@@ -814,7 +814,7 @@ Both are fatal, like `step_limit`: `try` never catches them.
 JSON lines, append-only. Records:
 
 ```
-{"j":"start","version":1,"run_id":"…","program_sha256":"…","config_sha256":"…"}
+{"j":"start","version":2,"run_id":"…","program_sha256":"…","config_sha256":"…"}
 {"j":"intent","n":1,"op":"count","key":"…","body":{…}}
 {"j":"result","n":1,"ok":…}            or  {"j":"result","n":1,"err":"…"}
 {"j":"retry","n":3}                    an operator authorized one more attempt at action 3
@@ -822,8 +822,11 @@ JSON lines, append-only. Records:
 {"j":"end","ok":true,"result":…}       or  {"j":"end","ok":false,"failure":"…","message":"…"}
 ```
 
-`op` is `count`, `model`, `action`, `print`, `clock` or `random`. After an intent come only its result, or,
-for an action, `retry`/`attempt` pairs and then its result. A crash can tear only the last line; a
+`op` is `count`, `model`, `action`, `print`, `clock`, `random` or `input`. After an intent come only
+its result, or, for an action, `retry`/`attempt` pairs and then its result. A record of a concurrent
+task (section 18) also has `"t"`, the task's id: each task's operations are numbered from 1 by
+themselves and must follow these rules among themselves, and the tasks' records may interleave in any
+order. Version 1 journals, which have no tasks, are read as they are. A crash can tear only the last line; a
 torn last line is discarded on resume (it was never acknowledged). Any other
 malformed line is corruption, and resume refuses. Resuming a journal that
 already has an `end` record replays it without contacting the world and
@@ -1412,3 +1415,47 @@ native code run on the interpreter.
 Its journals are bound to the program's fingerprint, as `staalc`'s are, and not to
 how it is run: a run started by the executable can be resumed by `staalc resume`
 with the same program, and the other way round.
+
+## 18. Concurrency: `parallel`
+
+`parallel(list, f, a, b)` calls the declared function `f` as `f(item, a, b)` once for
+each item of `list`, all at once, and gives the results as a list in the list's order
+(`List<R, N>` for a list of at most N items and `f` giving R; nothing, when `f` gives
+nothing). `f` is a function's name, `m.f` from a module, not a function value: a
+function value only computes, while a task may call models and act through the
+capabilities it is given. What follows `f` is names and literals, evaluated once, so
+nothing is done once per task but the call itself.
+
+- Tasks run on up to 16 threads at a time; the rest wait for a thread. Each task has
+  its own steps, counted against what the run had left; when all have ended their
+  steps are added to the run's, and a run past `max_steps` fails then. Each runs on
+  the interpreter, whatever the engine; native code still runs everything else.
+- Every task runs to its end, whatever the others do. Then, if any failed, `parallel`
+  fails with the first failure by position in the list, except that a failure which
+  stops the run (`in_doubt`, `journal`) comes before any other. So the outcome is the
+  same however the tasks were scheduled.
+- Values cannot be changed once made, and `set` changes only a function's own
+  variables, so tasks share no data: there is nothing to race on. What they share is
+  the runtime's: the journal, the model, the services, and the capabilities passed to
+  them. A capability limited by `uses` or `max` (in its grant or anywhere in its
+  chain, or a library capability's `needs`) cannot be passed to tasks (`capability`):
+  which task's action would be refused, or how money would be spent, would depend on
+  their timing. `each` and `only`, checked action by action, can.
+- A budget covers its tasks: the cost analysis counts the call once per item the list
+  may hold (E004), and what the tasks spend is taken from the enclosing budgets when
+  they end.
+- Each task's operations are a stream of their own in the journal (section 11), named
+  by the task's id: the number of the `parallel` call in its function's run and the
+  item's position (`2.0`, `2.1`; a task's own tasks `2.1/1.0`). A resumed run gives
+  every task the same id, so each replays exactly what it recorded, whatever order
+  the tasks run in this time. A crash can leave one action in doubt in each task that
+  was in flight; `staalc resolve` then names the one it records with `--operation
+  <id>` (`2.1:1`, operation 1 of task 2.1). The crash tests kill a run of concurrent
+  actions and model calls at every journal write and in every task's in-doubt window,
+  resume it on either engine, and check the result and the world are an uninterrupted
+  run's, with no action performed twice.
+- The log is the same whatever the order tasks ran in: each task's events are added
+  when the tasks end, in the list's order, each with `"task"`. Receipts of a
+  simulated service follow the order tasks reached it, as a real service's would.
+- Under the debugger and in the REPL, which show one thing at a time, tasks run one
+  after another in the list's order; the debugger names the task it stops in.

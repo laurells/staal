@@ -1,0 +1,9 @@
+// expect: E901
+// message: `parallel` takes the function's name, not a call of it
+fn double(n: Int) -> Int {
+    return n * 2
+}
+
+fn f() -> List<Int, 2> {
+    return parallel([1, 2], double(1))
+}

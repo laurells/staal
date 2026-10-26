@@ -97,6 +97,13 @@ impl Broker {
         Ok(out)
     }
 
+    /// Whether actions through `h` are counted against a limit (`uses` or `max`)
+    /// anywhere in its chain: then the order of concurrent actions would decide which
+    /// is refused, so such a capability is never shared by concurrent tasks.
+    pub fn counted(&self, h: usize) -> Result<bool, String> {
+        Ok(self.chain(h)?.iter().any(|&i| self.caps[i].limits.uses.is_some() || self.caps[i].limits.max.is_some()))
+    }
+
     /// Checks that an action spending `amount` on `target` is within every limit in
     /// the chain. Changes nothing: call `count_use` before performing it, and `charge`
     /// after it succeeds.

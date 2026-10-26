@@ -1,0 +1,5 @@
+// expect: E101
+// message: `parallel` runs a declared function, but 'g' is a variable here
+fn f(g: fn(Int) -> Int) -> List<Int, 2> {
+    return parallel([1, 2], g)
+}

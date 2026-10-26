@@ -26,6 +26,9 @@ pub trait Adapter {
     /// Performs the action. `key` is unique to this run and this operation. Returns a
     /// receipt id on success, or an error message.
     fn perform(&mut self, key: &str, capability: &str, method: &str, args: &[Json]) -> Result<String, String>;
+    /// An adapter for a concurrent task: the same services, usable from another thread
+    /// at the same time.
+    fn fork(&self) -> Box<dyn Adapter + Send>;
 }
 
 /// An adapter that performs nothing real. It records each action it "performs" in a
@@ -45,13 +48,19 @@ pub trait Adapter {
 pub struct SimulatedAdapter {
     fail_rules: Vec<(String, String)>,
     idempotent: bool,
-    world: Vec<Json>,
-    world_file: Option<File>,
+    /// The world, shared with every fork: what was performed, and its file.
+    world: std::sync::Arc<std::sync::Mutex<World>>,
+}
+
+#[derive(Default)]
+struct World {
+    entries: Vec<Json>,
+    file: Option<File>,
 }
 
 impl SimulatedAdapter {
     pub fn from_config(cfg: Option<&Json>) -> Result<SimulatedAdapter, String> {
-        let mut adapter = SimulatedAdapter { fail_rules: Vec::new(), idempotent: true, world: Vec::new(), world_file: None };
+        let mut adapter = SimulatedAdapter { fail_rules: Vec::new(), idempotent: true, world: Default::default() };
         let Some(cfg) = cfg else { return Ok(adapter) };
         let obj = cfg.as_object().ok_or("adapters: expected an object")?;
         for k in obj.keys() {
@@ -96,19 +105,21 @@ impl SimulatedAdapter {
             file.read_to_string(&mut text).map_err(|e| format!("adapters.simulated.world: cannot read {}: {e}", path.display()))?;
             // Every line is written whole and flushed before an action reports success,
             // so a torn line belongs to an action that never reported success: ignore it.
+            let mut world = World::default();
             for line in text.lines() {
                 if let Ok(entry) = serde_json::from_str::<Json>(line) {
-                    adapter.world.push(entry);
+                    world.entries.push(entry);
                 }
             }
-            adapter.world_file = Some(file);
+            world.file = Some(file);
+            adapter.world = std::sync::Arc::new(std::sync::Mutex::new(world));
         }
         Ok(adapter)
     }
 
     /// Everything performed in the world so far (for tests).
-    pub fn world(&self) -> &[Json] {
-        &self.world
+    pub fn world(&self) -> Vec<Json> {
+        self.world.lock().map(|w| w.entries.clone()).unwrap_or_default()
     }
 }
 
@@ -162,19 +173,25 @@ impl Adapter for SimulatedAdapter {
                 return Err(format!("simulated failure of {capability}.{method}"));
             }
         }
+        // One action at a time in the world: a key is looked up and recorded together.
+        let mut world = self.world.lock().map_err(|_| "simulated world: lost".to_string())?;
         if self.idempotent
-            && let Some(seen) = self.world.iter().find(|e| e["key"] == key) {
+            && let Some(seen) = world.entries.iter().find(|e| e["key"] == key) {
                 return seen["receipt"].as_str().map(str::to_string).ok_or_else(|| "world entry has no receipt".into());
             }
-        let receipt = format!("sim-{}", self.world.len() + 1);
+        let receipt = format!("sim-{}", world.entries.len() + 1);
         let entry = json!({ "key": key, "capability": capability, "method": method, "args": args, "receipt": receipt });
-        if let Some(f) = &mut self.world_file {
+        if let Some(f) = &mut world.file {
             let mut line = entry.to_string();
             line.push('\n');
             f.write_all(line.as_bytes()).and_then(|()| f.sync_data()).map_err(|e| format!("simulated world: {e}"))?;
         }
-        self.world.push(entry);
+        world.entries.push(entry);
         Ok(receipt)
+    }
+
+    fn fork(&self) -> Box<dyn Adapter + Send> {
+        Box::new(SimulatedAdapter { fail_rules: self.fail_rules.clone(), idempotent: self.idempotent, world: self.world.clone() })
     }
 }
 

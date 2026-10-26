@@ -58,6 +58,7 @@ pub enum Outcome {
     Unknown(String),
 }
 
+#[derive(Clone)]
 pub struct Client {
     agent: ureq::Agent,
     max: u64,

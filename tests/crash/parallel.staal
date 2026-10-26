@@ -1,0 +1,21 @@
+// A crash-test scenario for concurrency: three messages sent at once, three model
+// calls at once, then one more message. After a crash at any point, the resumed run
+// must give the same result, and no message may be sent twice.
+
+type Note { text: Text }
+
+fn notify(to: Text, mail: cap email.send) -> Receipt {
+    return mail.send(to)
+}
+
+fn summarize(topic: Text) -> Text budget(calls: 1, tokens: 400) {
+    let n = validate propose(Note, instruct: "Summarize", data: [topic], tokens: 400)
+    return n.text
+}
+
+fn main(mail: cap email.send) -> Text budget(calls: 3, tokens: 1200) {
+    let sent = parallel(["a@x.org", "b@x.org", "c@x.org"], notify, mail)
+    let notes = parallel(["rain", "sun", "wind"], summarize)
+    let last = mail.send("audit@x.org: " + join(notes, ","))
+    return join(notes, ",") + " " + to_text(len(sent))
+}

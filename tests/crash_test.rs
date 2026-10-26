@@ -662,3 +662,107 @@ fn a_tcp_exchange_is_never_made_twice_whatever_the_crash() {
         assert!(made <= 1, "{fp}: the exchange was made {made} times");
     }
 }
+
+/// Concurrency: three actions and three model calls in concurrent tasks, then one more
+/// action.
+const PARALLEL: Scenario = Scenario { program: "tests/crash/parallel.staal", config: "tests/crash/parallel.json", actions: 4 };
+
+/// The phase 11 gate: concurrent work is still crash-safe. Killed at every journal
+/// write and inside every task's in-doubt window, resumed (on the other engine too),
+/// with each action in doubt resolved as a correct operator would, the run ends
+/// exactly as an uninterrupted one: the same result, the same world, nothing twice.
+/// Several actions can be in doubt at once: every task in flight when the process died.
+#[test]
+fn concurrent_tasks_recover_exactly_after_any_crash() {
+    for idempotent in [true, false] {
+        for engines in [("interpreter", "interpreter"), ("interpreter", "native")] {
+            if engines.1 == "native" && !cfg!(feature = "native") {
+                continue;
+            }
+            let mode = format!("par-{}-{}", if idempotent { "idem" } else { "plain" }, engines.1);
+            let base = Case::of(&PARALLEL, &format!("{mode}-baseline"), idempotent);
+            let out = base.run(None);
+            assert_eq!(out.code, Some(0), "{mode} baseline: {}", out.stderr);
+            assert_eq!(out.stdout, "\"R,S,W 3\"");
+            // Which actions happened, not the simulated receipt numbers, which follow the
+            // order concurrent tasks reached the service in.
+            let unreceipted = |w: Vec<Json>| {
+                let mut w: Vec<Json> = w.into_iter().map(|mut e| { e.as_object_mut().unwrap().remove("receipt"); e }).collect();
+                w.sort_by_key(|e| e.to_string());
+                w
+            };
+            let world = unreceipted(base.world());
+            assert_eq!(world.len(), PARALLEL.actions);
+            let journal = base.journal_lines();
+            // Every operation, by id: the program's own (n) and each task's (t:n).
+            let ids: Vec<String> = journal
+                .iter()
+                .filter(|r| r["j"] == "intent")
+                .map(|r| match r["t"].as_str() {
+                    Some(t) => format!("{t}:{}", r["n"]),
+                    None => r["n"].to_string(),
+                })
+                .collect();
+            assert_eq!(ids.len(), 3 + 3 * 2 + 1, "3 sends, 3 counts and 3 model calls, 1 send");
+            let mut points: Vec<String> = (1..=journal.len()).map(|k| format!("after_write:{k}")).collect();
+            points.extend(ids.iter().map(|id| format!("before_result:{id}")));
+            for fp in &points {
+                let label = format!("{mode} {fp}");
+                let mut c = Case::of(&PARALLEL, &format!("{mode}-{}", fp.replace([':', '/'], "-")), idempotent);
+                c.engines = engines;
+                let crashed = c.run(Some(fp));
+                assert_eq!(crashed.code, None, "{label}: the injected crash did not happen: {}", crashed.stderr);
+                let mut finished = None;
+                for _ in 0..20 {
+                    let out = c.resume();
+                    match out.code {
+                        Some(0) => {
+                            finished = Some(out);
+                            break;
+                        }
+                        Some(3) => {
+                            // Each action in doubt, resolved by what the world shows.
+                            for (task, key) in open_actions(&c) {
+                                let done = c.world_entries().into_iter().find(|e| e["key"] == key);
+                                let mut how: Vec<String> = match done {
+                                    Some(e) => vec!["--performed".into(), e["receipt"].as_str().unwrap().into()],
+                                    None => vec!["--retry".into()],
+                                };
+                                how.extend(["--operation".to_string(), task]);
+                                let r = c.resolve(&how.iter().map(String::as_str).collect::<Vec<_>>());
+                                assert_eq!(r.code, Some(0), "{label}: resolve failed: {}", r.stderr);
+                            }
+                        }
+                        other => panic!("{label}: resume exited {other:?}: {}", out.stderr),
+                    }
+                }
+                let out = finished.unwrap_or_else(|| panic!("{label}: the run did not finish"));
+                assert_eq!(out.stdout, "\"R,S,W 3\"", "{label}");
+                assert_eq!(unreceipted(c.world()), world, "{label}: the world differs from an uninterrupted run");
+                c.assert_no_duplicates(&label);
+                let again = c.resume();
+                assert_eq!((again.code, again.stdout.as_str()), (Some(0), "\"R,S,W 3\""), "{label}: {}", again.stderr);
+            }
+        }
+    }
+}
+
+/// The actions a journal leaves open: each one's operation id and key.
+fn open_actions(c: &Case) -> Vec<(String, String)> {
+    let mut last: std::collections::BTreeMap<String, Json> = std::collections::BTreeMap::new();
+    for r in c.journal_lines() {
+        let t = r["t"].as_str().unwrap_or("").to_string();
+        last.insert(t, r);
+    }
+    let mut open = Vec::new();
+    for (t, r) in &last {
+        if r["j"] == "intent" || r["j"] == "attempt" {
+            let n = r["n"].as_u64().unwrap();
+            let intent = c.journal_lines().into_iter().find(|x| x["j"] == "intent" && x["n"] == n && x["t"].as_str().unwrap_or("") == t).unwrap();
+            assert_eq!(intent["op"], "action", "only actions are ever left for an operator");
+            let id = if t.is_empty() { n.to_string() } else { format!("{t}:{n}") };
+            open.push((id, intent["key"].as_str().unwrap().to_string()));
+        }
+    }
+    open
+}

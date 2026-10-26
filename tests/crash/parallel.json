@@ -1,0 +1,10 @@
+{
+  "entry": "main",
+  "grants": { "mail": { "cap": "email.send" } },
+  "model": { "provider": "script", "responses": [
+    { "when": "rain", "output": { "text": "R" } },
+    { "when": "sun", "output": { "text": "S" } },
+    { "when": "wind", "output": { "text": "W" } }
+  ] },
+  "adapters": { "simulated": {} }
+}

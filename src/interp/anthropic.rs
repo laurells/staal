@@ -33,6 +33,7 @@ const RETRYABLE: [u16; 6] = [429, 500, 502, 503, 504, 529];
 const MAX_REPLY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
 
+#[derive(Clone)]
 pub struct AnthropicProvider {
     agent: ureq::Agent,
     base: String,
@@ -218,6 +219,11 @@ impl AnthropicProvider {
 }
 
 impl Provider for AnthropicProvider {
+    fn fork(&self) -> Box<dyn Provider + Send> {
+        // The agent's connection pool is shared; each request stands alone.
+        Box::new(self.clone())
+    }
+
     fn count_input_tokens(&mut self, req: &ModelRequest) -> Result<u64, ProviderError> {
         let body = Json::Object(self.body(req)?);
         let (status, reply) = self.post("/v1/messages/count_tokens", &body)?;

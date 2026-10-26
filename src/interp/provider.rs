@@ -62,8 +62,12 @@ pub trait Provider {
     /// Sends the request and returns the reply.
     fn complete(&mut self, req: &ModelRequest) -> Result<ModelReply, ProviderError>;
     /// Called instead of `complete` when a resumed run takes a model call's reply from
-    /// its journal. Real providers do nothing; a scripted provider moves to its next reply.
-    fn skip(&mut self) {}
+    /// its journal. Real providers do nothing; a scripted provider sets aside the reply
+    /// `complete` would have given.
+    fn skip(&mut self, _req: &ModelRequest) {}
+    /// A provider for a concurrent task: the same service, usable from another thread
+    /// at the same time. A scripted provider shares its replies with its forks.
+    fn fork(&self) -> Box<dyn Provider + Send>;
 }
 
 /// The provider a run config's `model` object names.
@@ -76,11 +80,13 @@ pub fn from_config(cfg: &Json) -> Result<Box<dyn Provider + Send>, String> {
     }
 }
 
-/// A deterministic provider for tests: replies come from a fixed script, in order.
-/// Input tokens are counted as one token per 4 bytes of the request's JSON (rounded up).
+/// A deterministic provider for tests: replies come from a fixed script, in order. A
+/// reply with `"when": "text"` is only for a request whose JSON contains that text, so
+/// concurrent tasks each get theirs whatever order they ask in; each call takes the
+/// first reply not yet used that fits it. Input tokens are counted as one token per 4
+/// bytes of the request's JSON (rounded up).
 pub struct ScriptProvider {
-    replies: Vec<ScriptReply>,
-    next: usize,
+    replies: std::sync::Arc<std::sync::Mutex<Vec<(ScriptReply, bool)>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +98,8 @@ pub struct ScriptReply {
     pub error: Option<String>,
     /// The provider cannot be reached: the run stops, and resuming asks again.
     pub unavailable: Option<String>,
+    /// Only for a request whose JSON contains this.
+    pub when: Option<String>,
 }
 
 impl ScriptProvider {
@@ -112,7 +120,7 @@ impl ScriptProvider {
             let at = format!("model.responses[{i}]");
             let r = r.as_object().ok_or(format!("{at}: expected an object"))?;
             for k in r.keys() {
-                if !["output", "output_tokens", "input_tokens", "error", "unavailable"].contains(&k.as_str()) {
+                if !["output", "output_tokens", "input_tokens", "error", "unavailable", "when"].contains(&k.as_str()) {
                     return Err(format!("{at}: unknown key '{k}'"));
                 }
             }
@@ -139,9 +147,23 @@ impl ScriptProvider {
                 input_tokens: tokens("input_tokens")?,
                 error,
                 unavailable,
+                when: text("when")?,
             });
         }
-        Ok(ScriptProvider { replies, next: 0 })
+        let replies = replies.into_iter().map(|r| (r, false)).collect();
+        Ok(ScriptProvider { replies: std::sync::Arc::new(std::sync::Mutex::new(replies)) })
+    }
+
+    /// Takes the first unused reply that fits `req`, and its position.
+    fn take(&self, req: &ModelRequest) -> Result<(usize, ScriptReply), String> {
+        let text = req.to_json().to_string();
+        let mut replies = self.replies.lock().map_err(|_| "the script's replies were lost".to_string())?;
+        let i = replies
+            .iter()
+            .position(|(r, used)| !used && r.when.as_ref().is_none_or(|w| text.contains(w.as_str())))
+            .ok_or_else(|| format!("script has no reply left for this model call ({} of {} used)", replies.iter().filter(|r| r.1).count(), replies.len()))?;
+        replies[i].1 = true;
+        Ok((i, replies[i].0.clone()))
     }
 
     fn count(req: &ModelRequest) -> u64 {
@@ -155,15 +177,16 @@ impl Provider for ScriptProvider {
         Ok(Self::count(req))
     }
 
-    fn skip(&mut self) {
-        self.next += 1;
+    fn skip(&mut self, req: &ModelRequest) {
+        let _ = self.take(req);
+    }
+
+    fn fork(&self) -> Box<dyn Provider + Send> {
+        Box::new(ScriptProvider { replies: self.replies.clone() })
     }
 
     fn complete(&mut self, req: &ModelRequest) -> Result<ModelReply, ProviderError> {
-        let Some(r) = self.replies.get(self.next).cloned() else {
-            return Err(ProviderError::Failed(format!("script has no reply for model call #{}", self.next + 1)));
-        };
-        self.next += 1;
+        let (_, r) = self.take(req).map_err(ProviderError::Failed)?;
         if let Some(e) = r.unavailable {
             return Err(ProviderError::Unavailable(e));
         }

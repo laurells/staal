@@ -210,6 +210,13 @@ fn reveals(e: &Expr, env: &Env) -> Vec<Src> {
             inexact(reveals(inner, env))
         }
         Expr::Parse { text, .. } => inexact(reveals(text, env)),
+        // Each task is given an item of the list: the results reveal the list and what
+        // the call is given besides.
+        Expr::Parallel { list, call, .. } => {
+            let mut v = reveals(list, env);
+            v.extend(reveals(call, env));
+            inexact(v)
+        }
         Expr::Named { value, .. } => reveals(value, env),
         // `some(x)` is x, wrapped: what is inside it is exactly x.
         Expr::SomeOf(inner, _) => reveals(inner, env),
@@ -267,6 +274,7 @@ fn expr_text(e: &Expr) -> String {
         Expr::Try(inner, _) => format!("try {}", expr_text(inner)),
         Expr::Propose { .. } => "propose(...)".into(),
         Expr::Parse { .. } => "parse(...)".into(),
+        Expr::Parallel { .. } => "parallel(...)".into(),
         Expr::Done { .. } => "done(...)".into(),
         Expr::Cmp { left, op, right, .. } => format!("{} {op} {}", expr_text(left), expr_text(right)),
         Expr::Arith { left, op, right, .. } => format!("{} {op} {}", expr_text(left), expr_text(right)),
@@ -3422,6 +3430,47 @@ fn closure_type(ctx: &mut Ctx, name: &str, captures: &[Expr], pos: Pos, env: &En
 /// Returns the expression's type and whether its value is trusted.
 fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
     match e {
+        Expr::Parallel { list, item, call, pos } => {
+            let (lty, ltrusted) = type_of(ctx, list, env)?;
+            let Ty::List(el, max) = &lty else {
+                let code = if matches!(lty, Ty::Proposed(_)) { "E001" } else { "E101" };
+                ctx.err(code, list.pos(), format!("`parallel` needs a list, found {lty}"));
+                return None;
+            };
+            // A declared function: a function value only computes, so it could do nothing
+            // worth running concurrently, and it carries no authority.
+            let variable = match call.as_ref() {
+                Expr::Call { name, .. } if !env.contains_key(name) => None,
+                Expr::Call { name, .. } => Some(name.clone()),
+                Expr::CallValue { callee, .. } => match callee.as_ref() {
+                    Expr::Var(n, _) => Some(n.clone()),
+                    _ => Some("it".into()),
+                },
+                _ => Some("it".into()),
+            };
+            if let Some(name) = variable {
+                ctx.err("E101", call.pos(), format!("`parallel` runs a declared function, but '{name}' is a variable here"));
+                return None;
+            }
+            // Bounded like `for`: as many tasks as the list may hold.
+            ctx.for_bounds.insert(*pos, *max);
+            let mut task_env = env.clone();
+            let b = Binding {
+                ty: (**el).clone(),
+                trusted: ltrusted,
+                reveals: reveals(list, env),
+                proven_ok: false,
+                holds_evidence: false,
+                decl: None,
+                raises: None,
+            };
+            task_env.insert(item.clone(), b);
+            let (rty, rtrusted) = type_of(ctx, call, &task_env)?;
+            if rty == named("Unit") {
+                return Some((rty, true));
+            }
+            Some((Ty::List(Box::new(rty), *max), rtrusted))
+        }
         // `crate::calls` replaces every one; kept total.
         Expr::Named { value, .. } => type_of(ctx, value, env),
         Expr::Str(..) => Some((named("Text"), true)),

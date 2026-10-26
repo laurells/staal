@@ -1388,6 +1388,10 @@ impl Parser {
                     Ok(Expr::Parse { ty, text: Box::new(text), pos })
                 })
             }
+            Tok::Ident(name) if name == "parallel" && self.toks.get(self.i + 1).map(|t| &t.tok) == Some(&Tok::LParen) => {
+                self.bump();
+                self.parallel(pos)
+            }
             Tok::Ident(name) if name == "none" => {
                 self.bump();
                 Ok(Expr::NoneLit(pos))
@@ -1453,6 +1457,45 @@ impl Parser {
             }
             other => Err((pos, format!("expected expression, found {other:?}"))),
         }
+    }
+
+    /// `parallel(list, f, a, b)`, after its word: `f` a declared function (`m.f` from a
+    /// module), the rest names or literals. Its item is a variable no program can name.
+    fn parallel(&mut self, pos: Pos) -> Result<Expr, (Pos, String)> {
+        self.expect(Tok::LParen, "'('")?;
+        let list = self.expr()?;
+        self.expect(Tok::Comma, "',' and the function to run for each item")?;
+        let fpos = self.pos();
+        let f = self.ident()?;
+        let method = if *self.peek() == Tok::Dot {
+            self.bump();
+            Some(self.ident()?)
+        } else {
+            None
+        };
+        if *self.peek() == Tok::LParen {
+            return Err((fpos, "`parallel` takes the function's name, not a call of it: parallel(items, f, a, b)".into()));
+        }
+        let item = format!("parallel@{}:{}:{}", pos.file, pos.line, pos.col);
+        let mut args = vec![Expr::Var(item.clone(), pos)];
+        while *self.peek() == Tok::Comma {
+            self.bump();
+            let apos = self.pos();
+            let a = self.expr()?;
+            if !matches!(a, Expr::Var(..) | Expr::Str(..) | Expr::Int(..) | Expr::Bool(..) | Expr::Money(..)) {
+                return Err((
+                    apos,
+                    "`parallel` passes only names and literals after the function, so nothing is computed once per task: give each value a name with `let` first".into(),
+                ));
+            }
+            args.push(a);
+        }
+        self.expect(Tok::RParen, "')'")?;
+        let call = match method {
+            None => Expr::Call { name: f, args, slots: Vec::new(), pos: fpos },
+            Some(m) => Expr::Action { receiver: f, method: m, args, pos: fpos },
+        };
+        Ok(Expr::Parallel { list: Box::new(list), item, call: Box::new(call), pos })
     }
 
     /// A whole number, or money: a number followed on the same line by a currency

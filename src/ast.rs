@@ -859,6 +859,10 @@ pub enum Expr {
     Try(Box<Expr>, Pos),
     /// `receiver.method(args)` — an action performed through a capability
     Action { receiver: String, method: String, args: Vec<Expr>, pos: Pos },
+    /// `parallel(list, f, a, b)`: `call` (`f(item, a, b)`, a call of a declared function
+    /// whose first argument is the variable `item`) made once for each item of `list`,
+    /// all at once; its results, in the list's order.
+    Parallel { list: Box<Expr>, item: String, call: Box<Expr>, pos: Pos },
 }
 
 impl Expr {
@@ -895,6 +899,7 @@ impl Expr {
             Expr::Record { fields, .. } | Expr::Variant { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
             // Only what the model is given is evaluated; `blind_to` names data, it is not evaluated.
             Expr::Propose { instruct, data, .. } => instruct.iter().map(|b| b.as_ref()).chain(data.iter()).collect(),
+            Expr::Parallel { list, call, .. } => vec![list, call],
         }
     }
 
@@ -929,6 +934,7 @@ impl Expr {
             Expr::Propose { instruct, data, blind_to, .. } => {
                 instruct.iter_mut().map(|b| b.as_mut()).chain(data.iter_mut()).chain(blind_to.iter_mut()).collect()
             }
+            Expr::Parallel { list, call, .. } => vec![list, call],
         }
     }
 
@@ -955,7 +961,7 @@ impl Expr {
             | Expr::Variant { pos, .. }
             | Expr::Index { pos, .. } => *pos,
             Expr::Cmp { pos, .. } | Expr::Field { pos, .. } | Expr::Done { pos, .. } => *pos,
-            Expr::Propose { pos, .. } | Expr::Parse { pos, .. } => *pos,
+            Expr::Propose { pos, .. } | Expr::Parse { pos, .. } | Expr::Parallel { pos, .. } => *pos,
             Expr::Action { pos, .. } | Expr::Call { pos, .. } | Expr::Named { pos, .. } | Expr::Method { pos, .. } => *pos,
             Expr::Lambda { pos, .. } | Expr::Closure { pos, .. } | Expr::CallValue { pos, .. } => *pos,
         }

@@ -1,0 +1,9 @@
+// expect: E101
+// message: `parallel` needs a list, found Int
+fn double(n: Int) -> Int {
+    return n * 2
+}
+
+fn f() -> List<Int, 3> {
+    return parallel(3, double)
+}

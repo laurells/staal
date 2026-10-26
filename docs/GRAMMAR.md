@@ -48,7 +48,7 @@ since JSON from outside often has such fields.
 **Contextual words** have a meaning only where the grammar below says, and are
 identifiers everywhere else: `action`, `as`, `canonical`, `capability`, `const`,
 `enum`, `evidence`, `fail`, `fails`, `interface`, `match`, `needs`, `none`,
-`parse`, `self`, `some` and `_`; the budget limits `calls` and `tokens`; the
+`parallel`, `parse`, `self`, `some` and `_`; the budget limits `calls` and `tokens`; the
 options of a propose call `instruct`, `data`, `blind_to` and `tokens`; the capability
 limits `max`, `each`, `uses` and `only`; the parameter marks `trusted`, `blind`,
 `target` and `amount`; and the type names `List`, `Optional`, `Map`, `Set` and
@@ -272,6 +272,7 @@ So `not a == b` is `not (a == b)`, `a + b * c` is `a + (b * c)`, and `-x.y` is
                 | "propose" "(" type ( "," propose_opt )* ")"
                 | "validate" postfix
                 | "parse" "(" type "," expr ")"
+                | "parallel" "(" expr "," path ( "," ( IDENT | STRING | NUM | money | "true" | "false" ) )* ")"
                 | "try" atom
                 | "done" "(" "evidence" ":" list ")"
                 | "some" "(" expr ")"
@@ -307,6 +308,7 @@ module `A` or variant `B` of the enum `A`, is decided once names are known.
 let fee = 2.50 USD
 let quote = validate propose(Quote, instruct: "Price this.", data: [order], tokens: 400)
 let sent = try sms.send(to, "Your code is \(code)")
+let replies = parallel(tickets, answer, model_budget, "en")
 let total = cart.lines[0].total() + adder(3)(4)
 let paid = Payment.Paid { amount: fee, reference: "r-1" }
 return done(evidence: [sent])
@@ -324,5 +326,8 @@ and `name(...)` with one of them always calls the built-in:
     base64_decode hex_encode hex_decode format_time parse_time make_time date_parts
     time_parts weekday print now random_int read_line
 
-`parse`, `some` and `none` are part of the grammar above. What each built-in takes
+`parse`, `parallel`, `some` and `none` are part of the grammar above. In
+`parallel(list, f, a, b)`, `f` names a declared function (`m.f` one from a module),
+not a call of it, and what follows it is names and literals only, so nothing is
+evaluated once per task. What each built-in takes
 and gives is in RUNTIME.md, sections 2, 4 and 12.

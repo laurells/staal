@@ -1,0 +1,8 @@
+// expect: E101
+fn double(n: Int) -> Int {
+    return n * 2
+}
+
+fn f() -> List<Int, 2> {
+    return parallel(["a", "b"], double)
+}

@@ -1,0 +1,9 @@
+// expect: E901
+// message: `parallel` passes only names and literals after the function
+fn add(n: Int, k: Int) -> Int {
+    return n + k
+}
+
+fn f() -> List<Int, 2> {
+    return parallel([1, 2], add, 1 + 1)
+}

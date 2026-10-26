@@ -1,0 +1,11 @@
+// expect: E004
+// Each task's model call counts: three of them do not fit a budget of two calls.
+type Note { text: Text }
+
+fn summarize(topic: Text) -> Text budget(calls: 1, tokens: 100) {
+    return (validate propose(Note, data: [topic], tokens: 100)).text
+}
+
+fn summarize_all(topics: List<Text, 3>) -> List<Text, 3> budget(calls: 2, tokens: 300) {
+    return parallel(topics, summarize)
+}

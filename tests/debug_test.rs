@@ -130,3 +130,23 @@ fn quit_stops_the_run_and_a_program_with_errors_never_starts() {
     assert!(o.stdout.is_empty());
     assert!(Command::new(BIN).args(["debug", "bad.staal"]).current_dir(&dir).output().unwrap().status.code() == Some(2));
 }
+
+#[test]
+fn a_breakpoint_in_concurrent_tasks_stops_in_each_one_in_turn() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/debug");
+    let mut child = Command::new(BIN)
+        .args(["debug", "tasks.staal", "--config", "run.json"])
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"break 2\ncontinue\ncontinue\nprint n\ncontinue\n").unwrap();
+    let o = child.wait_with_output().unwrap();
+    let out = String::from_utf8(o.stdout).unwrap();
+    for task in ["1.0", "1.1", "1.2"] {
+        assert!(out.contains(&format!("stopped at tasks.staal:2 in square (task {task})")), "{out}");
+    }
+    assert!(out.contains("(debug) 2\n"), "{out}");
+    assert!(out.ends_with("14\n"), "{out}");
+}

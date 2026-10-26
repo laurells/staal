@@ -21,7 +21,9 @@
 //
 // A line names the entry file's line unless FILE is given: a module's file as the
 // program names it, or the end of that path (`lib.staal` for `./lib.staal`). A breakpoint must be on a line where a statement
-// starts. When the input ends, the run goes on to its end without stopping.
+// starts. When the input ends, the run goes on to its end without stopping. Under the
+// debugger, the tasks of `parallel` run one after another, in the list's order, and a
+// stop in one names it.
 
 use crate::ast::{Program, Stmt};
 use crate::interp::DebugHook;
@@ -56,6 +58,8 @@ pub struct Debugger {
     last: Option<(u32, usize, usize)>,
     /// Whether the input has ended: from then on the run goes on without stopping.
     detached: bool,
+    /// The concurrent task now running ("" for the program itself).
+    task: String,
 }
 
 impl Debugger {
@@ -82,6 +86,7 @@ impl Debugger {
             mode: Mode::Step,
             last: None,
             detached: false,
+            task: String::new(),
         }
     }
 
@@ -124,7 +129,10 @@ impl Debugger {
     /// Reads commands until one goes on; false to stop the run.
     fn prompt(&mut self, at: Pos, stack: &[(String, Pos)], vars: &dyn Fn() -> Vec<(String, Json)>) -> bool {
         let func = stack.last().map_or("?", |(n, _)| n.as_str()).to_string();
-        let here = format!("{}:{} in {func}", self.file_name(at.file), at.line);
+        let mut here = format!("{}:{} in {func}", self.file_name(at.file), at.line);
+        if !self.task.is_empty() {
+            here.push_str(&format!(" (task {})", self.task));
+        }
         let text = self.line_text(at.file, at.line).trim().to_string();
         self.say(&format!("stopped at {here}\n  {} | {text}", at.line));
         loop {
@@ -225,6 +233,12 @@ impl Debugger {
 }
 
 impl DebugHook for Debugger {
+    fn task(&mut self, task: &str) {
+        self.task = task.to_string();
+        // A new task enters its lines afresh.
+        self.last = None;
+    }
+
     fn before(&mut self, at: Pos, stack: &[(String, Pos)], vars: &dyn Fn() -> Vec<(String, Json)>) -> bool {
         if self.detached {
             return true;

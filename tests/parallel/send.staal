@@ -1,0 +1,21 @@
+// The program the parallel runtime tests run.
+fn notify(to: Text, mail: cap email.send) -> Receipt {
+    return mail.send(to)
+}
+
+fn send_all(mail: cap email.send) -> Int {
+    let sent = parallel(["+2348000000001", "+2348000000002", "+2348000000003"], notify, mail)
+    return len(sent)
+}
+
+fn busy(n: Int) -> Int {
+    let t = 0
+    repeat 100 {
+        set t = t + n
+    }
+    return t
+}
+
+fn heavy() -> Int {
+    return sum(parallel([1, 2, 3, 4], busy))
+}

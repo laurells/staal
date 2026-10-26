@@ -31,7 +31,7 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
 rejecting the programs it should. 50 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 594 invalid ones
+including the two benchmark workflows (`workflow_*.staal`), and 601 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 
@@ -1025,6 +1025,38 @@ are not TLS) stays in doubt. An organisation's own authority can be added with
 
 What these tests do not cover: real services. `examples/` holds Termii SMS and
 Resend email programs with instructions to run them with your own keys.
+
+## Concurrency: `parallel`
+
+```staal
+type Note { text: Text }
+
+fn summarize(topic: Text) -> Text budget(calls: 1, tokens: 400) {
+    return (validate propose(Note, instruct: "Summarize", data: [topic], tokens: 400)).text
+}
+
+fn notify(to: Text, mail: cap email.send) -> Receipt {
+    return mail.send(to)
+}
+
+fn digest(topics: List<Text, 3>, people: List<Text, 3>, mail: cap email.send) -> List<Text, 3> budget(calls: 3, tokens: 1200) {
+    let sent = parallel(people, notify, mail)
+    return parallel(topics, summarize)
+}
+```
+
+`parallel(list, f, ...)` runs `f(item, ...)` for every item at once and gives the
+results in the list's order. `f` is a declared function, so a task can ask a model and
+act through the capabilities it is given; the values after `f` are names or literals,
+given to every task. Every task runs to its end; if any failed, the result is the
+first failure by position. Tasks share no data (nothing in Staal can be changed by two
+of them), so there is nothing to race on, and a budget covers every task (E004).
+
+Concurrent work is crash-safe like any other: each task's operations are recorded on
+their own, a resumed run replays each task exactly, and an action left in doubt in a
+task is resolved by name (`staalc resolve --operation 2.1:1`). A capability limited by
+`uses` or `max` cannot be passed to tasks, since which of them it refused would depend
+on their timing; use a `for` loop for those. RUNTIME.md section 18 has the details.
 
 ## Sockets: `net.tcp.exchange`
 

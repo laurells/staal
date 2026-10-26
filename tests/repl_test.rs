@@ -117,6 +117,18 @@ error[E101]: function 'older' is defined twice (1:1)
 }
 
 #[test]
+fn concurrent_tasks_print_in_the_lists_order() {
+    let d = scratch("repl-parallel");
+    // The first items take longest: run at once, they would print last.
+    let shout = "fn shout(n: Int) {\n    let t = 0\n    repeat 400 {\n        if t > n * 10 {\n            break\n        }\n        set t = t + 1\n    }\n    print(to_text(n))\n}\n";
+    let items: Vec<String> = (0..30).rev().map(|i| i.to_string()).collect();
+    let input = format!("{shout}parallel([{}], shout)\n", items.join(", "));
+    let (code, out, err) = repl(&d, &[], &input);
+    let want: String = items.iter().map(|i| format!("{i}\n")).collect();
+    assert_eq!((code, out.as_str()), (Some(0), want.as_str()), "{err}");
+}
+
+#[test]
 fn a_model_is_never_reached_and_modules_come_from_the_folder() {
     let d = scratch("repl-modules");
     fs::write(d.join("util.staal"), "pub fn twice(n: Int) -> Int {\n    return n * 2\n}\n\npub fn broken() -> Int {\n    return 1\n}\n").unwrap();

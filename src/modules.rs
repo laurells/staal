@@ -866,6 +866,13 @@ impl Resolver<'_, '_, '_> {
                 }
             }
             Expr::Parse { text, .. } => self.expr(text),
+            // The item is a local of the call; the list is outside it.
+            Expr::Parallel { list, item, call, .. } => {
+                self.expr(list);
+                self.locals.push(item.clone());
+                self.expr(call);
+                self.locals.pop();
+            }
             Expr::Cmp { left, right, .. } | Expr::Arith { left, right, .. } | Expr::Logic { left, right, .. } => {
                 self.expr(left);
                 self.expr(right);

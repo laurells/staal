@@ -148,6 +148,12 @@ pub const MAX_DEPTH_CEILING: usize = 2_000;
 /// Stack for the interpreter thread, sized so MAX_DEPTH_CEILING nested calls fit.
 const INTERP_STACK_BYTES: usize = 512 * 1024 * 1024;
 
+/// One task waiting for a thread: its interpreter, its arguments, where its result goes.
+type TaskWork<'a, 'p> = (&'a mut Interp<'p>, Vec<Value>, &'a mut Option<Result<Value, Failure>>);
+
+/// The most threads one `parallel` runs its tasks on at a time; the rest wait for one.
+const MAX_PARALLEL: usize = 16;
+
 /// The outcome of a run: the entry function's result or a failure, and the log.
 #[derive(Debug)]
 pub struct RunResult {
@@ -270,6 +276,9 @@ pub fn run_config_profiled(
 /// whether the run goes on.
 pub trait DebugHook: Send {
     fn before(&mut self, at: crate::lexer::Pos, stack: &[(String, crate::lexer::Pos)], vars: &dyn Fn() -> Vec<(String, Json)>) -> bool;
+    /// A concurrent task starts (`task` its id), or the program goes on after its
+    /// tasks (""): under a debugger, tasks run one after another.
+    fn task(&mut self, _task: &str) {}
 }
 
 /// Runs a checked program on the interpreter, without a journal, stopping before each
@@ -918,6 +927,7 @@ fn check_all_limits(prog: &Program) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // The interpreter
 
+#[derive(Clone)]
 struct Meter {
     calls_left: Option<u64>,
     tokens_left: Option<u64>,
@@ -972,9 +982,11 @@ struct Interp<'p> {
     types: Types,
     provider: Box<dyn Provider + Send>,
     adapter: Box<dyn Adapter + Send>,
-    broker: Broker,
+    /// Shared with the run's concurrent tasks.
+    broker: Shared<Broker>,
     meters: Vec<Meter>,
-    journal: Journal,
+    /// Shared with the run's concurrent tasks.
+    journal: Shared<Journal>,
     log: Vec<Json>,
     steps: u64,
     depth: usize,
@@ -1006,6 +1018,9 @@ struct Interp<'p> {
     /// The concurrent task this interpreter runs ("" for the program itself): its
     /// operations are a stream of their own in the journal.
     task: String,
+    /// How many `parallel` calls this interpreter has made: with the item's position,
+    /// what names each task, the same on every run.
+    spawns: u64,
 }
 
 /// What a profiled run spent in one function. Steps are the runtime's own count
@@ -1057,7 +1072,24 @@ enum Answer {
     Unknown(String),
 }
 
+/// State a run shares with its concurrent tasks, each holding it for one step at a time.
+type Shared<T> = std::sync::Arc<std::sync::Mutex<T>>;
+
+/// The value behind a lock. A task that panicked while holding it is a bug in staalc,
+/// reported where it happened; the state itself is still the last one written.
+fn locked<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl<'p> Interp<'p> {
+    fn broker(&self) -> std::sync::MutexGuard<'_, Broker> {
+        locked(&self.broker)
+    }
+
+    fn journal(&self) -> std::sync::MutexGuard<'_, Journal> {
+        locked(&self.journal)
+    }
+
     fn new(
         prog: &'p Program,
         limits: Limits,
@@ -1071,9 +1103,9 @@ impl<'p> Interp<'p> {
             types: types_of(prog),
             provider,
             adapter,
-            broker: Broker::default(),
+            broker: Default::default(),
             meters: Vec::new(),
-            journal,
+            journal: std::sync::Arc::new(std::sync::Mutex::new(journal)),
             log: Vec::new(),
             steps: 0,
             depth: 0,
@@ -1110,6 +1142,7 @@ impl<'p> Interp<'p> {
             debug: None,
             debug_stack: Vec::new(),
             task: String::new(),
+            spawns: 0,
         }
     }
 
@@ -1138,25 +1171,25 @@ impl<'p> Interp<'p> {
     }
 
     fn run(&mut self, setup: &Setup) -> RunResult {
-        let resumed = self.journal.is_resuming();
-        self.emit("run_start", json!({ "entry": setup.entry, "run_id": self.journal.run_id(), "resumed": resumed }));
+        let resumed = self.journal().is_resuming();
+        self.emit("run_start", json!({ "entry": setup.entry, "run_id": self.journal().run_id(), "resumed": resumed }));
         let mut args = Vec::new();
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
                 Arg::Grant { path, limits, idempotency_key, needs } => {
-                    let h = self.broker.grant(path, limits.clone());
+                    let h = self.broker().grant(path, limits.clone());
                     if *idempotency_key {
-                        self.broker.set_idempotency_key(h).unwrap_or_default();
+                        self.broker().set_idempotency_key(h).unwrap_or_default();
                     }
                     let mut given = Vec::with_capacity(needs.len());
                     for n in needs {
                         match n {
                             NeedArg::Data(v) => given.push(v.clone()),
                             NeedArg::Cap { path: ip, limits: il, idempotency_key: ik, declared } => {
-                                let ih = self.broker.grant(ip, il.clone());
+                                let ih = self.broker().grant(ip, il.clone());
                                 if *ik {
-                                    self.broker.set_idempotency_key(ih).unwrap_or_default();
+                                    self.broker().set_idempotency_key(ih).unwrap_or_default();
                                 }
                                 self.emit(
                                     "grant",
@@ -1199,7 +1232,7 @@ impl<'p> Interp<'p> {
             Err(f) => Some(json!({ "ok": false, "failure": f.kind.to_string(), "message": f.message })),
         };
         if let Some(rec) = ending
-            && let Err(e) = self.journal.end(rec) {
+            && let Err(e) = self.journal().end(rec) {
                 result = fail(FailKind::Journal, format!("the run finished, but its end could not be recorded: {e}"));
             }
         match &result {
@@ -1223,7 +1256,7 @@ impl<'p> Interp<'p> {
             return Ok(Value::Cap(h));
         }
         let l = runtime_limits(limits).or_else(internal)?;
-        let child = self.broker.narrow(h, l).or_else(internal)?;
+        let child = self.broker().narrow(h, l).or_else(internal)?;
         Ok(Value::Cap(child))
     }
 
@@ -1697,8 +1730,185 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// An interpreter for concurrent task `id`: the same program, journal, broker and
+    /// services, its own steps (at most what this one has left), budget meters (copies,
+    /// settled when the tasks end) and log.
+    fn fork_task(&self, id: String) -> Interp<'p> {
+        Interp {
+            fns: self.fns.clone(),
+            types: self.types.clone(),
+            provider: self.provider.fork(),
+            adapter: self.adapter.fork(),
+            broker: self.broker.clone(),
+            meters: self.meters.clone(),
+            journal: self.journal.clone(),
+            log: Vec::new(),
+            steps: 0,
+            depth: self.depth,
+            limits: Limits { max_steps: self.limits.max_steps.saturating_sub(self.steps), ..self.limits },
+            http: self.http.clone(),
+            tcp: self.tcp.clone(),
+            fs_max_read_bytes: self.fs_max_read_bytes,
+            secrets: self.secrets.clone(),
+            lib: self.lib.clone(),
+            needs: self.needs.clone(),
+            performed: 0,
+            effects: 0,
+            // Native code runs functions whole on this thread; a task interprets.
+            native: None,
+            capture: self.capture.clone(),
+            profile: None,
+            debug: None,
+            debug_stack: Vec::new(),
+            task: id,
+            spawns: 0,
+        }
+    }
+
+    /// `parallel(list, f, ...)`: `f` for each item, as concurrent tasks (at most
+    /// MAX_PARALLEL threads at a time; one after another under a debugger or the
+    /// REPL, which show one thing at a time). Every task runs to its end; then their
+    /// steps, budgets, counts and logs are added to this run's in the list's order, and
+    /// the first failure by position is the result, one that stops the run (in doubt,
+    /// the journal) before any other.
+    fn parallel(&mut self, frame: &mut Frame, list: &Expr, item: &str, call: &Expr) -> Result<Value, Failure> {
+        let Value::List(items) = self.eval(frame, list)? else { return internal("`parallel` of a value that is not a list") };
+        let Expr::Call { name, args, .. } = call else { return internal("`parallel` of something that is not a call") };
+        // Everything the call is given besides the item, evaluated once, here.
+        let mut given: Vec<Option<Value>> = Vec::new();
+        for a in args {
+            match a {
+                Expr::Var(n, _) if n == item => given.push(None),
+                a => given.push(Some(self.eval(frame, a)?)),
+            }
+        }
+        for v in given.iter().flatten() {
+            if let Value::Cap(h) = v {
+                let mut handles = vec![*h];
+                let root = self.broker().root(*h).or_else(internal)?;
+                for n in self.needs.get(&root).into_iter().flatten() {
+                    if let Value::Cap(nh) = n {
+                        handles.push(*nh);
+                    }
+                }
+                for hh in handles {
+                    let counted = self.broker().counted(hh).or_else(internal)?;
+                    if counted {
+                        let path = self.broker().path(hh).or_else(internal)?.to_string();
+                        return fail(
+                            FailKind::Capability,
+                            format!(
+                                "'{path}' is limited by `uses` or `max`, so it cannot be shared by concurrent tasks: \
+                                 which of them would be refused would depend on their timing. Use a `for` loop"
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        self.spawns += 1;
+        let prefix = if self.task.is_empty() { String::new() } else { format!("{}/", self.task) };
+        let mut tasks: Vec<Interp<'p>> = (0..items.len()).map(|i| self.fork_task(format!("{prefix}{}.{i}", self.spawns))).collect();
+        let calls: Vec<Vec<Value>> = items
+            .into_iter()
+            .map(|x| given.iter().map(|g| g.clone().unwrap_or_else(|| x.clone())).collect())
+            .collect();
+        let mut results: Vec<Option<Result<Value, Failure>>> = (0..tasks.len()).map(|_| None).collect();
+        if self.debug.is_some() || self.capture.is_some() {
+            for (i, (t, a)) in tasks.iter_mut().zip(calls).enumerate() {
+                // The debugger follows each task in turn.
+                t.debug = self.debug.take();
+                if let Some(d) = &mut t.debug {
+                    d.task(&t.task);
+                }
+                results[i] = Some(t.call(name, a));
+                self.debug = t.debug.take();
+            }
+            if let Some(d) = &mut self.debug {
+                d.task(&self.task);
+            }
+        } else {
+            let work: Vec<std::sync::Mutex<Option<TaskWork<'_, 'p>>>> =
+                tasks.iter_mut().zip(calls).zip(results.iter_mut()).map(|((t, a), r)| std::sync::Mutex::new(Some((t, a, r)))).collect();
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let workers = work.len().min(MAX_PARALLEL);
+            let started = std::thread::scope(|s| -> Result<(), String> {
+                let mut handles = Vec::new();
+                for _ in 0..workers {
+                    let (work, next) = (&work, &next);
+                    let h = std::thread::Builder::new()
+                        .stack_size(INTERP_STACK_BYTES)
+                        .spawn_scoped(s, move || loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            let Some(slot) = work.get(i) else { return };
+                            if let Some((t, a, r)) = locked(slot).take() {
+                                *r = Some(t.call(name, a));
+                            }
+                        })
+                        .map_err(|e| format!("could not start a thread for concurrent tasks: {e}"))?;
+                    handles.push(h);
+                }
+                for h in handles {
+                    h.join().map_err(|_| "a concurrent task's thread crashed; this is a bug in staalc".to_string())?;
+                }
+                Ok(())
+            });
+            if let Err(e) = started {
+                return internal(e);
+            }
+        }
+        // Settle what the tasks spent, in order.
+        let before: Vec<Meter> = self.meters.clone();
+        for t in &mut tasks {
+            self.steps = self.steps.saturating_add(t.steps);
+            self.performed += t.performed;
+            self.effects += t.effects;
+            for (i, m) in t.meters.iter().enumerate() {
+                if let (Some(parent), Some(b)) = (self.meters.get_mut(i), before.get(i)) {
+                    let spent = |was: Option<u64>, now: Option<u64>| was.zip(now).map_or(0, |(w, n)| w.saturating_sub(n));
+                    parent.calls_left = parent.calls_left.map(|c| c.saturating_sub(spent(b.calls_left, m.calls_left)));
+                    parent.tokens_left = parent.tokens_left.map(|c| c.saturating_sub(spent(b.tokens_left, m.tokens_left)));
+                }
+            }
+            for mut ev in std::mem::take(&mut t.log) {
+                if let Some(o) = ev.as_object_mut() {
+                    o.insert("seq".into(), json!(self.log.len() + 1));
+                    o.insert("task".into(), json!(t.task));
+                }
+                self.log.push(ev);
+            }
+        }
+        if self.steps > self.limits.max_steps {
+            return Err(step_limit(self.limits.max_steps));
+        }
+        let mut values = Vec::with_capacity(results.len());
+        let mut first: Option<Failure> = None;
+        for r in results {
+            match r {
+                Some(Ok(v)) => values.push(v),
+                Some(Err(f)) => {
+                    let stops = matches!(f.kind, FailKind::InDoubt | FailKind::Journal | FailKind::Internal);
+                    let first_stops = first.as_ref().is_some_and(|x| matches!(x.kind, FailKind::InDoubt | FailKind::Journal | FailKind::Internal));
+                    if first.is_none() || (stops && !first_stops) {
+                        first = Some(f);
+                    }
+                }
+                None => return internal("a concurrent task never ran"),
+            }
+        }
+        if let Some(f) = first {
+            return Err(f);
+        }
+        match self.fns.get(name.as_str()).map(|f| f.ret.is_none()) {
+            Some(true) => Ok(Value::Unit),
+            Some(false) => Ok(Value::List(values)),
+            None => internal(format!("undefined function '{name}'")),
+        }
+    }
+
     fn eval(&mut self, frame: &mut Frame, e: &Expr) -> Result<Value, Failure> {
         match e {
+            Expr::Parallel { list, item, call, .. } => self.parallel(frame, list, item, call),
             Expr::Var(n, _) => frame.get(n),
             Expr::Str(s, _) => Ok(Value::Text(s.clone())),
             Expr::Bool(b, _) => Ok(Value::Bool(*b)),
@@ -1938,7 +2148,7 @@ impl<'p> Interp<'p> {
 
     // RUNTIME.md section 6
     fn action(&mut self, h: usize, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
-        let path = self.broker.path(h).or_else(internal)?.to_string();
+        let path = self.broker().path(h).or_else(internal)?.to_string();
         // The runtime's own capabilities never reach an adapter.
         if path == "net.tcp.exchange" {
             return self.tcp_action(h, &path, method, args);
@@ -1968,7 +2178,8 @@ impl<'p> Interp<'p> {
             "action_requested",
             json!({ "capability": path, "method": method, "amount": amount_text, "target": target }),
         );
-        if let Err(why) = self.broker.authorize(h, amount, target.as_deref()) {
+        let authorized = self.broker().authorize(h, amount, target.as_deref());
+        if let Err(why) = authorized {
             self.emit("action_refused", json!({ "capability": path, "method": method, "reason": why }));
             return fail(FailKind::Capability, why);
         }
@@ -1985,7 +2196,7 @@ impl<'p> Interp<'p> {
         }
         // Approved: this attempt counts against every `uses` limit in the chain, whatever
         // the service then answers.
-        self.broker.count_use(h).or_else(internal)?;
+        self.broker().count_use(h).or_else(internal)?;
         let body =
             json!({ "capability": path, "method": method, "args": args_json, "amount": amount_text, "target": target });
         let idempotent = self.adapter.idempotent(&path, method);
@@ -2007,7 +2218,7 @@ impl<'p> Interp<'p> {
                     json!({ "capability": path, "method": method, "amount": amount_text, "args": args_json,
                             "receipt": id, "replayed": replayed }),
                 );
-                self.broker.charge(h, amount).or_else(internal)?;
+                self.broker().charge(h, amount).or_else(internal)?;
                 Ok(Value::Receipt(Receipt { id, capability: path, method: method.to_string() }))
             }
             Err(msg) => {
@@ -2050,11 +2261,12 @@ impl<'p> Interp<'p> {
             "action_requested",
             json!({ "capability": path, "method": method, "amount": amount_text, "target": target }),
         );
-        if let Err(why) = self.broker.authorize(h, amount, target.as_deref()) {
+        let authorized = self.broker().authorize(h, amount, target.as_deref());
+        if let Err(why) = authorized {
             return self.refuse(path, method, FailKind::Capability, why);
         }
-        self.broker.count_use(h).or_else(internal)?;
-        let root = self.broker.root(h).or_else(internal)?;
+        self.broker().count_use(h).or_else(internal)?;
+        let root = self.broker().root(h).or_else(internal)?;
         let mut call_args = args;
         call_args.extend(self.needs.get(&root).cloned().unwrap_or_default());
         let (before, effects_before) = (self.performed, self.effects);
@@ -2072,7 +2284,7 @@ impl<'p> Interp<'p> {
                     "action_performed",
                     json!({ "capability": path, "method": method, "amount": amount_text, "target": target, "receipt": id }),
                 );
-                self.broker.charge(h, amount).or_else(internal)?;
+                self.broker().charge(h, amount).or_else(internal)?;
                 Ok(Value::Receipt(Receipt { id, capability: path.to_string(), method: method.to_string() }))
             }
             Ok(_) => internal("a capability action returned something that is not Text"),
@@ -2089,7 +2301,7 @@ impl<'p> Interp<'p> {
                     json!({ "capability": path, "method": method, "error": f.message, "may_have_spent": may_have_spent }),
                 );
                 if may_have_spent {
-                    self.broker.charge(h, amount).or_else(internal)?;
+                    self.broker().charge(h, amount).or_else(internal)?;
                 }
                 Err(f)
             }
@@ -2143,14 +2355,15 @@ impl<'p> Interp<'p> {
             }
         }
         self.emit("action_requested", json!({ "capability": path, "method": method, "target": url }));
-        if let Err(why) = self.broker.authorize(h, None, Some(&url)) {
+        let authorized = self.broker().authorize(h, None, Some(&url));
+        if let Err(why) = authorized {
             return self.refuse(path, method, FailKind::Capability, why);
         }
         // GET is safe to repeat by definition; the others only when the operator has said
         // the service deduplicates by Idempotency-Key, which the runtime then sends.
-        let keyed = method != "get" && self.broker.idempotency_key(h).or_else(internal)?;
+        let keyed = method != "get" && self.broker().idempotency_key(h).or_else(internal)?;
         let retryable = method == "get" || keyed;
-        self.broker.count_use(h).or_else(internal)?;
+        self.broker().count_use(h).or_else(internal)?;
         let shown: Vec<Json> = headers
             .iter()
             .map(|(n, v)| match v {
@@ -2227,10 +2440,11 @@ impl<'p> Interp<'p> {
             Err(e) => return self.refuse(path, method, FailKind::Capability, e),
         };
         self.emit("action_requested", json!({ "capability": path, "method": method, "target": file }));
-        if let Err(why) = self.broker.authorize(h, None, Some(&file)) {
+        let authorized = self.broker().authorize(h, None, Some(&file));
+        if let Err(why) = authorized {
             return self.refuse(path, method, FailKind::Capability, why);
         }
-        self.broker.count_use(h).or_else(internal)?;
+        self.broker().count_use(h).or_else(internal)?;
         let what = format!("action {path} {file}");
         let (answer, replayed) = match method {
             // Reading changes nothing, and writing the same content again leaves the same
@@ -2295,10 +2509,11 @@ impl<'p> Interp<'p> {
             Err(e) => return self.refuse(path, method, FailKind::Capability, e),
         };
         self.emit("action_requested", json!({ "capability": path, "method": method, "target": address }));
-        if let Err(why) = self.broker.authorize(h, None, Some(&address)) {
+        let authorized = self.broker().authorize(h, None, Some(&address));
+        if let Err(why) = authorized {
             return self.refuse(path, method, FailKind::Capability, why);
         }
-        self.broker.count_use(h).or_else(internal)?;
+        self.broker().count_use(h).or_else(internal)?;
         let jbody = json!({ "capability": path, "method": method, "target": address,
                             "data_sha256": journal::sha256_hex(data.as_bytes()), "until": until });
         let what = format!("action {path} {address}");
@@ -2354,10 +2569,11 @@ impl<'p> Interp<'p> {
             Err(e) => return self.refuse(path, method, FailKind::Capability, e),
         };
         self.emit("action_requested", json!({ "capability": path, "method": method, "target": file }));
-        if let Err(why) = self.broker.authorize(h, None, Some(&file)) {
+        let authorized = self.broker().authorize(h, None, Some(&file));
+        if let Err(why) = authorized {
             return self.refuse(path, method, FailKind::Capability, why);
         }
-        self.broker.count_use(h).or_else(internal)?;
+        self.broker().count_use(h).or_else(internal)?;
         let what = format!("action {path} {file}");
         // The journal records hashes of the SQL and its parameters, not the values: on
         // resume the program computes them again, and the hashes detect a difference.
@@ -2365,7 +2581,7 @@ impl<'p> Interp<'p> {
         let jbody = json!({ "capability": path, "method": method, "target": file,
                             "sql_sha256": journal::sha256_hex(sql.as_bytes()),
                             "params_sha256": journal::sha256_hex(params_json.as_bytes()) });
-        let keyed = self.broker.idempotency_key(h).or_else(internal)?;
+        let keyed = self.broker().idempotency_key(h).or_else(internal)?;
         let (answer, replayed) = match method {
             "query" => self.external("action", jbody, true, &what, |it, _key| {
                 Answer::Done(db::query(&file, sql, &params, it.fs_max_read_bytes).map(|rows| json!({ "text": scrub_text(&it.secrets, &rows.to_string()) })))
@@ -2418,7 +2634,7 @@ impl<'p> Interp<'p> {
         what: &str,
         live: impl FnOnce(&mut Self, &str) -> Answer,
     ) -> Result<(Result<Json, String>, bool), Failure> {
-        let step = match self.journal.begin(&self.task, op, body) {
+        let step = match self.journal().begin(&self.task, op, body) {
             Ok(step) => step,
             Err(e) => return fail(FailKind::Journal, e),
         };
@@ -2474,7 +2690,8 @@ impl<'p> Interp<'p> {
                 );
             }
         };
-        if let Err(e) = self.journal.finish(&self.task, n, answer.clone()) {
+        let recorded = self.journal().finish(&self.task, n, answer.clone());
+        if let Err(e) = recorded {
             // The operation happened but is not durably recorded. Keep it in the log, then
             // stop: resume will find it in doubt.
             let shown = match &answer {
@@ -2558,7 +2775,7 @@ impl<'p> Interp<'p> {
             }
         })?;
         if replayed {
-            self.provider.skip();
+            self.provider.skip(&req);
         }
         let reply = match answer {
             Ok(v) => match (v.get("output"), v.get("error").and_then(Json::as_str), v["input_tokens"].as_u64(), v["output_tokens"].as_u64()) {
@@ -3332,6 +3549,10 @@ mod tests {
     }
 
     impl Provider for Recording {
+        fn fork(&self) -> Box<dyn Provider + Send> {
+            Box::new(Recording { counted: self.counted.clone(), sent: self.sent.clone() })
+        }
+
         fn count_input_tokens(&mut self, _req: &ModelRequest) -> Result<u64, ProviderError> {
             self.counted.fetch_add(1, Ordering::SeqCst);
             Ok(10)

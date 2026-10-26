@@ -7,6 +7,16 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `parallel(list, f, ...)`: concurrency. `f`, a declared function, runs for every item
+  at once on up to 16 threads; the results come back in the list's order, and a
+  failure is the first by position, so the outcome never depends on scheduling. Tasks
+  share no data; a capability limited by `uses` or `max` is refused for them. Each
+  task's operations are their own stream in the journal (version 2), so a resumed run
+  replays every task exactly: the crash tests kill concurrent actions and model calls
+  at every crash point and resume on either engine. `staalc resolve --operation`
+  names one of several actions in doubt. Budgets count every task (E004); logs are
+  the same whatever the scheduling. The debugger and the REPL run tasks in turn.
+- Scripted model replies can say `"when"`, the text of the request they answer.
 - `net.tcp.exchange`: a TCP request and its reply, read to the peer's close or to a
   delimiter, to the addresses `only` allows (canonical `host:port`, `host:*` or `*`).
   An exchange that may have reached the peer is never repeated: it is left for an

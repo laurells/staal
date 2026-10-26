@@ -237,6 +237,15 @@ impl<'a> Analyzer<'a> {
     fn expr(&mut self, e: &Expr, stack: &mut Vec<&'a str>, cycles: &mut HashSet<&'a str>) -> Cost {
         // Everything an expression evaluates costs what it costs; a model call adds one
         // call and its token limit, and a function call adds the callee's cost.
+        // `parallel`: its call once for each item the list may hold.
+        if let Expr::Parallel { list, call, pos, .. } = e {
+            let per = self.expr(call, stack, cycles);
+            let all = match self.for_bounds.get(pos) {
+                Some(n) => per.times(*n),
+                None => per.forever(),
+            };
+            return self.expr(list, stack, cycles).add(all);
+        }
         let mut c = match e {
             Expr::Propose { tokens, .. } => Cost { calls: Bound::Fin(1), tokens: tokens.map_or(Bound::Unbounded, Bound::Fin) },
             Expr::Call { name, .. } => self.fn_cost(name, stack, cycles),
