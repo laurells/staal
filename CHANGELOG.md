@@ -7,6 +7,18 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- Version ranges for dependencies: `{"git": ..., "version": "^1.2"}` takes the newest
+  release tag of that repository within the range, and `{"version": "~0.3"}` the
+  newest version the project's registry lists. Ranges are Semantic Versioning
+  (`^`, `~`, `=`, comparisons, wildcards; pre-releases only when named). One version
+  per package fits every range asking for it; a locked one is kept while it fits, and
+  `staalc update [--package <name>]` moves it. A conflict is reported with who wants
+  what, never searched around. A moved release tag or registry entry, or a tag whose
+  manifest gives another version, stops the fetch with nothing changed. `staal.lock`
+  is version 2 (version 1 is still read), recording each package's version.
+- Package registries: a git repository listing each published version's commit and
+  the SHA-256 of its files, checked on every fetch. `staalc publish` adds a version
+  (a published version never changes); `staalc yank` stops one being chosen again.
 - `net.tcp.accept` and `net.tcp.reply`: listening. `accept` waits for the next client
   on an address `only` allows and gives its request as an `Incoming`; `reply` answers
   that connection and closes it. Tasks made by `parallel` serve clients at once. The
@@ -201,6 +213,8 @@ the language or its file formats.
   `min`, `max`, `map`, `any`, `all`, `count` or any other of them must be renamed.
 
 ### Fixed
+- A package could be named `db` or `ffi`, capability families of the runtime; both
+  are refused now, as `net` and `fs` were.
 - `staalc resolve` refuses an operation that resume makes again by itself (`fs.read`,
   `fs.write`, `db.sqlite.query`, `net.tcp.accept`, `net.tcp.reply`). Before, it could
   record a receipt for an `fs.read` or a `db.sqlite.query`, and the resumed run then

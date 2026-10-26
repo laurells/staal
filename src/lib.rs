@@ -19,6 +19,7 @@ pub mod native;
 pub mod packages;
 pub mod parser;
 pub mod pattern;
+pub mod semver;
 pub mod targets;
 
 use checker::Diagnostic;

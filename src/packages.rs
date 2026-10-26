@@ -1,9 +1,16 @@
 // Packages (roadmap phase 4): libraries from outside the program's folder.
 //
 // A project is the folder of the entry file. If it holds `staal.json`, its
-// `dependencies` name packages by git URL and exact commit:
+// `dependencies` name packages by git URL and exact commit, by a version range of a
+// repository's release tags, or by a version range from the project's registry:
 //
-//   { "dependencies": { "sms": { "git": "https://github.com/x/sms", "commit": "<40 hex>" } } }
+//   { "registry": "https://github.com/x/registry",
+//     "dependencies": { "sms": { "git": "https://github.com/x/sms", "commit": "<40 hex>" },
+//                       "email": { "git": "https://github.com/x/email", "version": "^1.2" },
+//                       "chat": { "version": "~0.3" } } }
+//
+// `staalc fetch` resolves each to one commit, the newest version fitting every range
+// (or the locked one while it fits), and locks it.
 //
 // A package is a git repository with `staal.json` at its root:
 //
@@ -31,6 +38,7 @@ use crate::ast::{Program, Stmt, Ty};
 use crate::checker::Diagnostic;
 use crate::lexer::Pos;
 use crate::modules::{Source, SourceFile};
+use crate::semver::{Range, Version};
 use serde_json::{json, Map, Value as Json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,18 +62,40 @@ pub enum Authority {
     Only(Vec<String>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// Where a package's files are: a git location and one commit there.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Dep {
     pub git: String,
     pub commit: String,
 }
 
+/// What a manifest asks for: one commit, a range of a repository's release tags, or a
+/// range of the versions the project's registry lists.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Spec {
+    Commit(Dep),
+    Tags { git: String, range: Range },
+    Registry { range: Range },
+}
+
+impl Spec {
+    fn describe(&self) -> String {
+        match self {
+            Spec::Commit(d) => format!("commit {} of {}", &d.commit[..12], d.git),
+            Spec::Tags { git, range } => format!("version {range} of {git}"),
+            Spec::Registry { range } => format!("version {range} from the registry"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Manifest {
     pub package: Option<String>,
-    pub version: Option<String>,
+    pub version: Option<Version>,
     pub authority: BTreeMap<String, Authority>,
-    pub dependencies: BTreeMap<String, Dep>,
+    pub dependencies: BTreeMap<String, Spec>,
+    /// The project's registry, a git location (a project's manifest only).
+    pub registry: Option<String>,
 }
 
 /// One verified package: its manifest and its `.staal` files, read once and kept, so the
@@ -82,7 +112,7 @@ pub struct Package {
 #[derive(Debug, Clone)]
 pub struct Project {
     pub root: PathBuf,
-    pub deps: BTreeMap<String, Dep>,
+    pub deps: BTreeMap<String, Spec>,
     pub packages: BTreeMap<String, Package>,
 }
 
@@ -95,7 +125,7 @@ fn check_package_name(name: &str, at: &str) -> Result<(), String> {
     if !is_name(name) {
         return Err(format!("{at}: '{name}' is not a package name (lowercase letters, digits and _, starting with a letter)"));
     }
-    if name == "net" || name == "fs" {
+    if ["net", "fs", "db", "ffi"].contains(&name) {
         return Err(format!("{at}: '{name}' belongs to the runtime and cannot name a package"));
     }
     Ok(())
@@ -140,24 +170,44 @@ fn check_pattern(path: &str, p: &str) -> Result<(), String> {
     }
 }
 
-fn parse_deps(v: Option<&Json>, at: &str) -> Result<BTreeMap<String, Dep>, String> {
+fn parse_deps(v: Option<&Json>, at: &str) -> Result<BTreeMap<String, Spec>, String> {
     let mut out = BTreeMap::new();
     let Some(v) = v else { return Ok(out) };
     let obj = v.as_object().ok_or(format!("{at}.dependencies: expected an object"))?;
     for (name, d) in obj {
         let dat = format!("{at}.dependencies.{name}");
         check_package_name(name, &dat)?;
-        let d = d.as_object().ok_or(format!("{dat}: expected {{\"git\": ..., \"commit\": ...}}"))?;
+        let d = d.as_object().ok_or(format!(
+            "{dat}: expected {{\"git\": ..., \"commit\": ...}}, {{\"git\": ..., \"version\": ...}} or {{\"version\": ...}}"
+        ))?;
         for k in d.keys() {
-            if k != "git" && k != "commit" {
+            if !["git", "commit", "version"].contains(&k.as_str()) {
                 return Err(format!("{dat}: unknown key '{k}'"));
             }
         }
-        let git = d.get("git").and_then(Json::as_str).ok_or(format!("{dat}.git: expected a string"))?;
-        let commit = d.get("commit").and_then(Json::as_str).ok_or(format!("{dat}.commit: expected a string"))?;
-        check_git(git, &format!("{dat}.git"))?;
-        check_commit(commit, &format!("{dat}.commit"))?;
-        out.insert(name.clone(), Dep { git: git.to_string(), commit: commit.to_string() });
+        let text = |k: &str| match d.get(k) {
+            None => Ok(None),
+            Some(Json::String(s)) => Ok(Some(s.as_str())),
+            Some(_) => Err(format!("{dat}.{k}: expected a string")),
+        };
+        let (git, commit, version) = (text("git")?, text("commit")?, text("version")?);
+        if let Some(g) = git {
+            check_git(g, &format!("{dat}.git"))?;
+        }
+        let range = |v: &str| Range::parse(v).map_err(|e| format!("{dat}.version: {e}"));
+        let spec = match (git, commit, version) {
+            (Some(g), Some(c), None) => {
+                check_commit(c, &format!("{dat}.commit"))?;
+                Spec::Commit(Dep { git: g.to_string(), commit: c.to_string() })
+            }
+            (Some(g), None, Some(v)) => Spec::Tags { git: g.to_string(), range: range(v)? },
+            (None, None, Some(v)) => Spec::Registry { range: range(v)? },
+            (_, Some(_), Some(_)) => return Err(format!("{dat}: give a commit or a version, not both")),
+            (None, Some(_), None) => return Err(format!("{dat}: a commit needs the git location it is in")),
+            (Some(_), None, None) => return Err(format!("{dat}: give the commit, or a version range of the repository's release tags")),
+            (None, None, None) => return Err(format!("{dat}: give a version range, or a git location and a commit or version")),
+        };
+        out.insert(name.clone(), spec);
     }
     Ok(out)
 }
@@ -169,7 +219,7 @@ impl Manifest {
         let v: Json = serde_json::from_str(text).map_err(|e| format!("{at}: not valid JSON: {e}"))?;
         let obj = v.as_object().ok_or(format!("{at}: expected an object"))?;
         for k in obj.keys() {
-            if !["package", "version", "authority", "dependencies"].contains(&k.as_str()) {
+            if !["package", "version", "authority", "dependencies", "registry"].contains(&k.as_str()) {
                 return Err(format!("{at}: unknown key '{k}'"));
             }
         }
@@ -183,8 +233,19 @@ impl Manifest {
         };
         let version = match obj.get("version") {
             None => None,
-            Some(Json::String(s)) => Some(s.clone()),
+            Some(Json::String(s)) => Some(Version::parse(s).map_err(|e| format!("{at}.version: {e}"))?),
             Some(_) => return Err(format!("{at}.version: expected a string")),
+        };
+        let registry = match obj.get("registry") {
+            None => None,
+            Some(_) if as_package => {
+                return Err(format!("{at}.registry: the project chooses the registry; a package cannot"));
+            }
+            Some(Json::String(g)) => {
+                check_git(g, &format!("{at}.registry"))?;
+                Some(g.clone())
+            }
+            Some(_) => return Err(format!("{at}.registry: expected a git location")),
         };
         let mut authority = BTreeMap::new();
         if let Some(a) = obj.get("authority") {
@@ -227,7 +288,7 @@ impl Manifest {
         {
             return Err(format!("{at}: package '{n}' cannot depend on itself"));
         }
-        Ok(Manifest { package, version, authority, dependencies })
+        Ok(Manifest { package, version, authority, dependencies, registry })
     }
 }
 
@@ -240,6 +301,10 @@ pub struct Lock {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LockedPackage {
     pub dep: Dep,
+    /// The version its manifest gives, if any.
+    pub version: Option<Version>,
+    /// The registry it was chosen from, for a dependency on the registry.
+    pub registry: Option<String>,
     pub files: BTreeMap<String, String>,
 }
 
@@ -247,8 +312,9 @@ impl Lock {
     pub fn parse(text: &str, at: &str) -> Result<Lock, String> {
         let v: Json = serde_json::from_str(text).map_err(|e| format!("{at}: not valid JSON: {e}"))?;
         let obj = v.as_object().ok_or(format!("{at}: expected an object"))?;
-        if obj.get("staal_lock") != Some(&json!(1)) {
-            return Err(format!("{at}: not a staal.lock of version 1"));
+        // Version 1 has no versions or registries; it reads as version 2 without them.
+        if obj.get("staal_lock") != Some(&json!(1)) && obj.get("staal_lock") != Some(&json!(2)) {
+            return Err(format!("{at}: not a staal.lock of version 1 or 2"));
         }
         for k in obj.keys() {
             if k != "staal_lock" && k != "packages" {
@@ -262,7 +328,7 @@ impl Lock {
             check_package_name(name, &pat)?;
             let p = p.as_object().ok_or(format!("{pat}: expected an object"))?;
             for k in p.keys() {
-                if !["git", "commit", "files"].contains(&k.as_str()) {
+                if !["git", "commit", "version", "registry", "files"].contains(&k.as_str()) {
                     return Err(format!("{pat}: unknown key '{k}'"));
                 }
             }
@@ -278,7 +344,20 @@ impl Lock {
                 let h = h.ok_or(format!("{pat}.files.{f}: expected a SHA-256 in hex"))?;
                 files.insert(f.clone(), h.to_ascii_lowercase());
             }
-            packages.insert(name.clone(), LockedPackage { dep: Dep { git: git.into(), commit: commit.into() }, files });
+            let version = match p.get("version") {
+                None | Some(Json::Null) => None,
+                Some(Json::String(v)) => Some(Version::parse(v).map_err(|e| format!("{pat}.version: {e}"))?),
+                Some(_) => return Err(format!("{pat}.version: expected a string")),
+            };
+            let registry = match p.get("registry") {
+                None | Some(Json::Null) => None,
+                Some(Json::String(g)) => {
+                    check_git(g, &format!("{pat}.registry"))?;
+                    Some(g.clone())
+                }
+                Some(_) => return Err(format!("{pat}.registry: expected a git location")),
+            };
+            packages.insert(name.clone(), LockedPackage { dep: Dep { git: git.into(), commit: commit.into() }, version, registry, files });
         }
         Ok(Lock { packages })
     }
@@ -287,9 +366,16 @@ impl Lock {
         let mut ps = Map::new();
         for (name, p) in &self.packages {
             let files: Map<String, Json> = p.files.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
-            ps.insert(name.clone(), json!({ "git": p.dep.git, "commit": p.dep.commit, "files": files }));
+            let mut e = json!({ "git": p.dep.git, "commit": p.dep.commit, "files": files });
+            if let Some(v) = &p.version {
+                e["version"] = json!(v.to_string());
+            }
+            if let Some(r) = &p.registry {
+                e["registry"] = json!(r);
+            }
+            ps.insert(name.clone(), e);
         }
-        let mut text = serde_json::to_string_pretty(&json!({ "staal_lock": 1, "packages": ps })).expect("serialisable");
+        let mut text = serde_json::to_string_pretty(&json!({ "staal_lock": 2, "packages": ps })).expect("serialisable");
         text.push('\n');
         text
     }
@@ -380,6 +466,9 @@ impl Project {
             if m.package.as_deref() != Some(name) {
                 return Err(format!("package {name}: its {MANIFEST} names it '{}'", m.package.unwrap_or_default()));
             }
+            if m.version != lp.version {
+                return Err(format!("package {name} does not match {LOCKFILE}: its {MANIFEST} gives another version; run `staalc fetch`"));
+            }
             let mut modules = BTreeMap::new();
             for (f, bytes) in &tree {
                 if let Some(stem) = f.strip_suffix(".staal") {
@@ -389,31 +478,27 @@ impl Project {
             }
             packages.insert(name.clone(), Package { name: name.clone(), dep: lp.dep.clone(), manifest: m, modules });
         }
-        // The lock must be exactly the dependency graph: every package wanted at the
-        // commit it is wanted at, and nothing else.
-        let mut wanted: BTreeMap<String, (Dep, String)> = BTreeMap::new();
-        let mut queue: Vec<(String, Dep, String)> =
+        // The lock must be exactly the dependency graph: every package locked at what
+        // everything that depends on it asks for, and nothing else.
+        let mut wanted: BTreeSet<String> = BTreeSet::new();
+        let mut queue: Vec<(String, Spec, String)> =
             manifest.dependencies.iter().map(|(n, d)| (n.clone(), d.clone(), "the project".to_string())).collect();
-        while let Some((n, d, by)) = queue.pop() {
-            if let Some((have, first)) = wanted.get(&n) {
-                if *have != d {
-                    return Err(format!("{first} and {by} want different versions of package {n}; one version per package"));
-                }
-                continue;
-            }
+        while let Some((n, spec, by)) = queue.pop() {
             let p = packages
                 .get(&n)
                 .ok_or(format!("{LOCKFILE} has no package {n} (wanted by {by}); run `staalc fetch`"))?;
-            if p.dep != d {
-                return Err(format!("{LOCKFILE} has package {n} at {}, but {by} wants {}; run `staalc fetch`", p.dep.commit, d.commit));
+            let locked = &lock.packages[&n];
+            satisfies(&spec, locked, manifest.registry.as_deref()).map_err(|why| {
+                format!("{LOCKFILE} has package {n} {}, but {by} wants {}: {why}; run `staalc fetch`", locked_text(locked), spec.describe())
+            })?;
+            if wanted.insert(n.clone()) {
+                for (dn, dd) in &p.manifest.dependencies {
+                    queue.push((dn.clone(), dd.clone(), format!("package {n}")));
+                }
             }
-            for (dn, dd) in &p.manifest.dependencies {
-                queue.push((dn.clone(), dd.clone(), format!("package {n}")));
-            }
-            wanted.insert(n, (d, by));
         }
         for n in packages.keys() {
-            if !wanted.contains_key(n) {
+            if !wanted.contains(n) {
                 return Err(format!("{LOCKFILE} has package {n}, which nothing depends on; run `staalc fetch`"));
             }
         }
@@ -445,7 +530,8 @@ fn describe_authority(a: &BTreeMap<String, Authority>) -> String {
 }
 
 fn describe_package(p: &Package) -> String {
-    format!("{} {} at {}: {}", p.name, p.dep.git, &p.dep.commit[..12], describe_authority(&p.manifest.authority))
+    let version = p.manifest.version.as_ref().map(|v| format!(" {v}")).unwrap_or_default();
+    format!("{}{version} {} at {}: {}", p.name, p.dep.git, &p.dep.commit[..12], describe_authority(&p.manifest.authority))
 }
 
 fn verify(name: &str, tree: &BTreeMap<String, Vec<u8>>, files: &BTreeMap<String, String>) -> Result<(), String> {
@@ -466,6 +552,34 @@ fn verify(name: &str, tree: &BTreeMap<String, Vec<u8>>, files: &BTreeMap<String,
         return Err(format!("package {name} has no {MANIFEST}"));
     }
     Ok(())
+}
+
+/// Whether a locked package is what `spec` asks for, or why not. `registry` is the
+/// project's.
+fn satisfies(spec: &Spec, l: &LockedPackage, registry: Option<&str>) -> Result<(), String> {
+    let in_range = |range: &Range| match &l.version {
+        Some(v) if range.matches(v) => Ok(()),
+        Some(v) => Err(format!("{v} is not within {range}")),
+        None => Err("its manifest gives no version".to_string()),
+    };
+    match spec {
+        Spec::Commit(d) if l.registry.is_none() && l.dep == *d => Ok(()),
+        Spec::Commit(_) => Err("another commit or location".into()),
+        Spec::Tags { git, range } if l.registry.is_none() && l.dep.git == *git => in_range(range),
+        Spec::Tags { .. } => Err("another location".into()),
+        Spec::Registry { range } => match (registry, &l.registry) {
+            (None, _) => Err(format!("the project's {MANIFEST} names no registry")),
+            (Some(r), Some(lr)) if r == lr => in_range(range),
+            _ => Err("it is not from the project's registry".into()),
+        },
+    }
+}
+
+fn locked_text(l: &LockedPackage) -> String {
+    match &l.version {
+        Some(v) => format!("{v} (commit {} of {})", &l.dep.commit[..12], l.dep.git),
+        None => format!("at commit {} of {}", &l.dep.commit[..12], l.dep.git),
+    }
 }
 
 /// Finds modules for a program in `root` that may use packages.
@@ -666,18 +780,42 @@ fn git(dir: Option<&Path>, args: &[&str]) -> Result<Vec<u8>, String> {
     Ok(out.stdout)
 }
 
-/// The files of one commit, read from git's objects.
-fn fetch_commit(name: &str, dep: &Dep, scratch: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let repo = scratch.join(format!("{name}.git"));
+type Files = BTreeMap<String, Vec<u8>>;
+
+/// A scratch folder removed when dropped, whatever happened.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(dir: PathBuf) -> Result<Scratch, String> {
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        Ok(Scratch(dir))
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A bare clone of `location`, as `<scratch>/<label>.git`.
+fn clone_bare(label: &str, location: &str, scratch: &Path) -> Result<PathBuf, String> {
+    let repo = scratch.join(format!("{label}.git"));
     let _ = std::fs::remove_dir_all(&repo);
-    let url = dep.git.strip_prefix("file://").unwrap_or(&dep.git);
+    let url = location.strip_prefix("file://").unwrap_or(location);
     git(None, &["clone", "--bare", "--quiet", "--", url, repo.to_str().ok_or("scratch path is not UTF-8")?])
-        .map_err(|e| format!("package {name}: cannot fetch {}: {e}", dep.git))?;
-    let commit_ok = git(Some(&repo), &["cat-file", "-t", &dep.commit]).map(|t| t == b"commit\n").unwrap_or(false);
+        .map_err(|e| format!("cannot fetch {location}: {e}"))?;
+    Ok(repo)
+}
+
+/// The files of one commit, read from git's objects.
+fn read_commit(name: &str, repo: &Path, dep: &Dep) -> Result<Files, String> {
+    let commit_ok = git(Some(repo), &["cat-file", "-t", &dep.commit]).map(|t| t == b"commit\n").unwrap_or(false);
     if !commit_ok {
         return Err(format!("package {name}: {} has no commit {}", dep.git, dep.commit));
     }
-    let listing = git(Some(&repo), &["ls-tree", "-r", "-z", "--full-tree", &dep.commit])?;
+    let listing = git(Some(repo), &["ls-tree", "-r", "-z", "--full-tree", &dep.commit])?;
     let mut files = BTreeMap::new();
     let mut lower = BTreeSet::new();
     let mut total = 0u64;
@@ -694,18 +832,17 @@ fn fetch_commit(name: &str, dep: &Dep, scratch: &Path) -> Result<BTreeMap<String
         if !lower.insert(path.to_lowercase()) {
             return Err(format!("package {name}: two files differ only in upper and lower case ({path})"));
         }
-        let bytes = git(Some(&repo), &["cat-file", "blob", oid])?;
+        let bytes = git(Some(repo), &["cat-file", "blob", oid])?;
         total += bytes.len() as u64;
         if files.len() >= MAX_FILES || total > MAX_BYTES {
             return Err(format!("package {name} holds more than {MAX_FILES} files or {MAX_BYTES} bytes"));
         }
         files.insert(path.to_string(), bytes);
     }
-    let _ = std::fs::remove_dir_all(&repo);
     Ok(files)
 }
 
-fn write_tree(dir: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<(), String> {
+fn write_tree(dir: &Path, files: &Files) -> Result<(), String> {
     for (rel, bytes) in files {
         let path = dir.join(rel);
         if let Some(parent) = path.parent() {
@@ -722,16 +859,326 @@ fn write_tree(dir: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<(), Strin
     Ok(())
 }
 
-fn hashes(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, String> {
+fn hashes(files: &Files) -> BTreeMap<String, String> {
     files.iter().map(|(k, v)| (k.clone(), sha256_hex(v))).collect()
 }
 
-type Fetched = (BTreeMap<String, Vec<u8>>, Manifest, String);
+/// One SHA-256 for a whole package: of a line `<file hash>  <path>` per file, in path
+/// order (paths cannot hold a newline). A registry records it for each version.
+pub fn files_digest(hashes: &BTreeMap<String, String>) -> String {
+    let mut text = String::new();
+    for (path, h) in hashes {
+        text.push_str(&format!("{h}  {path}\n"));
+    }
+    sha256_hex(text.as_bytes())
+}
 
-/// `staalc fetch`: fetches every dependency at its commit, writes the packages and
-/// `staal.lock`, and reports each package and its authority. A package already in the
-/// lock at the same commit must have exactly the files the lock records.
+// ---------------------------------------------------------------------------------
+// Registries
+//
+// A registry is a git repository: `staal-registry.json` (`{"staal_registry": 1}`) at
+// its root, and `packages/<name>.json` for each package:
+//
+//   { "package": "sms",
+//     "versions": [ { "version": "1.2.0", "git": "https://...", "commit": "<40 hex>",
+//                     "files_sha256": "<64 hex>", "yanked": false } ] }
+//
+// Each version names one commit and the digest of its files, so a registry cannot be
+// made to serve other files for a version by rewriting the package's repository.
+
+pub const REGISTRY_MARKER: &str = "staal-registry.json";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    pub version: Version,
+    pub dep: Dep,
+    pub files_sha256: String,
+    pub yanked: bool,
+}
+
+fn parse_entries(text: &str, name: &str, at: &str) -> Result<Vec<Entry>, String> {
+    let v: Json = serde_json::from_str(text).map_err(|e| format!("{at}: not valid JSON: {e}"))?;
+    let obj = v.as_object().ok_or(format!("{at}: expected an object"))?;
+    for k in obj.keys() {
+        if k != "package" && k != "versions" {
+            return Err(format!("{at}: unknown key '{k}'"));
+        }
+    }
+    if obj.get("package").and_then(Json::as_str) != Some(name) {
+        return Err(format!("{at}: \"package\" must be \"{name}\""));
+    }
+    let list = obj.get("versions").and_then(Json::as_array).ok_or(format!("{at}.versions: expected a list"))?;
+    let mut out: Vec<Entry> = Vec::new();
+    for (i, e) in list.iter().enumerate() {
+        let eat = format!("{at}.versions[{i}]");
+        let e = e.as_object().ok_or(format!("{eat}: expected an object"))?;
+        for k in e.keys() {
+            if !["version", "git", "commit", "files_sha256", "yanked"].contains(&k.as_str()) {
+                return Err(format!("{eat}: unknown key '{k}'"));
+            }
+        }
+        let s = |k: &str| e.get(k).and_then(Json::as_str).ok_or(format!("{eat}.{k}: expected a string"));
+        let version = Version::parse(s("version")?).map_err(|err| format!("{eat}.version: {err}"))?;
+        let (location, commit, digest) = (s("git")?, s("commit")?, s("files_sha256")?);
+        check_git(location, &format!("{eat}.git"))?;
+        check_commit(commit, &format!("{eat}.commit"))?;
+        if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            return Err(format!("{eat}.files_sha256: expected a SHA-256 in lowercase hex"));
+        }
+        let yanked = match e.get("yanked") {
+            None => false,
+            Some(Json::Bool(b)) => *b,
+            Some(_) => return Err(format!("{eat}.yanked: expected true or false")),
+        };
+        if out.iter().any(|o| o.version == version) {
+            return Err(format!("{at}: version {version} is listed twice"));
+        }
+        out.push(Entry { version, dep: Dep { git: location.into(), commit: commit.into() }, files_sha256: digest.into(), yanked });
+    }
+    Ok(out)
+}
+
+fn entries_text(name: &str, entries: &[Entry]) -> String {
+    let versions: Vec<Json> = entries
+        .iter()
+        .map(|e| json!({ "version": e.version.to_string(), "git": e.dep.git, "commit": e.dep.commit, "files_sha256": e.files_sha256, "yanked": e.yanked }))
+        .collect();
+    let mut text = serde_json::to_string_pretty(&json!({ "package": name, "versions": versions })).expect("serialisable");
+    text.push('\n');
+    text
+}
+
+fn check_marker(text: &[u8], at: &str) -> Result<(), String> {
+    let v: Option<Json> = serde_json::from_slice(text).ok();
+    if v != Some(json!({ "staal_registry": 1 })) {
+        return Err(format!("{at}: {REGISTRY_MARKER} must be {{\"staal_registry\": 1}}"));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------
+// Choosing versions
+
+/// What one package was resolved to.
+#[derive(Debug, Clone, PartialEq)]
+struct Pick {
+    dep: Dep,
+    version: Option<Version>,
+    registry: Option<String>,
+}
+
+impl Pick {
+    fn as_locked(&self) -> LockedPackage {
+        LockedPackage { dep: self.dep.clone(), version: self.version.clone(), registry: self.registry.clone(), files: BTreeMap::new() }
+    }
+}
+
+/// Reads repositories, commits, tags and the registry, each once per fetch.
+struct Fetcher {
+    scratch: PathBuf,
+    clones: BTreeMap<String, PathBuf>,
+    trees: BTreeMap<Dep, Files>,
+    registry: Option<String>,
+    index: Option<PathBuf>,
+}
+
+impl Fetcher {
+    fn repo(&mut self, location: &str) -> Result<PathBuf, String> {
+        if let Some(r) = self.clones.get(location) {
+            return Ok(r.clone());
+        }
+        let r = clone_bare(&format!("r{}", self.clones.len()), location, &self.scratch)?;
+        self.clones.insert(location.to_string(), r.clone());
+        Ok(r)
+    }
+
+    fn files(&mut self, name: &str, dep: &Dep) -> Result<&Files, String> {
+        if !self.trees.contains_key(dep) {
+            let repo = self.repo(&dep.git).map_err(|e| format!("package {name}: {e}"))?;
+            let files = read_commit(name, &repo, dep)?;
+            self.trees.insert(dep.clone(), files);
+        }
+        Ok(&self.trees[dep])
+    }
+
+    fn manifest(&mut self, name: &str, dep: &Dep) -> Result<Manifest, String> {
+        let files = self.files(name, dep)?;
+        let text = files.get(MANIFEST).ok_or(format!("package {name} has no {MANIFEST} at its root (commit {} of {})", &dep.commit[..12], dep.git))?;
+        let text = std::str::from_utf8(text).map_err(|_| format!("package {name}: {MANIFEST} is not UTF-8"))?;
+        let m = Manifest::parse(text, &format!("package {name}: {MANIFEST}"), true)?;
+        if m.package.as_deref() != Some(name) {
+            return Err(format!("package {name}: its {MANIFEST} (commit {} of {}) names it '{}'", &dep.commit[..12], dep.git, m.package.unwrap_or_default()));
+        }
+        Ok(m)
+    }
+
+    /// The release tags of a repository (`v1.2.0` or `1.2.0`), by version.
+    fn tags(&mut self, name: &str, location: &str) -> Result<BTreeMap<Version, Dep>, String> {
+        let repo = self.repo(location).map_err(|e| format!("package {name}: {e}"))?;
+        let out = git(Some(&repo), &["for-each-ref", "--format=%(refname:strip=2)", "refs/tags"])?;
+        let mut tags: BTreeMap<Version, (Dep, String)> = BTreeMap::new();
+        for t in String::from_utf8_lossy(&out).lines() {
+            let Ok(v) = Version::parse(t.strip_prefix('v').unwrap_or(t)) else { continue };
+            // A tag of something other than a commit is not a release.
+            let Ok(c) = git(Some(&repo), &["rev-parse", "--verify", "--quiet", &format!("refs/tags/{t}^{{commit}}")]) else { continue };
+            let c = String::from_utf8_lossy(&c).trim().to_string();
+            check_commit(&c, &format!("package {name}: tag {t}"))?;
+            let dep = Dep { git: location.to_string(), commit: c };
+            if let Some((other, ot)) = tags.get(&v)
+                && *other != dep
+            {
+                return Err(format!("package {name}: tags {ot} and {t} of {location} are both version {v} but name different commits"));
+            }
+            tags.insert(v, (dep, t.to_string()));
+        }
+        Ok(tags.into_iter().map(|(v, (d, _))| (v, d)).collect())
+    }
+
+    /// Every version of a package the registry lists.
+    fn entries(&mut self, name: &str, by: &str) -> Result<Vec<Entry>, String> {
+        let Some(registry) = self.registry.clone() else {
+            return Err(format!("{by} wants package {name} from the registry, but the project's {MANIFEST} names no \"registry\""));
+        };
+        if self.index.is_none() {
+            let r = clone_bare("registry", &registry, &self.scratch).map_err(|e| format!("the registry: {e}"))?;
+            let marker = git(Some(&r), &["cat-file", "blob", &format!("HEAD:{REGISTRY_MARKER}")])
+                .map_err(|_| format!("{registry} is not a Staal registry: it has no {REGISTRY_MARKER}"))?;
+            check_marker(&marker, &registry)?;
+            self.index = Some(r);
+        }
+        let r = self.index.clone().expect("set above");
+        let path = format!("HEAD:packages/{name}.json");
+        if git(Some(&r), &["cat-file", "-e", &path]).is_err() {
+            return Err(format!("the registry has no package {name} (wanted by {by})"));
+        }
+        let text = git(Some(&r), &["cat-file", "blob", &path])?;
+        let text = String::from_utf8(text).map_err(|_| format!("the registry's packages/{name}.json is not UTF-8"))?;
+        parse_entries(&text, name, &format!("the registry's packages/{name}.json"))
+    }
+}
+
+/// Chooses what one package resolves to, given what everything that depends on it asks
+/// for: the locked choice when it still fits (`locked`, None when updating), otherwise
+/// the newest version that fits every range. Older versions of the packages that ask
+/// are never tried: a conflict is reported, not searched around.
+fn choose(f: &mut Fetcher, name: &str, cons: &[(Spec, String)], locked: Option<&LockedPackage>) -> Result<Pick, String> {
+    let wants = || cons.iter().map(|(s, by)| format!("{by} wants {}", s.describe())).collect::<Vec<_>>().join("; ");
+    let registry = cons.iter().any(|(s, _)| matches!(s, Spec::Registry { .. }));
+    let locations: BTreeSet<&str> = cons
+        .iter()
+        .filter_map(|(s, _)| match s {
+            Spec::Commit(d) => Some(d.git.as_str()),
+            Spec::Tags { git, .. } => Some(git.as_str()),
+            Spec::Registry { .. } => None,
+        })
+        .collect();
+    if registry && !locations.is_empty() {
+        return Err(format!("package {name}: {}; a package comes from the registry or from git, not both", wants()));
+    }
+    if locations.len() > 1 {
+        return Err(format!("package {name}: {}; one location per package", wants()));
+    }
+    let commits: BTreeSet<&Dep> = cons.iter().filter_map(|(s, _)| if let Spec::Commit(d) = s { Some(d) } else { None }).collect();
+    if commits.len() > 1 {
+        return Err(format!("package {name}: {}; one version per package", wants()));
+    }
+    let ranges: Vec<&Range> = cons
+        .iter()
+        .filter_map(|(s, _)| match s {
+            Spec::Tags { range, .. } | Spec::Registry { range } => Some(range),
+            Spec::Commit(_) => None,
+        })
+        .collect();
+    let fits = |v: &Version| ranges.iter().all(|r| r.matches(v));
+    if let Some(d) = commits.first() {
+        let m = f.manifest(name, d)?;
+        if !ranges.is_empty() && !m.version.as_ref().is_some_and(fits) {
+            let is = m.version.as_ref().map_or("no version".to_string(), |v| format!("version {v}"));
+            return Err(format!("package {name}: {}; that commit is {is}", wants()));
+        }
+        return Ok(Pick { dep: (*d).clone(), version: m.version, registry: None });
+    }
+    // Every version on offer, by version: its commit, the digest the registry records,
+    // and whether it was yanked.
+    let first_by = &cons[0].1;
+    let offered: BTreeMap<Version, (Dep, Option<String>, bool)> = if registry {
+        f.entries(name, first_by)?.into_iter().map(|e| (e.version, (e.dep, Some(e.files_sha256), e.yanked))).collect()
+    } else {
+        let location = locations.first().expect("a location");
+        f.tags(name, location)?.into_iter().map(|(v, d)| (v, (d, None, false))).collect()
+    };
+    let source = if registry { f.registry.clone() } else { None };
+    // The locked version, if it came from this source: its tag or entry must still
+    // name the locked commit.
+    let mut chosen = None;
+    if let Some(l) = locked
+        && l.registry == source
+        && (registry || locations.first() == Some(&l.dep.git.as_str()))
+        && let Some(v) = &l.version
+        && let Some((d, _, _)) = offered.get(v)
+    {
+        if *d != l.dep {
+            let what = if registry { "the registry's entry for it" } else { "its release tag" };
+            return Err(format!(
+                "package {name} {v} is commit {} now, but {LOCKFILE} has commit {}: {what} was moved. Nothing was changed; check the package's history, then `staalc update` takes the new commit",
+                &d.commit[..12],
+                &l.dep.commit[..12]
+            ));
+        }
+        if fits(v) {
+            chosen = Some(v.clone());
+        }
+    }
+    let chosen = match chosen.or_else(|| offered.iter().rev().find(|(v, (_, _, yanked))| fits(v) && !yanked).map(|(v, _)| v.clone())) {
+        Some(v) => v,
+        None => {
+            let shown: Vec<String> = offered.iter().rev().take(12).map(|(v, (_, _, y))| if *y { format!("{v} (yanked)") } else { v.to_string() }).collect();
+            let offer = if shown.is_empty() { "none".to_string() } else { shown.join(", ") };
+            return Err(format!(
+                "no version of package {name} fits: {}. Versions: {offer}. staalc takes the newest fitting version of each package and does not try older versions of the packages that ask; give one of them an exact version (\"=1.2.0\") to choose another",
+                wants()
+            ));
+        }
+    };
+    let (dep, digest, _) = offered[&chosen].clone();
+    // What the tag or entry says must be what the files say.
+    let m = f.manifest(name, &dep)?;
+    if m.version.as_ref() != Some(&chosen) {
+        let is = m.version.as_ref().map_or("no version".to_string(), |v| format!("version {v}"));
+        return Err(format!("package {name} {chosen} (commit {} of {}): its {MANIFEST} gives {is}", &dep.commit[..12], dep.git));
+    }
+    if let Some(want) = digest {
+        let have = files_digest(&hashes(f.files(name, &dep)?));
+        if have != want {
+            return Err(format!(
+                "package {name} {chosen}: the files of commit {} of {} are not the files the registry recorded for it. Nothing was changed",
+                &dep.commit[..12],
+                dep.git
+            ));
+        }
+    }
+    Ok(Pick { dep, version: Some(chosen), registry: source })
+}
+
+/// Which locked choices `staalc fetch` may change: none (fetch), all, or one package's
+/// (update).
+pub enum Update<'a> {
+    Nothing,
+    All,
+    Package(&'a str),
+}
+
+/// `staalc fetch`: resolves every dependency (keeping each locked choice that still
+/// fits), fetches it, writes the packages and `staal.lock`, and reports each package
+/// and its authority. A package already in the lock at the same commit must have
+/// exactly the files the lock records.
 pub fn fetch(root: &Path) -> Result<Vec<String>, String> {
+    fetch_with(root, Update::Nothing)
+}
+
+/// `staalc update`: as `fetch`, but `update` names the locked choices to forget, so
+/// those packages move to the newest versions that fit.
+pub fn fetch_with(root: &Path, update: Update) -> Result<Vec<String>, String> {
     let mpath = root.join(MANIFEST);
     let mtext = std::fs::read_to_string(&mpath).map_err(|e| format!("cannot read {}: {e}", mpath.display()))?;
     let manifest = Manifest::parse(&mtext, MANIFEST, false)?;
@@ -740,58 +1187,91 @@ pub fn fetch(root: &Path) -> Result<Vec<String>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("cannot read {LOCKFILE}: {e}")),
     };
+    if let Update::Package(n) = update
+        && !old.as_ref().is_some_and(|l| l.packages.contains_key(n))
+    {
+        return Err(format!("{LOCKFILE} has no package {n} to update"));
+    }
     let store = root.join(STORE);
-    let scratch = root.join(".staal/scratch");
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&scratch).map_err(|e| format!("cannot create {}: {e}", scratch.display()))?;
+    let scratch = Scratch::new(root.join(".staal/scratch"))?;
+    let mut f = Fetcher { scratch: scratch.0.clone(), clones: BTreeMap::new(), trees: BTreeMap::new(), registry: manifest.registry.clone(), index: None };
 
-    let mut lock = Lock::default();
-    // Per package: its files, its manifest, and who first asked for it.
-    let mut fetched: BTreeMap<String, Fetched> = BTreeMap::new();
-    let mut queue: Vec<(String, Dep, String)> =
-        manifest.dependencies.iter().rev().map(|(n, d)| (n.clone(), d.clone(), "the project".to_string())).collect();
-    while let Some((name, dep, by)) = queue.pop() {
-        if let Some(have) = lock.packages.get(&name) {
-            if have.dep != dep {
-                let first = &fetched[&name].2;
-                return Err(format!("{first} and {by} want different versions of package {name}; one version per package"));
+    // Until nothing changes: walk the graph from the project through the current
+    // choices, and choose again for every package whose choice no longer fits.
+    let mut picks: BTreeMap<String, Pick> = BTreeMap::new();
+    let mut settled = false;
+    for _ in 0..64 {
+        let mut cons: BTreeMap<String, Vec<(Spec, String)>> = BTreeMap::new();
+        let mut queue: std::collections::VecDeque<(String, Spec, String)> =
+            manifest.dependencies.iter().map(|(n, s)| (n.clone(), s.clone(), "the project".to_string())).collect();
+        let mut expanded = BTreeSet::new();
+        while let Some((n, s, by)) = queue.pop_front() {
+            cons.entry(n.clone()).or_default().push((s, by));
+            if let Some(p) = picks.get(&n).cloned()
+                && expanded.insert(n.clone())
+            {
+                let m = f.manifest(&n, &p.dep)?;
+                let by = match &m.version {
+                    Some(v) => format!("package {n} {v}"),
+                    None => format!("package {n}"),
+                };
+                for (dn, ds) in &m.dependencies {
+                    queue.push_back((dn.clone(), ds.clone(), by.clone()));
+                }
             }
-            continue;
         }
-        // Always read from git, and compare with the lock: what is on disk, and the lock
-        // itself, may have been edited; the commit cannot be.
-        let locked = old.as_ref().and_then(|l| l.packages.get(&name)).filter(|l| l.dep == dep);
-        let files = fetch_commit(&name, &dep, &scratch)?;
-        if let Some(l) = locked
+        let mut changed = false;
+        for (n, cs) in &cons {
+            if picks.get(n).is_some_and(|p| cs.iter().all(|(s, _)| satisfies(s, &p.as_locked(), manifest.registry.as_deref()).is_ok())) {
+                continue;
+            }
+            let keep = match update {
+                Update::Nothing => true,
+                Update::All => false,
+                Update::Package(u) => u != n,
+            };
+            let locked = old.as_ref().and_then(|l| l.packages.get(n)).filter(|_| keep);
+            let p = choose(&mut f, n, cs, locked)?;
+            picks.insert(n.clone(), p);
+            changed = true;
+        }
+        picks.retain(|n, _| cons.contains_key(n));
+        if !changed {
+            settled = true;
+            break;
+        }
+    }
+    if !settled {
+        return Err("the dependencies' versions did not settle after 64 rounds: their ranges keep moving each other; give some of them exact versions".into());
+    }
+
+    // Always read from git, and compare with the lock: what is on disk, and the lock
+    // itself, may have been edited; the commit cannot be.
+    let mut lock = Lock::default();
+    let mut fetched: BTreeMap<String, (Files, Manifest)> = BTreeMap::new();
+    for (name, p) in &picks {
+        let files = f.files(name, &p.dep)?.clone();
+        if let Some(l) = old.as_ref().and_then(|l| l.packages.get(name)).filter(|l| l.dep == p.dep)
             && hashes(&files) != l.files
         {
-            let _ = std::fs::remove_dir_all(&scratch);
             return Err(format!(
                 "package {name} at {} does not have the files {LOCKFILE} records: the lock was edited, or the repository's history rewritten. Nothing was changed",
-                dep.commit
+                p.dep.commit
             ));
         }
-        let mtext = files.get(MANIFEST).ok_or(format!("package {name} has no {MANIFEST} at its root"))?;
-        let mtext = std::str::from_utf8(mtext).map_err(|_| format!("package {name}: {MANIFEST} is not UTF-8"))?;
-        let m = Manifest::parse(mtext, &format!("package {name}: {MANIFEST}"), true)?;
-        if m.package.as_deref() != Some(name.as_str()) {
-            return Err(format!("{by} calls it {name}, but its {MANIFEST} names it '{}'", m.package.clone().unwrap_or_default()));
-        }
-        for (dn, dd) in m.dependencies.iter().rev() {
-            queue.push((dn.clone(), dd.clone(), format!("package {name}")));
-        }
-        lock.packages.insert(name.clone(), LockedPackage { dep, files: hashes(&files) });
-        fetched.insert(name, (files, m, by));
+        let m = f.manifest(name, &p.dep)?;
+        lock.packages.insert(name.clone(), LockedPackage { files: hashes(&files), ..p.as_locked() });
+        fetched.insert(name.clone(), (files, m));
     }
 
     // Everything fetched and checked: now replace the store and the lock.
     std::fs::create_dir_all(&store).map_err(|e| format!("cannot create {}: {e}", store.display()))?;
-    for (name, (files, _, _)) in &fetched {
+    for (name, (files, _)) in &fetched {
         let dir = store.join(name);
         if read_tree(&dir).ok().is_some_and(|t| verify(name, &t, &lock.packages[name].files).is_ok()) {
             continue;
         }
-        let tmp = scratch.join(format!("{name}.new"));
+        let tmp = scratch.0.join(format!("{name}.new"));
         let _ = std::fs::remove_dir_all(&tmp);
         write_tree(&tmp, files)?;
         let _ = std::fs::remove_dir_all(&dir);
@@ -805,24 +1285,28 @@ pub fn fetch(root: &Path) -> Result<Vec<String>, String> {
             }
         }
     }
-    let ltmp = scratch.join("staal.lock.new");
+    let ltmp = scratch.0.join("staal.lock.new");
     std::fs::write(&ltmp, lock.to_text()).map_err(|e| format!("cannot write {LOCKFILE}: {e}"))?;
     std::fs::rename(&ltmp, root.join(LOCKFILE)).map_err(|e| format!("cannot write {LOCKFILE}: {e}"))?;
-    let _ = std::fs::remove_dir_all(&scratch);
 
     let mut report = Vec::new();
-    for (name, (_, m, _)) in &fetched {
-        let dep = &lock.packages[name].dep;
-        let before = old.as_ref().and_then(|l| l.packages.get(name));
+    for (name, (_, m)) in &fetched {
+        let l = &lock.packages[name];
+        let before = old.as_ref().and_then(|o| o.packages.get(name));
         let note = match before {
             None => "new".to_string(),
-            Some(b) if b.dep == dep.clone() => "unchanged".to_string(),
-            Some(b) => format!("was {}", &b.dep.commit[..12]),
+            Some(b) if b.dep == l.dep => "unchanged".to_string(),
+            Some(b) => match &b.version {
+                Some(v) if b.version != l.version => format!("was {v}, commit {}", &b.dep.commit[..12]),
+                _ => format!("was commit {}", &b.dep.commit[..12]),
+            },
         };
+        let version = l.version.as_ref().map(|v| format!(" {v}")).unwrap_or_default();
+        let from = if l.registry.is_some() { " from the registry:" } else { "" };
         report.push(format!(
-            "{name} {} at {} ({note})\n    authority: {}",
-            dep.git,
-            &dep.commit[..12],
+            "{name}{version}{from} {} at {} ({note})\n    authority: {}",
+            l.dep.git,
+            &l.dep.commit[..12],
             describe_authority(&m.authority)
         ));
     }
@@ -833,7 +1317,111 @@ pub fn fetch(root: &Path) -> Result<Vec<String>, String> {
             }
         }
     }
+    drop(scratch);
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------------
+// Publishing to a registry
+
+/// A clean scratch folder outside any project, for reading a package's commit.
+fn temp_scratch(what: &str) -> Result<Scratch, String> {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).map_err(|e| format!("no random source: {e}"))?;
+    let tag: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    Scratch::new(std::env::temp_dir().join(format!("staalc-{what}-{tag}")))
+}
+
+/// Checks `index` is a registry's working tree whose files for `name` have no
+/// uncommitted changes, creating the marker in a new, empty registry.
+fn open_index(index: &Path, name: &str) -> Result<PathBuf, String> {
+    let top = git(Some(index), &["rev-parse", "--show-toplevel"]).map_err(|e| format!("{} is not a git working tree: {e}", index.display()))?;
+    let top = PathBuf::from(String::from_utf8_lossy(&top).trim());
+    let rel = format!("packages/{name}.json");
+    let dirty = git(Some(&top), &["status", "--porcelain", "--", REGISTRY_MARKER, &rel])?;
+    if !dirty.is_empty() {
+        return Err(format!("the registry has uncommitted changes to {REGISTRY_MARKER} or {rel}; commit or discard them first"));
+    }
+    let marker = top.join(REGISTRY_MARKER);
+    match std::fs::read(&marker) {
+        Ok(t) => check_marker(&t, &top.display().to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if top.join("packages").exists() {
+                return Err(format!("{} has a packages folder but no {REGISTRY_MARKER}", top.display()));
+            }
+            std::fs::write(&marker, "{\"staal_registry\": 1}\n").map_err(|e| format!("cannot write {}: {e}", marker.display()))?;
+        }
+        Err(e) => return Err(format!("cannot read {}: {e}", marker.display())),
+    }
+    Ok(top)
+}
+
+fn read_entries(top: &Path, name: &str) -> Result<Vec<Entry>, String> {
+    let path = top.join("packages").join(format!("{name}.json"));
+    match std::fs::read_to_string(&path) {
+        Ok(t) => parse_entries(&t, name, &format!("packages/{name}.json")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
+}
+
+fn commit_entries(top: &Path, name: &str, entries: &mut [Entry], message: &str) -> Result<(), String> {
+    entries.sort_by(|a, b| a.version.cmp(&b.version));
+    let dir = top.join("packages");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let rel = format!("packages/{name}.json");
+    std::fs::write(top.join(&rel), entries_text(name, entries)).map_err(|e| format!("cannot write {rel}: {e}"))?;
+    git(Some(top), &["add", "--", REGISTRY_MARKER, &rel])?;
+    git(Some(top), &["commit", "--quiet", "-m", message, "--", REGISTRY_MARKER, &rel])?;
+    Ok(())
+}
+
+/// `staalc publish`: adds the package at `commit` of `location` to the registry whose
+/// working tree is `index`, as a commit there. The version is the package's own, and
+/// a version already published is never changed.
+pub fn publish(index: &Path, location: &str, commit: &str) -> Result<String, String> {
+    check_git(location, "--git")?;
+    check_commit(commit, "--commit")?;
+    let scratch = temp_scratch("publish")?;
+    let repo = clone_bare("package", location, &scratch.0)?;
+    let dep = Dep { git: location.to_string(), commit: commit.to_string() };
+    let files = read_commit("to publish", &repo, &dep)?;
+    let text = files.get(MANIFEST).ok_or(format!("commit {commit} of {location} has no {MANIFEST} at its root"))?;
+    let text = std::str::from_utf8(text).map_err(|_| format!("{MANIFEST} is not UTF-8"))?;
+    let m = Manifest::parse(text, MANIFEST, true)?;
+    let name = m.package.clone().expect("a package's manifest has a name");
+    let version = m.version.clone().ok_or(format!("package {name}: its {MANIFEST} gives no \"version\"; a published package must"))?;
+    let top = open_index(index, &name)?;
+    let mut entries = read_entries(&top, &name)?;
+    if let Some(e) = entries.iter().find(|e| e.version == version) {
+        return Err(format!("package {name} {version} is already published (commit {} of {}); a published version never changes: publish a new version", &e.dep.commit[..12], e.dep.git));
+    }
+    let digest = files_digest(&hashes(&files));
+    entries.push(Entry { version: version.clone(), dep, files_sha256: digest, yanked: false });
+    commit_entries(&top, &name, &mut entries, &format!("Publish {name} {version}"))?;
+    Ok(format!(
+        "published {name} {version} (commit {} of {location}) to the registry in {}\n    authority: {}\nPush the registry for others to see it.",
+        &commit[..12],
+        top.display(),
+        describe_authority(&m.authority)
+    ))
+}
+
+/// `staalc yank`: marks a published version yanked (or not, with `undo`). A yanked
+/// version is not chosen again, but a project that locked it keeps it.
+pub fn yank(index: &Path, name: &str, version: &str, undo: bool) -> Result<String, String> {
+    check_package_name(name, "--package")?;
+    let v = Version::parse(version).map_err(|e| format!("--version: {e}"))?;
+    let top = open_index(index, name)?;
+    let mut entries = read_entries(&top, name)?;
+    let e = entries.iter_mut().find(|e| e.version == v).ok_or(format!("the registry has no {name} {v}"))?;
+    if e.yanked != undo {
+        return Err(format!("{name} {v} is {}yanked already", if undo { "not " } else { "" }));
+    }
+    e.yanked = !undo;
+    let what = if undo { "Unyank" } else { "Yank" };
+    commit_entries(&top, name, &mut entries, &format!("{what} {name} {v}"))?;
+    Ok(format!("{}yanked {name} {v}; push the registry for others to see it", if undo { "un" } else { "" }))
 }
 
 #[cfg(test)]

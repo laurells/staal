@@ -10,6 +10,9 @@
 //   staalc repl    [--engine interpreter|native|both]
 //   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
 //   staalc fetch   [<project folder>]
+//   staalc update  [<project folder>] [--package <name>]
+//   staalc publish --registry <registry folder> --git <location> --commit <id>
+//   staalc yank    --registry <registry folder> --package <name> --version <version> [--undo]
 //   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
 //   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
 //   staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
@@ -45,6 +48,9 @@ const USAGE: &str = "usage:
   staalc repl    [--engine interpreter|native|both]
   staalc test    [--config <test.json>] [--engine interpreter|native|both] <file.staal or folder>...
   staalc fetch   [<project folder>]
+  staalc update  [<project folder>] [--package <name>]
+  staalc publish --registry <registry folder> --git <location> --commit <id>
+  staalc yank    --registry <registry folder> --package <name> --version <version> [--undo]
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
   staalc run     <file.staal> --config <run.json> [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
   staalc resume  <file.staal> --config <run.json> --journal <run.journal> [--log <run.jsonl>] [--engine native]
@@ -123,7 +129,27 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         "lsp" if rest.is_empty() => crate::lsp::serve(std::io::stdin().lock(), std::io::stdout().lock()),
         "lsp" => u("lsp takes no arguments: an editor starts it and talks to it on standard input and output"),
         "fetch" => match parse(rest, &[], &[]) {
-            Ok((dir, _)) => fetch(dir.as_deref().unwrap_or(".")),
+            Ok((dir, _)) => fetch(dir.as_deref().unwrap_or("."), crate::packages::Update::Nothing),
+            Err(e) => u(&e),
+        },
+        "update" => match parse(rest, &["--package"], &[]) {
+            Ok((dir, opts)) => {
+                let which = match opts.get("--package") {
+                    Some(p) => crate::packages::Update::Package(p),
+                    None => crate::packages::Update::All,
+                };
+                fetch(dir.as_deref().unwrap_or("."), which)
+            }
+            Err(e) => u(&e),
+        },
+        "publish" => match parse(rest, &["--registry", "--git", "--commit"], &["--registry", "--git", "--commit"]) {
+            Ok((None, o)) => said(crate::packages::publish(Path::new(&o["--registry"]), &o["--git"], &o["--commit"])),
+            Ok((Some(extra), _)) => u(&format!("unexpected argument {extra}")),
+            Err(e) => u(&e),
+        },
+        "yank" => match parse(rest, &["--registry", "--package", "--version", "--undo"], &["--registry", "--package", "--version"]) {
+            Ok((None, o)) => said(crate::packages::yank(Path::new(&o["--registry"]), &o["--package"], &o["--version"], o.contains_key("--undo"))),
+            Ok((Some(extra), _)) => u(&format!("unexpected argument {extra}")),
             Err(e) => u(&e),
         },
         "build" => match parse(rest, &["-o", "--runtime"], &["-o"]) {
@@ -160,7 +186,7 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
 }
 
 /// Options that take no value.
-const FLAGS: &[&str] = &["--retry"];
+const FLAGS: &[&str] = &["--retry", "--undo"];
 
 /// Parses `[file] (--option value | --flag)*`. Each option may appear once;
 /// `required` options must be present.
@@ -302,10 +328,24 @@ fn run(
     }
 }
 
+/// What a registry command did, or why it did nothing.
+fn said(r: Result<String, String>) -> u8 {
+    match r {
+        Ok(m) => {
+            println!("{m}");
+            0
+        }
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            2
+        }
+    }
+}
+
 /// Fetches the project's packages, writes staal.lock, and shows each package's
 /// authority, so it can be reviewed before any of its code is used.
-fn fetch(dir: &str) -> u8 {
-    match crate::packages::fetch(Path::new(dir)) {
+fn fetch(dir: &str, update: crate::packages::Update) -> u8 {
+    match crate::packages::fetch_with(Path::new(dir), update) {
         Ok(lines) => {
             if lines.is_empty() {
                 println!("no dependencies");

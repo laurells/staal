@@ -249,7 +249,7 @@ fn dependencies_are_exact() {
     project(&app, &[("sms", &b.join("repos/sms"), &other)], "fn go() -> Int {\n    return 1\n}\n");
     assert!(codes(&main).unwrap_err().contains("run `staalc fetch`"));
     let report = packages::fetch(&app).unwrap().join("\n");
-    assert!(report.contains(&format!("(was {})", &commit[..12])), "{report}");
+    assert!(report.contains(&format!("(was commit {})", &commit[..12])), "{report}");
     assert!(codes(&main).is_ok());
 }
 
@@ -337,7 +337,7 @@ fn one_version_per_package() {
     let app = b.join("app");
     project(&app, &[("a", &repos.join("a"), &a), ("b", &repos.join("b"), &bb)], "fn go() -> Int {\n    return 1\n}\n");
     let e = packages::fetch(&app).unwrap_err();
-    assert!(e.contains("want different versions of package fmt"), "{e}");
+    assert!(e.starts_with("package fmt: package a wants commit") && e.contains("package b wants commit") && e.ends_with("one version per package"), "{e}");
 }
 
 /// A package whose authority and code are given, in a project that uses it.

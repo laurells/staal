@@ -1261,15 +1261,36 @@ program has no packages and imports only its own files (section 11 and the READM
 
 ### Manifests
 
-The project's `staal.json` names its dependencies, each by git location and full
-commit id:
+The project's `staal.json` names its dependencies in one of three ways:
 
-    { "dependencies": {
-        "sms": { "git": "https://github.com/laurells/staal-sms", "commit": "<40 lowercase hex digits>" } } }
+    { "registry": "https://github.com/example/staal-registry",
+      "dependencies": {
+        "sms":   { "git": "https://github.com/laurells/staal-sms", "commit": "<40 lowercase hex digits>" },
+        "email": { "git": "https://github.com/laurells/staal-email", "version": "^1.2" },
+        "chat":  { "version": "~0.3.1" } } }
+
+- `git` and `commit`: exactly that commit.
+- `git` and `version`: the newest release of that repository within the range. A
+  release is a tag `v1.2.0` or `1.2.0` (lightweight or annotated) naming a commit
+  whose `staal.json` gives that same version.
+- `version` alone: the newest version within the range that the project's
+  `registry` lists (Registries, below).
 
 A location is `https://`, `ssh://`, `user@host:path`, `file://` or an absolute path.
-Plain `http://` and `git://` are refused. A branch or tag name is refused: they can
-move, and a dependency must name exactly one tree of files.
+Plain `http://` and `git://` are refused. A branch name, or a tag given as a
+commit, is refused: a dependency names one commit, or a range of versions that
+`staalc fetch` resolves to one commit and locks.
+
+A version is Semantic Versioning 2.0.0 (`MAJOR.MINOR.PATCH`, optionally a
+pre-release such as `-rc.1`); build metadata (`+...`) is refused. A range is
+comparators separated by commas, all of which must hold: `1.2.3` or `^1.2.3` (at
+least 1.2.3, below 2.0.0; for `0.x`, below the next minor version, and `^0.0.3` is
+exactly 0.0.3), `~1.2.3` (below 1.3.0), `=1.2.3`, `>=1.2`, `>1.2`, `<2`, `<=1.4`,
+and wildcards `1.*`, `1.2.*`, `*`. A pre-release version is chosen only by a range
+with a comparator naming a pre-release of the same `MAJOR.MINOR.PATCH`
+(`^1.3.0-rc.1` allows `1.3.0-rc.2`, never `1.4.0-beta`). The registry is the
+project's choice: a package's manifest cannot name one, and a package's own
+dependencies on the registry use the project's.
 
 A package is a git repository with a `staal.json` at its root:
 
@@ -1277,39 +1298,79 @@ A package is a git repository with a `staal.json` at its root:
       "authority": { "net.http.post": ["https://api.ng.termii.com/api/sms/send"] },
       "dependencies": { ... } }
 
-`package` must be the name the depending project uses. `authority` is required
+`package` must be the name the depending project uses. `version`, when given, must
+be a version; a package fetched by version range must give it. `authority` is required
 (`{}` for none). Each key is a capability path; the value is `"any"`, or a non-empty
 list of `only` patterns, checked like a grant's (canonical, no `*` in a host).
-Package names are lowercase letters, digits and `_`, starting with a letter; `net`
-and `fs` are refused. Unknown keys are refused everywhere.
+Package names are lowercase letters, digits and `_`, starting with a letter; `net`,
+`fs`, `db` and `ffi`, the runtime's own capability families, are refused. Unknown keys are refused everywhere.
 
 ### Fetching and the lockfile
 
-`staalc fetch [folder]` reads each dependency's commit from git's objects (a bare
-clone, then the commit's tree and blobs; never a checkout, so line-ending settings,
-attributes and filters cannot change a byte). It follows each package's own
-dependencies. Then it refuses, before changing anything:
+`staalc fetch [folder]` first resolves the dependency graph: every package gets one
+commit that fits what everything depending on it asks for. A choice already in
+`staal.lock` is kept while it still fits; otherwise the newest fitting version is
+taken, skipping yanked ones. The resolver never tries older versions of the packages
+that ask: when no version fits every range, it says which packages want which
+ranges and which versions exist, and stops; an exact version (`"=1.2.0"`) on one of
+them chooses another. `staalc update [folder]` forgets every locked choice, and
+`--package <name>` only that one, so they move to the newest versions that fit.
+
+It reads each chosen commit from git's objects (a bare clone, then the commit's
+tree and blobs; never a checkout, so line-ending settings, attributes and filters
+cannot change a byte). Then it refuses, before changing anything:
 
 - a commit the repository does not have;
 - a file that is a link or a submodule, a path with an empty, `.`, `..` or `.git`
   part, a backslash or a colon, two paths that differ only in letter case, or more
   than 10,000 files or 64 MiB;
 - a package whose manifest gives another name, or is malformed;
-- two different commits (or locations) of one package anywhere in the graph: one
-  version of each package per project;
+- two different commits, or two locations, or both a git location and the registry,
+  for one package anywhere in the graph: one version of each package per project;
+- an exact commit whose own version does not fit a range another package asks for;
+- a release tag or registry entry whose commit's `staal.json` gives another
+  version, and two tags of one version naming different commits;
+- a locked version whose tag or registry entry now names another commit (it was
+  moved): `staalc update` takes the new commit, deliberately;
+- a version from the registry whose files are not those the registry recorded;
 - a package already in `staal.lock` at the same commit whose files differ from
   the lock (the lock was edited, or the repository's history rewritten).
 
 Only then are packages written to `.staal/packages/<name>/` and `staal.lock`
-replaced. The lock records, per package, its location, commit and the SHA-256 of
-every file. `fetch` prints each package with its authority, marked `new`,
-`unchanged` or `was <old commit>`, for review.
+replaced. The lock (version 2; version 1 is still read) records, per package, its
+location, commit, version, registry if it came from one, and the SHA-256 of every
+file. `fetch` prints each package with its version and authority, marked `new`,
+`unchanged` or `was <old version and commit>`, for review.
+
+### Registries
+
+A registry is a git repository: `staal-registry.json` (`{"staal_registry": 1}`)
+at its root and `packages/<name>.json` for each package, listing every published
+version with the git location and commit it is, the SHA-256 of its files (of a
+line `<file SHA-256>  <path>` per file, in path order), and whether it is yanked.
+`staalc fetch` reads the registry's default branch. Since each version names a
+commit and a digest of its files, the registry cannot be made to serve other files
+for a version without its own history changing, and a locked version whose entry
+changed stops the fetch.
+
+`staalc publish --registry <folder> --git <location> --commit <id>` adds a version
+to the registry whose working tree is `<folder>`, as a commit there: it reads the
+commit from git as `fetch` does, takes the name and version from its `staal.json`
+(a version is required), records the digest, and refuses a version already
+published, since a published version never changes. A new, empty repository becomes
+a registry at its first publish. `staalc yank --registry <folder> --package <name>
+--version <v> [--undo]` marks a version yanked: no project chooses it again, but a
+project that locked it keeps it. Both leave the commit for the operator to push.
+Whoever can push to the registry can publish under any name: a public registry
+needs every change reviewed.
 
 ### Loading
 
 Before a program is checked or run, the lock must match `staal.json`: every
-dependency, and every package's own dependencies, at the commit wanted, and nothing
-else. Every package folder must hold exactly the files the lock lists, each with its
+dependency, and every package's own dependencies, locked at what it asks for (that
+commit; or, for a range, a version within it from that location or the project's
+registry), and nothing else; and each package's `staal.json` must give the version
+the lock records. Every package folder must hold exactly the files the lock lists, each with its
 hash, and only plain files (a link, even to identical content, is refused). Files
 are read once, verified, and the verified text is what the compiler reads. Any
 mismatch stops before anything is checked (exit 2), naming the file.

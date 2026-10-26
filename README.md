@@ -99,6 +99,9 @@ To build without the native compiler (smaller, interpreter only):
 | `staalc resume <file.staal> --config <run.json> --journal <run.journal>` | Continues a run that stopped or crashed |
 | `staalc resolve --journal <run.journal> ...` | Records an operator's decision on an action left in doubt |
 | `staalc fetch [<project folder>]` | Fetches the packages named in `staal.json` and writes `staal.lock` |
+| `staalc update [<project folder>] [--package <name>]` | As fetch, moving locked versions to the newest within their ranges |
+| `staalc publish --registry <folder> --git <location> --commit <id>` | Adds a package version to a registry |
+| `staalc yank --registry <folder> --package <name> --version <v> [--undo]` | Marks a published version not to be chosen again |
 | `staalc build <file.staal> -o <app>` | Builds a standalone executable (Linux) |
 | `staalc fmt [--check] <file.staal>...` | Formats files in place, or lists those not formatted |
 | `staalc test [--config <test.json>] <file or folder>...` | Runs the tests written in Staal, in both engines |

@@ -1220,9 +1220,23 @@ change after it was read (next section).
 
 A package is a git repository with a `staal.json` naming it and listing its
 `authority`: every capability its code may use, with the targets it may reach.
-`staalc fetch` reads each dependency at its exact commit (a branch or tag is
-refused: they move), writes it to `.staal/packages/`, records the SHA-256 of
-every file in `staal.lock`, and prints each package's authority for review.
+A dependency names an exact commit, a version range of a repository's release
+tags, or a version range from a registry:
+
+    { "registry": "https://github.com/example/staal-registry",
+      "dependencies": {
+        "sms":   { "git": "https://github.com/laurells/staal-sms", "commit": "1bd0e7645a505227084bc83379affbcd71732560" },
+        "email": { "git": "https://github.com/laurells/staal-email", "version": "^1.2" },
+        "chat":  { "version": "~0.3" } } }
+
+`staalc fetch` gives each package one version that fits every range asking for
+it (the newest, or the one already locked while it still fits), reads it from
+git, writes it to `.staal/packages/`, records its commit, version and the SHA-256
+of every file in `staal.lock`, and prints each package's authority for review.
+`staalc update` moves locked versions to the newest that fit (`--package <name>`
+for one). When no version fits every range, it stops and says who wants what; it
+does not try older versions of the packages that ask. A release tag that moved, or
+a registry entry that changed, stops the fetch with nothing changed.
 The full rules are in [RUNTIME.md](RUNTIME.md) section 14. In short:
 
 - **Nothing unverified is read as code.** Before checking or running, every
@@ -1259,10 +1273,21 @@ added or missing file, following a link, accepting a link from git, trusting the
 lock without git, accepting a branch name, not prefixing a package's own imports,
 letting the program import a package it does not depend on, allowing a dependency
 and a folder of one name, each of the four authority rules, allowing two versions,
-allowing plain http, and accepting a misnamed package.
+allowing plain http, and accepting a misnamed package. Nine more tests cover
+versions and registries: the newest fitting release chosen and kept until
+`update`, a moved tag or registry entry, conflicting ranges, an exact commit
+against a range, pre-releases, yanking, a registry entry whose files do not match,
+and publishing; twelve mutations of the resolver and registry are each caught.
 
-Packages are fetched from any git host over HTTPS or SSH, GitHub included. There
-is no package registry yet: a dependency is always a git URL and a commit. Whoever can edit both `staal.lock` and `.staal/packages/` controls the
+A registry is itself a git repository listing each published version's commit and
+the digest of its files. `staalc publish --registry <folder> --git <location>
+--commit <id>` adds a version to a local clone of one as a commit, refusing one
+already published; `staalc yank` marks a version not to be chosen again (projects
+that locked it keep it). Pushing the registry publishes it. There is no public
+registry yet. Whoever can push to a registry can publish under any name, so a
+shared one needs its changes reviewed.
+
+Packages are fetched from any git host over HTTPS or SSH, GitHub included. Whoever can edit both `staal.lock` and `.staal/packages/` controls the
 code, as with any lockfile: `staalc check` trusts the lock, and `staalc fetch`
 compares both with git. `git` must be installed to fetch.
 
