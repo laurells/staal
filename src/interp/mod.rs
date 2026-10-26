@@ -437,6 +437,8 @@ struct Setup {
 /// Settings for the runtime's own capabilities (RUNTIME.md section 12).
 struct RuntimeSettings {
     net: http::Settings,
+    /// For `net.tls`: the roots `net.extra_root_certificates` adds to Mozilla's.
+    tls: std::sync::Arc<rustls::ClientConfig>,
     fs_max_read_bytes: usize,
     /// Every secret value of the run, removed from anything recorded or shown.
     secrets: Vec<String>,
@@ -525,7 +527,7 @@ fn parse_grant(
         for (i, pat) in limits.only.iter().flatten().enumerate() {
             let checked = if http {
                 crate::targets::check_url_pattern(pat)
-            } else if want == "net.tcp.exchange" {
+            } else if want == "net.tcp.exchange" || want == "net.tls.exchange" {
                 crate::targets::check_address_pattern(pat)
             } else {
                 crate::targets::check_path_pattern(pat)
@@ -685,7 +687,8 @@ fn runtime_settings(cfg: &Map<String, Json>) -> Result<RuntimeSettings, String> 
             }
         }
     }
-    Ok(RuntimeSettings { net, fs_max_read_bytes, secrets: Vec::new() })
+    let tls = tcp::tls_config(&net.extra_roots)?;
+    Ok(RuntimeSettings { net, fs_max_read_bytes, secrets: Vec::new(), tls })
 }
 
 /// Converts a limit written in source (`max: 500 USD`) to money.
@@ -1115,6 +1118,7 @@ impl<'p> Interp<'p> {
                 connect_timeout: runtime.net.connect_timeout,
                 timeout: runtime.net.timeout,
                 max_reply_bytes: runtime.net.max_response_bytes,
+                tls: runtime.tls.clone(),
             },
             fs_max_read_bytes: runtime.fs_max_read_bytes,
             secrets: runtime.secrets.clone(),
@@ -2150,7 +2154,7 @@ impl<'p> Interp<'p> {
     fn action(&mut self, h: usize, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
         let path = self.broker().path(h).or_else(internal)?.to_string();
         // The runtime's own capabilities never reach an adapter.
-        if path == "net.tcp.exchange" {
+        if path == "net.tcp.exchange" || path == "net.tls.exchange" {
             return self.tcp_action(h, &path, method, args);
         }
         if path.starts_with("net.http.") {
@@ -2518,7 +2522,7 @@ impl<'p> Interp<'p> {
                             "data_sha256": journal::sha256_hex(data.as_bytes()), "until": until });
         let what = format!("action {path} {address}");
         let (answer, replayed) = self.external("action", jbody, false, &what, |it, _key| {
-            match tcp::exchange(&address, data.as_bytes(), until.as_deref(), &it.tcp) {
+            match tcp::exchange(&address, data.as_bytes(), until.as_deref(), &it.tcp, path == "net.tls.exchange") {
                 tcp::Outcome::Reply(t) => Answer::Done(Ok(json!({ "text": scrub_text(&it.secrets, &t) }))),
                 tcp::Outcome::NotSent(e) => Answer::Done(Err(format!("{NOT_SENT}{e}"))),
                 tcp::Outcome::Unusable(e) => Answer::Done(Err(e)),

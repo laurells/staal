@@ -228,7 +228,7 @@ impl Journal {
             intent["body"]["method"].as_str().unwrap_or("?")
         );
         let http = intent["body"]["capability"].as_str().is_some_and(|c| c.starts_with("net.http."));
-        let tcp = intent["body"]["capability"] == "net.tcp.exchange";
+        let tcp = matches!(intent["body"]["capability"].as_str(), Some("net.tcp.exchange" | "net.tls.exchange"));
         let mut j = Journal::with(Some(file), String::new(), BTreeMap::new(), None);
         let shown = op_id(&task, n);
         let (result, summary) = match resolution {

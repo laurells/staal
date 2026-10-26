@@ -1058,7 +1058,7 @@ task is resolved by name (`staalc resolve --operation 2.1:1`). A capability limi
 `uses` or `max` cannot be passed to tasks, since which of them it refused would depend
 on their timing; use a `for` loop for those. RUNTIME.md section 18 has the details.
 
-## Sockets: `net.tcp.exchange`
+## Sockets: `net.tcp.exchange` and `net.tls.exchange`
 
 ```staal
 fn ping(conn: cap net.tcp.exchange, address: Text) -> Text {
@@ -1071,7 +1071,9 @@ One exchange connects to a `host:port` the grant's `only` allows (`"127.0.0.1:*"
 peer closes, or to a delimiter given as the third argument. The reply is untrusted
 text. An exchange is never repeated after a crash: if it may have reached the peer,
 the run stops until an operator records the reply (`staalc resolve --reply`).
-RUNTIME.md section 12 has the details. Plain TCP only: nothing is encrypted.
+`net.tls.exchange` is the same over TLS, with the certificate always verified
+(Mozilla's roots and any the operator adds); `net.tcp.exchange` is plain TCP, not
+encrypted. RUNTIME.md section 12 has the details.
 
 ## Databases: `db.sqlite`
 

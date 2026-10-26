@@ -855,7 +855,7 @@ the journal like any other action. Capability paths starting with `net.`, `fs.` 
 | --- | --- | --- |
 | `net.http.get`, `net.http.delete` | `c.get(url)`, `c.get(url, headers)` | `Response` |
 | `net.http.post`, `net.http.put`, `net.http.patch` | `c.post(url, body)`, `c.post(url, body, headers)` | `Response` |
-| `net.tcp.exchange` | `c.exchange(address, data)`, `c.exchange(address, data, until)` | `Text` |
+| `net.tcp.exchange`, `net.tls.exchange` | `c.exchange(address, data)`, `c.exchange(address, data, until)` | `Text` |
 | `fs.read` | `c.read(path)` | `Text` |
 | `fs.write` | `c.write(path, content)` | `Receipt` |
 | `db.sqlite.query` | `c.query(database, sql)`, `c.query(database, sql, params)` | `Text` (JSON rows) |
@@ -949,8 +949,15 @@ Linux and macOS only; on other systems every file action fails.
 the reply as text. Without `until` it closes its sending side after the data, which
 tells the peer the request is complete, and reads until the peer closes; with
 `until` (a delimiter such as `"\r\n"`) it reads until the reply ends with it, for
-protocols that keep the connection open. The connection is plain TCP: nothing is
-encrypted. Addresses are canonical (the host as the URL Standard writes it, lowercased
+protocols that keep the connection open. `net.tcp.exchange` is plain TCP: nothing is
+encrypted. `net.tls.exchange` is the same exchange over TLS, its certificate always
+verified against Mozilla's root certificates and those `net.extra_root_certificates`
+adds (never instead), and against the address's host. A handshake that fails (an
+untrusted, expired or other host's certificate) fails before any data is sent, so it
+is `not sent`. Without `until`, TLS is ended properly after the data (close_notify);
+a peer that closes the connection without ending TLS could have had its reply cut
+short by someone between, so that reply fails (`action`), though the exchange
+happened. Addresses are canonical (the host as the URL Standard writes it, lowercased
 and in ASCII, IPv6 in brackets; the port 1 to 65535), and an `only` pattern is an
 address, `host:*` (any port of one host) or `*`: a `*` never stands for part of a
 host. The time limit is `net.timeout_ms` for the whole exchange, the connect limit

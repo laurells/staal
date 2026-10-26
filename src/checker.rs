@@ -1106,7 +1106,7 @@ enum RuntimeCap {
     /// `db.sqlite.query`, which only reads, and `db.sqlite.execute`, which changes.
     DbQuery,
     DbExecute,
-    /// `net.tcp.exchange`: data sent to an address, its reply read.
+    /// `net.tcp.exchange` and `net.tls.exchange`: data sent to an address, its reply read.
     Tcp,
 }
 
@@ -1117,7 +1117,7 @@ fn runtime_cap(path: &[String]) -> Option<RuntimeCap> {
         ["net", "http", m] if HTTP_METHODS.contains(m) => Some(RuntimeCap::Http { body: matches!(*m, "post" | "put" | "patch") }),
         ["fs", "read"] => Some(RuntimeCap::FsRead),
         ["fs", "write"] => Some(RuntimeCap::FsWrite),
-        ["net", "tcp", "exchange"] => Some(RuntimeCap::Tcp),
+        ["net", "tcp" | "tls", "exchange"] => Some(RuntimeCap::Tcp),
         ["db", "sqlite", "query"] => Some(RuntimeCap::DbQuery),
         ["db", "sqlite", "execute"] => Some(RuntimeCap::DbExecute),
         _ => None,
@@ -1397,7 +1397,7 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                         pos,
                         format!(
                             "`cap {p}` is not a runtime capability; there are net.http.get, net.http.post, \
-                             net.http.put, net.http.patch, net.http.delete, net.tcp.exchange, fs.read, \
+                             net.http.put, net.http.patch, net.http.delete, net.tcp.exchange, net.tls.exchange, fs.read, \
                              fs.write, db.sqlite.query and db.sqlite.execute"
                         ),
                     ),

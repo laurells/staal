@@ -7,6 +7,10 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- `net.tls.exchange`: the TCP exchange over TLS, its certificate always verified
+  against Mozilla's roots and the operator's extra ones and against the host. A failed
+  handshake is `not sent`; a reply the peer did not end with close_notify is refused
+  as possibly cut short.
 - `parallel(list, f, ...)`: concurrency. `f`, a declared function, runs for every item
   at once on up to 16 threads; the results come back in the list's order, and a
   failure is the first by position, so the outcome never depends on scheduling. Tasks
