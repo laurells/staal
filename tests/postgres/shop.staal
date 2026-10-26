@@ -1,0 +1,53 @@
+// The program the db.postgres tests run: SQL is its own, values from outside are
+// parameters, and what a query gives is validated like any outside data.
+type Order { id: Int, item: Text, qty: Int }
+
+fn record(db: cap db.postgres.execute, read: cap db.postgres.query, item: Text, qty: Int) -> Int {
+    let added = db.execute("shop", "INSERT INTO orders (item, qty) VALUES ($1, $2)", [item, to_text(qty)])
+    let rows = validate parse(List<Order, 100>, read.query("shop", "SELECT id, item, qty FROM orders ORDER BY id"))
+    return len(rows)
+}
+
+// One row of each type a query reads.
+fn kinds(read: cap db.postgres.query) -> Text {
+    return read.query("shop", "SELECT 7::int2 AS i2, -8::int4 AS i4, 9007199254740993::int8 AS i8, true AS yes, 'naira ₦'::text AS t, 'x'::varchar(3) AS v, 12.50::numeric(10,2) AS price, -0.000123::numeric AS small, 0.1::float8 AS f8, 0.1::float4 AS f4, '2026-10-26'::date AS d, '2026-10-26 13:05:09.25'::timestamp AS ts, '2026-10-26 13:05:09+01'::timestamptz AS tz, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid AS id, '{\"a\": 1.10}'::json AS j, '{\"b\": [1, 2]}'::jsonb AS jb, NULL::text AS nothing, 'medium'::size AS sz")
+}
+
+// What a query refuses, as the failure it gives.
+fn refused(read: cap db.postgres.query, which: Text) -> Text {
+    if which == "insert" {
+        let r = try read.query("shop", "INSERT INTO orders (item, qty) VALUES ('sneaky', 1)")
+        return r.error
+    }
+    if which == "two" {
+        let r = try read.query("shop", "SELECT 1; SELECT 2")
+        return r.error
+    }
+    if which == "params" {
+        let r = try read.query("shop", "SELECT $1::int AS a", ["1", "2"])
+        return r.error
+    }
+    if which == "interval" {
+        let r = try read.query("shop", "SELECT '1 day'::interval AS gap")
+        return r.error
+    }
+    if which == "bytes" {
+        let r = try read.query("shop", "SELECT 'ab'::bytea AS raw")
+        return r.error
+    }
+    if which == "names" {
+        let r = try read.query("shop", "SELECT 1 AS a, 2 AS a")
+        return r.error
+    }
+    if which == "nowhere" {
+        let r = try read.query("elsewhere", "SELECT 1 AS a")
+        return r.error
+    }
+    let r = try read.query("shop", "SELECT nope FROM orders")
+    return r.error
+}
+
+// A parameter read as the type the server infers for it.
+fn typed(read: cap db.postgres.query, qty: Text) -> Text {
+    return read.query("shop", "SELECT count(*)::int AS n FROM orders WHERE qty >= $1", [qty])
+}

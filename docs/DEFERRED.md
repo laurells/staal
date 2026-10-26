@@ -45,6 +45,18 @@ one. The runtime never answers twice and says plainly when a request was lost
 idempotency key. If wanted, document that pattern with an example; there is nothing
 to fix in the runtime.
 
+## MongoDB
+
+Deferred on 2026-10-26, when PostgreSQL was built (`db.postgres`). Needed: `db.mongo`
+capabilities as the runtime's own, documents coming back as JSON for `parse` and
+`validate`. Two things to settle first. The Rust driver is asynchronous; it would run
+on its own small runtime, as the Postgres client does. And crash safety: a write and
+its idempotency key can be kept together only in a transaction, which MongoDB has only
+on a replica set or sharded cluster; on a single server a write left in doubt must stop
+the run for an operator, and the docs must say so. Done when: tests against a real
+server (a replica set for the keyed path), crash tests at every point with and without
+keys, mutations caught, and documented.
+
 ## Before the repository is public
 
 CODE_OF_CONDUCT.md names the maintainer but not yet the address reports go to:

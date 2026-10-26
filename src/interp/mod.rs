@@ -12,6 +12,7 @@ pub mod adapter;
 pub mod broker;
 pub mod db;
 pub mod ffi;
+pub mod pg;
 pub mod fsx;
 pub mod http;
 pub mod journal;
@@ -456,14 +457,21 @@ struct RuntimeSettings {
 
 enum Arg {
     Data(Value),
-    Grant { path: String, limits: broker::Limits, idempotency_key: bool, needs: Vec<NeedArg>, foreign: Option<std::sync::Arc<ffi::Function>> },
+    Grant {
+        path: String,
+        limits: broker::Limits,
+        idempotency_key: bool,
+        needs: Vec<NeedArg>,
+        foreign: Option<std::sync::Arc<ffi::Function>>,
+        postgres: Option<std::sync::Arc<pg::Grant>>,
+    },
 }
 
 /// What a library capability's grant supplies for one of its `needs`.
 enum NeedArg {
     /// A runtime capability, granted by the operator and then narrowed to the limits
     /// the library declared for it.
-    Cap { path: String, limits: broker::Limits, idempotency_key: bool, declared: CapLimits },
+    Cap { path: String, limits: broker::Limits, idempotency_key: bool, declared: CapLimits, postgres: Option<std::sync::Arc<pg::Grant>> },
     /// A secret or a text setting.
     Data(Value),
 }
@@ -474,6 +482,8 @@ struct ParsedGrant {
     needs: Vec<NeedArg>,
     /// For `ffi.*`: the C function the grant loads.
     foreign: Option<std::sync::Arc<ffi::Function>>,
+    /// For `db.postgres.*`: the databases the grant reaches.
+    postgres: Option<std::sync::Arc<pg::Grant>>,
 }
 
 /// How a net.http failure that certainly sent nothing begins, in results and journals.
@@ -517,9 +527,11 @@ fn parse_grant(
 ) -> Result<ParsedGrant, String> {
     let g = g.as_object().ok_or(format!("{at}: expected an object"))?;
     let c_function = want.starts_with("ffi.");
+    let postgres = want.starts_with("db.postgres.");
     for k in g.keys() {
         let known = ["cap", "max", "each", "uses", "only", "idempotency_key", "needs"].contains(&k.as_str())
-            || (c_function && ["library", "sha256", "repeatable"].contains(&k.as_str()));
+            || (c_function && ["library", "sha256", "repeatable"].contains(&k.as_str()))
+            || (postgres && k == "databases");
         if !known {
             return Err(format!("{at}: unknown key '{k}'"));
         }
@@ -542,6 +554,8 @@ fn parse_grant(
         for (i, pat) in limits.only.iter().flatten().enumerate() {
             let checked = if c_function {
                 Err("a C function has no target for `only` to limit".to_string())
+            } else if postgres {
+                Err("the databases a db.postgres grant lists are the only ones it reaches; `only` does not apply".to_string())
             } else if http {
                 crate::targets::check_url_pattern(pat)
             } else if want == "net.tcp.exchange" || want == "net.tls.exchange" || want == "net.tcp.accept" {
@@ -553,11 +567,11 @@ fn parse_grant(
             };
             checked.map_err(|e| format!("{at}.only[{i}]: {e}"))?;
         }
-        if idempotency_key && !((http && want != "net.http.get") || want == "db.sqlite.execute") {
-            return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, and db.sqlite.execute"));
+        if idempotency_key && !((http && want != "net.http.get") || want == "db.sqlite.execute" || want == "db.postgres.execute") {
+            return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, db.sqlite.execute and db.postgres.execute"));
         }
     } else if idempotency_key {
-        return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, and db.sqlite.execute"));
+        return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, db.sqlite.execute and db.postgres.execute"));
     }
     // The slot's own limits narrow the grant when the run starts. Money limits in
     // different currencies could never both be met: refuse now.
@@ -598,6 +612,7 @@ fn parse_grant(
                             limits: inner.limits,
                             idempotency_key: inner.idempotency_key,
                             declared: nd.clone(),
+                            postgres: inner.postgres,
                         });
                     }
                     Ty::Named(x) if x == "Secret" => {
@@ -615,7 +630,66 @@ fn parse_grant(
         }
     }
     let foreign = if c_function { Some(load_c_function(g, at, want, prog, &mut runtime.libraries)?) } else { None };
-    Ok(ParsedGrant { limits, idempotency_key, needs, foreign })
+    let postgres = if postgres { Some(std::sync::Arc::new(postgres_grant(g, at, runtime)?)) } else { None };
+    Ok(ParsedGrant { limits, idempotency_key, needs, foreign, postgres })
+}
+
+/// `"databases"` of a `db.postgres.*` grant: each database it reaches, by the name
+/// programs use, with its server, database, user, password (from the environment) and
+/// whether TLS may be left off (only for a server on this machine).
+fn postgres_grant(g: &Map<String, Json>, at: &str, runtime: &mut RuntimeSettings) -> Result<pg::Grant, String> {
+    let dbs = g
+        .get("databases")
+        .and_then(Json::as_object)
+        .ok_or(format!("{at}.databases: the databases it reaches, {{\"name\": {{\"host\": ..., \"dbname\": ..., \"user\": ...}}}}"))?;
+    if dbs.is_empty() {
+        return Err(format!("{at}.databases: names no database"));
+    }
+    let mut out = pg::Grant::default();
+    for (name, d) in dbs {
+        let dat = format!("{at}.databases.{name}");
+        if name.is_empty() || name.chars().any(|c| c.is_control()) {
+            return Err(format!("{dat}: '{name}' is not a name"));
+        }
+        let d = d.as_object().ok_or(format!("{dat}: expected an object"))?;
+        for k in d.keys() {
+            if !["host", "port", "dbname", "user", "password", "tls"].contains(&k.as_str()) {
+                return Err(format!("{dat}: unknown key '{k}'"));
+            }
+        }
+        let text = |k: &str| -> Result<String, String> {
+            match d.get(k).and_then(Json::as_str) {
+                Some(s) if !s.is_empty() && !s.chars().any(|c| c.is_control()) => Ok(s.to_string()),
+                _ => Err(format!("{dat}.{k}: expected a string")),
+            }
+        };
+        let host = text("host")?;
+        let port = match d.get("port") {
+            None => 5432,
+            Some(p) => p.as_u64().filter(|p| (1..=65535).contains(p)).ok_or(format!("{dat}.port: a port, 1 to 65535"))? as u16,
+        };
+        let password = match d.get("password") {
+            None => None,
+            Some(spec) => {
+                let secret = load_secret(spec, &format!("{dat}.password"))?;
+                runtime.secrets.push(secret.value.clone());
+                Some(secret.value)
+            }
+        };
+        let tls = match d.get("tls") {
+            None => true,
+            Some(Json::String(m)) if m == "verify" => true,
+            Some(Json::String(m)) if m == "disable" => {
+                if !pg::is_local(&host) {
+                    return Err(format!("{dat}.tls: \"disable\" only for a server on this machine (localhost, 127.0.0.1, ::1); '{host}' is reached with TLS"));
+                }
+                false
+            }
+            Some(_) => return Err(format!("{dat}.tls: \"verify\" (the default) or \"disable\"")),
+        };
+        out.databases.insert(name.clone(), pg::Database { host, port, dbname: text("dbname")?, user: text("user")?, password, tls });
+    }
+    Ok(out)
 }
 
 /// The C function an `ffi.*` grant names: its library file, pinned by SHA-256, loaded,
@@ -882,7 +956,14 @@ impl Setup {
                     let g = grants.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this capability"))?;
                     let want = path.join(".");
                     let pg = parse_grant(g, &at, &want, declared, &types, prog, &mut runtime)?;
-                    args.push(Arg::Grant { path: want, limits: pg.limits, idempotency_key: pg.idempotency_key, needs: pg.needs, foreign: pg.foreign });
+                    args.push(Arg::Grant {
+                        path: want,
+                        limits: pg.limits,
+                        idempotency_key: pg.idempotency_key,
+                        needs: pg.needs,
+                        foreign: pg.foreign,
+                        postgres: pg.postgres,
+                    });
                 }
                 Ty::Proposed(_) => {
                     return Err(format!("inputs.{}: an entry parameter cannot be Proposed; only model calls produce those", p.name))
@@ -1052,6 +1133,8 @@ struct Interp<'p> {
     server: Shared<tcp::Server>,
     /// The C function each `ffi.*` grant loaded, by the grant's broker handle.
     foreign: HashMap<usize, std::sync::Arc<ffi::Function>>,
+    /// The databases each `db.postgres.*` grant reaches, by the grant's broker handle.
+    postgres: HashMap<usize, std::sync::Arc<pg::Grant>>,
     fs_max_read_bytes: usize,
     secrets: Vec<String>,
     /// Library capabilities' actions, by the path programs use (`termii.sms.send`).
@@ -1178,6 +1261,7 @@ impl<'p> Interp<'p> {
             },
             server: Default::default(),
             foreign: HashMap::new(),
+            postgres: HashMap::new(),
             fs_max_read_bytes: runtime.fs_max_read_bytes,
             secrets: runtime.secrets.clone(),
             lib: prog
@@ -1239,8 +1323,11 @@ impl<'p> Interp<'p> {
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
-                Arg::Grant { path, limits, idempotency_key, needs, foreign } => {
+                Arg::Grant { path, limits, idempotency_key, needs, foreign, postgres } => {
                     let h = self.broker().grant(path, limits.clone());
+                    if let Some(p) = postgres {
+                        self.postgres.insert(h, p.clone());
+                    }
                     if let Some(f) = foreign {
                         // C code the broker cannot check: the run says so, first.
                         self.emit(
@@ -1257,8 +1344,11 @@ impl<'p> Interp<'p> {
                     for n in needs {
                         match n {
                             NeedArg::Data(v) => given.push(v.clone()),
-                            NeedArg::Cap { path: ip, limits: il, idempotency_key: ik, declared } => {
+                            NeedArg::Cap { path: ip, limits: il, idempotency_key: ik, declared, postgres } => {
                                 let ih = self.broker().grant(ip, il.clone());
+                                if let Some(p) = postgres {
+                                    self.postgres.insert(ih, p.clone());
+                                }
                                 if *ik {
                                     self.broker().set_idempotency_key(ih).unwrap_or_default();
                                 }
@@ -1821,6 +1911,7 @@ impl<'p> Interp<'p> {
             tcp: self.tcp.clone(),
             server: self.server.clone(),
             foreign: self.foreign.clone(),
+            postgres: self.postgres.clone(),
             fs_max_read_bytes: self.fs_max_read_bytes,
             secrets: self.secrets.clone(),
             lib: self.lib.clone(),
@@ -2231,6 +2322,9 @@ impl<'p> Interp<'p> {
         }
         if path.starts_with("ffi.") {
             return self.c_action(h, &path, method, args);
+        }
+        if path.starts_with("db.postgres.") {
+            return self.pg_action(h, &path, method, args);
         }
         if path.starts_with("net.http.") {
             return self.http_action(h, &path, method, args);
@@ -2829,6 +2923,83 @@ impl<'p> Interp<'p> {
             Ok(v) => {
                 self.performed += 1;
                 self.emit("action_performed", json!({ "capability": path, "method": method, "target": file, "replayed": replayed }));
+                match (method, v["text"].as_str(), v["receipt"].as_str()) {
+                    ("query", Some(t), _) => Ok(Value::Text(t.to_string())),
+                    ("execute", _, Some(id)) => {
+                        Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
+                    }
+                    _ => fail(FailKind::Journal, format!("malformed database result in the journal: {v}")),
+                }
+            }
+            Err(msg) => {
+                self.emit("action_failed", json!({ "capability": path, "method": method, "error": msg, "replayed": replayed }));
+                fail(FailKind::Action, msg)
+            }
+        }
+    }
+
+    /// A `db.postgres` action: a query, in a read-only transaction and safe to make
+    /// again after a crash, or a statement that changes the database, which is not,
+    /// unless the grant keeps idempotency keys in the database (RUNTIME.md section 12).
+    fn pg_action(&mut self, h: usize, path: &str, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
+        let (Some(Value::Text(name)), Some(Value::Text(sql))) = (args.first(), args.get(1)) else {
+            return internal("db.postgres without a database or SQL");
+        };
+        let params: Vec<String> = match args.get(2) {
+            None => Vec::new(),
+            Some(Value::List(items)) => {
+                let mut ps = Vec::new();
+                for i in items {
+                    let Value::Text(t) = i else { return internal("db.postgres parameters that are not text") };
+                    ps.push(t.clone());
+                }
+                ps
+            }
+            Some(_) => return internal("db.postgres parameters that are not a list"),
+        };
+        let root = self.broker().root(h).or_else(internal)?;
+        let Some(grant) = self.postgres.get(&root).cloned() else {
+            return internal(format!("{path} was granted without its databases"));
+        };
+        self.emit("action_requested", json!({ "capability": path, "method": method, "target": name }));
+        if !grant.databases.contains_key(name) {
+            let names: Vec<&str> = grant.databases.keys().map(String::as_str).collect();
+            let why = format!("the grant reaches no database named '{name}' (it reaches {})", names.join(", "));
+            return self.refuse(path, method, FailKind::Capability, why);
+        }
+        let authorized = self.broker().authorize(h, None, None);
+        if let Err(why) = authorized {
+            return self.refuse(path, method, FailKind::Capability, why);
+        }
+        self.broker().count_use(h).or_else(internal)?;
+        let what = format!("action {path} {name}");
+        // The journal records hashes of the SQL and its parameters, not the values.
+        let params_json = json!(params).to_string();
+        let jbody = json!({ "capability": path, "method": method, "target": name,
+                            "sql_sha256": journal::sha256_hex(sql.as_bytes()),
+                            "params_sha256": journal::sha256_hex(params_json.as_bytes()) });
+        let keyed = self.broker().idempotency_key(h).or_else(internal)?;
+        let settings = pg::Settings { connect_timeout: self.tcp.connect_timeout, timeout: self.tcp.timeout, tls: self.tcp.tls.clone() };
+        let (answer, replayed) = match method {
+            "query" => self.external("action", jbody, true, &what, |it, _key| {
+                let rows = pg::query(&grant, name, sql, &params, it.fs_max_read_bytes, &settings);
+                Answer::Done(rows.map(|rows| json!({ "text": scrub_text(&it.secrets, &rows.to_string()) })).map_err(|e| scrub_text(&it.secrets, &e)))
+            })?,
+            "execute" => {
+                self.effects += 1;
+                self.external("action", jbody, keyed, &what, |it, key| match pg::execute(&grant, name, sql, &params, keyed.then_some(key), &settings) {
+                    pg::Executed::Done(n) => Answer::Done(Ok(json!({ "receipt": format!("postgres:{n}") }))),
+                    // Nothing from the server is trusted to leave the password out.
+                    pg::Executed::Failed(e) => Answer::Done(Err(scrub_text(&it.secrets, &e))),
+                    pg::Executed::Unknown(e) => Answer::Unknown(scrub_text(&it.secrets, &e)),
+                })?
+            }
+            other => return internal(format!("db.postgres has no method '{other}'")),
+        };
+        match answer {
+            Ok(v) => {
+                self.performed += 1;
+                self.emit("action_performed", json!({ "capability": path, "method": method, "target": name, "replayed": replayed }));
                 match (method, v["text"].as_str(), v["receipt"].as_str()) {
                     ("query", Some(t), _) => Ok(Value::Text(t.to_string())),
                     ("execute", _, Some(id)) => {

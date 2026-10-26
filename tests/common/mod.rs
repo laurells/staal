@@ -2,6 +2,7 @@
 // See tests/run_test.rs for the expectation format.
 #![allow(dead_code)]
 
+pub mod postgres;
 pub mod server;
 pub mod tls;
 

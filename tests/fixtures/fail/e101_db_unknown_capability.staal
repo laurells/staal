@@ -1,5 +1,5 @@
 // expect: E101
-// message: db.sqlite.query and db.sqlite.execute
-fn read(db: cap db.postgres.query) -> Int {
+// message: db.sqlite.execute, db.postgres.query and db.postgres.execute
+fn read(db: cap db.mysql.query) -> Int {
     return 1
 }

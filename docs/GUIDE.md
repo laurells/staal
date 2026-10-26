@@ -1112,7 +1112,7 @@ accepted and not yet answered when the run stopped is lost, and the resumed run'
 `reply` fails saying so. Nothing is encrypted. RUNTIME.md section 12 has the
 details.
 
-## Databases: `db.sqlite`
+## Databases: `db.sqlite` and `db.postgres`
 
 ```staal
 type Order { id: Int, item: Text, qty: Int }
@@ -1140,6 +1140,32 @@ does. A resumed run replays its queries from the journal, and a statement a cras
 left in doubt is never made twice: with `"idempotency_key": true` the runtime keeps
 each statement's key in the database, in the same transaction, and checks it;
 without it the run stops for an operator. RUNTIME.md section 12 has the details.
+
+PostgreSQL works the same way, with `$1`, `$2` placeholders, through
+`db.postgres.query` and `db.postgres.execute`. The grant names each database the
+capability reaches, and the program uses that name:
+
+```staal
+type Customer { name: Text, phone: Text }
+
+fn ready(db: cap db.postgres.query) -> Int {
+    let rows = db.query("shop", "SELECT name, phone FROM customers WHERE ready = $1", ["true"])
+    return len(validate parse(List<Customer, 100>, rows))
+}
+```
+
+    "db": { "cap": "db.postgres.query",
+            "databases": { "shop": { "host": "db.internal", "dbname": "shop", "user": "reader",
+                                     "password": { "env": "SHOP_DB_PASSWORD" } } } }
+
+A query runs in a read-only transaction, so it cannot change anything. Connections
+use TLS with the server's certificate verified (plain TCP only to a server on this
+machine), and the password never reaches a log or journal. Numbers, text, booleans,
+exact `numeric` values, dates, timestamps, uuids and JSON come back in JSON; other
+types need a cast to text in the SQL. A statement whose connection breaks while
+committing is in doubt, and is never guessed: with `"idempotency_key": true` the
+resumed run checks the key it wrote in the same transaction. MongoDB is not supported
+yet.
 
 ## Capabilities from libraries
 

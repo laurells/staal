@@ -1,0 +1,10 @@
+// expect: E006
+// message: untrusted value used as SQL
+// A model's answer cannot become SQL on Postgres either: values from outside are
+// parameters ($1, $2, ...).
+type Q { sql: Text }
+
+fn run(db: cap db.postgres.execute) -> Receipt budget(calls: 1, tokens: 300) {
+    let q = validate propose(Q, tokens: 300)
+    return db.execute("shop", q.sql)
+}

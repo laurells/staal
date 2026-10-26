@@ -7,6 +7,13 @@ the language or its file formats.
 ## Unreleased
 
 ### Added
+- PostgreSQL: `db.postgres.query` and `db.postgres.execute`. A grant names the
+  databases it reaches (server, database, user, password from the environment);
+  TLS is required and verified, except to a server on this machine. Queries run in a
+  read-only transaction and give exact JSON rows; statements commit durably, with
+  idempotency keys kept in the database when the grant asks. A statement whose
+  connection breaks during COMMIT is left in doubt, never guessed. Tested against a
+  real server, with crash tests at every point. MongoDB is deferred.
 - A program that needs no grants runs without a config file:
   `staalc run prog.staal [--entry <function>] [--input <name>=<value>]...` (`main`
   by default; Text inputs as written, others as JSON), for `run`, `resume`, `profile`

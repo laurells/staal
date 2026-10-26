@@ -33,6 +33,12 @@ url = "2.5.8"
 # (src/interp/http.rs) and for `net.tls` (src/interp/tcp.rs); the same version and
 # the same ring provider ureq uses.
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
+# PostgreSQL for the `db.postgres` capabilities (src/interp/pg.rs): the synchronous
+# client of rust-postgres, and its rustls integration on the same rustls and ring.
+postgres = "=0.19.14"
+tokio-postgres-rustls = { version = "=0.14.0", default-features = false, features = ["ring"] }
+# The buffer type postgres's parameter encoding writes into; the version postgres uses.
+bytes = "1.12.1"
 # Mozilla root certificates as certificates, so an operator can add a root on top of
 # them (net.extra_root_certificates). The same 1.0.9 snapshot ureq uses by default.
 webpki-root-certs = "1.0.9"

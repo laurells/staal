@@ -1,0 +1,5 @@
+// expect: E101
+// message: the databases a db.postgres grant lists are the only ones it reaches
+fn read(db: cap db.postgres.query(only: ["shop"])) -> Text {
+    return db.query("shop", "SELECT 1 AS a")
+}

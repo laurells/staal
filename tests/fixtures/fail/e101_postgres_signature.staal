@@ -1,0 +1,5 @@
+// expect: E101
+// message: query(database: Text, sql: Text) or query(database, sql, params: List<Text, N>)
+fn read(db: cap db.postgres.query) -> Text {
+    return db.query("shop", "SELECT $1::int AS a", [1])
+}

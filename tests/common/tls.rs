@@ -35,6 +35,16 @@ impl Ca {
     }
 }
 
+impl Ca {
+    /// A certificate for `names` and its key, in PEM, for a server that reads files.
+    pub fn server_pem(&self, names: &[&str]) -> (String, String) {
+        let p = CertificateParams::new(names.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        let key = KeyPair::generate().unwrap();
+        let cert = p.signed_by(&key, &self.issuer).unwrap();
+        (cert.pem(), key.serialize_pem())
+    }
+}
+
 /// A certificate for `names` that signs itself, trusted by no one.
 pub fn self_signed(names: &[&str]) -> Arc<rustls::ServerConfig> {
     let key = KeyPair::generate().unwrap();

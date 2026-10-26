@@ -114,6 +114,11 @@ fn staalc_config_writes_a_config_to_fill_in() {
         json!({ "entry": "send", "inputs": { "to": "" }, "grants": { "mail": { "cap": "email.send", "uses": 3 } },
                 "secrets": { "key": { "env": "KEY" } } })
     );
+    // A Postgres grant with a database to fill in.
+    let (_, out, _) = staalc(&["config", "tests/fixtures/pass/postgres.staal", "--entry", "ready"]);
+    let pgc: Json = serde_json::from_str(&out).unwrap();
+    assert_eq!(pgc["grants"]["db"]["databases"]["database"]["password"], json!({ "env": "DATABASE_PASSWORD" }), "{pgc}");
+    assert_eq!(pgc["grants"]["mark"]["uses"], 1, "{pgc}");
     // A model only where the program asks one.
     assert_eq!(skeleton("ask")["model"]["provider"], "anthropic");
     // A library capability's grant holds what it needs, its secrets named after it.

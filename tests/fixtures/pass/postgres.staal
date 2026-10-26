@@ -1,0 +1,9 @@
+// Postgres as the runtime gives it: a read-only query and a statement that changes
+// the database, with values from outside as parameters.
+type Customer { name: Text, phone: Text }
+
+fn ready(db: cap db.postgres.query, mark: cap db.postgres.execute(uses: 1), order: Text) -> Int {
+    let customers = validate parse(List<Customer, 100>, db.query("shop", "SELECT name, phone FROM customers WHERE ready"))
+    let marked = mark.execute("shop", "UPDATE orders SET notified = true WHERE id = $1", [order])
+    return len(customers)
+}

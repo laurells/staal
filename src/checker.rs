@@ -1111,6 +1111,10 @@ enum RuntimeCap {
     FsWrite,
     /// `db.sqlite.query`, which only reads, and `db.sqlite.execute`, which changes.
     DbQuery,
+    /// `db.postgres.query` and `db.postgres.execute`: as SQLite's, on the databases a
+    /// grant names.
+    PgQuery,
+    PgExecute,
     DbExecute,
     /// `net.tcp.exchange` and `net.tls.exchange`: data sent to an address, its reply read.
     Tcp,
@@ -1131,6 +1135,8 @@ fn runtime_cap(path: &[String]) -> Option<RuntimeCap> {
         ["net", "tcp", "reply"] => Some(RuntimeCap::Reply),
         ["db", "sqlite", "query"] => Some(RuntimeCap::DbQuery),
         ["db", "sqlite", "execute"] => Some(RuntimeCap::DbExecute),
+        ["db", "postgres", "query"] => Some(RuntimeCap::PgQuery),
+        ["db", "postgres", "execute"] => Some(RuntimeCap::PgExecute),
         _ => None,
     }
 }
@@ -1418,7 +1424,7 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                             "`cap {p}` is not a runtime capability; there are net.http.get, net.http.post, \
                              net.http.put, net.http.patch, net.http.delete, net.tcp.exchange, net.tls.exchange, \
                              net.tcp.accept, net.tcp.reply, fs.read, \
-                             fs.write, db.sqlite.query and db.sqlite.execute"
+                             fs.write, db.sqlite.query, db.sqlite.execute, db.postgres.query and db.postgres.execute"
                         ),
                     ),
                     Some(kind) => {
@@ -1434,6 +1440,9 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                                 RuntimeCap::Http { .. } => crate::targets::check_url_pattern(pat),
                                 RuntimeCap::Tcp | RuntimeCap::Accept => crate::targets::check_address_pattern(pat),
                                 RuntimeCap::Reply => Err("`only` limits which addresses net.tcp.accept listens on; a reply goes to a connection accepted there".into()),
+                                RuntimeCap::PgQuery | RuntimeCap::PgExecute => {
+                                    Err("the databases a db.postgres grant lists are the only ones it reaches; `only` does not apply".into())
+                                }
                                 RuntimeCap::FsRead | RuntimeCap::FsWrite | RuntimeCap::DbQuery | RuntimeCap::DbExecute => {
                                     crate::targets::check_path_pattern(pat)
                                 }
@@ -2206,7 +2215,7 @@ fn outcome_holds_evidence(ctx: &Ctx, value: &Expr, env: &Env) -> bool {
             // An action holds a receipt unless it is one of the runtime's that returns data.
             Expr::Action { receiver, .. } => match env.get(receiver).map(|b| &b.ty) {
                 Some(Ty::Cap { path, .. }) => {
-                    !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead | RuntimeCap::DbQuery | RuntimeCap::Tcp | RuntimeCap::Accept))
+                    !matches!(runtime_cap(path), Some(RuntimeCap::Http { .. } | RuntimeCap::FsRead | RuntimeCap::DbQuery | RuntimeCap::PgQuery | RuntimeCap::Tcp | RuntimeCap::Accept))
                         && !ctx.foreign.contains_key(&path.join("."))
                 }
                 _ => false,
@@ -4534,7 +4543,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                     "write(path: Text, content: Text)".to_string(),
                     named("Receipt"),
                 ),
-                RuntimeCap::DbQuery | RuntimeCap::DbExecute => {
+                RuntimeCap::DbQuery | RuntimeCap::DbExecute | RuntimeCap::PgQuery | RuntimeCap::PgExecute => {
                     let params = |t: &Ty| matches!(t, Ty::List(el, _) if **el == text);
                     let ok = (tys.len() == 2 || tys.len() == 3) && tys[0] == text && tys[1] == text && tys.get(2).is_none_or(params);
                     // The SQL is an instruction to the database: like a model's instruction,
@@ -4545,10 +4554,13 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                         ctx.err(
                             "E006",
                             args[1].pos(),
-                            format!("untrusted value used as SQL in '{receiver}.{method}'; pass values from outside as parameters (?1, ?2, ...) instead"),
+                            format!(
+                                "untrusted value used as SQL in '{receiver}.{method}'; pass values from outside as parameters ({}) instead",
+                                if matches!(kind, RuntimeCap::PgQuery | RuntimeCap::PgExecute) { "$1, $2, ..." } else { "?1, ?2, ..." }
+                            ),
                         );
                     }
-                    let result = if kind == RuntimeCap::DbQuery { text.clone() } else { named("Receipt") };
+                    let result = if matches!(kind, RuntimeCap::DbQuery | RuntimeCap::PgQuery) { text.clone() } else { named("Receipt") };
                     (ok, format!("{method}(database: Text, sql: Text) or {method}(database, sql, params: List<Text, N>)"), result)
                 }
             };

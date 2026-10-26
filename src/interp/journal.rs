@@ -224,7 +224,7 @@ impl Journal {
         let n = intent["n"].as_u64().unwrap_or_default(); // checked by check_body
         // Actions always safe to make again: resume makes them again, and a result
         // recorded here could not take the form the program reads.
-        if let Some(c @ ("fs.read" | "fs.write" | "db.sqlite.query" | "net.tcp.accept" | "net.tcp.reply")) =
+        if let Some(c @ ("fs.read" | "fs.write" | "db.sqlite.query" | "db.postgres.query" | "net.tcp.accept" | "net.tcp.reply")) =
             intent["body"]["capability"].as_str()
         {
             return Err(format!("operation {} in doubt is {c}, which resume makes again by itself; nothing to resolve", op_id(&task, n)));

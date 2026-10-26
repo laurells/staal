@@ -131,6 +131,13 @@ fn grant(prog: &Program, path: &[String], limits: &CapLimits) -> Json {
         g.insert("library".into(), json!(""));
         g.insert("sha256".into(), json!(""));
     }
+    // A database to fill in, under the name the program gives it.
+    if p.starts_with("db.postgres.") {
+        g.insert(
+            "databases".into(),
+            json!({ "database": { "host": "", "dbname": "", "user": "", "password": { "env": "DATABASE_PASSWORD" } } }),
+        );
+    }
     if let Some(c) = prog.caps.iter().find(|c| c.actions.iter().any(|a| c.action_path(&a.name) == p))
         && !c.needs.is_empty()
     {

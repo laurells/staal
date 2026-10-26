@@ -879,7 +879,7 @@ sensitive data. Like the log, it must never be given to a model as context.
 - An adapter that declares an action idempotent must, given a key it has seen,
   not perform the action again and must return the original receipt.
 
-## 12. The runtime's own capabilities: `net.http`, `fs` and `db.sqlite`
+## 12. The runtime's own capabilities: `net.http`, `net.tcp`, `fs` and `db`
 
 Most capabilities are performed by an adapter and return a `Receipt`. Three families
 belong to the runtime itself, which performs them, checks them, and records them in
@@ -898,6 +898,8 @@ the journal like any other action. Capability paths starting with `net.`, `fs.` 
 | `fs.write` | `c.write(path, content)` | `Receipt` |
 | `db.sqlite.query` | `c.query(database, sql)`, `c.query(database, sql, params)` | `Text` (JSON rows) |
 | `db.sqlite.execute` | `c.execute(database, sql)`, `c.execute(database, sql, params)` | `Receipt` |
+| `db.postgres.query` | `c.query(database, sql)`, `c.query(database, sql, params)` | `Text` (JSON rows) |
+| `db.postgres.execute` | `c.execute(database, sql)`, `c.execute(database, sql, params)` | `Receipt` |
 
 `url`, `path`, `content`, `address`, `data`, `until`, `connection`, `database` and `sql` are `Text`; `params` is a
 `List<Text, N>`. A `body` is `Text` or a `Secret` (below).
@@ -1081,6 +1083,57 @@ check: those folders should be writable only by whoever runs the program.
   check both, at every crash point.
 
 Linux only so far; elsewhere every database action fails.
+
+### PostgreSQL
+
+`db.postgres.query` and `db.postgres.execute` act on PostgreSQL databases. A grant
+names the databases it reaches; the program's `database` argument is one of those
+names, and any other is refused (`capability`). `only` does not apply (E101, or a
+config error on a grant).
+
+    "db": { "cap": "db.postgres.query",
+            "databases": { "shop": { "host": "db.internal", "port": 5432, "dbname": "shop",
+                                     "user": "reader", "password": { "env": "SHOP_DB_PASSWORD" } } } }
+
+`host`, `dbname` and `user` are required; `port` is 5432 unless given; `password`
+is a Secret from the environment (kept out of every log, journal and error message,
+as any secret is), and may be left out for a server that asks for none. Every
+connection uses TLS, with the server's certificate verified against Mozilla's roots
+and those `net.extra_root_certificates` adds, and against `host`; `"tls": "disable"`
+is allowed only for a server on this machine (`localhost`, `127.0.0.1`, `::1`). The
+connect time limit is `net.connect_timeout_ms`, and a statement that runs longer than
+`net.timeout_ms` is cancelled by the server. Each action opens its own connection and
+closes it.
+
+- `query` runs in a READ ONLY transaction, so the server refuses anything that would
+  change the database, whatever the SQL says. It gives the rows as JSON text, for
+  `parse` and `validate`: an array with one object per row, by column name.
+  `smallint`, `integer`, `bigint` and `oid` are numbers; `boolean` is true or false;
+  `text`, `varchar`, `char`, `name` and enum types are strings; `numeric` is its exact
+  decimal text (`"12.50"`); `real` and `double precision` are the shortest decimal
+  text that reads back as the same number; `date` is `2026-10-26`; `timestamp` is
+  `2026-10-26T13:05:09.25`; `timestamptz` is in UTC with `Z`; `uuid` is its usual
+  form; `json` and `jsonb` are their text, for `parse`; NULL is null. Any other type
+  (`bytea`, `interval`, arrays, ...) fails (`action`), saying how to cast it in the
+  SQL. Two columns of one name, more than 10,000 rows or more than
+  `fs.max_read_bytes` of JSON fail too.
+- `execute` runs one statement in a transaction with `synchronous_commit` on, so once
+  it returns the change is durable. Its receipt is `postgres:N`, N the rows changed.
+- Either takes exactly one statement (the server refuses more). The SQL must be
+  trusted text (E006); values from outside are `params`, sent apart from the SQL as
+  text, which the server reads as the type it infers for each placeholder (`$1`,
+  `$2`, ...), exactly as `psql` would. A count of parameters that does not match the
+  placeholders fails before anything runs.
+
+A query is made again after a crash, as SQLite's is. A statement that fails before
+COMMIT, or that the server refuses at COMMIT, certainly changed nothing (`action`).
+One whose connection is lost while committing may or may not have been committed: it
+is in doubt and stops the run for an operator (`staalc resolve`), unless its grant says
+`"idempotency_key": true`. Then its key is written to `_staal_keys` in the same
+transaction, and the resumed run looks for it: a statement whose key is there is not
+run again. The tests run against a real PostgreSQL server: the crash tests kill a run
+at every crash point, with and without keys, and a proxy that cuts the connection
+during COMMIT checks that such a statement is left in doubt, not guessed.
 
 ### HTTP requests
 

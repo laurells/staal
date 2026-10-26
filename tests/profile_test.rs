@@ -104,8 +104,10 @@ fn a_failing_run_is_still_profiled_and_problems_are_refused() {
     let o = staalc(&["profile", dir.join("bad.staal").to_str().unwrap(), "--config", c.to_str().unwrap()]);
     assert_eq!(o.status.code(), Some(1));
     assert!(!String::from_utf8_lossy(&o.stderr).contains("own steps"));
-    // A config is required; an output that cannot be written is exit 2.
-    assert_eq!(staalc(&["profile", f.to_str().unwrap()]).status.code(), Some(2));
+    // Without a config, `main` runs with no inputs (here it fails as above); a
+    // function that is not there, or an output that cannot be written, is exit 2.
+    assert_eq!(staalc(&["profile", f.to_str().unwrap()]).status.code(), Some(1));
+    assert_eq!(staalc(&["profile", f.to_str().unwrap(), "--entry", "nope"]).status.code(), Some(2));
     let o = staalc(&["profile", f.to_str().unwrap(), "--config", c.to_str().unwrap(), "-o", "/nonexistent/dir/p.json"]);
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(staalc(&["profile", f.to_str().unwrap(), "--config", c.to_str().unwrap(), "--engine", "fast"]).status.code(), Some(2));
