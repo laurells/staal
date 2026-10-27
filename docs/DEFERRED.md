@@ -57,11 +57,6 @@ the run for an operator, and the docs must say so. Done when: tests against a re
 server (a replica set for the keyed path), crash tests at every point with and without
 keys, mutations caught, and documented.
 
-## Before the repository is public
-
-The reference package repositories (staal-sms, staal-payments, staal-email,
-staal-chat) need the same LICENSE and NOTICE as this one.
-
 ## Phase 10 (platforms and distribution), blocked
 
 Blocked on GitHub Actions billing (CI does not run) and on this workspace being
