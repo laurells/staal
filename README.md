@@ -145,9 +145,10 @@ continued.
 Staal is pre-release and not yet ready for production use. Built and tested:
 the compiler and all eight safety rules, the reference runtime, Claude as a
 model provider, exact money, the capability broker, budgets, the crash-safe
-journal, modules, HTTP and file capabilities, capabilities declared by
-libraries, packages fetched from git and locked by hash, native code,
-executables and the C interface; enums and `match`, optional values, tuples, maps
+journal, modules, HTTP, file, TCP, SQLite and PostgreSQL capabilities,
+capabilities declared by libraries, packages with versions and registries,
+fetched from git and locked by hash, native code, executables, the C interface,
+and calling C libraries (runs that do are marked unchecked); enums and `match`, optional values, tuples, maps
 and sets, typed errors, methods, generic functions, interfaces, function values and
 closures; and a standard library of text, number, list, hashing, encoding and date
 functions, with printing, the clock and random numbers journaled so a resumed run
@@ -155,8 +156,10 @@ replays them.
 
 Not yet done: runs against the live services (Claude, Termii, Stripe, Resend,
 Slack) with real keys, which so far are tested against local stand-ins; other
-model providers; Windows; executables on macOS (`staalc build` is Linux only
-for now); an installable Python package; and calling C libraries from Staal.
+model providers; Windows; proof on macOS (everything has been tested on Linux;
+`staalc build` is Linux only for now); a Python package on PyPI; MongoDB; and an
+independent security review. docs/DEFERRED.md lists the work decided on and
+put off.
 
 ## Repository layout
 
@@ -174,6 +177,7 @@ python/staal/                     Python wrapper over the C interface
 docs/                             language guide and runtime specification
 examples/                         example programs and libraries
 packages/                         reference packages: sms, payments, email, chat
+site/                             the landing page, published to GitHub Pages
 tests/                            fixtures, runtime cases, crash and engine tests
 ```
 

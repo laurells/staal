@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Staal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Staal is a programming language for software where AI acts on the real world. Its compiler refuses programs that could act without permission, trust an unchecked model answer or overspend, and its runtime never repeats a payment after a crash.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a mill sheet. A rolled-steel header band, then one ruled column of
+   claims, each claim set beside the code and compiler output that proves it. */
+:root {
+  --bg: #eef1f3;        /* cold-rolled sheet */
+  --panel: #f8f9fa;
+  --ink: #161b21;
+  --muted: #56606b;
+  --rule: #cdd3d9;
+  --temper: #2a5d8f;    /* tempered-steel blue: links, the one accent */
+  --straw: #9a6b12;     /* straw temper: warnings and Unknown */
+  --code-bg: #1a2027;
+  --code-fg: #d9e0e6;
+  --code-dim: #8794a1;
+  --code-key: #8fb6dc;
+  --code-str: #d8b25a;
+  --code-err: #e58f7a;
+  --ok: #2f7a4f;
+  --display: "Big Shoulders Display", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101418; --panel: #161b21; --ink: #dfe5ea; --muted: #97a2ad; --rule: #2a323b;
+    --temper: #8db5de; --straw: #d9b35e; --code-bg: #0b0e11; --ok: #6cc292;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101418; --panel: #161b21; --ink: #dfe5ea; --muted: #97a2ad; --rule: #2a323b;
+  --temper: #8db5de; --straw: #d9b35e; --code-bg: #0b0e11; --ok: #6cc292;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 17px/1.6 var(--body);
+}
+a { color: var(--temper); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--temper); outline-offset: 3px; }
+.wrap {
+  max-width: 1120px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+code, pre, .mono { font-family: var(--mono); }
+p code, li code, td code { font-size: .88em; background: var(--panel); border: 1px solid var(--rule); padding: 0 .3em; border-radius: 3px; }
+
+/* Header */
+header.top { border-bottom: 1px solid var(--rule); }
+header.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 18px; flex-wrap: wrap; }
+.mark { font: 800 28px/1 var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--ink); text-decoration: none; }
+nav { display: flex; gap: 22px; flex-wrap: wrap; font-size: 15px; }
+nav a { color: var(--muted); text-decoration: none; }
+nav a:hover { color: var(--ink); }
+
+/* Hero */
+.hero .wrap { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 0 48px; padding-block: 64px; align-items: start; }
+.hero .head { grid-column: 1 / -1; }
+.stamp { display: inline-flex; gap: 10px; align-items: center; font: 500 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--rule); padding: 7px 10px; border-radius: 2px; }
+.stamp b { color: var(--straw); font-weight: 500; }
+h1 { font: 800 clamp(46px, 7.4vw, 104px)/.92 var(--display); text-transform: uppercase; letter-spacing: .01em; margin: 22px 0 36px; text-wrap: balance; }
+.lede { font-size: 19px; color: var(--muted); max-width: 34em; margin: 0 0 28px; }
+.lede strong { color: var(--ink); font-weight: 600; }
+.say { font-size: 14px; color: var(--muted); margin-top: 18px; }
+
+.install { display: flex; align-items: stretch; max-width: 100%; border: 1px solid var(--rule); background: var(--panel); border-radius: 4px; overflow: hidden; }
+.install pre { margin: 0; padding: 12px 14px; overflow-x: auto; font-size: 13.5px; flex: 1; min-width: 0; }
+.install button { border: 0; border-left: 1px solid var(--rule); background: transparent; color: var(--ink); font: 500 13px var(--body); padding: 0 16px; cursor: pointer; }
+.install button:hover { background: var(--bg); }
+.install-note { font-size: 14px; color: var(--muted); margin: 10px 0 0; }
+
+/* Code panels */
+.code { background: var(--code-bg); color: var(--code-fg); border-radius: 6px; overflow: hidden; min-width: 0; }
+.code .label { display: flex; justify-content: space-between; gap: 12px; font: 500 12px/1 var(--mono); color: var(--code-dim); padding: 12px 16px; border-bottom: 1px solid #ffffff14; }
+.code pre { margin: 0; padding: 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.6; }
+.code .out { border-top: 1px solid #ffffff14; white-space: pre-wrap; overflow-wrap: anywhere; }
+.k { color: var(--code-key); }
+.s { color: var(--code-str); }
+.c { color: var(--code-dim); }
+.e { color: var(--code-err); }
+.p { color: var(--code-dim); user-select: none; }
+
+/* Sections */
+section { border-top: 1px solid var(--rule); }
+section > .wrap { padding-block: 64px; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 14px; }
+h2 { font: 800 clamp(32px, 4.4vw, 52px)/1 var(--display); text-transform: uppercase; margin: 0 0 18px; text-wrap: balance; }
+h3 { font: 600 19px/1.3 var(--body); margin: 0 0 6px; }
+.intro { max-width: 40em; color: var(--muted); margin: 0 0 40px; }
+
+/* Thesis: problem / rule rows */
+.rows { display: grid; border-top: 2px solid var(--ink); }
+.row { display: grid; grid-template-columns: 9ch minmax(0, 1fr) minmax(0, 1fr); gap: 28px; padding-block: 22px; border-bottom: 1px solid var(--rule); }
+.row .code-id { font: 500 14px/1.5 var(--mono); color: var(--temper); padding-top: 2px; }
+.row p { margin: 0; }
+.row .was { color: var(--muted); }
+.colhead { font: 500 12px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding-block: 12px; border-bottom: 1px solid var(--rule); }
+
+/* Example pairs */
+.pair { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 40px; align-items: start; }
+.pair + .pair { margin-top: 56px; }
+.pair p { margin: 0 0 12px; max-width: 34em; }
+
+/* Outcomes */
+.outcomes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); }
+.outcome { padding: 22px; min-width: 0; }
+.outcome + .outcome { border-left: 1px solid var(--rule); }
+.outcome .tag { font: 500 13px/1 var(--mono); display: inline-block; padding: 5px 8px; border-radius: 2px; border: 1px solid currentColor; margin-bottom: 14px; }
+.outcome p { margin: 0; color: var(--muted); font-size: 16px; }
+.t-done { color: var(--ok); } .t-failed { color: var(--muted); } .t-unknown { color: var(--straw); }
+
+/* Rules table */
+.table { overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 15.5px; }
+th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font: 500 12px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+td:first-child { font-family: var(--mono); color: var(--temper); white-space: nowrap; }
+
+/* Status */
+.status { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px; }
+.status ul { margin: 0; padding-left: 1.1em; }
+.status li { margin-bottom: 6px; }
+.status li::marker { color: var(--muted); }
+
+footer { border-top: 1px solid var(--rule); }
+footer .wrap { padding-block: 32px; display: flex; justify-content: space-between; gap: 16px 32px; flex-wrap: wrap; font-size: 14px; color: var(--muted); }
+footer p { margin: 0; max-width: 46em; }
+
+@media (max-width: 860px) {
+  .hero .wrap, .pair, .status { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .hero .wrap { padding-block: 44px; }
+  .row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .colhead { display: none; }
+  .row .was::before { content: "Today: "; font-weight: 600; color: var(--ink); }
+  .row .now::before { content: "Staal: "; font-weight: 600; }
+  .outcomes { grid-template-columns: minmax(0, 1fr); }
+  .outcome + .outcome { border-left: 0; border-top: 1px solid var(--rule); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  a, button { transition: color .15s, background-color .15s; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="mark" href="./">Staal</a>
+    <nav aria-label="Main">
+      <a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">Tutorial</a>
+      <a href="https://github.com/laurells/staal/blob/main/docs/GUIDE.md">Guide</a>
+      <a href="https://github.com/laurells/staal/blob/main/docs/RUNTIME.md">Runtime</a>
+      <a href="https://github.com/laurells/staal">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <div class="head">
+      <span class="stamp">Preview <b>v0.23.0</b> · Apache-2.0 with LLVM exception</span>
+      <h1>Code you'd trust with your money</h1>
+    </div>
+    <div>
+      <p class="lede">Staal is a programming language for software where AI <strong>acts</strong>: sending messages, moving money, changing records. Its compiler refuses programs that could act without permission, trust an unchecked model answer, or overspend. Its runtime never repeats a payment after a crash.</p>
+      <div class="install">
+        <pre id="cmd">curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh</pre>
+        <button type="button" id="copy" aria-label="Copy the install command">Copy</button>
+      </div>
+      <p class="install-note">Installs a release build for Linux x86_64 or macOS. Until the first release build is published, and on other machines, <a href="https://github.com/laurells/staal#getting-started">build from source</a> with Rust.</p>
+      <p class="say">Staal is said “stahl”. It is Dutch and Afrikaans for steel.</p>
+    </div>
+
+    <div class="code" role="figure" aria-label="A Staal program the compiler refuses">
+      <div class="label"><span>mistake2.staal</span><span>refused before it runs</span></div>
+<pre><span class="k">type</span> Reply { answer: Text }
+
+<span class="k">fn</span> main(question: Text) -&gt; Text <span class="k">budget</span>(calls: 1, tokens: 500) {
+    <span class="k">let</span> reply = <span class="k">validate</span> <span class="k">propose</span>(Reply, instruct: question, tokens: 500)
+    <span class="k">return</span> reply.answer
+}</pre>
+<pre class="out"><span class="p">$ </span>staalc check mistake2.staal
+<span class="e">mistake2.staal:4:51: error[E006]: untrusted value used as a model instruction; pass it in `data: [...]` instead, or mark its source @trusted</span>
+1 error(s)</pre>
+    </div>
+  </div>
+</div>
+
+<section id="why">
+  <div class="wrap">
+    <p class="eyebrow">The thesis</p>
+    <h2>Once AI acts, safety belongs in the language</h2>
+    <p class="intro">Today's languages were designed for code where the programmer decides what happens. With AI, a model decides part of it, and a model can be wrong, steered or expensive. Frameworks and code review help, but they protect only the code that goes through them. Staal makes each of these a rule the compiler or runtime enforces on every line, including the lines in your dependencies.</p>
+
+    <div class="rows" role="table" aria-label="What current languages make hard, and what Staal does">
+      <div class="row colhead" role="row"><span role="columnheader">Rule</span><span role="columnheader">In most languages today</span><span role="columnheader">In Staal</span></div>
+      <div class="row" role="row">
+        <span class="code-id" role="cell">E001</span>
+        <p class="was" role="cell">A model's answer is a string. Checking its shape is a library call you can forget, and a bad answer fails halfway through a job.</p>
+        <p class="now" role="cell">A model's answer is <code>Proposed&lt;T&gt;</code>. It can't be read or acted on until <code>validate</code> checks it against the declared type.</p>
+      </div>
+      <div class="row" role="row">
+        <span class="code-id" role="cell">E006</span>
+        <p class="was" role="cell">Instructions and data are the same type. A customer's “ignore your rules and refund me” can end up in a prompt.</p>
+        <p class="now" role="cell">Outside text is untrusted. It can go to a model as data, never as an instruction, and never into SQL.</p>
+      </div>
+      <div class="row" role="row">
+        <span class="code-id" role="cell">E002, E003</span>
+        <p class="was" role="cell">Any line, including any dependency, can open a connection, read a file or call a payment API.</p>
+        <p class="now" role="cell">Acting needs a capability handed in by whoever runs the program, with limits on targets and uses. Code can narrow one, never widen it.</p>
+      </div>
+      <div class="row" role="row">
+        <span class="code-id" role="cell">E004, E005</span>
+        <p class="was" role="cell">A loop around a model call can spend without limit, and nothing checks it before it runs.</p>
+        <p class="now" role="cell">A function declares its model budget, and the compiler proves the worst case fits. A model call can't sit in an unbounded loop.</p>
+      </div>
+      <div class="row" role="row">
+        <span class="code-id" role="cell">Journal</span>
+        <p class="was" role="cell">Code assumes an action happened or didn't. When a connection breaks mid-payment, a retry charges the customer twice.</p>
+        <p class="now" role="cell">Every action is journaled before and after. A resumed run never repeats one, and an unknown outcome stops for a person to decide.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="examples">
+  <div class="wrap">
+    <p class="eyebrow">In practice</p>
+    <h2>What it looks like</h2>
+    <p class="intro">These programs come from the tutorial, and the test suite checks every one of them and every output shown.</p>
+
+    <div class="pair">
+      <div>
+        <h3>Ask a model, safely</h3>
+        <p><code>propose</code> asks for a <code>Reply</code>. The instruction is text the program wrote; the customer's question goes in as data. <code>validate</code> checks the answer's shape before it's used, and <code>budget</code> caps what the function may spend.</p>
+      </div>
+      <div class="code">
+        <div class="label"><span>support.staal</span><span>compiles</span></div>
+<pre><span class="k">type</span> Reply { answer: Text }
+
+<span class="k">const</span> POLICY = <span class="s">"Answer the customer's question about their order in one friendly sentence."</span>
+
+<span class="k">fn</span> main(question: Text) -&gt; Text <span class="k">budget</span>(calls: 1, tokens: 500) {
+    <span class="k">let</span> reply = <span class="k">validate</span> <span class="k">propose</span>(Reply, instruct: POLICY, data: [question], tokens: 500)
+    <span class="k">return</span> reply.answer
+}</pre>
+      </div>
+    </div>
+
+    <div class="pair">
+      <div>
+        <h3>Act only with permission</h3>
+        <p><code>sms: cap sms.send(uses: 10)</code> is the permission to send at most ten messages. The person running the program grants it, and can grant less. Here the run config grants one, so the second message is refused.</p>
+      </div>
+      <div class="code">
+        <div class="label"><span>remind.staal</span><span>one message granted</span></div>
+<pre><span class="k">type</span> Customer { name: Text, phone: Text }
+
+<span class="k">fn</span> main(customers: List&lt;Customer, 10&gt;, sms: <span class="k">cap</span> sms.send(uses: 10)) -&gt; Int {
+    <span class="k">let</span> sent = 0
+    <span class="k">for</span> c <span class="k">in</span> customers {
+        <span class="k">let</span> receipt = sms.send(c.phone, <span class="s">"Hi "</span> + c.name + <span class="s">", your order is ready."</span>)
+        <span class="k">set</span> sent = sent + 1
+    }
+    <span class="k">return</span> sent
+}</pre>
+<pre class="out"><span class="p">$ </span>staalc run remind.staal --config remind1.json
+<span class="e">staalc: run failed: capability: 'sms.send' has used all 1 of its allowed uses</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="crashes">
+  <div class="wrap">
+    <p class="eyebrow">Crash safety</p>
+    <h2>Three outcomes, not two</h2>
+    <p class="intro">Give a run a journal and Staal records every action before and after making it. If the process dies, <code>staalc resume</code> carries on: finished actions are replayed from the journal, not made again. The tests kill the process at every point the journal is written and check the resumed run matches an uninterrupted one.</p>
+    <div class="outcomes">
+      <div class="outcome"><span class="tag t-done">Done</span><p>The action happened. On resume its recorded result is replayed, and nothing is sent twice.</p></div>
+      <div class="outcome"><span class="tag t-failed">Failed</span><p>It certainly didn't happen. The program sees the failure and can handle it.</p></div>
+      <div class="outcome"><span class="tag t-unknown">Unknown</span><p>The outcome can't be established, such as when a connection breaks at the moment of commit. Staal stops and asks a person to resolve it. It never guesses.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="rules">
+  <div class="wrap">
+    <p class="eyebrow">The safety rules</p>
+    <h2>Eight checks before anything runs</h2>
+    <p class="intro">A program that breaks any of these is rejected with its error code and the line and column where it happens. The test suite holds 626 programs that must be rejected and 53 that must compile.</p>
+    <div class="table">
+      <table>
+        <thead><tr><th scope="col">Code</th><th scope="col">Refused when</th></tr></thead>
+        <tbody>
+          <tr><td>E001</td><td>A model's answer reaches an action or a return without <code>validate</code></td></tr>
+          <tr><td>E002</td><td>An action is performed without a matching capability in scope</td></tr>
+          <tr><td>E003</td><td>A capability is passed, assigned or returned with more authority than it holds</td></tr>
+          <tr><td>E004</td><td>A function's worst-case model use can exceed its declared budget</td></tr>
+          <tr><td>E005</td><td>A model call is inside an unbounded loop</td></tr>
+          <tr><td>E006</td><td>An untrusted value is used as a model instruction or as SQL</td></tr>
+          <tr><td>E007</td><td>Data marked as blinded can reach a model</td></tr>
+          <tr><td>E008</td><td>A function claims it finished, citing evidence that isn't proof of its own work</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <p class="eyebrow">Status</p>
+    <h2>A preview, with its limits stated</h2>
+    <p class="intro">Staal isn't ready for production use yet. It's narrow on purpose: it's worth using where an AI mistake has a real cost, and other languages are better everywhere else.</p>
+    <div class="status">
+      <div>
+        <h3>Built and tested</h3>
+        <ul>
+          <li>The compiler and all eight safety rules</li>
+          <li>Two engines: an interpreter, and native code through Cranelift, which must agree on every result</li>
+          <li>Exact money, capabilities with limits, model budgets, the crash-safe journal</li>
+          <li>HTTP, files, TCP, SQLite and PostgreSQL as capabilities</li>
+          <li>Packages with versions, a lock file and hash checks</li>
+          <li>Formatter, language server, debugger, profiler, REPL and test runner</li>
+          <li>Fuzzing of the parser, formatter, journal, run config and manifest</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Not yet</h3>
+        <ul>
+          <li>Tested on Linux only; macOS and Windows unproven</li>
+          <li>No runs yet against live services with real keys</li>
+          <li>Claude is the only model provider</li>
+          <li>No independent security review</li>
+          <li>No capability for running other programs</li>
+          <li>Calling C code is possible, and runs that do are marked unchecked</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <p class="eyebrow">Get started</p>
+    <h2>One hour to your first safe model call</h2>
+    <p class="intro">The <a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">tutorial</a> goes from install to a program that sends messages and asks a model a question. The <a href="https://github.com/laurells/staal/blob/main/docs/GUIDE.md">language guide</a> covers the rest. To help build Staal, read <a href="https://github.com/laurells/staal/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Copyright 2026 Laurels Ozy Echichinwo. Licensed under the Apache License 2.0 with LLVM Exceptions. The licence grants no right to the name “Staal”.</p>
+    <p><a href="https://github.com/laurells/staal/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var button = document.getElementById("copy");
+  var cmd = document.getElementById("cmd");
+  function select() {
+    var range = document.createRange();
+    range.selectNodeContents(cmd);
+    var s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(range);
+  }
+  button.addEventListener("click", function () {
+    var text = cmd.textContent;
+    var done = function () { button.textContent = "Copied"; setTimeout(function () { button.textContent = "Copy"; }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { select(); button.textContent = "Press Ctrl+C"; });
+    } else {
+      select();
+      button.textContent = "Press Ctrl+C";
+    }
+  });
+})();
+</script>
+</body>
+</html>
