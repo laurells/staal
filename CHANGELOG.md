@@ -7,7 +7,7 @@ the language or its file formats.
 ## 0.23.0 — 2026-10-27
 
 ### Added
-- A Node.js and TypeScript package (`node/`, npm name `staal`): `run`, `resume`,
+- A Node.js and TypeScript package (`node/`, npm name `@staal/node`; npm refuses `staal` as too close to `stall` and `steal`): `run`, `resume`,
   `resolve` and `check` over the C interface, returning Promises and running off the
   event loop, with types for every result. Tested on both engines, through real
   crashes at every journal write (a child process killed, the run resumed and, where

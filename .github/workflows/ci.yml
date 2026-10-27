@@ -51,7 +51,7 @@ jobs:
           cargo clippy --locked -- -D warnings
           ../scripts/node_package.sh "$RUNNER_TEMP/npm"
           mkdir "$RUNNER_TEMP/npm-app"
-          (cd "$RUNNER_TEMP/npm-app" && npm init -y >/dev/null && npm install "$RUNNER_TEMP"/npm/staal-*.tgz)
-          STAAL_PACKAGE="$RUNNER_TEMP/npm-app/node_modules/staal" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 node --test test/staal.test.mjs
+          (cd "$RUNNER_TEMP/npm-app" && npm init -y >/dev/null && npm install "$RUNNER_TEMP"/npm/staal-node-*.tgz)
+          STAAL_PACKAGE="$RUNNER_TEMP/npm-app/node_modules/@staal/node" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 node --test test/staal.test.mjs
       - name: Clippy
         run: cargo clippy --all-targets --features failpoints -- -D warnings

@@ -105,8 +105,8 @@ jobs:
       - name: The package, installed and tested
         run: |
           mkdir "$RUNNER_TEMP/npm-app"
-          (cd "$RUNNER_TEMP/npm-app" && npm init -y >/dev/null && npm install "$GITHUB_WORKSPACE"/dist/staal-*.tgz)
-          STAAL_PACKAGE="$RUNNER_TEMP/npm-app/node_modules/staal" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 node --test node/test/staal.test.mjs
+          (cd "$RUNNER_TEMP/npm-app" && npm init -y >/dev/null && npm install "$GITHUB_WORKSPACE"/dist/staal-node-*.tgz)
+          STAAL_PACKAGE="$RUNNER_TEMP/npm-app/node_modules/@staal/node" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 node --test node/test/staal.test.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: dist-npm

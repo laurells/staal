@@ -64,9 +64,9 @@ tested, nothing rebuilt. Both use trusted publishing, so no token is stored anyw
   `staal`, owner `laurells`, repository `staal`, workflow `publish.yml`, environment
   `pypi`.
 - On npm: the package must exist before a trusted publisher can be set, so its first
-  version is published by hand (`npm login`, then `npm publish staal-X.Y.Z.tgz
+  version is published by hand (`npm login`, then `npm publish staal-node-X.Y.Z.tgz
   --access public`, with the file from the GitHub release). Then on npmjs.com: the
-  `staal` package, Settings, Trusted Publisher, GitHub Actions, with owner
+  `@staal/node` package (in the npm organisation `staal`), Settings, Trusted Publisher, GitHub Actions, with owner
   `laurells`, repository `staal`, workflow `publish.yml`, environment `npm`.
 - Environments named `pypi` and `npm` in the repository (Settings, Environments).
 
@@ -77,7 +77,7 @@ It can also be run by hand for a tag (Actions, publish, Run workflow).
 
 Without CI, the files built as in "Linux builds without CI" are uploaded from the
 machine that built them. Only Linux x86_64 files exist that way, so `pip install staal`
-and `npm install staal` then fail on other platforms with no matching file.
+and `npm install @staal/node` then fail on other platforms with no matching file.
 
     # PyPI: an API token from pypi.org (Account settings, API tokens); user __token__.
     python3 -m pip install twine
@@ -85,7 +85,7 @@ and `npm install staal` then fail on other platforms with no matching file.
     python3 -m twine upload dist/*.whl
 
     # npm: an npmjs.com account, logged in once with `npm login`.
-    npm publish dist/staal-X.Y.Z.tgz
+    npm publish dist/staal-node-X.Y.Z.tgz
 
 Upload only the wheel, never an sdist: the sdist holds no binaries and cannot build
 them.

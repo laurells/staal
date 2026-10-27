@@ -4,7 +4,7 @@
 // This package holds no Staal logic: it passes strings to staalc and parses the JSON
 // it returns, exactly as the C interface (include/staal.h) and the Python package do.
 //
-//   const staal = require('staal');
+//   const staal = require('@staal/node');
 //   const out = await staal.run('refund.staal', config, { journal: 'run.journal' });
 //   if (out.status === 'done') console.log(out.result);
 

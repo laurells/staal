@@ -1,5 +1,5 @@
 {
-  "name": "staal",
+  "name": "@staal/node",
   "version": "0.23.0",
   "description": "Run Staal programs from Node.js: the staalc compiler and runtime, through its C interface",
   "license": "Apache-2.0 WITH LLVM-exception",
@@ -21,6 +21,9 @@
     "NOTICE",
     "LICENSE-THIRD-PARTY.txt"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18"
   },

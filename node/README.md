@@ -1,16 +1,16 @@
-# staal for Node.js
+# @staal/node: Staal for Node.js
 
 Run [Staal](https://github.com/laurells/staal) programs from Node.js and TypeScript.
 Staal is a programming language for software where AI acts: its compiler refuses a
 program that could act without permission, use a model's answer unchecked, or
 overspend, and its runtime never repeats an action after a crash.
 
-This package holds no Staal logic of its own. It calls staalc's C interface
+Install it with `npm install @staal/node`. This package holds no Staal logic of its own. It calls staalc's C interface
 in-process, so a Node app gets exactly the results `staalc` and the Python package
 give. Runs happen off the event loop and return Promises.
 
 ```js
-const staal = require('staal');
+const staal = require('@staal/node');
 
 // Your app decides the policy; Staal enforces it.
 const limit = customer.tier === 'gold' ? 500 : 50;

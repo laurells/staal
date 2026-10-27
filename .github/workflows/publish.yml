@@ -7,7 +7,7 @@
 # PyPI, once: pypi.org, Account settings, Publishing, add a pending publisher:
 # project staal, owner laurells, repository staal, workflow publish.yml, environment
 # pypi. npm, once, after the package's first version is published by hand (npm
-# needs the package to exist): npmjs.com, the staal package, Settings, Trusted
+# needs the package to exist): npmjs.com, the @staal/node package, Settings, Trusted
 # Publisher, GitHub Actions: owner laurells, repository staal, workflow publish.yml,
 # environment npm. A version already on either registry is left as it is.
 name: publish
@@ -60,7 +60,7 @@ jobs:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           version="${TAG#v}"
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "staal-$version.tgz" --dir dist
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "staal-node-$version.tgz" --dir dist
           ls dist
       # Trusted publishing needs npm 11.5.1 or later, and no NODE_AUTH_TOKEN at all:
       # even an empty one makes npm skip it.
@@ -71,8 +71,8 @@ jobs:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           version="${TAG#v}"
-          if npm view "staal@$version" version >/dev/null 2>&1; then
-            echo "staal $version is already on npm; nothing to do"
+          if npm view "@staal/node@$version" version >/dev/null 2>&1; then
+            echo "@staal/node $version is already on npm; nothing to do"
           else
-            npm publish "dist/staal-$version.tgz" --access public --provenance
+            npm publish "dist/staal-node-$version.tgz" --access public --provenance
           fi

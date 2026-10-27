@@ -1,7 +1,7 @@
 #!/bin/sh
-# Builds the `staal` npm package for this machine's platform: the Node addon
+# Builds the `@staal/node` npm package for this machine's platform: the Node addon
 # (node/, linking staalc), its JavaScript and types, and the licences, packed with
-# `npm pack` into <output folder>/staal-X.Y.Z.tgz.
+# `npm pack` into <output folder>/staal-node-X.Y.Z.tgz.
 #
 #   scripts/node_package.sh [output folder]     (default: target/npm)
 #
