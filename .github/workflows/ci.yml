@@ -1,5 +1,6 @@
-# Builds and tests staalc on Linux and macOS: macos-15 is Apple Silicon (arm64),
-# macos-15-intel is Intel (x86_64; GitHub supports it until the macOS 15 image retires).
+# Builds and tests staalc on Linux (x86_64 and arm64) and macOS: macos-15 is Apple
+# Silicon (arm64), macos-15-intel is Intel (x86_64; GitHub supports it until the macOS
+# 15 image retires).
 # Everything in `cargo test`, with crash injection, plus the build without native code.
 name: ci
 on:
@@ -12,13 +13,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, macos-15-intel]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Rust
-        run: rustup toolchain install 1.97.0 --profile minimal --component clippy && rustup default 1.97.0
-      - name: PostgreSQL for the db.postgres tests (preinstalled on Ubuntu; Homebrew on macOS)
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.0 --component clippy
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          else
+            rustup toolchain install 1.97.0 --profile minimal --component clippy && rustup default 1.97.0
+          fi
+      - name: PostgreSQL for the db.postgres tests on Linux, where the image has none
+        if: runner.os == 'Linux'
+        run: test -d /usr/lib/postgresql || { sudo apt-get update -q && sudo apt-get install -y -q postgresql; }
+      - name: PostgreSQL for the db.postgres tests (Homebrew on macOS)
         if: runner.os == 'macOS'
         run: brew install postgresql@16 && echo "STAAL_POSTGRES_BIN=$(brew --prefix postgresql@16)/bin" >> "$GITHUB_ENV"
       - name: Versions

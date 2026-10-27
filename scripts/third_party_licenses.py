@@ -52,25 +52,30 @@ def main():
     if len(sys.argv) not in (2, 3):
         sys.exit("usage: third_party_licenses.py <output file> [Cargo.toml]")
     manifest = os.path.abspath(sys.argv[2]) if len(sys.argv) == 3 else os.path.join(ROOT, "Cargo.toml")
-    # The platform the binaries are for: this machine's, or STAAL_LICENCE_TARGET (to
-    # check another platform's crates from here).
-    host = os.environ.get("STAAL_LICENCE_TARGET") or next(l.split(": ", 1)[1] for l in subprocess.check_output(["rustc", "-vV"], text=True).splitlines() if l.startswith("host: "))
-    meta = json.loads(subprocess.check_output(
-        ["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", host, "--manifest-path", manifest],
-        text=True))
-    packages = {p["id"]: p for p in meta["packages"]}
-    nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
-    root = meta["resolve"]["root"]
-    linked, todo = set(), [root]
-    while todo:
-        i = todo.pop()
-        if i in linked:
-            continue
-        linked.add(i)
-        for d in nodes[i]["deps"]:
-            if any(k["kind"] is None for k in d["dep_kinds"]):
-                todo.append(d["pkg"])
-    linked.discard(root)
+    # The platforms the binaries are for: this machine's, or STAAL_LICENCE_TARGET, a
+    # comma-separated list (to check another platform's crates from here, or to cover
+    # every platform one package holds, as the npm package does): their crates together.
+    targets = [t for t in os.environ.get("STAAL_LICENCE_TARGET", "").split(",") if t] or [
+        next(l.split(": ", 1)[1] for l in subprocess.check_output(["rustc", "-vV"], text=True).splitlines() if l.startswith("host: "))]
+    packages, linked = {}, set()
+    for host in targets:
+        meta = json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", host, "--manifest-path", manifest],
+            text=True))
+        packages.update({p["id"]: p for p in meta["packages"]})
+        nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
+        root = meta["resolve"]["root"]
+        seen, todo = set(), [root]
+        while todo:
+            i = todo.pop()
+            if i in seen:
+                continue
+            seen.add(i)
+            for d in nodes[i]["deps"]:
+                if any(k["kind"] is None for k in d["dep_kinds"]):
+                    todo.append(d["pkg"])
+        seen.discard(root)
+        linked |= seen
     # staalc itself, when it is a path dependency (the Node addon): its licence is
     # LICENSE and NOTICE, not a third party's.
     linked = {i for i in linked if packages[i]["source"] is not None}

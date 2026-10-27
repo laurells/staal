@@ -31,7 +31,23 @@ cleanup
 mkdir -p "$raw" "$bin" "$out"
 case "$(uname -s)" in
     Linux) cp "$rel/staalc" "$rel/libstaalc.so" "$rel/libstaalc.a" "$bin/" ;;
-    Darwin) cp "$rel/staalc" "$rel/libstaalc.dylib" "$rel/libstaalc.a" "$bin/" ;;
+    Darwin)
+        cp "$rel/staalc" "$rel/libstaalc.dylib" "$rel/libstaalc.a" "$bin/"
+        # Tag the wheel for the oldest macOS the binaries run on (their deployment
+        # target), after checking each binary really asks for no newer one.
+        if [ -n "${MACOSX_DEPLOYMENT_TARGET:-}" ]; then
+            for f in "$rel/staalc" "$rel/libstaalc.dylib"; do
+                minos=$(otool -l "$f" | awk '/LC_BUILD_VERSION/ {found=1} found && $1 == "minos" {print $2; exit}')
+                "$python" -c 'import sys; a, b = (tuple(int(x) for x in v.split(".")) for v in sys.argv[1:3]); sys.exit(0 if a <= b else 1)' "$minos" "$MACOSX_DEPLOYMENT_TARGET" \
+                    || { echo "wheel.sh: $f needs macOS $minos, newer than MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >&2; exit 2; }
+            done
+            major=${MACOSX_DEPLOYMENT_TARGET%%.*}
+            minor=${MACOSX_DEPLOYMENT_TARGET#*.}
+            [ "$minor" = "$MACOSX_DEPLOYMENT_TARGET" ] && minor=0
+            STAAL_WHEEL_PLATFORM="macosx_${major}_${minor}_$(uname -m)"
+            export STAAL_WHEEL_PLATFORM
+        fi
+        ;;
     *) echo "wheel.sh: no wheel layout for $(uname -s) yet" >&2; exit 2 ;;
 esac
 # The licence goes in the wheel's metadata: setuptools takes LICENSE and NOTICE from

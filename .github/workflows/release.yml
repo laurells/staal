@@ -1,9 +1,10 @@
 # A release, made when a version tag (v0.23.0) is pushed: on each platform the tests,
 # then the release archive and the Python wheel, the wheel installed and used with no
-# Rust (scripts/wheel_test.sh), the npm package, and a draft GitHub release holding
-# them, with the changelog's notes for the version. Publishing the draft runs
-# publish.yml, which uploads the wheels and the npm package. Linux builds in a manylinux_2_28 container, so
-# what it makes runs on glibc 2.28 and later.
+# Rust (scripts/wheel_test.sh), the npm package with every platform's addon, and a
+# draft GitHub release holding them, with the changelog's notes for the version.
+# Publishing the draft runs publish.yml, which uploads the wheels and the npm package.
+# Linux builds in a manylinux_2_28 container (x86_64 and arm64), so what it makes runs
+# on glibc 2.28 and later.
 name: release
 on:
   push:
@@ -20,6 +21,9 @@ jobs:
         include:
           - os: ubuntu-24.04
             container: quay.io/pypa/manylinux_2_28_x86_64
+            python: /opt/python/cp312-cp312/bin/python3
+          - os: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
             python: /opt/python/cp312-cp312/bin/python3
           - os: macos-15
             python: python3
@@ -73,10 +77,26 @@ jobs:
           name: dist-${{ matrix.os }}
           path: dist/
           if-no-files-found: error
-  # The npm package (Linux x86_64), its addon built for glibc 2.28 with cargo-zigbuild
-  # (RELEASING.md), tested with crash injection, then packed, installed and tested again.
-  npm:
-    runs-on: ubuntu-24.04
+  # The npm package's addon for each platform: on Linux built for glibc 2.28 with
+  # cargo-zigbuild (RELEASING.md), on macOS for its deployment target; each tested,
+  # with crash injection, on its own platform first.
+  npm-addon:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            zig: "1"
+          - os: ubuntu-24.04-arm
+            zig: "1"
+          - os: macos-15
+            deployment: "11.0"
+          - os: macos-15-intel
+            deployment: "10.12"
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment }}
+      STAAL_ZIGBUILD: ${{ matrix.zig }}
     steps:
       - uses: actions/checkout@v4
       - name: The tag is this version
@@ -84,9 +104,17 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           test "${GITHUB_REF_NAME}" = "v${version}" || { echo "tag ${GITHUB_REF_NAME} is not v${version}"; exit 1; }
-      - name: Rust and cargo-zigbuild
+      - name: Rust
         run: |
-          rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.0
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          else
+            rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
+          fi
+      - name: cargo-zigbuild
+        if: matrix.zig
+        run: |
           python3 -m pip install --quiet --break-system-packages ziglang==0.13.0
           cargo install --locked cargo-zigbuild --version 0.19.8
       - uses: actions/setup-node@v4
@@ -96,24 +124,69 @@ jobs:
         working-directory: node
         run: |
           cargo build --locked --features failpoints
-          cp target/debug/libstaal_node.so "$RUNNER_TEMP/staal-fp.node"
+          case "$(uname -s)" in Darwin) lib=libstaal_node.dylib ;; *) lib=libstaal_node.so ;; esac
+          cp "target/debug/$lib" "$RUNNER_TEMP/staal-fp.node"
           npm ci
           STAAL_NODE_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 npm test
           npm run types
+      - name: The addon
+        run: scripts/node_addon.sh addons
+      - uses: actions/upload-artifact@v4
+        with:
+          name: addon-${{ matrix.os }}
+          path: addons/
+          if-no-files-found: error
+  # One npm package holding every platform's addon.
+  npm:
+    needs: npm-addon
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust (the licence list reads cargo metadata)
+        run: rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: addon-*
+          path: addons
+          merge-multiple: true
       - name: npm package
-        run: STAAL_ZIGBUILD=1 scripts/node_package.sh dist
-      - name: The package, installed and tested
         run: |
-          mkdir "$RUNNER_TEMP/npm-app"
-          (cd "$RUNNER_TEMP/npm-app" && npm init -y >/dev/null && npm install "$GITHUB_WORKSPACE"/dist/staal-node-*.tgz)
-          STAAL_PACKAGE="$RUNNER_TEMP/npm-app/node_modules/@staal/node" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 node --test node/test/staal.test.mjs
+          for p in linux-x64-gnu linux-arm64-gnu darwin-arm64 darwin-x64; do
+            test -f "addons/$p/staal.node" || { echo "no addon for $p"; exit 1; }
+          done
+          STAAL_NODE_ADDONS=addons scripts/node_package.sh dist
       - uses: actions/upload-artifact@v4
         with:
           name: dist-npm
           path: dist/
           if-no-files-found: error
+  # The packed package, installed from its file and tested on every platform it holds.
+  npm-installed:
+    needs: npm
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-npm
+          path: dist
+      - name: The package, installed and tested
+        run: |
+          mkdir "$RUNNER_TEMP/npm-app"
+          (cd "$RUNNER_TEMP/npm-app" && npm init -y >/dev/null && npm install "$GITHUB_WORKSPACE"/dist/staal-node-*.tgz)
+          STAAL_PACKAGE="$RUNNER_TEMP/npm-app/node_modules/@staal/node" STAAL_HAS_NATIVE=1 node --test node/test/staal.test.mjs
   release:
-    needs: [build, npm]
+    needs: [build, npm, npm-installed]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
@@ -122,6 +195,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
+          pattern: dist-*
           path: dist
           merge-multiple: true
       - name: Draft release

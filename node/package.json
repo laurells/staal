@@ -28,10 +28,12 @@
     "node": ">=18"
   },
   "os": [
-    "linux"
+    "linux",
+    "darwin"
   ],
   "cpu": [
-    "x64"
+    "x64",
+    "arm64"
   ],
   "libc": [
     "glibc"

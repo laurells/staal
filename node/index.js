@@ -27,7 +27,7 @@ function load() {
   if (!fs.existsSync(file)) {
     throw new Error(
       `staal: this package has no build for ${platformDir()} yet (looked for ${file}). ` +
-        'Builds exist for linux-x64-gnu; elsewhere, build node/ from https://github.com/laurells/staal',
+        'Builds exist for linux-x64-gnu, linux-arm64-gnu, darwin-arm64 and darwin-x64; elsewhere, build node/ from https://github.com/laurells/staal',
     );
   }
   return require(file);

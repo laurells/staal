@@ -3,8 +3,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh
 #
-# It picks the archive for this machine (Linux x86_64, macOS on Apple Silicon or
-# Intel), downloads it and its SHA-256, refuses an archive whose hash differs, unpacks
+# It picks the archive for this machine (Linux on x86_64 or arm64, macOS on Apple
+# Silicon or Intel), downloads it and its SHA-256, refuses an archive whose hash differs, unpacks
 # it into ~/.staal/<version>, and links staalc into ~/.local/bin. Nothing runs as root
 # and nothing outside those two folders is touched.
 #
@@ -27,6 +27,7 @@ fail() {
 
 case "$(uname -s) $(uname -m)" in
     "Linux x86_64") target="x86_64-unknown-linux-gnu" ;;
+    "Linux aarch64" | "Linux arm64") target="aarch64-unknown-linux-gnu" ;;
     "Darwin arm64") target="aarch64-apple-darwin" ;;
     "Darwin x86_64") target="x86_64-apple-darwin" ;;
     *) fail "no release for $(uname -s) on $(uname -m) yet; build from source instead (README.md, \"From source\")" ;;

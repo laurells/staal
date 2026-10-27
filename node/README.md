@@ -31,8 +31,9 @@ in `index.d.ts`: `done` with a `result`, `failed` with a `failure`, `stopped` (a
 action in doubt: `resolve` it, then `resume`), `invalid` with located check errors,
 or `error`. Pass `{ engine: 'native' }` to run pure code as machine code.
 
-**Platforms.** Linux on x86_64 with glibc 2.28 or newer, Node 18 or newer. Other
-platforms come later; until then, build `node/` from the repository.
+**Platforms.** Node 18 or newer, on Linux (x86_64 and arm64, glibc 2.28 or newer) and
+macOS (Apple Silicon, macOS 11 or newer; Intel, macOS 10.12 or newer). Elsewhere,
+build `node/` from the repository.
 
 **Licence.** Apache-2.0 WITH LLVM-exception. The addon contains staalc and its Rust
 dependencies, whose licences are in `LICENSE-THIRD-PARTY.txt`.
