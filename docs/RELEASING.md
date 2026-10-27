@@ -54,9 +54,25 @@ built them, which has a newer glibc, not yet on a glibc 2.28 system.
 ## Publishing to PyPI and npm
 
 Both are public and permanent: a version, once uploaded, can be withdrawn but never
-replaced. Publish only a version that is tagged, from files built and tested as
-above. Only Linux x86_64 files exist so far, so `pip install staal` and
-`npm install staal` fail on other platforms with no matching file.
+replaced.
+
+Publishing the draft release runs `.github/workflows/publish.yml`, which uploads the
+release's own wheels to PyPI and its npm package to npm: the files CI built and
+tested, nothing rebuilt. It needs, once:
+
+- PyPI trusted publishing, so no PyPI token exists anywhere: on pypi.org, Account
+  settings, Publishing, add a pending publisher with project `staal`, owner
+  `laurells`, repository `staal`, workflow `publish.yml`, environment `pypi`.
+- An npm automation token (npmjs.com, Access Tokens) in the repository secret
+  `NPM_TOKEN`, under an environment named `npm` (Settings, Environments), so only
+  that job can read it.
+- GitHub Actions running for the repository.
+
+It can also be run by hand for a tag (Actions, publish, Run workflow).
+
+Without CI, the files built as in "Linux builds without CI" are uploaded from the
+machine that built them. Only Linux x86_64 files exist that way, so `pip install staal`
+and `npm install staal` then fail on other platforms with no matching file.
 
     # PyPI: an API token from pypi.org (Account settings, API tokens); user __token__.
     python3 -m pip install twine
