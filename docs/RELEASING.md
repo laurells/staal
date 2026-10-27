@@ -58,15 +58,20 @@ replaced.
 
 Publishing the draft release runs `.github/workflows/publish.yml`, which uploads the
 release's own wheels to PyPI and its npm package to npm: the files CI built and
-tested, nothing rebuilt. It needs, once:
+tested, nothing rebuilt. Both use trusted publishing, so no token is stored anywhere. It needs, once:
 
-- PyPI trusted publishing, so no PyPI token exists anywhere: on pypi.org, Account
-  settings, Publishing, add a pending publisher with project `staal`, owner
-  `laurells`, repository `staal`, workflow `publish.yml`, environment `pypi`.
-- An npm automation token (npmjs.com, Access Tokens) in the repository secret
-  `NPM_TOKEN`, under an environment named `npm` (Settings, Environments), so only
-  that job can read it.
-- GitHub Actions running for the repository.
+- On pypi.org: Account settings, Publishing, add a pending publisher with project
+  `staal`, owner `laurells`, repository `staal`, workflow `publish.yml`, environment
+  `pypi`.
+- On npm: the package must exist before a trusted publisher can be set, so its first
+  version is published by hand (`npm login`, then `npm publish staal-X.Y.Z.tgz
+  --access public`, with the file from the GitHub release). Then on npmjs.com: the
+  `staal` package, Settings, Trusted Publisher, GitHub Actions, with owner
+  `laurells`, repository `staal`, workflow `publish.yml`, environment `npm`.
+- Environments named `pypi` and `npm` in the repository (Settings, Environments).
+
+A version already on PyPI or npm is skipped, so publishing a release whose npm
+package was uploaded by hand still uploads its wheels.
 
 It can also be run by hand for a tag (Actions, publish, Run workflow).
 
