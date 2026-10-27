@@ -112,6 +112,23 @@ test('bad arguments are errors, never crashes', async () => {
   assert.equal((await staal.resume(clinic, cfg, path.join(scratch, 'none.journal'))).status, 'error');
 });
 
+test('the quickstart prints what the README says', () => {
+  // examples/quickstart/app.js requires '@staal/node': resolve it to the package
+  // under test.
+  const modules = fs.mkdtempSync(path.join(os.tmpdir(), 'staal-node-modules-'));
+  fs.mkdirSync(path.join(modules, '@staal'));
+  fs.symlinkSync(process.env.STAAL_PACKAGE || path.resolve(here, '..'), path.join(modules, '@staal', 'node'), 'dir');
+  const out = spawnSync(process.execPath, [path.join(root, 'examples', 'quickstart', 'app.js')], {
+    env: { ...process.env, NODE_PATH: modules },
+    encoding: 'utf8',
+  });
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(
+    out.stdout,
+    "Refunded 35.00 USD for order 4417\n'payments.refund' allows at most 50.00 USD per action; this action needs 300.00 USD\n",
+  );
+});
+
 // Real crashes: a child process dies at each journal write in turn, and this process
 // resumes. Needs an addon built with the failpoints feature.
 const crashAddon = process.env.STAAL_CRASH_ADDON;

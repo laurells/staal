@@ -84,6 +84,7 @@ h1 { font: 800 clamp(42px, 6.6vw, 92px)/1 var(--display); font-optical-sizing: a
 .install pre { margin: 0; padding: 12px 14px; overflow-x: auto; font-size: 13.5px; flex: 1; min-width: 0; }
 .install button { border: 0; border-left: 1px solid var(--rule); background: transparent; color: var(--ink); font: 500 13px var(--body); padding: 0 16px; cursor: pointer; }
 .install button:hover { background: var(--bg); }
+.installs { display: grid; gap: 8px; }
 .install-note { font-size: 14px; color: var(--muted); margin: 10px 0 0; }
 
 /* Code panels */
@@ -116,6 +117,9 @@ h3 { font: 600 19px/1.3 var(--body); margin: 0 0 6px; }
 /* Example pairs */
 .pair { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 40px; align-items: start; }
 .pair + .pair { margin-top: 56px; }
+.quick { margin-top: 16px; }
+.quick-pair { margin-top: 16px; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.intro.after { margin: 28px 0 0; }
 .pair p { margin: 0 0 12px; max-width: 34em; }
 
 /* Outcomes */
@@ -181,11 +185,12 @@ footer p { margin: 0; max-width: 46em; }
     </div>
     <div>
       <p class="lede">Staal is a programming language for software where AI <strong>acts</strong>: sending messages, moving money, changing records. Its compiler refuses programs that could act without permission, trust an unchecked model answer, or overspend. Its runtime never repeats a payment after a crash.</p>
-      <div class="install">
-        <pre id="cmd">curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh</pre>
-        <button type="button" id="copy" aria-label="Copy the install command">Copy</button>
+      <div class="installs">
+        <div class="install"><pre>pip install staal</pre><button type="button" class="copy" aria-label="Copy the pip command">Copy</button></div>
+        <div class="install"><pre>npm install @staal/node</pre><button type="button" class="copy" aria-label="Copy the npm command">Copy</button></div>
+        <div class="install"><pre>curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh</pre><button type="button" class="copy" aria-label="Copy the install command">Copy</button></div>
       </div>
-      <p class="install-note">Installs a release build for Linux x86_64 or macOS. Until the first release build is published, and on other machines, <a href="https://github.com/laurells/staal#getting-started">build from source</a> with Rust.</p>
+      <p class="install-note">From Python (Linux x86_64, macOS 15 or newer), from Node.js (Linux x86_64), or the <code>staalc</code> command on its own (Linux x86_64 and macOS). Elsewhere, <a href="https://github.com/laurells/staal#getting-started">build from source</a> with Rust.</p>
       <p class="say">Staal is said “stahl”. It is Dutch and Afrikaans for steel.</p>
     </div>
 
@@ -361,8 +366,63 @@ footer p { margin: 0; max-width: 46em; }
 <section id="start">
   <div class="wrap">
     <p class="eyebrow">Get started</p>
-    <h2>One hour to your first safe model call</h2>
-    <p class="intro">The <a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">tutorial</a> goes from install to a program that sends messages and asks a model a question. The <a href="https://github.com/laurells/staal/blob/main/docs/GUIDE.md">language guide</a> covers the rest. To help build Staal, read <a href="https://github.com/laurells/staal/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
+    <h2>Five minutes in your own app</h2>
+    <p class="intro">Your app decides the policy, here a refund limit per customer tier, and Staal enforces it. No account or key is needed: with no payment service configured, Staal uses a simulated one. These files are <code>examples/quickstart/</code>, and the test suite checks the output below.</p>
+    <div class="code quick">
+      <div class="label"><span>refund.staal</span><span>the part that moves money</span></div>
+<pre>// Refunds an order, never by more than the app allows.
+fn main(order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -&gt; Text {
+    let receipt = pay.refund(order, amount)
+    return "Refunded " + to_text(amount) + " for order " + order
+}</pre>
+    </div>
+    <div class="pair quick-pair">
+      <div class="code"><div class="label"><span>app.py</span><span>pip install staal</span></div>
+<pre># pip install staal, then: python3 app.py
+import os
+
+import staal
+
+lib = staal.Library()
+PROGRAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "refund.staal")
+LIMIT = {"gold": 500, "standard": 50}  # USD per refund, decided by your app
+
+
+def refund(tier, order, amount):
+    return lib.run(PROGRAM, {
+        "entry": "main",
+        "inputs": {"order": order, "amount": {"amount": amount, "currency": "USD"}},
+        "grants": {"pay": {"cap": "payments.refund", "each": {"amount": str(LIMIT[tier]), "currency": "USD"}}},
+    })
+
+
+print(refund("standard", "4417", "35.00")["result"])
+print(refund("standard", "4417", "300.00")["failure"]["message"])</pre></div>
+      <div class="code"><div class="label"><span>app.js</span><span>npm install @staal/node</span></div>
+<pre>// npm install @staal/node, then: node app.js
+const path = require('path');
+const staal = require('@staal/node');
+
+const PROGRAM = path.join(__dirname, 'refund.staal');
+const LIMIT = { gold: 500, standard: 50 }; // USD per refund, decided by your app
+
+function refund(tier, order, amount) {
+  return staal.run(PROGRAM, {
+    entry: 'main',
+    inputs: { order, amount: { amount, currency: 'USD' } },
+    grants: { pay: { cap: 'payments.refund', each: { amount: String(LIMIT[tier]), currency: 'USD' } } },
+  });
+}
+
+(async () =&gt; {
+  console.log((await refund('standard', '4417', '35.00')).result);
+  console.log((await refund('standard', '4417', '300.00')).failure.message);
+})();</pre></div>
+    </div>
+    <div class="code quick"><div class="label"><span>output</span><span>either one</span></div>
+<pre class="out">Refunded 35.00 USD for order 4417
+'payments.refund' allows at most 50.00 USD per action; this action needs 300.00 USD</pre></div>
+    <p class="intro after">Then the <a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">tutorial</a> goes from install to a program that sends messages and asks a model a question safely, in about an hour. The <a href="https://github.com/laurells/staal/blob/main/docs/GUIDE.md">language guide</a> covers the rest. To help build Staal, read <a href="https://github.com/laurells/staal/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
   </div>
 </section>
 
@@ -375,24 +435,24 @@ footer p { margin: 0; max-width: 46em; }
 
 <script>
 (function () {
-  var button = document.getElementById("copy");
-  var cmd = document.getElementById("cmd");
-  function select() {
-    var range = document.createRange();
-    range.selectNodeContents(cmd);
-    var s = window.getSelection();
-    s.removeAllRanges();
-    s.addRange(range);
-  }
-  button.addEventListener("click", function () {
-    var text = cmd.textContent;
-    var done = function () { button.textContent = "Copied"; setTimeout(function () { button.textContent = "Copy"; }, 1600); };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(done, function () { select(); button.textContent = "Press Ctrl+C"; });
-    } else {
-      select();
-      button.textContent = "Press Ctrl+C";
+  document.querySelectorAll(".install .copy").forEach(function (button) {
+    var cmd = button.parentNode.querySelector("pre");
+    function select() {
+      var range = document.createRange();
+      range.selectNodeContents(cmd);
+      var s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(range);
     }
+    button.addEventListener("click", function () {
+      var done = function () { button.textContent = "Copied"; setTimeout(function () { button.textContent = "Copy"; }, 1600); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(cmd.textContent).then(done, function () { select(); button.textContent = "Press Ctrl+C"; });
+      } else {
+        select();
+        button.textContent = "Press Ctrl+C";
+      }
+    });
   });
 })();
 </script>

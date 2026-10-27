@@ -10,6 +10,53 @@ crashes halfway through resumes without repeating a payment or a message.
 Staal is said "stahl": it is Dutch and Afrikaans for steel. This repository holds
 `staalc`, the Staal compiler and reference runtime, written in Rust.
 
+## Add it to your app
+
+Keep your app in Python or Node.js; write the part that moves money or messages in
+Staal. Your app decides the policy, Staal enforces it:
+
+    pip install staal            # or: npm install @staal/node
+
+`refund.staal`, the part that moves money:
+
+```
+// Refunds an order, never by more than the app allows.
+fn main(order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -> Text {
+    let receipt = pay.refund(order, amount)
+    return "Refunded " + to_text(amount) + " for order " + order
+}
+```
+
+`app.py`, your app, granting each run a limit by customer tier:
+
+```python
+import staal
+
+lib = staal.Library()
+LIMIT = {"gold": 500, "standard": 50}  # USD per refund, decided by your app
+
+def refund(tier, order, amount):
+    return lib.run("refund.staal", {
+        "entry": "main",
+        "inputs": {"order": order, "amount": {"amount": amount, "currency": "USD"}},
+        "grants": {"pay": {"cap": "payments.refund", "each": {"amount": str(LIMIT[tier]), "currency": "USD"}}},
+    })
+
+print(refund("standard", "4417", "35.00")["result"])
+print(refund("standard", "4417", "300.00")["failure"]["message"])
+```
+
+```
+Refunded 35.00 USD for order 4417
+'payments.refund' allows at most 50.00 USD per action; this action needs 300.00 USD
+```
+
+No account or key is needed: with no payment service configured, Staal uses a
+simulated one. The same in Node.js, and both files in full, are in
+`examples/quickstart/`; the test suite checks this output. Next, the
+[tutorial](docs/TUTORIAL.md) adds a model's decision, and the guide's "Policy from
+your app" shows the pattern in depth.
+
 ## Highlights
 
 **Safety checked at compile time.** Eight rules (E001 to E008) reject a program

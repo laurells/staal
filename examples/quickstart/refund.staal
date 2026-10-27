@@ -1,0 +1,5 @@
+// Refunds an order, never by more than the app allows.
+fn main(order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -> Text {
+    let receipt = pay.refund(order, amount)
+    return "Refunded " + to_text(amount) + " for order " + order
+}

@@ -91,3 +91,20 @@ fn python_app_decides_the_limit_and_staal_enforces_it() {
     assert!(stdout.contains("checks passed"), "{stdout}");
     println!("{}", stdout.trim());
 }
+
+#[test]
+fn the_python_quickstart_prints_what_the_readme_says() {
+    // examples/quickstart/app.py, as README.md shows it: one refund made, one refused.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = std::process::Command::new("python3")
+        .arg(root.join("examples/quickstart/app.py"))
+        .env("STAAL_LIBRARY", shared_library())
+        .env("PYTHONPATH", root.join("python"))
+        .output()
+        .expect("python3 must be installed to run this test");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Refunded 35.00 USD for order 4417\n'payments.refund' allows at most 50.00 USD per action; this action needs 300.00 USD\n"
+    );
+}
