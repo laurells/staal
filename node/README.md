@@ -1,7 +1,7 @@
 # @staal/node: Staal for Node.js
 
 Run [Staal](https://github.com/laurells/staal) programs from Node.js and TypeScript.
-Staal is a programming language for software where AI acts: its compiler refuses a
+Staal is the programming language for agents: its compiler refuses a
 program that could act without permission, use a model's answer unchecked, or
 overspend, and its runtime never repeats an action after a crash.
 

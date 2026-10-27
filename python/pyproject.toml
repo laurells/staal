@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "staal"
 # The same as staalc's own version (Cargo.toml); a test keeps them equal.
 version = "0.23.0"
-description = "The staalc compiler and runtime, and a Python interface to it"
+description = "Staal, the programming language for agents: the staalc compiler and runtime, and a Python interface to it"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0 WITH LLVM-exception" }

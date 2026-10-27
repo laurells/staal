@@ -1,8 +1,10 @@
 # Staal
 
-Staal is a programming language for software that acts on the real world:
-payments, messages, files and calls to AI models. Its compiler proves, before a
-program runs, that every action has the authority it needs, that untrusted model
+**The programming language for agents.**
+
+Agents should not act on prompts and hope. Staal is a programming language built
+for what agents do: moving money, sending messages, changing files and records,
+and calling AI models. Its compiler proves, before a program runs, that every action has the authority it needs, that untrusted model
 output is validated before it is used, and that model spending stays inside a
 declared budget. Its runtime records every effect durably, so a program that
 crashes halfway through resumes without repeating a payment or a message.

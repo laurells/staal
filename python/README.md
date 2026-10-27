@@ -1,7 +1,7 @@
 # staal
 
-[Staal](https://github.com/laurells/staal) is a programming language for software
-where AI acts: sending messages, moving money, changing records. Its compiler
+[Staal](https://github.com/laurells/staal) is the programming language for agents,
+built for what they do: sending messages, moving money, changing records. Its compiler
 refuses a program that could act without permission, use a model's answer
 unchecked, let untrusted text instruct a model, or overspend its budget, and its
 runtime journals every action so a crashed run resumes without repeating one.
