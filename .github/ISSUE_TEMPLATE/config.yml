@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/laurells/staal/discussions/categories/q-a
+    about: Questions about the language, the tutorial or an error you don't understand.
+  - name: Share an idea
+    url: https://github.com/laurells/staal/discussions/categories/ideas
+    about: Ideas for the language, the standard library or packages, before they become a proposal.
+  - name: Report a security problem
+    url: https://github.com/laurells/staal/security/advisories/new
+    about: Never in a public issue. Report it privately, as SECURITY.md explains.

@@ -1,0 +1,35 @@
+name: Change proposal
+description: Propose a change to the language, the runtime or the tools, before writing it.
+labels: [proposal]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A change to the language (its syntax, a checker rule, what a program may do) is a design decision, and is easier to agree on before it is written (CONTRIBUTING.md).
+        Not sure yet? Start in Discussions, under Ideas.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you cannot do today, or what goes wrong, with a real example.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The change
+      description: What you propose, with example Staal code showing it.
+    validations:
+      required: true
+  - type: textarea
+    id: guarantees
+    attributes:
+      label: Effect on Staal's guarantees
+      description: Could this let a program act without a capability, use an unvalidated model answer, overspend a budget, or repeat an action after a crash? How is that prevented? Does it work the same on both engines?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways to solve the problem, including doing it in a package instead of the language.

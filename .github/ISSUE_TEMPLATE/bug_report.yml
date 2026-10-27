@@ -1,0 +1,75 @@
+name: Bug report
+description: Something in staalc does not do what the documentation says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The smallest program that shows the problem is the most useful thing you can give.
+        A security problem (a program getting past a capability, a budget, a safety rule or the journal) is never reported here: see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `staalc --version`.
+      placeholder: staalc 0.23.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system and processor.
+      placeholder: Ubuntu 24.04, x86_64
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      description: Which engine shows the problem? Try both with `--engine interpreter` and `--engine native` if you can.
+      options:
+        - Interpreter
+        - Native
+        - Both
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: program
+    attributes:
+      label: Program
+      description: The smallest Staal program that shows the problem.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Run config
+      description: If the run uses one. Remove every key, password and token first.
+      render: json
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The exact command you ran and everything it printed.
+      render: console
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should have happened, and where the documentation says so if you know.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and this is not one of them.
+          required: true
+        - label: Nothing I pasted contains a key, password, token or customer data.
+          required: true
