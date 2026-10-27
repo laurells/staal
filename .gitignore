@@ -3,3 +3,9 @@ __pycache__/
 /python/LICENSE
 /python/NOTICE
 /python/LICENSE-THIRD-PARTY.txt
+/node/target
+/node/node_modules
+/node/bin
+/node/LICENSE
+/node/NOTICE
+/node/LICENSE-THIRD-PARTY.txt
