@@ -266,6 +266,14 @@ the language or its file formats.
   `min`, `max`, `map`, `any`, `all`, `count` or any other of them must be renamed.
 
 ### Fixed
+- macOS: a `net.tcp.exchange` whose peer answered and closed at once was reported
+  as in doubt, because macOS refuses a new socket timeout once the peer has closed.
+  The read timeout is now set before sending and kept when an update is refused;
+  `net.tcp.accept` the same. Found by CI on its first macOS run, with three test
+  problems: a TLS test server that could reset the connection, a PostgreSQL test
+  server reachable on 127.0.0.1 only while macOS resolves localhost to ::1, and the
+  licences of two macOS-only crates (objc2), which `release_test` now checks for every
+  release platform.
 - A package could be named `db` or `ffi`, and a library capability declared under
   `db.`, capability families of the runtime; all are refused now, as `net` and `fs`
   were.
