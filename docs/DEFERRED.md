@@ -64,6 +64,10 @@ unable to download other Rust targets. Remaining: Windows builds and tests, proo
 macOS, cross-compiling, wasm. Needs CI working again or a linked machine. Still open:
 whether to publish the wheel to PyPI (the owner's decision).
 
+The CI badge was taken off the top of README.md on 2026-10-27, because it showed
+failing runs. Put it back once CI runs:
+`[![ci](https://github.com/laurells/staal/actions/workflows/ci.yml/badge.svg)](https://github.com/laurells/staal/actions/workflows/ci.yml)`
+
 ## C libraries (`cap ffi`) on macOS and aarch64
 
 Built and tested on Linux x86_64 only. The code supports macOS and aarch64 (loading
