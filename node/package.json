@@ -35,9 +35,6 @@
     "x64",
     "arm64"
   ],
-  "libc": [
-    "glibc"
-  ],
   "scripts": {
     "test": "node --test test/staal.test.mjs",
     "types": "tsc --noEmit -p test/tsconfig.json"
