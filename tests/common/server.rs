@@ -17,6 +17,15 @@
 //                  200 {"id": ..., "currency": "usd" (or "eur"), "object": "payment_intent"}
 //   /v1/refunds    200 {"id": "re-<n>", "status": "succeeded", "object": "refund"},
 //                  deduplicating by Idempotency-Key like /send
+//   /transaction/verify/T_ok (T_failed, T_ghs)
+//                  like Paystack: 200 {"status": true, "data": {"reference", "currency":
+//                  "NGN" (GHS for T_ghs), "status": "success" ("failed" for T_failed)}}
+//   /refund        like Paystack: 200 {"status": true, "data": {"id": <n>, "status": "pending"}}
+//   /v3/transactions/908790/verify (908791)
+//                  like Flutterwave: 200 {"status": "success", "data": {"id", "currency": "NGN",
+//                  "status": "successful" ("failed" for 908791)}}
+//   /v3/transactions/908790/refund
+//                  like Flutterwave: 200 {"status": "success", "data": {"id": <n>, "status": "completed"}}
 //   /emails        200 {"id": "em-<n>"}, like Resend
 //   /api/chat.postMessage
 //                  like Slack: 200 {"ok": true, "ts": "<n>"}, or for channel C_BAD
@@ -180,6 +189,30 @@ fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mu
                 }
             }
         }
+        // Paystack, shaped as its documentation shows: amounts in kobo.
+        "/transaction/verify/T_ok" | "/transaction/verify/T_failed" | "/transaction/verify/T_ghs" => {
+            let reference = &path["/transaction/verify/".len()..];
+            let (status, currency) = match reference {
+                "T_failed" => ("failed", "NGN"),
+                "T_ghs" => ("success", "GHS"),
+                _ => ("success", "NGN"),
+            };
+            (200, format!("{{\"status\": true, \"message\": \"Verification successful\", \"data\": {{\"id\": 1004723697, \"reference\": \"{reference}\", \"amount\": 500000, \"currency\": \"{currency}\", \"status\": \"{status}\"}}}}").into_bytes())
+        }
+        "/refund" => (
+            200,
+            format!("{{\"status\": true, \"message\": \"Refund has been queued for processing\", \"data\": {{\"id\": {}, \"currency\": \"NGN\", \"status\": \"pending\"}}}}", 3018283 + n).into_bytes(),
+        ),
+        // Flutterwave v3: amounts in main units.
+        "/v3/transactions/908790/verify" | "/v3/transactions/908791/verify" => {
+            let id: u64 = path["/v3/transactions/".len()..path.len() - "/verify".len()].parse().unwrap();
+            let status = if id == 908791 { "failed" } else { "successful" };
+            (200, format!("{{\"status\": \"success\", \"message\": \"Transaction fetched successfully\", \"data\": {{\"id\": {id}, \"tx_ref\": \"order-{id}\", \"amount\": 3000, \"currency\": \"NGN\", \"status\": \"{status}\"}}}}").into_bytes())
+        }
+        "/v3/transactions/908790/refund" => (
+            200,
+            format!("{{\"status\": \"success\", \"message\": \"Transaction refund initiated\", \"data\": {{\"id\": {}, \"tx_id\": 908790, \"status\": \"completed\"}}}}", 75922 + n).into_bytes(),
+        ),
         "/emails" => (200, format!("{{\"id\": \"em-{n}\"}}").into_bytes()),
         "/api/chat.postMessage" if body.contains("\"C_BAD\"") => {
             (200, b"{\"ok\": false, \"error\": \"channel_not_found\"}".to_vec())

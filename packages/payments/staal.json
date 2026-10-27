@@ -1,8 +1,16 @@
 {
   "package": "payments",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "authority": {
-    "net.http.get": ["https://api.stripe.com/v1/payment_intents/*"],
-    "net.http.post": ["https://api.stripe.com/v1/refunds"]
+    "net.http.get": [
+      "https://api.stripe.com/v1/payment_intents/*",
+      "https://api.paystack.co/transaction/verify/*",
+      "https://api.flutterwave.com/v3/transactions/*/verify"
+    ],
+    "net.http.post": [
+      "https://api.stripe.com/v1/refunds",
+      "https://api.paystack.co/refund",
+      "https://api.flutterwave.com/v3/transactions/*/refund"
+    ]
   }
 }

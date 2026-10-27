@@ -582,3 +582,106 @@ fn go(texts: cap sms.termii.send(uses: 1), refunds: cap payments.stripe.refund(m
     let log = serde_json::to_string(&out.log).unwrap();
     assert!(!log.contains(KEY), "the log contains the key");
 }
+
+/// The payments package's Paystack and Flutterwave refunds, against a local server
+/// answering as their documentation shows: each refund checked against its
+/// transaction first, amounts in each service's unit, and every refusal made before
+/// any refund is sent.
+#[test]
+fn paystack_and_flutterwave_refunds_run_against_local_services() {
+    init();
+    let s = Server::start();
+    let b = base("african-payments");
+    let repos = b.join("repos");
+    let local = s.url("");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/payments");
+    let mut files = Vec::new();
+    for e in std::fs::read_dir(&src).unwrap() {
+        let e = e.unwrap();
+        let text = std::fs::read_to_string(e.path())
+            .unwrap()
+            .replace("https://api.paystack.co", &local)
+            .replace("https://api.flutterwave.com", &local);
+        files.push((e.file_name().to_string_lossy().to_string(), text));
+    }
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let commit = repo(&repos.join("payments"), &refs);
+    let main = project(
+        &b.join("app"),
+        &[("payments", &repos.join("payments"), &commit)],
+        r#"import payments.paystack
+import payments.flutterwave
+
+fn go(ps: cap payments.paystack.refund(max: 50000 NGN), fw: cap payments.flutterwave.refund(max: 50000 NGN)) -> Text {
+    let a = ps.refund(" T_ok ", 2500.00 NGN)
+    let failed = try ps.refund("T_failed", 100.00 NGN)
+    let ghs = try ps.refund("T_ghs", 100.00 NGN)
+    let c = fw.refund("908790", 1500.00 NGN)
+    let fw_failed = try fw.refund("908791", 1500.00 NGN)
+    let kobo = try fw.refund("908790", 150.50 NGN)
+    let not_id = try fw.refund("order-1", 100.00 NGN)
+    if failed.ok or ghs.ok or fw_failed.ok or kobo.ok or not_id.ok {
+        return "a refusal was missed"
+    }
+    return failed.error + " | " + ghs.error + " | " + fw_failed.error + " | " + kobo.error + " | " + not_id.error
+}
+"#,
+    );
+    packages::fetch(&b.join("app")).unwrap();
+    let checked = staalc::check_path(&main).unwrap();
+    let prog = checked.result.unwrap_or_else(|d| panic!("{d:?}"));
+    let cfg = json!({
+        "entry": "go",
+        "grants": {
+            "ps": { "cap": "payments.paystack.refund", "needs": {
+                "get": { "cap": "net.http.get", "only": [s.url("/transaction/verify/*")] },
+                "post": { "cap": "net.http.post", "only": [s.url("/refund")] },
+                "key": { "env": "STAAL_PKG_KEY" } } },
+            "fw": { "cap": "payments.flutterwave.refund", "needs": {
+                "get": { "cap": "net.http.get", "only": [s.url("/v3/transactions/*/verify")] },
+                "post": { "cap": "net.http.post", "only": [s.url("/v3/transactions/*/refund")] },
+                "key": { "env": "STAAL_PKG_KEY" } } }
+        },
+        "model": { "provider": "script", "responses": [] }
+    });
+    let out = staalc::interp::run_config(&prog, &cfg).unwrap();
+    let result = out.result.as_ref().unwrap_or_else(|f| panic!("{f:?}")).as_str().unwrap().to_string();
+    let parts: Vec<&str> = result.split(" | ").collect();
+    assert!(parts[0].contains("transaction T_failed is 'failed', not a successful payment"), "{result}");
+    assert!(parts[1].contains("the payment is in GHS, the refund in NGN"), "{result}");
+    assert!(parts[2].contains("transaction 908791 is 'failed', not a successful payment"), "{result}");
+    assert!(parts[3].contains("whole units of a two-decimal currency, not 150.50 NGN"), "{result}");
+    assert!(parts[4].contains("'order-1' is not a Flutterwave transaction id"), "{result}");
+    // The receipts are the services' own refund ids.
+    let receipts: Vec<String> = out
+        .log
+        .iter()
+        .filter(|e| e["event"] == "action_performed" && e["capability"].as_str().is_some_and(|c| c.starts_with("payments.")))
+        .map(|e| e["receipt"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(receipts, ["paystack-refund-3018285", "flutterwave-refund-75928"], "{:?}", out.log);
+    let reqs = s.requests();
+    let sent: Vec<(&str, &str)> = reqs.iter().map(|r| (r.method.as_str(), r.path.as_str())).collect();
+    // Only the two good refunds were sent; every refusal came before a refund request.
+    assert_eq!(
+        sent,
+        [
+            ("GET", "/transaction/verify/T_ok"),
+            ("POST", "/refund"),
+            ("GET", "/transaction/verify/T_failed"),
+            ("GET", "/transaction/verify/T_ghs"),
+            ("GET", "/v3/transactions/908790/verify"),
+            ("POST", "/v3/transactions/908790/refund"),
+            ("GET", "/v3/transactions/908791/verify"),
+        ]
+    );
+    let paystack: serde_json::Value = serde_json::from_str(&reqs[1].body).unwrap();
+    assert_eq!(paystack, json!({ "transaction": "T_ok", "amount": "250000" }), "kobo, as a string, as Paystack's example");
+    let flutterwave: serde_json::Value = serde_json::from_str(&reqs[5].body).unwrap();
+    assert_eq!(flutterwave, json!({ "amount": 1500, "comments": "Refund made by a Staal program" }), "naira, not kobo");
+    for r in &reqs {
+        assert_eq!(r.headers["authorization"], format!("Bearer {KEY}"), "{}", r.path);
+    }
+    let log = serde_json::to_string(&out.log).unwrap();
+    assert!(!log.contains(KEY), "the log contains the key");
+}

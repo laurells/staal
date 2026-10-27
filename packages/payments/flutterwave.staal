@@ -1,0 +1,77 @@
+// Refunds through Flutterwave (https://flutterwave.com), API v3.
+//
+// Programs ask for `cap payments.flutterwave.refund(max: 50000 NGN, only: [...])` and
+// call `refunds.refund(transaction_id, 2500.00 NGN)`, with the transaction's id (the
+// `data.id` Flutterwave gave for the payment). The runtime checks the amount and the
+// id against the program's limits before this code runs.
+//
+// The refund is checked against the transaction first: it must exist, be
+// "successful", and be in the refund's currency. Flutterwave v3 takes refund amounts
+// in the currency's main unit (naira, not kobo), and refuses refunds below its
+// minimum (NGN 100, KES 10). This package refunds whole units only, in currencies
+// with two decimal places, and refuses anything else rather than round it.
+//
+// Flutterwave documents no idempotency key for refunds. Grant `post` without
+// "idempotency_key": a refund whose answer a crash cut off then stops the run, in
+// doubt, for an operator to check in the Flutterwave dashboard and resolve, instead
+// of being sent again.
+
+type Verified { status: Text, data: Transaction }
+type Transaction { id: Int, status: Text, currency: Text }
+type Refund { amount: Int, comments: Text }
+type Refunded { status: Text, data: RefundData }
+type RefundData { id: Int, status: Text }
+
+capability payments.flutterwave {
+    needs get: cap net.http.get(only: ["https://api.flutterwave.com/v3/transactions/*/verify"])
+    needs post: cap net.http.post(only: ["https://api.flutterwave.com/v3/transactions/*/refund"])
+    needs key: Secret
+
+    canonical(id: Text) -> Text {
+        return trim(id)
+    }
+
+    action refund(transaction: Text @target, amount: Money @amount) -> Text {
+        let id = trim(transaction)
+        let n = to_int(id)
+        if id == "" or n == none {
+            fail("'" + id + "' is not a Flutterwave transaction id, which is a number")
+        }
+        let cents = minor_units(amount)
+        if rem(cents, 100) != 0 or not two_decimals(currency(amount)) {
+            fail("Flutterwave refunds here are in whole units of a two-decimal currency, not " + to_text(amount))
+        }
+        let auth = header("Authorization", fill_secret("Bearer {secret}", key))
+        let v = get.get("https://api.flutterwave.com/v3/transactions/" + url_segment(id) + "/verify", [auth])
+        if v.status != 200 or not v.complete {
+            fail("Flutterwave answered " + json(v.status) + " for transaction " + id + ": " + v.body)
+        }
+        let verified: Verified = validate parse(Verified, v.body)
+        let t = verified.data
+        if verified.status != "success" or to_text(t.id) != id {
+            fail("Flutterwave did not confirm transaction " + id)
+        }
+        if t.status != "successful" {
+            fail("transaction " + id + " is '" + t.status + "', not a successful payment")
+        }
+        if t.currency != currency(amount) {
+            fail("the payment is in " + t.currency + ", the refund in " + currency(amount))
+        }
+        let p = post.post("https://api.flutterwave.com/v3/transactions/" + url_segment(id) + "/refund",
+            json(Refund { amount: cents / 100, comments: "Refund made by a Staal program" }),
+            [auth, header("Content-Type", "application/json")])
+        if p.status < 200 or p.status > 299 or not p.complete {
+            fail("Flutterwave answered " + json(p.status) + ": " + p.body)
+        }
+        let refunded: Refunded = validate parse(Refunded, p.body)
+        if refunded.status != "success" {
+            fail("Flutterwave refused the refund: " + p.body)
+        }
+        return "flutterwave-refund-" + to_text(refunded.data.id)
+    }
+}
+
+// Currencies Flutterwave settles that ISO 4217 gives two decimal places.
+fn two_decimals(code: Text) -> Bool {
+    return contains(["NGN", "GHS", "KES", "ZAR", "TZS", "EGP", "MAD", "ZMW", "MWK", "USD", "EUR", "GBP"], code)
+}

@@ -1,0 +1,65 @@
+// Refunds through Paystack (https://paystack.com).
+//
+// Programs ask for `cap payments.paystack.refund(max: 50000 NGN, only: [...])` and call
+// `refunds.refund(reference, 2500.00 NGN)`. The runtime checks the amount and the
+// transaction reference against the program's limits before this code runs.
+//
+// The refund is checked against the transaction first: it must exist, have succeeded,
+// and be in the refund's currency. Amounts are sent in the currency's subunit (kobo
+// for NGN), as Paystack takes them. Paystack takes a partial refund up to what is
+// left of the transaction.
+//
+// Paystack documents no idempotency key for refunds. Grant `post` without
+// "idempotency_key": a refund whose answer a crash cut off then stops the run, in
+// doubt, for an operator to check in the Paystack dashboard and resolve, instead of
+// being sent again.
+
+type Verified { status: Bool, data: Transaction }
+type Transaction { reference: Text, status: Text, currency: Text }
+type Refund { transaction: Text, amount: Text }
+type Refunded { status: Bool, data: RefundData }
+type RefundData { id: Int, status: Text }
+
+capability payments.paystack {
+    needs get: cap net.http.get(only: ["https://api.paystack.co/transaction/verify/*"])
+    needs post: cap net.http.post(only: ["https://api.paystack.co/refund"])
+    needs key: Secret
+
+    canonical(reference: Text) -> Text {
+        return trim(reference)
+    }
+
+    action refund(reference: Text @target, amount: Money @amount) -> Text {
+        let ref = trim(reference)
+        if ref == "" {
+            fail("a transaction reference is needed")
+        }
+        let auth = header("Authorization", fill_secret("Bearer {secret}", key))
+        let v = get.get("https://api.paystack.co/transaction/verify/" + url_segment(ref), [auth])
+        if v.status != 200 or not v.complete {
+            fail("Paystack answered " + json(v.status) + " for transaction " + ref + ": " + v.body)
+        }
+        let verified: Verified = validate parse(Verified, v.body)
+        let t = verified.data
+        if not verified.status or t.reference != ref {
+            fail("Paystack did not confirm transaction " + ref)
+        }
+        if t.status != "success" {
+            fail("transaction " + ref + " is '" + t.status + "', not a successful payment")
+        }
+        // A refund in another currency would read the subunits as that currency's.
+        if t.currency != currency(amount) {
+            fail("the payment is in " + t.currency + ", the refund in " + currency(amount))
+        }
+        let p = post.post("https://api.paystack.co/refund", json(Refund { transaction: ref, amount: to_text(minor_units(amount)) }),
+            [auth, header("Content-Type", "application/json")])
+        if p.status < 200 or p.status > 299 or not p.complete {
+            fail("Paystack answered " + json(p.status) + ": " + p.body)
+        }
+        let refunded: Refunded = validate parse(Refunded, p.body)
+        if not refunded.status {
+            fail("Paystack refused the refund: " + p.body)
+        }
+        return "paystack-refund-" + to_text(refunded.data.id)
+    }
+}

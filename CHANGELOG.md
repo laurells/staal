@@ -4,6 +4,17 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+### Added
+
+- The `payments` package refunds through Paystack (`payments.paystack.refund`) and
+  Flutterwave (`payments.flutterwave.refund`), beside Stripe. Each refund is checked
+  against its transaction first (it exists, succeeded, and is in the refund's
+  currency); Paystack is sent kobo, Flutterwave v3 naira, in whole units only. Tested
+  against a local server answering as each service documents; not yet against the
+  live services.
+
 ## 0.23.0 — 2026-10-27
 
 ### Added
