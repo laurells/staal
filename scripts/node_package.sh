@@ -11,6 +11,9 @@
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:-"$root/target/npm"}
+# Absolute: the packing happens in another folder.
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
 case "$(uname -s) $(uname -m)" in
     "Linux x86_64") dir="linux-x64-gnu"; target="x86_64-unknown-linux-gnu" ;;
     *) echo "node_package.sh: no npm package layout for $(uname -s) $(uname -m) yet" >&2; exit 2 ;;
