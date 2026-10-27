@@ -1,0 +1,44 @@
+{
+  "name": "staal",
+  "version": "0.23.0",
+  "description": "Run Staal programs from Node.js: the staalc compiler and runtime, through its C interface",
+  "license": "Apache-2.0 WITH LLVM-exception",
+  "homepage": "https://laurells.github.io/staal/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/laurells/staal.git",
+    "directory": "node"
+  },
+  "bugs": "https://github.com/laurells/staal/issues",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "bin/",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "LICENSE-THIRD-PARTY.txt"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "scripts": {
+    "test": "node --test test/staal.test.mjs",
+    "types": "tsc --noEmit -p test/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2"
+  }
+}

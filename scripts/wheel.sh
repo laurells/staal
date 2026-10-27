@@ -7,16 +7,28 @@
 #   scripts/wheel.sh [output folder]     (default: target/wheels)
 #
 # Needs: cargo, and a Python with `build` (and `auditwheel` and `patchelf` on Linux):
-# set PYTHON.
+# set PYTHON. STAAL_RELEASE_DIR uses binaries built elsewhere instead of building
+# them here, such as the ones `cargo zigbuild` makes for older glibc (RELEASING.md);
+# AUDITWHEEL_PLAT then names the manylinux tag they were built for.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:-"$root/target/wheels"}
 python=${PYTHON:-python3}
-cargo build --release --manifest-path "$root/Cargo.toml"
-rel="$root/target/release"
+if [ -n "${STAAL_RELEASE_DIR:-}" ]; then
+    rel=$STAAL_RELEASE_DIR
+else
+    cargo build --release --manifest-path "$root/Cargo.toml"
+    rel="$root/target/release"
+fi
 bin="$root/python/staal/_bin"
-rm -rf "$bin" "$root/python/build"
-mkdir -p "$bin" "$out"
+raw=$(mktemp -d)
+# Whatever happens, nothing built is left in python/.
+cleanup() {
+    rm -rf "$raw" "$bin" "$root/python/build" "$root/python"/*.egg-info "$root/python/LICENSE" "$root/python/NOTICE" "$root/python/LICENSE-THIRD-PARTY.txt"
+}
+trap cleanup EXIT
+cleanup
+mkdir -p "$raw" "$bin" "$out"
 case "$(uname -s)" in
     Linux) cp "$rel/staalc" "$rel/libstaalc.so" "$rel/libstaalc.a" "$bin/" ;;
     Darwin) cp "$rel/staalc" "$rel/libstaalc.dylib" "$rel/libstaalc.a" "$bin/" ;;
@@ -26,12 +38,10 @@ esac
 # beside pyproject.toml.
 cp "$root/LICENSE" "$root/NOTICE" "$root/python/"
 "$python" "$root/scripts/third_party_licenses.py" "$root/python/LICENSE-THIRD-PARTY.txt"
-raw=$(mktemp -d)
 "$python" -m build --wheel --outdir "$raw" "$root/python"
 case "$(uname -s)" in
     # auditwheel runs patchelf; a virtual environment's tools are beside its Python.
     Linux) PATH="$(dirname "$(command -v "$python")"):$PATH" "$python" -m auditwheel repair --wheel-dir "$out" "$raw"/*.whl ;;
     *) cp "$raw"/*.whl "$out/" ;;
 esac
-rm -rf "$raw" "$bin" "$root/python/build" "$root/python"/*.egg-info "$root/python/LICENSE" "$root/python/NOTICE" "$root/python/LICENSE-THIRD-PARTY.txt"
 ls "$out"

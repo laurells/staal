@@ -8,6 +8,16 @@ the language or its file formats.
 
 ### Added
 
+- A Node.js and TypeScript package (`node/`, npm name `staal`): `run`, `resume`,
+  `resolve` and `check` over the C interface, returning Promises and running off the
+  event loop, with types for every result. Tested on both engines, through real
+  crashes at every journal write (a child process killed, the run resumed and, where
+  an action was left in doubt, resolved), installed from its packed file.
+  `scripts/node_package.sh` packs it.
+- Linux builds for glibc 2.28 and later without CI, through cargo-zigbuild: the
+  wheel (`STAAL_RELEASE_DIR`, `AUDITWHEEL_PLAT` in `scripts/wheel.sh`) and the npm
+  package (`STAAL_ZIGBUILD=1`). RELEASING.md says how, and how to publish to PyPI and
+  npm.
 - GUIDE.md, "Policy from your app": an application works out each run's limits
   (a customer's tier, an order's cost) and grants them; Staal enforces them and the
   code's own limits. `examples/policy/` holds the program and a Python app, tested

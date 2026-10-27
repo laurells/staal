@@ -37,5 +37,19 @@ jobs:
           if [ "$(uname -s)" = Linux ]; then "$RUNNER_TEMP/pyenv/bin/pip" install --quiet auditwheel patchelf; fi
           PYTHON="$RUNNER_TEMP/pyenv/bin/python" scripts/wheel.sh "$RUNNER_TEMP/wheels"
           scripts/wheel_test.sh "$RUNNER_TEMP"/wheels/*.whl "$RUNNER_TEMP/wheel-test"
+      - name: Node package (tests with crash injection, types, then packed, installed and tested again)
+        if: runner.os == 'Linux'
+        working-directory: node
+        run: |
+          cargo build --locked --features failpoints
+          cp target/debug/libstaal_node.so "$RUNNER_TEMP/staal-fp.node"
+          npm ci
+          STAAL_NODE_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 npm test
+          npm run types
+          cargo clippy --locked -- -D warnings
+          ../scripts/node_package.sh "$RUNNER_TEMP/npm"
+          mkdir "$RUNNER_TEMP/npm-app"
+          (cd "$RUNNER_TEMP/npm-app" && npm init -y >/dev/null && npm install "$RUNNER_TEMP"/npm/staal-*.tgz)
+          STAAL_PACKAGE="$RUNNER_TEMP/npm-app/node_modules/staal" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 node --test test/staal.test.mjs
       - name: Clippy
         run: cargo clippy --all-targets --features failpoints -- -D warnings

@@ -10,11 +10,21 @@ description = "The staalc compiler and runtime, and a Python interface to it"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0 WITH LLVM-exception" }
+keywords = ["staal", "programming language", "compiler", "ai", "agents", "capabilities"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Compilers",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
 ]
+
+[project.urls]
+Homepage = "https://laurells.github.io/staal/"
+Source = "https://github.com/laurells/staal"
+Issues = "https://github.com/laurells/staal/issues"
+Documentation = "https://github.com/laurells/staal/blob/main/docs/GUIDE.md"
 
 [project.scripts]
 staalc = "staal._cli:main"

@@ -1,5 +1,5 @@
 // One version everywhere a release states it: staalc itself, the Python package, the
-// VS Code extension, and the changelog's latest release.
+// Node package and its addon, the VS Code extension, and the changelog's latest release.
 
 use std::fs;
 use std::path::Path;
@@ -28,7 +28,7 @@ fn a_release_carries_the_licences_of_what_it_contains() {
         assert!(text.lines().any(|l| l.starts_with(name)), "{name}is missing");
     }
     assert!(text.contains("Permission is hereby granted") && text.contains("Apache License"), "the licence texts themselves");
-    for script in ["scripts/package.sh", "scripts/wheel.sh"] {
+    for script in ["scripts/package.sh", "scripts/wheel.sh", "scripts/node_package.sh"] {
         assert!(read(script).contains("third_party_licenses.py"), "{script} does not include the licences");
     }
 }
@@ -42,6 +42,11 @@ fn every_part_of_a_release_has_staalcs_version() {
     assert_eq!(py_version, VERSION, "python/pyproject.toml");
     let ext: serde_json::Value = serde_json::from_str(&read("editors/vscode/package.json")).unwrap();
     assert_eq!(ext["version"], VERSION, "editors/vscode/package.json");
+    let node: serde_json::Value = serde_json::from_str(&read("node/package.json")).unwrap();
+    assert_eq!(node["version"], VERSION, "node/package.json");
+    let addon = read("node/Cargo.toml");
+    let addon_version = addon.lines().find_map(|l| l.strip_prefix("version = \"")?.strip_suffix('"')).unwrap();
+    assert_eq!(addon_version, VERSION, "node/Cargo.toml");
     // The changelog: what is not released yet first, then the latest release, which
     // is this version, with its date.
     let log = read("CHANGELOG.md");

@@ -61,8 +61,11 @@ keys, mutations caught, and documented.
 
 Blocked on GitHub Actions billing (CI does not run) and on this workspace being
 unable to download other Rust targets. Remaining: Windows builds and tests, proof on
-macOS, cross-compiling, wasm. Needs CI working again or a linked machine. Still open:
-whether to publish the wheel to PyPI (the owner's decision).
+macOS, cross-compiling, wasm. Needs CI working again or a linked machine. Linux
+x86_64 wheels and npm packages for glibc 2.28 are built without CI (RELEASING.md,
+"Linux builds without CI"), but not yet tried on a glibc 2.28 system; macOS and
+Linux aarch64 packages need CI. Publishing to PyPI and npm: decided (2026-10-27), the
+owner uploads.
 
 The CI badge was taken off the top of README.md on 2026-10-27, because it showed
 failing runs. Put it back once CI runs:

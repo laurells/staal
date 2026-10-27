@@ -1,0 +1,26 @@
+# The Node.js addon for the `staal` npm package: Staal's C interface (src/capi.rs),
+# called in-process and exposed to JavaScript. It holds no Staal logic of its own, so
+# Node gets exactly the results the C interface and the Python package give.
+[package]
+name = "staal-node"
+version = "0.23.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0 WITH LLVM-exception"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+staalc = { path = ".." }
+napi = { version = "2.16.17", default-features = false, features = ["napi4"] }
+napi-derive = "2.16.13"
+
+[build-dependencies]
+napi-build = "2.2.0"
+
+[features]
+# Test-only crash injection, forwarded to staalc (src/interp/journal.rs). Never in a
+# published build.
+failpoints = ["staalc/failpoints"]

@@ -8,9 +8,9 @@ environment and uses it with no Rust (`scripts/wheel_test.sh`), and makes a draf
 GitHub release holding them all, with the changelog's notes for the version.
 
 1. Move the changelog's `## Unreleased` entries under `## X.Y.Z — YYYY-MM-DD`.
-2. Set version X.Y.Z in `Cargo.toml`, `python/pyproject.toml` and
-   `editors/vscode/package.json`. `cargo test --test release_test` fails until all
-   three and the changelog agree.
+2. Set version X.Y.Z in `Cargo.toml`, `python/pyproject.toml`,
+   `editors/vscode/package.json`, `node/package.json` and `node/Cargo.toml`.
+   `cargo test --test release_test` fails until all of them and the changelog agree.
 3. Commit, then tag and push: `git tag -a vX.Y.Z -m "staalc X.Y.Z"` and
    `git push origin vX.Y.Z`. The workflow refuses a tag that is not `v` and the
    version in `Cargo.toml`.
@@ -26,5 +26,45 @@ the same `staalc`, libraries and licence files; `pip install` of it gives the `s
 `staal` Python package, with no Rust needed.
 
 Not yet in a release: Windows, other Linux architectures, WebAssembly, and
-executables from `staalc build` on macOS (it makes them on Linux only). Publishing
-the wheel to PyPI is a separate decision: a PyPI project is public.
+executables from `staalc build` on macOS (it makes them on Linux only).
+
+## Linux builds without CI
+
+While CI cannot run, Linux x86_64 binaries for glibc 2.28 and later (the same
+baseline as the manylinux_2_28 container) are built on any Linux machine with
+[cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild), which links against
+an older glibc through Zig:
+
+    pip install ziglang==0.13.0
+    cargo install --locked cargo-zigbuild --version 0.19.8
+    cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.28 --target-dir target/zig
+
+    # The wheel, from those binaries, tagged manylinux_2_28, then tested installed.
+    STAAL_RELEASE_DIR=target/zig/x86_64-unknown-linux-gnu/release AUDITWHEEL_PLAT=manylinux_2_28_x86_64 \
+        PYTHON=<python with build, auditwheel, patchelf> scripts/wheel.sh dist
+    scripts/wheel_test.sh dist/staal-X.Y.Z-py3-none-manylinux_2_28_x86_64.whl
+
+    # The npm package, its addon built the same way.
+    STAAL_ZIGBUILD=1 scripts/node_package.sh dist
+
+`objdump -T <binary> | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1` shows the newest
+glibc a binary needs: it must be at most 2.28. These have been tested on the machine that
+built them, which has a newer glibc, not yet on a glibc 2.28 system.
+
+## Publishing to PyPI and npm
+
+Both are public and permanent: a version, once uploaded, can be withdrawn but never
+replaced. Publish only a version that is tagged, from files built and tested as
+above. Only Linux x86_64 files exist so far, so `pip install staal` and
+`npm install staal` fail on other platforms with no matching file.
+
+    # PyPI: an API token from pypi.org (Account settings, API tokens); user __token__.
+    python3 -m pip install twine
+    python3 -m twine check dist/*.whl
+    python3 -m twine upload dist/*.whl
+
+    # npm: an npmjs.com account, logged in once with `npm login`.
+    npm publish dist/staal-X.Y.Z.tgz
+
+Upload only the wheel, never an sdist: the sdist holds no binaries and cannot build
+them.

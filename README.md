@@ -37,7 +37,9 @@ code through Cranelift, with results, errors and journals identical to the
 interpreter. `staalc build` links a program into a single executable.
 
 **Callable from any language.** A C interface (`include/staal.h`) runs programs
-from other languages; a Python wrapper is included.
+from other languages, with packages for Python (`python/`) and for Node.js and
+TypeScript (`node/`): your application decides the policy, Staal enforces it
+(GUIDE.md, "Policy from your app").
 
 ## A first program
 
