@@ -37,7 +37,10 @@ case "$(uname -s)" in
         # target), after checking each binary really asks for no newer one.
         if [ -n "${MACOSX_DEPLOYMENT_TARGET:-}" ]; then
             for f in "$rel/staalc" "$rel/libstaalc.dylib"; do
-                minos=$(otool -l "$f" | awk '/LC_BUILD_VERSION/ {found=1} found && $1 == "minos" {print $2; exit}')
+                # LC_BUILD_VERSION gives "minos"; binaries for macOS before 10.14 carry
+                # LC_VERSION_MIN_MACOSX, which gives "version".
+                minos=$(otool -l "$f" | awk '/LC_BUILD_VERSION/ {b=1} b && $1 == "minos" {print $2; exit} /LC_VERSION_MIN_MACOSX/ {m=1} m && $1 == "version" {print $2; exit}')
+                [ -n "$minos" ] || { echo "wheel.sh: no minimum macOS version found in $f" >&2; exit 2; }
                 "$python" -c 'import sys; a, b = (tuple(int(x) for x in v.split(".")) for v in sys.argv[1:3]); sys.exit(0 if a <= b else 1)' "$minos" "$MACOSX_DEPLOYMENT_TARGET" \
                     || { echo "wheel.sh: $f needs macOS $minos, newer than MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >&2; exit 2; }
             done
