@@ -1,0 +1,11 @@
+// A support agent that may refund. The code allows at most 500 USD per refund;
+// the app that runs it grants each run a limit of its own, never more.
+type Refund { order: Text, amount: Money, reason: Text }
+
+const POLICY = "Read the complaint. If our 14-day policy allows it, propose a refund."
+
+fn main(complaint: Text, pay: cap payments.refund(each: 500 USD)) -> Text budget(calls: 1, tokens: 400) {
+    let r = validate propose(Refund, instruct: POLICY, data: [complaint], tokens: 400)
+    let receipt = pay.refund(r)
+    return "Refunded \(r.amount) for order " + r.order
+}

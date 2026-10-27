@@ -454,6 +454,47 @@ is called. A limit that needs an action's amount or target refuses the action
 when it cannot be determined. Grants in the run config can carry the same
 limits. Details: [RUNTIME.md](RUNTIME.md) section 6.
 
+## Policy from your app
+
+A limit in a signature is the most that code will ever accept, not the permission
+itself. The permission is granted by whoever starts the run, and it can only be
+narrower. So policy that depends on things only your application knows (a
+customer's tier, an account balance, what an order cost, the time) belongs in
+your application: it works out the limit and grants it to the run, and Staal
+enforces it.
+
+    fn main(complaint: Text, pay: cap payments.refund(each: 500 USD)) -> Text budget(calls: 1, tokens: 400) {
+        let r = validate propose(Refund, instruct: POLICY, data: [complaint], tokens: 400)
+        let receipt = pay.refund(r)
+        return "Refunded \(r.amount) for order " + r.order
+    }
+
+From Python, through the C interface:
+
+    TIER_LIMIT = {"gold": 500, "standard": 50}  # USD per refund
+
+    def handle(lib, customer, order_total, complaint, model):
+        limit = min(TIER_LIMIT[customer["tier"]], order_total)
+        config = {
+            "entry": "main",
+            "inputs": {"complaint": complaint},
+            "grants": {"pay": {"cap": "payments.refund", "each": {"amount": str(limit), "currency": "USD"}}},
+            "model": model,
+        }
+        return lib.run("refund.staal", config)
+
+A standard customer's run can refund at most 50 USD, and a refund the model
+proposes above that fails as `capability` before the payment service is called.
+A grant above the code's own 500 USD is narrowed to 500 USD, so a bug in the app
+cannot get a refund past what the code allows either. The app decides; Staal
+enforces both limits, on both engines, and a resumed run replays the refund from
+the journal instead of making it again.
+
+The complete program and app are in `examples/policy/`; the test suite runs them
+(`python/tests/test_policy.py`). Inside one running program, limits are fixed
+numbers: a program can branch between capabilities narrowed to different limits,
+but cannot yet narrow by a value it computes. That is planned.
+
 ## Budgets and loops
 
     fn draft() -> Note budget(calls: 3, tokens: 6000) {

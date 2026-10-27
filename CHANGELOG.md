@@ -4,6 +4,15 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+### Added
+
+- GUIDE.md, "Policy from your app": an application works out each run's limits
+  (a customer's tier, an order's cost) and grants them; Staal enforces them and the
+  code's own limits. `examples/policy/` holds the program and a Python app, tested
+  on both engines and through a resume (`python/tests/test_policy.py`).
+
 ## 0.23.0 — 2026-10-26
 
 ### Added

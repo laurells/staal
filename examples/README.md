@@ -10,6 +10,17 @@ For a first program that needs no account, see `invoice/`:
 
     staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
 
+## Policy decided by your app
+
+`policy/app.py` runs `policy/refund.staal` from Python and grants each run a
+refund limit from the customer's tier and the order's cost. Staal refuses any
+refund above it, and never one above the 500 USD the code allows, whatever the app
+grants. GUIDE.md, "Policy from your app", explains it. You need the C library and
+an Anthropic API key:
+
+    cargo build --release
+    STAAL_LIBRARY=target/release/libstaalc.so ANTHROPIC_API_KEY=... python3 examples/policy/app.py
+
 ## A decision by Claude
 
 `claude/triage.staal` asks Claude whether a complaint deserves a refund and

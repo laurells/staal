@@ -67,3 +67,27 @@ fn python_runs_the_clinic_program_through_the_c_interface() {
     assert!(stdout.contains("checks passed"), "{stdout}");
     println!("{}", stdout.trim());
 }
+
+#[test]
+fn python_app_decides_the_limit_and_staal_enforces_it() {
+    // examples/policy: the limit each run is granted comes from the app (tier, order
+    // cost), and neither the model nor a bug in the app gets a refund past it.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("python-policy");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).unwrap();
+    let out = std::process::Command::new("python3")
+        .arg("-I")
+        .arg(root.join("python/tests/test_policy.py"))
+        .arg(root)
+        .arg(&scratch)
+        .env("STAAL_LIBRARY", shared_library())
+        .env("STAAL_HAS_NATIVE", if cfg!(feature = "native") { "1" } else { "0" })
+        .output()
+        .expect("python3 must be installed to run this test");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "python failed:\n{stdout}\n{stderr}");
+    assert!(stdout.contains("checks passed"), "{stdout}");
+    println!("{}", stdout.trim());
+}
