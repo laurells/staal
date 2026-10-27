@@ -515,6 +515,7 @@ fn is_input(c: &Case, result: &Json) -> bool {
 
 /// A database scenario's directory: its config (with `idempotency_key` on the execute
 /// grant or not), its database and its journal.
+#[cfg(target_os = "linux")]
 fn db_case(name: &str, keyed: bool) -> (PathBuf, Vec<String>, Vec<String>) {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("crash-db").join(name);
     let _ = std::fs::remove_dir_all(&dir);

@@ -17,15 +17,19 @@
 // TEXT as a string, NULL as null, REAL as the shortest decimal text that reads back
 // as the same number. A BLOB is refused: it is not text.
 
+#[cfg(target_os = "linux")]
 use rusqlite::limits::Limit;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::Connection;
+#[cfg(target_os = "linux")]
+use rusqlite::OpenFlags;
 use serde_json::{json, Map, Value as Json};
 
 /// The most rows one query may give.
 pub const MAX_ROWS: usize = 10_000;
 
 /// How long an operation waits for another process's lock on the database.
+#[cfg(target_os = "linux")]
 const BUSY_MS: u64 = 5_000;
 
 /// The table `execute` keeps its idempotency keys in, when its grant asks for it.
