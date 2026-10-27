@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="Staal">
+<title>Staal</title>
+<polygon points="30,20 158,20 170,32 170,50 30,50" fill="#161b21"/>
+<rect x="30" y="56" width="30" height="23" fill="#161b21"/>
+<rect x="30" y="85" width="140" height="30" fill="#2a5d8f"/>
+<rect x="140" y="121" width="30" height="23" fill="#161b21"/>
+<polygon points="30,150 170,150 170,180 42,180 30,168" fill="#161b21"/>
+</svg>
