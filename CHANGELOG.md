@@ -4,10 +4,9 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
-## Unreleased
+## 0.23.0 — 2026-10-27
 
 ### Added
-
 - A Node.js and TypeScript package (`node/`, npm name `staal`): `run`, `resume`,
   `resolve` and `check` over the C interface, returning Promises and running off the
   event loop, with types for every result. Tested on both engines, through real
@@ -18,14 +17,12 @@ the language or its file formats.
   wheel (`STAAL_RELEASE_DIR`, `AUDITWHEEL_PLAT` in `scripts/wheel.sh`) and the npm
   package (`STAAL_ZIGBUILD=1`). RELEASING.md says how, and how to publish to PyPI and
   npm.
+- `.github/workflows/publish.yml`: publishing a release uploads its wheels to PyPI,
+  through trusted publishing (no token stored), and its npm package to npm.
 - GUIDE.md, "Policy from your app": an application works out each run's limits
   (a customer's tier, an order's cost) and grants them; Staal enforces them and the
   code's own limits. `examples/policy/` holds the program and a Python app, tested
   on both engines and through a resume (`python/tests/test_policy.py`).
-
-## 0.23.0 — 2026-10-26
-
-### Added
 - Release archives and wheels carry `LICENSE-THIRD-PARTY.txt`, the licences of every
   crate the binaries contain (`scripts/third_party_licenses.py`), with LICENSE and
   NOTICE.
