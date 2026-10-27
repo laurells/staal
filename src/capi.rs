@@ -283,5 +283,5 @@ pub unsafe extern "C" fn staal_free(s: *mut c_char) {
 /// The library's version, a static string: do not free it.
 #[unsafe(no_mangle)]
 pub extern "C" fn staal_version() -> *const c_char {
-    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
+    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast::<c_char>()
 }

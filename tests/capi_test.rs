@@ -19,7 +19,7 @@ fn take(p: *mut std::ffi::c_char) -> Json {
 fn arguments_that_are_not_strings_are_errors_not_crashes() {
     let bad = [0xffu8, 0xfe, 0x00];
     // SAFETY: NUL-terminated buffers that live for the calls.
-    let r = take(unsafe { staal_check(bad.as_ptr() as *const _) });
+    let r = take(unsafe { staal_check(bad.as_ptr().cast()) });
     assert_eq!(r["status"], "error");
     assert!(r["error"].as_str().unwrap().contains("not UTF-8"), "{r}");
     let r = take(unsafe { staal_check(std::ptr::null()) });

@@ -145,7 +145,7 @@ fn value(t: CType, raw: u64) -> Result<CValue, String> {
                 return Err(format!("the C function returned text longer than {MAX_TEXT} bytes"));
             }
             // SAFETY: `n` bytes from `p` were just found to precede a NUL.
-            let bytes = unsafe { std::slice::from_raw_parts(p as *const u8, n) };
+            let bytes = unsafe { std::slice::from_raw_parts(p.cast::<u8>(), n) };
             CValue::Text(String::from_utf8(bytes.to_vec()).map_err(|_| "the C function returned text that is not UTF-8".to_string())?)
         }
     })
