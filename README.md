@@ -1,7 +1,5 @@
 # Staal
 
-[![ci](https://github.com/laurells/staal/actions/workflows/ci.yml/badge.svg)](https://github.com/laurells/staal/actions/workflows/ci.yml)
-
 Staal is a programming language for software that acts on the real world:
 payments, messages, files and calls to AI models. Its compiler proves, before a
 program runs, that every action has the authority it needs, that untrusted model
