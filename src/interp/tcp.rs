@@ -137,14 +137,25 @@ fn talk<S: Read + Write>(
     sock: impl Fn(&S) -> std::io::Result<TcpStream>,
     close: impl FnOnce(&mut S) -> std::io::Result<()>,
 ) -> Outcome {
-    let timeout = |st: &S, read: bool| -> Result<(), String> {
-        let d = left().ok_or_else(|| format!("no reply from {address} within {} ms", s.timeout.as_millis()))?;
-        let so = sock(st).map_err(|e| format!("{address}: {e}"))?;
-        if read { so.set_read_timeout(Some(d)) } else { so.set_write_timeout(Some(d)) }.map_err(|e| format!("{address}: {e}"))
+    // Each read and write is bounded by what is left of the exchange's time. The
+    // deadline passing is the exchange's failure; the socket refusing a new timeout
+    // is not: macOS refuses one (EINVAL) once the peer has closed a connection whose
+    // sending side is already shut, while the reply still waits to be read. The read
+    // timeout set before sending then still bounds the read.
+    enum Bound {
+        Passed(String),
+        Refused(String),
+    }
+    let timeout = |st: &S, read: bool| -> Result<(), Bound> {
+        let d = left().ok_or_else(|| Bound::Passed(format!("no reply from {address} within {} ms", s.timeout.as_millis())))?;
+        let so = sock(st).map_err(|e| Bound::Refused(format!("{address}: {e}")))?;
+        if read { so.set_read_timeout(Some(d)) } else { so.set_write_timeout(Some(d)) }.map_err(|e| Bound::Refused(format!("{address}: {e}")))
     };
     // From here on the data may reach the peer.
-    if let Err(e) = timeout(st, false) {
-        return Outcome::Unknown(e);
+    for read in [false, true] {
+        if let Err(Bound::Passed(e) | Bound::Refused(e)) = timeout(st, read) {
+            return Outcome::Unknown(e);
+        }
     }
     if let Err(e) = st.write_all(data).and_then(|_| st.flush()) {
         return Outcome::Unknown(format!("sending to {address}: {e}"));
@@ -162,8 +173,9 @@ fn talk<S: Read + Write>(
         {
             break;
         }
-        if let Err(e) = timeout(st, true) {
-            return Outcome::Unknown(e);
+        match timeout(st, true) {
+            Err(Bound::Passed(e)) => return Outcome::Unknown(e),
+            Err(Bound::Refused(_)) | Ok(()) => {}
         }
         match st.read(&mut chunk) {
             Ok(0) => break,
@@ -217,6 +229,7 @@ pub fn accept(server: &std::sync::Mutex<Server>, address: &str, until: Option<&s
     // Waiting for a client has no time limit; reading its request has the run's.
     let (mut st, peer) = listener.accept().map_err(|e| format!("accepting on {address}: {e}"))?;
     let deadline = Instant::now() + s.timeout;
+    let mut bounded = false;
     let mut request: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 16 * 1024];
     loop {
@@ -229,7 +242,13 @@ pub fn accept(server: &std::sync::Mutex<Server>, address: &str, until: Option<&s
             .checked_duration_since(Instant::now())
             .filter(|d| !d.is_zero())
             .ok_or_else(|| format!("the request from {peer} did not arrive within {} ms", s.timeout.as_millis()))?;
-        st.set_read_timeout(Some(d)).map_err(|e| format!("{peer}: {e}"))?;
+        // The first timeout must be set; a later one the socket refuses (macOS, once
+        // the client has closed) leaves the earlier, longer one bounding the read.
+        match st.set_read_timeout(Some(d)) {
+            Ok(()) => bounded = true,
+            Err(e) if !bounded => return Err(format!("{peer}: {e}")),
+            Err(_) => {}
+        }
         match st.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {

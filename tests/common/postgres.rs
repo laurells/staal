@@ -97,7 +97,9 @@ impl Server {
             "-p".into(),
             port.to_string(),
             "-c".into(),
-            "listen_addresses=127.0.0.1".into(),
+            // Both loopback addresses: "localhost" is ::1 first, or only, on some
+            // systems (macOS). PostgreSQL starts if either can be bound.
+            "listen_addresses=127.0.0.1,::1".into(),
             "-c".into(),
             format!("unix_socket_directories={}", dir.display()),
             "-c".into(),

@@ -28,6 +28,19 @@ fn a_release_carries_the_licences_of_what_it_contains() {
         assert!(text.lines().any(|l| l.starts_with(name)), "{name}is missing");
     }
     assert!(text.contains("Permission is hereby granted") && text.contains("Apache License"), "the licence texts themselves");
+    // Every platform a release is built for, for staalc and for the Node addon: a crate
+    // only one platform links (macOS's, say) must have its licence too.
+    for target in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-apple-darwin"] {
+        for manifest in [None, Some("node/Cargo.toml")] {
+            let mut c = Command::new("python3");
+            c.arg(Path::new(ROOT).join("scripts/third_party_licenses.py")).arg(Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("licences-{target}.txt")));
+            if let Some(m) = manifest {
+                c.arg(Path::new(ROOT).join(m));
+            }
+            let o = c.env("STAAL_LICENCE_TARGET", target).output().unwrap();
+            assert!(o.status.success(), "{target} {manifest:?}: {}", String::from_utf8_lossy(&o.stderr));
+        }
+    }
     for script in ["scripts/package.sh", "scripts/wheel.sh", "scripts/node_package.sh"] {
         assert!(read(script).contains("third_party_licenses.py"), "{script} does not include the licences");
     }

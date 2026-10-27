@@ -34,6 +34,14 @@ fn server(cfg: Arc<rustls::ServerConfig>, close_notify: bool) -> (String, Arc<At
                 tls.conn.send_close_notify();
             }
             let _ = tls.flush();
+            // End the connection with a plain FIN, never a reset: closing a socket with
+            // unread data (the client's own close_notify, sent after its request)
+            // makes the kernel send RST, which the client would rightly report as a
+            // broken connection, and which can discard the reply it has not read yet.
+            let _ = tls.sock.shutdown(std::net::Shutdown::Write);
+            let _ = tls.sock.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+            let mut sink = [0u8; 4096];
+            while matches!(std::io::Read::read(&mut tls.sock, &mut sink), Ok(n) if n > 0) {}
         }
     });
     (format!("localhost:{port}"), lines)

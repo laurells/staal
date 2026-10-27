@@ -33,6 +33,9 @@ PREFIXES = ("LICEN", "COPYING", "NOTICE", "UNLICENSE")
 # repository, kept in scripts/licences/ (where each came from is in its key).
 PROJECT_LICENCES = {
     "https://github.com/napi-rs/napi-rs": ("LICENSE (github.com/napi-rs/napi-rs, tag napi@2.16.17)", "napi-rs.LICENSE"),
+    # macOS only, through tokio-postgres's whoami. Offered under Zlib, Apache-2.0 or
+    # MIT; taken under Zlib, whose terms ask nothing of binaries.
+    "https://github.com/madsmtm/objc2": ("LICENSE.md (github.com/madsmtm/objc2, tag frameworks-0.3.2), taken under the Zlib licence it offers", "objc2.LICENSE.md"),
 }
 
 
@@ -49,7 +52,9 @@ def main():
     if len(sys.argv) not in (2, 3):
         sys.exit("usage: third_party_licenses.py <output file> [Cargo.toml]")
     manifest = os.path.abspath(sys.argv[2]) if len(sys.argv) == 3 else os.path.join(ROOT, "Cargo.toml")
-    host = next(l.split(": ", 1)[1] for l in subprocess.check_output(["rustc", "-vV"], text=True).splitlines() if l.startswith("host: "))
+    # The platform the binaries are for: this machine's, or STAAL_LICENCE_TARGET (to
+    # check another platform's crates from here).
+    host = os.environ.get("STAAL_LICENCE_TARGET") or next(l.split(": ", 1)[1] for l in subprocess.check_output(["rustc", "-vV"], text=True).splitlines() if l.startswith("host: "))
     meta = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", host, "--manifest-path", manifest],
         text=True))
