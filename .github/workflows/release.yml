@@ -8,6 +8,8 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # A rehearsal from a branch: everything but the draft release.
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -29,10 +31,16 @@ jobs:
     container: ${{ matrix.container }}
     env:
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment }}
-      PYTHON: ${{ github.workspace }}/../pyenv/bin/python
+      # A fixed path: in the Linux container, github.workspace names the host's path
+      # in some places and the container's in others.
+      PYTHON: /tmp/staal-pyenv/bin/python
+      # No PostgreSQL server in the container or on these runners; ci.yml runs the
+      # PostgreSQL tests on Linux and macOS against a real one.
+      STAAL_SKIP_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
       - name: The tag is this version
+        if: github.ref_type == 'tag'
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           test "${GITHUB_REF_NAME}" = "v${version}" || { echo "tag ${GITHUB_REF_NAME} is not v${version}"; exit 1; }
@@ -44,9 +52,12 @@ jobs:
           else
             rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
           fi
+      - name: The container's Python 3.12 first on PATH (its own python3 is older)
+        if: matrix.container
+        run: echo "$(dirname "${{ matrix.python }}")" >> "$GITHUB_PATH"
       - name: Python tools
         run: |
-          "${{ matrix.python }}" -m venv "${{ github.workspace }}/../pyenv"
+          "${{ matrix.python }}" -m venv /tmp/staal-pyenv
           "$PYTHON" -m pip install --quiet build setuptools wheel
           if [ "$(uname -s)" = Linux ]; then "$PYTHON" -m pip install --quiet auditwheel patchelf; fi
       - name: Tests
@@ -69,6 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: The tag is this version
+        if: github.ref_type == 'tag'
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           test "${GITHUB_REF_NAME}" = "v${version}" || { echo "tag ${GITHUB_REF_NAME} is not v${version}"; exit 1; }
@@ -102,6 +114,7 @@ jobs:
           if-no-files-found: error
   release:
     needs: [build, npm]
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
