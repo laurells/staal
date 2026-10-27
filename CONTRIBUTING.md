@@ -16,7 +16,7 @@ welcome as issues, with the smallest program that shows them.
 
 Security problems are never reported in a public issue: use GitHub's private
 vulnerability reporting on this repository ("Security", then "Report a
-vulnerability").
+vulnerability"). [SECURITY.md](SECURITY.md) says what to include and what to expect.
 
 ## Building and testing
 
