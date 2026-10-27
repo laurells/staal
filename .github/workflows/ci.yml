@@ -24,6 +24,8 @@ jobs:
       - name: Versions
         run: rustc --version && cargo --version && git --version && python3 --version && node --version
       - name: Tests, with crash injection
+        env:
+          STAAL_REQUIRE_EVERY_LICENCE_TARGET: "1"
         run: cargo test --features failpoints --no-fail-fast
       - name: Tests without native code
         run: cargo test --no-default-features --no-fail-fast

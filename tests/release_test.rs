@@ -38,7 +38,20 @@ fn a_release_carries_the_licences_of_what_it_contains() {
                 c.arg(Path::new(ROOT).join(m));
             }
             let o = c.env("STAAL_LICENCE_TARGET", target).output().unwrap();
-            assert!(o.status.success(), "{target} {manifest:?}: {}", String::from_utf8_lossy(&o.stderr));
+            let err = String::from_utf8_lossy(&o.stderr);
+            // Cargo asks rustc about another platform to filter its crates, which some
+            // toolchains cannot answer (the release workflow's Linux container). There,
+            // and only for another platform, this is skipped, saying so; ci.yml sets
+            // STAAL_REQUIRE_EVERY_LICENCE_TARGET=1, so the check always runs there.
+            if !o.status.success()
+                && target != "x86_64-unknown-linux-gnu"
+                && err.contains("failed to run `rustc` to learn about target-specific information")
+                && std::env::var("STAAL_REQUIRE_EVERY_LICENCE_TARGET").as_deref() != Ok("1")
+            {
+                eprintln!("skipped: the licences for {target} ({manifest:?}): this toolchain cannot describe that platform");
+                continue;
+            }
+            assert!(o.status.success(), "{target} {manifest:?}: {err}");
         }
     }
     for script in ["scripts/package.sh", "scripts/wheel.sh", "scripts/node_package.sh"] {
