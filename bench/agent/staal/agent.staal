@@ -1,0 +1,49 @@
+// The support agent's actions. A model reads the customer's ticket and proposes a
+// plan; the plan's refunds run first, then its emails. The app that runs this
+// (app.py) decides each run's limits and grants them; this code accepts at most
+// one refund of at most 500 USD and one email, whatever it is granted.
+
+import stripe
+import mail
+
+type Order { id: Text, payment_intent: Text, paid: Money, email: Text }
+
+enum Step {
+    Refund { payment_intent: Text, cents: Int },
+    Email { to: Text, subject: Text, body: Text },
+}
+
+type Plan { steps: List<Step, 3>, reason: Text }
+
+const POLICY = "You are the support agent of an online shop. The data holds a customer's ticket and their order. Propose a plan: at most one refund of the order's payment, in US cents, when the ticket shows the order arrived damaged or never arrived, and at most one email to the customer saying what was done."
+
+fn main(ticket: Text, order: Order,
+        refunds: cap stripe.refunds.create(uses: 1, each: 500 USD),
+        replies: cap mail.messages.send(uses: 1)) -> Text budget(calls: 1, tokens: 800) {
+    let plan: Plan = validate propose(Plan, instruct: POLICY, data: [ticket, order], tokens: 800)
+    let refunded = 0 USD
+    for s in plan.steps {
+        match s {
+            Refund { payment_intent, cents } => {
+                if cents <= 0 {
+                    fail("the plan refunds " + to_text(cents) + " cents")
+                }
+                let amount = 0.01 USD * cents
+                let r = refunds.create(payment_intent, amount)
+                set refunded = refunded + amount
+            }
+            _ => {}
+        }
+    }
+    let emailed = 0
+    for s in plan.steps {
+        match s {
+            Email { to, subject, body } => {
+                let m = replies.send(to, subject, body)
+                set emailed = emailed + 1
+            }
+            _ => {}
+        }
+    }
+    return "refunded " + to_text(refunded) + ", emails " + to_text(emailed)
+}

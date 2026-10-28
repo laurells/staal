@@ -2565,8 +2565,11 @@ impl<'p> Interp<'p> {
                     json!({ "status": status, "body": scrub_text(&it.secrets, &body), "complete": complete }),
                 )),
                 http::Outcome::NotSent(e) => Answer::Done(Err(format!("{NOT_SENT}{e}"))),
-                // Safe to report as a failure: repeating it cannot do anything twice.
-                http::Outcome::Unknown(e) if retryable => Answer::Done(Err(format!("no answer: {e}"))),
+                // A GET is safe to report as a failure: repeating it cannot do anything.
+                // A keyed request is not: the program could only repeat it as a new
+                // operation, with a new key the service would not deduplicate. So the
+                // run stops, and resuming sends it again with the same key.
+                http::Outcome::Unknown(e) if method == "get" => Answer::Done(Err(format!("no answer: {e}"))),
                 http::Outcome::Unknown(e) => Answer::Unknown(e),
             }
         })?;

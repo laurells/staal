@@ -1182,7 +1182,10 @@ twice), unless the grant says the service deduplicates:
 
 Then the runtime sends `Idempotency-Key: <run id>-<operation>` with the request,
 the same key on every attempt, and such a request is retried after a crash or a
-lost answer. Only the operator can say this, in the grant; a program cannot. If the
+lost answer: a lost answer stops the run (`in_doubt`, which `try` cannot catch), and
+resuming sends the request again with the same key, with nothing to resolve first.
+The program is not told the request failed, because it could only repeat it as a new
+operation, with a new key the service would not deduplicate. Only the operator can say this, in the grant; a program cannot. If the
 service does not really deduplicate, or a retry comes after it has forgotten the key
 (Resend keeps keys for 24 hours), a request can be performed twice: this is the
 operator's statement to make.

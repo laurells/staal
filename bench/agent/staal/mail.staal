@@ -1,0 +1,32 @@
+// A library capability: email through a mail service's HTTP API (POST /emails).
+//
+// Programs ask for `cap mail.messages.send(only: [...], uses: N)`. `only` lists
+// addresses in the form `canonical` gives: trimmed and lower case. The service is
+// assumed not to deduplicate: grant `http` without "idempotency_key", so a message
+// whose answer was lost stops the run in doubt instead of being sent twice.
+
+type Message { from: Text, to: Text, subject: Text, text: Text }
+type Sent { id: Text }
+
+capability mail.messages {
+    needs http: cap net.http.post
+    needs key: Secret
+    needs base: Text
+    needs sender: Text
+
+    canonical(address: Text) -> Text {
+        return lower(trim(address))
+    }
+
+    action send(to: Text @target, subject: Text, body: Text) -> Text {
+        let m = Message { from: sender, to: lower(trim(to)), subject: subject, text: body }
+        let r = http.post(base + "/emails", json(m),
+            [header("Authorization", fill_secret("Bearer {secret}", key)),
+                header("Content-Type", "application/json")])
+        if r.status != 200 or not r.complete {
+            fail("the mail service answered " + json(r.status) + ": " + r.body)
+        }
+        let sent: Sent = validate parse(Sent, r.body)
+        return sent.id
+    }
+}

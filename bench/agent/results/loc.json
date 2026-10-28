@@ -1,0 +1,39 @@
+{
+ "python": [
+  {
+   "file": "app.py",
+   "what": "the agent, its policy, journal, retries and HTTP",
+   "lines": 312
+  }
+ ],
+ "staal": [
+  {
+   "file": "agent.staal",
+   "what": "the agent",
+   "lines": 39
+  },
+  {
+   "file": "app.py",
+   "what": "the policy, as grants, and run/resume/resolve",
+   "lines": 59
+  },
+  {
+   "file": "stripe.staal",
+   "what": "Stripe refunds library (from examples/capabilities)",
+   "lines": 39
+  },
+  {
+   "file": "mail.staal",
+   "what": "mail library",
+   "lines": 22
+  }
+ ],
+ "python_sections": {
+  "header": 45,
+  "The journal": 78,
+  "HTTP": 20,
+  "The model": 60,
+  "The actions, within the policy": 82,
+  "The job": 37
+ }
+}

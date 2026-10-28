@@ -4,6 +4,27 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+### Fixed
+
+- A POST (or PUT, PATCH, DELETE) granted `idempotency_key` whose answer was lost was
+  reported to the program as a failed action, which `try` could catch, while the
+  service may have acted on it: the money moved and the run said it failed, and a
+  program that caught the failure and sent the request again did so as a new
+  operation, with a new key the service would not deduplicate. Now the run stops
+  (`in_doubt`) and resuming sends the request again with the same key, as RUNTIME.md
+  section 12 said it would. Found by the agent benchmark (`bench/agent`), where a lost
+  Stripe answer left a refund made and its email unsent. A GET without an answer is
+  still a failure the program can catch.
+
+### Added
+
+- `bench/agent`: the same support agent written in Python alone and in Python with
+  Staal, run against prompt injection, malformed model output, permission escalation,
+  failing services and crashes around every external call, and against realistic
+  later changes to each agent; with its code size and what each team maintains.
+
 ## 0.24.0 — 2026-10-28
 
 ### Added

@@ -271,16 +271,37 @@ fn an_idempotency_key_is_sent_only_when_the_operator_says_so() {
     assert!(!reqs[0].headers.contains_key("idempotency-key"));
     let key = &reqs[1].headers["idempotency-key"];
     assert!(key.ends_with("-1") && key.len() > 30, "key {key}: <run id>-<operation>");
-    // And then a POST with no answer is retryable, so it is reported, not left in doubt.
-    let hang = format!(
-        r#"fn f(http: cap net.http.post) -> Bool {{
+}
+
+#[test]
+fn a_keyed_post_without_an_answer_stops_and_resumes_with_the_same_key() {
+    // A program that caught the failure could only send it again as a new operation,
+    // with a new key the service would not deduplicate: so the run stops instead, and
+    // `try` cannot catch it. Resuming sends it again with the same key.
+    let s = Server::start();
+    let src = format!(
+        r#"fn f(http: cap net.http.post) -> Int {{
     let r = try http.post("{}", "x")
-    return r.ok
+    if r.ok {{
+        return 1
+    }}
+    return 0
 }}"#,
-        s.url("/hang")
+        s.url("/hang-once")
     );
     let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.post", "idempotency_key": true } })), "net", json!({ "timeout_ms": 300 }));
-    assert_eq!(run(&hang, cfg).result.unwrap(), json!(false));
+    let p = prog(&src);
+    let journal = std::env::temp_dir().join(format!("staal-keyed-lost-{}.journal", std::process::id()));
+    let _ = std::fs::remove_file(&journal);
+    let f = run_config_durable(&p, &src, &cfg, Durability::Create(&journal)).unwrap().result.unwrap_err();
+    assert_eq!(f.kind, FailKind::InDoubt, "{}", f.message);
+    assert!(f.message.contains("Resume the run to make it again"), "{}", f.message);
+    let out = run_config_durable(&p, &src, &cfg, Durability::Resume(&journal)).unwrap();
+    assert_eq!(out.result.unwrap(), json!(1));
+    let reqs = s.requests();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[0].headers["idempotency-key"], reqs[1].headers["idempotency-key"]);
+    let _ = std::fs::remove_file(&journal);
 }
 
 #[test]

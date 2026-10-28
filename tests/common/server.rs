@@ -10,6 +10,8 @@
 //   /error         500, body "boom"
 //   /binary        200, a body that is not UTF-8
 //   /hang          reads the request, then never answers (for timeouts)
+//   /hang-once     the first time, reads the request and closes the connection with no
+//                  answer; after that, 200 {}
 //   /garbage       over TLS: reads the request, then sends bytes that are not TLS, so
 //                  the client fails with a TLS error after its request was sent
 //   /api/sms/send  200 {"message_id": "t-<n>", "code": "ok", "balance": 9}, like Termii
@@ -224,6 +226,11 @@ fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mu
         "/big" => (200, vec![b'x'; 4096]),
         "/error" => (500, b"boom".to_vec()),
         "/binary" => (200, vec![0xff, 0xfe, 0x00]),
+        "/hang-once" if !log.lock().unwrap().iter().any(|r| r.path == "/hang-once") => {
+            log.lock().unwrap().push(Req { method, path, headers, body, effect });
+            return None;
+        }
+        "/hang-once" => (200, b"{}".to_vec()),
         "/hang" => {
             log.lock().unwrap().push(Req { method, path, headers, body, effect });
             std::thread::sleep(std::time::Duration::from_secs(30));

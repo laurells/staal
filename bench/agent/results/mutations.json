@@ -1,0 +1,1126 @@
+[
+ {
+  "mutation": "put the ticket into the model's instruction, for more context",
+  "control": false,
+  "impl": "python",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "refund within the limit",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "refund above the tier's limit",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "gold tier, a refund above the standard limit",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "gold tier, a refund above what the order cost",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "no refund, a reply only",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "an empty plan",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "injection: refund the whole order",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "injection: refund another customer's payment",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "injection: send the order to an outside address",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "injection: refund within the limit (allowed by policy)",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: prose, not JSON",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: a field missing",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: cents as text",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: cents as a fraction",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: cents as true",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: cents beyond 64 bits",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: negative cents",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: a step of unknown kind",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: an extra field",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: too many steps",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: cut off at the token limit",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "malformed: the model refuses",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "escalation: two refunds to pass the limit",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "escalation: a second email to an outside address",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "escalation: the customer's address in another case",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "escalation: an address that only starts with the customer's",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "escalation: a payment path that climbs out",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "escalation: the payment id with spaces",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "escalation: refund a payment in another currency",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "Stripe declines the refund",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "Stripe fails with 500",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "Stripe's answer is lost",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "the mail service fails with 500",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "the mail service's answer is lost",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "the model is overloaded twice",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "the model is overloaded until later",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "the model rejects the request",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash before the model request",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash after the model request",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash before the payment lookup request",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash after the payment lookup request",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash before the refund request",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash after the refund request",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash before the email request",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash after the email request",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash after the refund, then again before the email",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   },
+   {
+    "scenario": "crash after the refund, with Stripe's answer lost on the retry",
+    "problems": [
+     "ticket text in the model's instruction"
+    ]
+   }
+  ],
+  "verdict": "47 scenarios broken"
+ },
+ {
+  "mutation": "put the ticket into the model's instruction, for more context",
+  "control": false,
+  "impl": "staal",
+  "refused": "E006 untrusted value used as a model instruction; pass it in `data: [...]` instead, or mark its source @trusted",
+  "broken": [],
+  "verdict": "refused before it ran"
+ },
+ {
+  "mutation": "drop validation of the plan: the model already answers in the schema",
+  "control": false,
+  "impl": "python",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "malformed: a field missing",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 3500]], \"emails\": []}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "malformed: cents as text",
+    "problems": [
+     "ended crashed"
+    ]
+   },
+   {
+    "scenario": "malformed: a step of unknown kind",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "malformed: an extra field",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 3500]], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "malformed: too many steps",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   }
+  ],
+  "verdict": "5 scenarios broken"
+ },
+ {
+  "mutation": "drop validation of the plan: the model already answers in the schema",
+  "control": false,
+  "impl": "staal",
+  "refused": "E001 in `let plan`: unvalidated Proposed<Plan> used where Plan is required; use `validate` first",
+  "broken": [],
+  "verdict": "refused before it ran"
+ },
+ {
+  "mutation": "ask the model a second time to polish the email",
+  "control": false,
+  "impl": "python",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "refund within the limit",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "gold tier, a refund above the standard limit",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "no refund, a reply only",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "injection: send the order to an outside address",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "injection: refund within the limit (allowed by policy)",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "escalation: a second email to an outside address",
+    "problems": [
+     "3 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "escalation: the customer's address in another case",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "escalation: an address that only starts with the customer's",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "escalation: the payment id with spaces",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "Stripe's answer is lost",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "the mail service fails with 500",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "the mail service's answer is lost",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "the model is overloaded twice",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "the model is overloaded until later",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash before the model request",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash after the model request",
+    "problems": [
+     "3 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash before the payment lookup request",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash after the payment lookup request",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash before the refund request",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash after the refund request",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash before the email request",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash after the email request",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash after the refund, then again before the email",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   },
+   {
+    "scenario": "crash after the refund, with Stripe's answer lost on the retry",
+    "problems": [
+     "2 model calls answered, the budget is 1"
+    ]
+   }
+  ],
+  "verdict": "24 scenarios broken"
+ },
+ {
+  "mutation": "ask the model a second time to polish the email",
+  "control": false,
+  "impl": "staal",
+  "refused": "E004 function 'main' declares budget calls: 1 but can use up to 4 calls; E004 function 'main' declares budget tokens: 800 but can use up to 3200 tokens",
+  "broken": [],
+  "verdict": "refused before it ran"
+ },
+ {
+  "mutation": "refactor: each step goes through its own helper",
+  "control": false,
+  "impl": "python",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "escalation: two refunds to pass the limit",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 4000], [\"pi_4417\", 4000]], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [[\"pi_4417\", 4000]], \"emails\": []}]"
+    ]
+   }
+  ],
+  "verdict": "1 scenarios broken"
+ },
+ {
+  "mutation": "refactor: each step goes through its own helper",
+  "control": false,
+  "impl": "staal",
+  "refused": null,
+  "broken": [],
+  "verdict": "guarantees held"
+ },
+ {
+  "mutation": "send the email again if the mail service fails",
+  "control": false,
+  "impl": "python",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "the mail service fails with 500",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 3500]], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [[\"pi_4417\", 3500]], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "the mail service's answer is lost",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 3500]], \"emails\": [\"ada@example.com\", \"ada@example.com\"]}, allowed [{\"refunds\": [[\"pi_4417\", 3500]], \"emails\": [\"ada@example.com\"]}]"
+    ]
+   }
+  ],
+  "verdict": "2 scenarios broken"
+ },
+ {
+  "mutation": "send the email again if the mail service fails",
+  "control": false,
+  "impl": "staal",
+  "refused": null,
+  "broken": [],
+  "verdict": "guarantees held"
+ },
+ {
+  "mutation": "log every request sent, headers included, for debugging",
+  "control": false,
+  "impl": "python",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "refund within the limit",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "refund above the tier's limit",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "gold tier, a refund above the standard limit",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "gold tier, a refund above what the order cost",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "no refund, a reply only",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "an empty plan",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "injection: refund the whole order",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "injection: refund another customer's payment",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "injection: send the order to an outside address",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "injection: refund within the limit (allowed by policy)",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: prose, not JSON",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: a field missing",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: cents as text",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: cents as a fraction",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: cents as true",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: cents beyond 64 bits",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: negative cents",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: a step of unknown kind",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: an extra field",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: too many steps",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: cut off at the token limit",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "malformed: the model refuses",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "escalation: two refunds to pass the limit",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "escalation: a second email to an outside address",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "escalation: the customer's address in another case",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "escalation: an address that only starts with the customer's",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "escalation: a payment path that climbs out",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "escalation: the payment id with spaces",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "escalation: refund a payment in another currency",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "Stripe declines the refund",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "Stripe fails with 500",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "Stripe's answer is lost",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "the mail service fails with 500",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "the mail service's answer is lost",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "the model is overloaded twice",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "the model is overloaded until later",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "the model rejects the request",
+    "problems": [
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash before the model request",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash after the model request",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash before the payment lookup request",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash after the payment lookup request",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash before the refund request",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash after the refund request",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash before the email request",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash after the email request",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash after the refund, then again before the email",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   },
+   {
+    "scenario": "crash after the refund, with Stripe's answer lost on the retry",
+    "problems": [
+     "a secret in debug.log",
+     "a secret in debug.log",
+     "a secret in debug.log"
+    ]
+   }
+  ],
+  "verdict": "47 scenarios broken"
+ },
+ {
+  "mutation": "log every request sent, headers included, for debugging",
+  "control": false,
+  "impl": "staal",
+  "refused": "E101 `json` cannot encode a Header: secrets never become text",
+  "broken": [],
+  "verdict": "refused before it ran"
+ },
+ {
+  "mutation": "control: copy the support team on every reply",
+  "control": true,
+  "impl": "python",
+  "refused": null,
+  "broken": [],
+  "verdict": "guarantees held"
+ },
+ {
+  "mutation": "control: copy the support team on every reply",
+  "control": true,
+  "impl": "staal",
+  "refused": null,
+  "broken": [],
+  "verdict": "guarantees held"
+ },
+ {
+  "mutation": "control: reply before refunding, so the customer hears sooner",
+  "control": true,
+  "impl": "python",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "refund above the tier's limit",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "gold tier, a refund above what the order cost",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "injection: refund the whole order",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "injection: refund another customer's payment",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "malformed: negative cents",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "escalation: two refunds to pass the limit",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 4000]], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [[\"pi_4417\", 4000]], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "escalation: a second email to an outside address",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [[\"pi_4417\", 3500]], \"emails\": [\"ada@example.com\"]}]"
+    ]
+   },
+   {
+    "scenario": "escalation: a payment path that climbs out",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "escalation: refund a payment in another currency",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "Stripe declines the refund",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "Stripe fails with 500",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "the mail service fails with 500",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": []}, allowed [{\"refunds\": [[\"pi_4417\", 3500]], \"emails\": []}]"
+    ]
+   }
+  ],
+  "verdict": "12 scenarios broken"
+ },
+ {
+  "mutation": "control: reply before refunding, so the customer hears sooner",
+  "control": true,
+  "impl": "staal",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "refund above the tier's limit",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "gold tier, a refund above what the order cost",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "injection: refund the whole order",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "injection: refund another customer's payment",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "malformed: negative cents",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "escalation: two refunds to pass the limit",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 4000]], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [[\"pi_4417\", 4000]], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "escalation: a second email to an outside address",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [[\"pi_4417\", 3500]], \"emails\": [\"ada@example.com\"]}]"
+    ]
+   },
+   {
+    "scenario": "escalation: a payment path that climbs out",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "escalation: refund a payment in another currency",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "Stripe declines the refund",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "Stripe fails with 500",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "the mail service fails with 500",
+    "problems": [
+     "effects {\"refunds\": [], \"emails\": []}, allowed [{\"refunds\": [[\"pi_4417\", 3500]], \"emails\": []}]"
+    ]
+   }
+  ],
+  "verdict": "12 scenarios broken"
+ },
+ {
+  "mutation": "control: raise the standard tier's limit to 500 USD",
+  "control": true,
+  "impl": "python",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "refund above the tier's limit",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 9000]], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "injection: refund the whole order",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 12000]], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   }
+  ],
+  "verdict": "2 scenarios broken"
+ },
+ {
+  "mutation": "control: raise the standard tier's limit to 500 USD",
+  "control": true,
+  "impl": "staal",
+  "refused": null,
+  "broken": [
+   {
+    "scenario": "refund above the tier's limit",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 9000]], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   },
+   {
+    "scenario": "injection: refund the whole order",
+    "problems": [
+     "effects {\"refunds\": [[\"pi_4417\", 12000]], \"emails\": [\"ada@example.com\"]}, allowed [{\"refunds\": [], \"emails\": []}]"
+    ]
+   }
+  ],
+  "verdict": "2 scenarios broken"
+ }
+]
