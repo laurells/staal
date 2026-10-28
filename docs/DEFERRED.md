@@ -57,25 +57,19 @@ the run for an operator, and the docs must say so. Done when: tests against a re
 server (a replica set for the keyed path), crash tests at every point with and without
 keys, mutations caught, and documented.
 
-## Phase 10 (platforms and distribution), blocked
+## Phase 10 (platforms and distribution), partly done
 
-Blocked on GitHub Actions billing (CI does not run) and on this workspace being
-unable to download other Rust targets. Remaining: Windows builds and tests, proof on
-macOS, cross-compiling, wasm. Needs CI working again or a linked machine. Linux
-x86_64 wheels and npm packages for glibc 2.28 are built without CI (RELEASING.md,
-"Linux builds without CI"), but not yet tried on a glibc 2.28 system; macOS and
-Linux aarch64 packages need CI. Publishing to PyPI and npm: decided (2026-10-27), the
-owner uploads.
+Done (2026-10-28): CI tests, and release.yml builds and tests the wheel, archive and
+npm addon on, Linux x86_64 and arm64 (manylinux_2_28) and macOS on Apple Silicon
+(11+) and Intel (10.12+); PyPI and npm publish through trusted publishing. The C library tests
+(`cap ffi`) run in CI on all four. Remaining:
+Windows builds and tests, Linux with musl (index.js already looks for a
+`linux-<arch>-musl` addon, none is built), cross-compiling, wasm, and `staalc build`
+executables on macOS.
 
 The CI badge was taken off the top of README.md on 2026-10-27, because it showed
-failing runs. Put it back once CI runs:
+failing runs. CI now passes on all four platforms; put it back if wanted:
 `[![ci](https://github.com/laurells/staal/actions/workflows/ci.yml/badge.svg)](https://github.com/laurells/staal/actions/workflows/ci.yml)`
-
-## C libraries (`cap ffi`) on macOS and aarch64
-
-Built and tested on Linux x86_64 only. The code supports macOS and aarch64 (loading
-by path on macOS, after hashing), but no test has run there: needs CI working again
-or a linked machine. Until then, treat those as unproven.
 
 ## Reliability, to do before more features
 

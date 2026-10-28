@@ -118,7 +118,7 @@ evidence, modules, packages and the rest.
 
 ## Getting started
 
-Without Rust, from a release, on Linux (x86_64) or macOS:
+Without Rust, from a release, on Linux (x86_64 or arm64) or macOS:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh
@@ -130,7 +130,8 @@ links `staalc` into `~/.local/bin`. Or unpack the archive yourself and run its
 `staalc`, or install the wheel with `pip install staal-X.Y.Z-py3-none-<platform>.whl`,
 which gives the `staalc` command and the `staal` Python package
 ([docs/RELEASING.md](docs/RELEASING.md) says what a release holds). Releases are
-made for Linux (glibc 2.28 and later) and macOS so far.
+made for Linux on x86_64 and arm64 (glibc 2.28 and later) and macOS on Apple
+Silicon (11 and later) and Intel (10.12 and later); arm64 Linux from 0.24.0.
 
 From source: Rust 1.89 or newer ([rustup.rs](https://rustup.rs)), `git` to
 fetch packages, and a C compiler (`cc`) to build executables. Developed and

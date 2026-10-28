@@ -8,6 +8,15 @@ the language or its file formats.
 
 ### Added
 
+- Packages for Linux on arm64 (wheel, archive and npm addon, glibc 2.28 and later)
+  and for Intel Macs (macOS 10.12 and later). Apple Silicon wheels now say macOS 11
+  and later, as the binaries need, instead of the build machine's macOS 15. Each
+  wheel's tag is checked against the minimum macOS its binaries declare. CI and
+  release builds run on all four platforms.
+- `@staal/node` carries addons for Linux x86_64 and arm64 and both Macs.
+- A quickstart in the README and on the site (`examples/quickstart/`), run as written
+  by the Python and Node tests.
+
 - The `payments` package refunds through Paystack (`payments.paystack.refund`) and
   Flutterwave (`payments.flutterwave.refund`), beside Stripe. Each refund is checked
   against its transaction first (it exists, succeeded, and is in the refund's

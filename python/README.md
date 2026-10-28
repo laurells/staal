@@ -32,10 +32,13 @@ Every call returns the JSON object described in
 [include/staal.h](https://github.com/laurells/staal/blob/main/include/staal.h), as a
 dict. `staalc build` also needs a C compiler (`cc`) to link executables.
 
-**Platforms.** Linux on x86_64 with glibc 2.28 or newer. Other platforms come
-later; until then, build from source.
+**Platforms.** Python 3.8 or newer, on Linux (x86_64 and arm64, glibc 2.28 or newer)
+and macOS (Apple Silicon, macOS 11 or newer; Intel, macOS 10.12 or newer), from
+0.24.0. Version 0.23.0 has Linux x86_64 and macOS 15 wheels only. Elsewhere, build
+from source.
 
-**Status.** A preview: tested on Linux only, with no independent security review yet.
+**Status.** A preview: tested on all four platforms above, with no independent
+security review yet.
 The [tutorial](https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md) takes
 about an hour.
 

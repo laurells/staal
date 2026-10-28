@@ -25,7 +25,7 @@ written by `scripts/third_party_licenses.py` from `cargo metadata`. The wheel ho
 the same `staalc`, libraries and licence files; `pip install` of it gives the `staalc` command and the
 `staal` Python package, with no Rust needed.
 
-Not yet in a release: Windows, other Linux architectures, WebAssembly, and
+Not yet in a release: Windows, Linux with musl, WebAssembly, and
 executables from `staalc build` on macOS (it makes them on Linux only).
 
 ## Linux builds without CI
@@ -78,6 +78,7 @@ It can also be run by hand for a tag (Actions, publish, Run workflow).
 Without CI, the files built as in "Linux builds without CI" are uploaded from the
 machine that built them. Only Linux x86_64 files exist that way, so `pip install staal`
 and `npm install @staal/node` then fail on other platforms with no matching file.
+With CI running, release.yml builds and tests all four platforms, so prefer it.
 
     # PyPI: an API token from pypi.org (Account settings, API tokens); user __token__.
     python3 -m pip install twine
