@@ -3,7 +3,7 @@
 # Node gets exactly the results the C interface and the Python package give.
 [package]
 name = "staal-node"
-version = "0.24.0"
+version = "0.24.1"
 edition = "2024"
 rust-version = "1.89"
 license = "Apache-2.0 WITH LLVM-exception"

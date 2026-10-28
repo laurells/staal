@@ -1,6 +1,6 @@
 {
   "name": "@staal/node",
-  "version": "0.24.0",
+  "version": "0.24.1",
   "description": "Staal, the programming language for agents, for Node.js: the staalc compiler and runtime, through its C interface",
   "keywords": [
     "staal",

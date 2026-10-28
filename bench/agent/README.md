@@ -57,7 +57,7 @@ commit, which includes the fix described below.
 Both versions pass all 47. Both stopped for an operator in the same 4 scenarios
 (an email whose answer was lost), and both were killed and restarted 11 times.
 
-Staal 0.24.0, the published release, fails 2 of the 47: "Stripe's answer is lost"
+Staal 0.24.0, the release before this fix, fails 2 of the 47: "Stripe's answer is lost"
 and "crash after the refund, with Stripe's answer lost on the retry". When a keyed
 POST lost its answer, 0.24.0 told the program the action had failed. The refund was
 made, the job reported failure, and the email was never sent. A program that caught
@@ -148,7 +148,7 @@ Line counts measure size, not difficulty.
 ## Running it
 
 ```
-pip install staal        # 0.24.1 or later for all 47; or STAAL_LIBRARY=<libstaalc built from source>
+pip install staal        # 0.24.1 or later for all 47
 python run.py            # every scenario against both agents
 python mutate.py         # the maintenance study (about 10 minutes)
 python loc.py            # lines of code
