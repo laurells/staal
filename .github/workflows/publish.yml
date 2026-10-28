@@ -74,5 +74,6 @@ jobs:
           if npm view "@staal/node@$version" version >/dev/null 2>&1; then
             echo "@staal/node $version is already on npm; nothing to do"
           else
-            npm publish "dist/staal-node-$version.tgz" --access public --provenance
+            # "./": without it npm reads dist/<file> as a GitHub repository, owner "dist".
+            npm publish "./dist/staal-node-$version.tgz" --access public --provenance
           fi
