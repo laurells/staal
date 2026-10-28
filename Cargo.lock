@@ -1439,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "staalc"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
