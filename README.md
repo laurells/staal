@@ -1,18 +1,63 @@
-# Staal
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/brand/staal-mark-dark.svg">
+    <img src="site/brand/staal-mark.svg" width="112" alt="Staal">
+  </picture>
+</p>
 
-**The programming language for agents.**
+<h1 align="center">Staal</h1>
+
+<p align="center">
+  <b>The programming language for agents.</b><br>
+  Not a wrapper around your prompts. A language whose compiler and runtime enforce what an agent may do,<br>
+  so limits, permissions and crash recovery hold even when the code around them changes.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0%20WITH%20LLVM--exception-2a5d8f" alt="License: Apache-2.0 WITH LLVM-exception"></a>
+  <a href="https://pypi.org/project/staal/"><img src="https://img.shields.io/pypi/v/staal?label=pypi&color=2a5d8f" alt="PyPI"></a>
+  <a href="https://www.npmjs.com/package/@staal/node"><img src="https://img.shields.io/npm/v/@staal/node?label=npm&color=2a5d8f" alt="npm"></a>
+  <a href="https://github.com/laurells/staal"><img src="https://img.shields.io/github/stars/laurells/staal?style=flat&color=2a5d8f" alt="GitHub stars"></a>
+</p>
+
+<p align="center">
+  <a href="bench/agent"><img src="docs/img/bench-code.svg" width="400" alt="Code to write and keep: Staal 159 lines, Python alone 312 lines"></a>
+  <a href="bench/agent"><img src="docs/img/bench-changes.svg" width="400" alt="Risky later changes that shipped broken: Staal 0 of 6, Python alone 6 of 6"></a>
+</p>
+
+## Benchmarks
+
+The same support agent, built twice: in Python alone and in Python with Staal, with
+the same limits, permissions, retries and crash recovery. Both face 47 scenarios:
+prompt injection, malformed model output, permission escalation, failing services,
+and crashes before and after every external call. Then six realistic later changes
+are made to each. See [bench/agent](bench/agent) for the code, the scenarios and
+what this does not show.
+
+| Metric | Python alone | Python with Staal |
+| --- | --- | --- |
+| Attack and crash scenarios passed | 47 of 47 | 47 of 47 |
+| Code to write and keep | 312 lines | 159 lines |
+| Risky later changes that shipped broken | 6 of 6 | 0 of 6 (4 refused before running, 2 held at run time) |
+| Operator interventions (emails in doubt) | 4 | 4 |
+
+Careful Python can match Staal on the day it is written. The difference is what
+happens to the guarantees as the code changes.
+
+## What it is
 
 Agents should not act on prompts and hope. Staal is a programming language built
 for what agents do: moving money, sending messages, changing files and records,
-and calling AI models. Its compiler proves, before a program runs, that every action has the authority it needs, that untrusted model
-output is validated before it is used, and that model spending stays inside a
-declared budget. Its runtime records every effect durably, so a program that
-crashes halfway through resumes without repeating a payment or a message.
+and calling AI models. Its compiler proves, before a program runs, that every action
+has the authority it needs, that untrusted model output is validated before it is
+used, and that model spending stays inside a declared budget. Its runtime records
+every effect durably, so a program that crashes halfway through resumes without
+repeating a payment or a message.
 
 Staal is said "stahl": it is Dutch and Afrikaans for steel. This repository holds
 `staalc`, the Staal compiler and reference runtime, written in Rust.
 
-## Add it to your app
+## Quick start
 
 Keep your app in Python or Node.js; write the part that moves money or messages in
 Staal. Your app decides the policy, Staal enforces it:
