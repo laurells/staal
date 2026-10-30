@@ -201,6 +201,7 @@ To build without the native compiler (smaller, interpreter only):
 | `staalc run <file.staal> [--entry <fn>] [--input <name>=<value>]...` | Runs a program that needs no grants, from the command line |
 | `staalc run <file.staal> --config <run.json>` | Runs a program with the inputs, grants and model a run config gives; add `--journal` for crash-safe runs and `--engine native` for native code |
 | `staalc config <file.staal> [--entry <fn>]` | Prints a run config to fill in for a program |
+| `staalc schema <file.staal> [--entry <fn>]` | Prints the JSON Schemas of a function's inputs and result, for describing it as a tool |
 | `staalc resume <file.staal> --config <run.json> --journal <run.journal>` | Continues a run that stopped or crashed |
 | `staalc resolve --journal <run.journal> ...` | Records an operator's decision on an action left in doubt |
 | `staalc fetch [<project folder>]` | Fetches the packages named in `staal.json` and writes `staal.lock` |

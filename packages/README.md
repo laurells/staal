@@ -35,3 +35,23 @@ Each package's code has been run against a local server standing in for its
 service (`tests/packages_test.rs`, with the base URL swapped), and all four have
 been fetched from their GitHub repositories with `staalc fetch`. Runs against the
 live services need your own keys.
+
+## What every package must meet
+
+A new package is reviewed against this list, in addition to the rules in
+[CONTRIBUTING.md](../CONTRIBUTING.md):
+
+- A `staal.json` manifest declaring exactly the URLs the package reaches, so the
+  compiler holds it to them (E108).
+- A `canonical` form for every target, so `only` patterns mean what they say: email
+  addresses trimmed and lower-cased, phone numbers in one international form,
+  identifiers such as `owner/repo#12` in one spelling.
+- A comment at the top of each library saying whether the service deduplicates
+  repeated requests, and by which header or key, so an operator knows whether to grant
+  `idempotency_key`.
+- A test against a local server that answers as the service's documentation shows,
+  with at least one action refused by `only` before any request is made, and a check
+  that the key never appears in the log.
+- A README section with a grant example.
+- An honest status: tested against a live test-mode account, or tested against a
+  local server only.

@@ -55,6 +55,7 @@ const USAGE: &str = "usage:
   staalc yank    --registry <registry folder> --package <name> --version <version> [--undo]
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
   staalc config  <file.staal> [--entry <function>]      (prints a run config to fill in)
+  staalc schema  <file.staal> [--entry <function>]      (prints the entry's input and output JSON Schemas)
   staalc run     <file.staal> (--config <run.json> | [--entry <function>] [--input <name>=<value>]...)
                  [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
   staalc resume  <file.staal> (--config <run.json> | ...as run) --journal <run.journal> [--log <run.jsonl>] [--engine native]
@@ -135,6 +136,11 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         "config" => match parse(rest, &["--entry"], &[]) {
             Ok((Some(file), opts)) => config_cmd(&file, opts.get("--entry").map(String::as_str)),
             Ok((None, _)) => u("config needs a program file"),
+            Err(e) => u(&e),
+        },
+        "schema" => match parse(rest, &["--entry"], &[]) {
+            Ok((Some(file), opts)) => schema_cmd(&file, opts.get("--entry").map(String::as_str)),
+            Ok((None, _)) => u("schema needs a program file"),
             Err(e) => u(&e),
         },
         "fetch" => match parse(rest, &[], &[]) {
@@ -375,6 +381,34 @@ fn run(
 }
 
 /// Prints a run config to fill in for the program's entry function.
+fn schema_cmd(file: &str, entry: Option<&str>) -> u8 {
+    let checked = match crate::check_path(Path::new(file)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            return 2;
+        }
+    };
+    let prog = match &checked.result {
+        Ok(p) => p,
+        Err(diags) => {
+            report(&checked.files, diags);
+            eprintln!("staalc: {file} has check errors");
+            return 1;
+        }
+    };
+    match crate::runconfig::interface(prog, entry) {
+        Ok(i) => {
+            println!("{}", serde_json::to_string_pretty(&i).expect("serialisable"));
+            0
+        }
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            2
+        }
+    }
+}
+
 fn config_cmd(file: &str, entry: Option<&str>) -> u8 {
     let checked = match crate::check_path(Path::new(file)) {
         Ok(c) => c,

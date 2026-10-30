@@ -24,6 +24,11 @@ pub struct Currency {
 }
 
 impl Currency {
+    /// Every supported currency: its code and how many decimal places it has.
+    pub fn all() -> &'static [(&'static str, u32)] {
+        CURRENCIES
+    }
+
     pub fn parse(code: &str) -> Result<Currency, String> {
         CURRENCIES
             .iter()

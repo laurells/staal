@@ -81,6 +81,31 @@ Keep a pull request to one change, with a description of what it does, why, how 
 is tested, and which deliberate breaks the tests caught. Commits have a short first
 line in the imperative ("Refuse a reply with no connection").
 
+## What to expect from review
+
+Every pull request and issue gets a first response within two working days (West
+Africa Time, Monday to Friday). The first response is either a review, a question,
+or a date by which a review will come.
+
+Review checks exactly the list in "What a change needs": both engines, tests that
+would catch the change breaking, the breaks you tried, crash safety for anything
+that acts, failing closed, documentation, and dependencies. For a package, it also
+checks the package checklist in [packages/README.md](packages/README.md). A review
+says which item a change does not meet yet, and what would meet it.
+
+A pull request that meets every item is merged. One that has had no reply from its
+author for 30 days after a review is closed, with a note saying it can be reopened.
+
+## First contributions
+
+Issues labelled
+[`good first issue`](https://github.com/laurells/staal/labels/good%20first%20issue)
+are scoped so that someone new to Staal can finish them, most of them packages: a
+library for one service, with its first one or two actions. A package needs no
+knowledge of the compiler, only of the service's API, and it is the quickest way to
+learn the language. Comment on an issue to take it, so two people do not write the
+same one.
+
 ## Licence
 
 Staal is licensed under the Apache License, Version 2.0, with the LLVM Exceptions

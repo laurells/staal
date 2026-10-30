@@ -4,6 +4,23 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+### Added
+
+- `staalc schema <file> [--entry <fn>]` prints what a caller outside a program sees of
+  a function, for describing it as a tool: a JSON Schema (2020-12) of its inputs, one
+  of its result, and the grants and secrets only an operator gives. Records and enums
+  are `$defs` referred to by `$ref`, so recursive types are exact, and money is
+  described with its currency's decimal places. Checked against the runtime's own
+  input rules on 39 values: they agree on all but a money amount too large to hold
+  exactly, which the runtime refuses and the schema cannot express.
+- `docs/MCP.md`: the design of `staalc mcp`, which will serve Staal programs to MCP
+  clients, with quotas across calls. Not built yet.
+- `CONTRIBUTING.md` says what to expect from review (a first response within two
+  working days) and how to take a first issue; `packages/README.md` lists what every
+  package must meet.
+
 ## 0.24.1 — 2026-10-28
 
 ### Fixed

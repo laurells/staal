@@ -80,6 +80,17 @@ capabilities it is given), Claude, with its key from `ANTHROPIC_API_KEY`. The
 placeholders are values of their types; what they should be is for the operator to
 write.
 
+`staalc schema prog.staal [--entry <function>]` prints what a caller outside the
+program sees of that function, for describing it as a tool (to an MCP client or an
+agent framework): `input`, a JSON Schema (2020-12) of the `inputs` it takes, where a
+parameter with a default is not required and each declared record or enum is a
+`$defs` entry referred to by `$ref`, so recursive types are described exactly;
+`output`, a JSON Schema of the result as a run writes it; and `grants` and `secrets`,
+the parameters only an operator gives, which are never inputs. Money is described
+with its currency's decimal places. The runtime's own check of inputs (section 3)
+still decides: the one thing it refuses that the schema accepts is a money amount too
+large to hold exactly.
+
 ## 2. Values
 
 **Constants.** `const NAME: T = value` declares a constant at the top of a file

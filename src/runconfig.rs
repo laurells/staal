@@ -246,3 +246,221 @@ pub fn skeleton(prog: &Program, entry: Option<&str>) -> Result<Json, String> {
     }
     Ok(Json::Object(cfg))
 }
+
+/// What a caller outside the program sees of entry function `entry` (or `main`): a JSON
+/// Schema (2020-12) for the inputs a caller gives, one for the value it returns, and the
+/// grants and secrets only an operator may give, which are never inputs. Used to describe
+/// a program as a tool (an MCP server, an agent framework). The schemas describe what
+/// `inputs` accepts; the runtime's own check of inputs (RUNTIME.md section 3) is still
+/// the one that decides, and it is stricter in one place a schema cannot express: a
+/// money amount too large to hold exactly is refused.
+pub fn interface(prog: &Program, entry: Option<&str>) -> Result<Json, String> {
+    let f = entry_fn(prog, entry)?;
+    let mut defs = Map::new();
+    let (mut props, mut required, mut grants, mut secrets) = (Map::new(), Vec::new(), Vec::new(), Vec::new());
+    for p in &f.params {
+        match &p.ty {
+            Ty::Cap { path, .. } => grants.push(json!({ "name": p.name, "cap": path.join(".") })),
+            Ty::Named(x) if x == "Secret" => secrets.push(json!(p.name)),
+            t => {
+                let s = input_schema(prog, t, &mut defs).map_err(|why| format!("parameter '{}': {why}", p.name))?;
+                props.insert(p.name.clone(), s);
+                if p.default.is_none() {
+                    required.push(json!(p.name));
+                }
+            }
+        }
+    }
+    let mut input = Map::new();
+    input.insert("$schema".into(), json!("https://json-schema.org/draft/2020-12/schema"));
+    input.insert("type".into(), json!("object"));
+    input.insert("properties".into(), Json::Object(props));
+    input.insert("required".into(), Json::Array(required));
+    input.insert("additionalProperties".into(), json!(false));
+    let mut out_defs = Map::new();
+    let output = match &f.ret {
+        None => json!({ "type": "null" }),
+        Some(t) => output_schema(prog, t, &mut out_defs)?,
+    };
+    if !defs.is_empty() {
+        input.insert("$defs".into(), Json::Object(defs));
+    }
+    let output = match output {
+        Json::Object(mut o) => {
+            o.insert("$schema".into(), json!("https://json-schema.org/draft/2020-12/schema"));
+            if !out_defs.is_empty() {
+                o.insert("$defs".into(), Json::Object(out_defs));
+            }
+            Json::Object(o)
+        }
+        other => other,
+    };
+    Ok(json!({ "entry": f.name, "input": Json::Object(input), "output": output, "grants": grants, "secrets": secrets }))
+}
+
+/// A `$ref` to a declared record or enum, its definition added to `defs` once. A
+/// definition refers to others by `$ref` too, so recursive types are described exactly.
+fn named_ref(prog: &Program, name: &str, defs: &mut Map<String, Json>, out: bool) -> Result<Json, String> {
+    // JSON Pointer escaping (RFC 6901) for the definition's name inside the reference.
+    let pointer = name.replace('~', "~0").replace('/', "~1");
+    let r = json!({ "$ref": format!("#/$defs/{pointer}") });
+    if defs.contains_key(name) {
+        return Ok(r);
+    }
+    let fields_schema = |fields: &[(String, Ty)], defs: &mut Map<String, Json>, kind: Option<&str>| -> Result<Json, String> {
+        let (mut props, mut req) = (Map::new(), Vec::new());
+        if let Some(k) = kind {
+            props.insert("kind".into(), json!({ "const": k }));
+            req.push(json!("kind"));
+        }
+        for (f, t) in fields {
+            let s = if out { output_schema(prog, t, defs)? } else { input_schema(prog, t, defs)? };
+            props.insert(f.clone(), s);
+            req.push(json!(f));
+        }
+        Ok(json!({ "type": "object", "properties": props, "required": req, "additionalProperties": false }))
+    };
+    if let Some(rec) = prog.types.iter().find(|r| r.name == name) {
+        // Placed before the fields are described, so a field that refers back to this
+        // type finds it and stops.
+        defs.insert(name.to_string(), json!({}));
+        let s = fields_schema(&rec.fields, defs, None)?;
+        defs.insert(name.to_string(), s);
+        return Ok(r);
+    }
+    if let Some(en) = prog.enums.iter().find(|e| e.name == name) {
+        defs.insert(name.to_string(), json!({}));
+        let mut options = Vec::new();
+        for v in &en.variants {
+            options.push(fields_schema(&v.fields, defs, Some(&v.name))?);
+        }
+        defs.insert(name.to_string(), json!({ "anyOf": options }));
+        return Ok(r);
+    }
+    Err(format!("unknown type {name}"))
+}
+
+/// Money as inputs take it: an amount with no more decimal places than its currency
+/// has, so one alternative per number of places.
+fn money_schema() -> Json {
+    let mut places: Vec<u32> = crate::interp::money::Currency::all().iter().map(|(_, e)| *e).collect();
+    places.sort_unstable();
+    places.dedup();
+    let options: Vec<Json> = places
+        .iter()
+        .map(|&e| {
+            let codes: Vec<&str> = crate::interp::money::Currency::all().iter().filter(|(_, x)| *x == e).map(|(c, _)| *c).collect();
+            let pattern = if e == 0 { "^[0-9]+$".to_string() } else { format!("^[0-9]+(\\.[0-9]{{1,{e}}})?$") };
+            json!({
+                "type": "object",
+                "properties": {
+                    "amount": { "type": "string", "pattern": pattern },
+                    "currency": { "enum": codes }
+                },
+                "required": ["amount", "currency"],
+                "additionalProperties": false
+            })
+        })
+        .collect();
+    json!({ "anyOf": options, "description": "money: a decimal amount as a string, e.g. {\"amount\": \"12.50\", \"currency\": \"USD\"}" })
+}
+
+/// The JSON Schema of a value a caller gives as type `t`, as `inputs` accepts it.
+fn input_schema(prog: &Program, t: &Ty, defs: &mut Map<String, Json>) -> Result<Json, String> {
+    Ok(match t {
+        Ty::Named(n) => match n.as_str() {
+            "Text" => json!({ "type": "string" }),
+            "Int" => json!({ "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX }),
+            "Bool" => json!({ "type": "boolean" }),
+            "Money" => money_schema(),
+            "Secret" | "Header" => return Err(format!("a {n} cannot be given as data")),
+            "Receipt" | "Outcome" | "Done" => {
+                return Err(format!("a {n} can only be made by the runtime, never given from outside"))
+            }
+            _ => named_ref(prog, n, defs, false)?,
+        },
+        Ty::List(inner, max) => json!({ "type": "array", "items": input_schema(prog, inner, defs)?, "maxItems": max }),
+        Ty::Set(inner, max) => {
+            json!({ "type": "array", "items": input_schema(prog, inner, defs)?, "maxItems": max, "uniqueItems": true })
+        }
+        Ty::Map(k, v, max) => {
+            let mut m = Map::new();
+            m.insert("type".into(), json!("object"));
+            m.insert("additionalProperties".into(), input_schema(prog, v, defs)?);
+            m.insert("maxProperties".into(), json!(max));
+            if **k == Ty::Named("Int".into()) {
+                m.insert("propertyNames".into(), json!({ "pattern": "^-?(0|[1-9][0-9]*)$" }));
+            }
+            Json::Object(m)
+        }
+        Ty::Optional(inner) => json!({ "anyOf": [input_schema(prog, inner, defs)?, { "type": "null" }] }),
+        Ty::Tuple(items) => {
+            let mut s = Vec::new();
+            for i in items {
+                s.push(input_schema(prog, i, defs)?);
+            }
+            json!({ "type": "array", "prefixItems": s, "items": false, "minItems": items.len(), "maxItems": items.len() })
+        }
+        Ty::Proposed(_) => return Err("a Proposed value can only come from a model call".into()),
+        Ty::Func(..) => return Err("a function value cannot be given as data".into()),
+        Ty::Cap { .. } => return Err("a capability can only be granted, never given as data".into()),
+    })
+}
+
+/// The JSON Schema of a value the entry function returns, as a run's result writes it.
+fn output_schema(prog: &Program, t: &Ty, defs: &mut Map<String, Json>) -> Result<Json, String> {
+    Ok(match t {
+        Ty::Named(n) => match n.as_str() {
+            "Text" => json!({ "type": "string" }),
+            "Int" => json!({ "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX }),
+            "Bool" => json!({ "type": "boolean" }),
+            "Money" => money_schema(),
+            "Receipt" => json!({
+                "type": "object",
+                "properties": { "receipt": { "type": "string" }, "capability": { "type": "string" }, "method": { "type": "string" } },
+                "required": ["receipt", "capability", "method"],
+                "additionalProperties": false
+            }),
+            "Outcome" => json!({
+                "type": "object",
+                "properties": { "ok": { "type": "boolean" }, "error": { "type": "string" } },
+                "required": ["ok", "error"],
+                "additionalProperties": false
+            }),
+            // Evidence: receipts, outcomes and other Done values, as the result writes them.
+            "Done" => json!({
+                "type": "object",
+                "properties": { "done": { "type": "array" } },
+                "required": ["done"],
+                "additionalProperties": false
+            }),
+            "Secret" | "Header" => return Err(format!("a {n} is never written as a result")),
+            _ => named_ref(prog, n, defs, true)?,
+        },
+        Ty::List(inner, max) => json!({ "type": "array", "items": output_schema(prog, inner, defs)?, "maxItems": max }),
+        Ty::Set(inner, max) => {
+            json!({ "type": "array", "items": output_schema(prog, inner, defs)?, "maxItems": max, "uniqueItems": true })
+        }
+        Ty::Map(k, v, max) => {
+            let mut m = Map::new();
+            m.insert("type".into(), json!("object"));
+            m.insert("additionalProperties".into(), output_schema(prog, v, defs)?);
+            m.insert("maxProperties".into(), json!(max));
+            if **k == Ty::Named("Int".into()) {
+                m.insert("propertyNames".into(), json!({ "pattern": "^-?(0|[1-9][0-9]*)$" }));
+            }
+            Json::Object(m)
+        }
+        Ty::Optional(inner) => json!({ "anyOf": [output_schema(prog, inner, defs)?, { "type": "null" }] }),
+        Ty::Tuple(items) => {
+            let mut s = Vec::new();
+            for i in items {
+                s.push(output_schema(prog, i, defs)?);
+            }
+            json!({ "type": "array", "prefixItems": s, "items": false, "minItems": items.len(), "maxItems": items.len() })
+        }
+        Ty::Proposed(_) => json!({}),
+        Ty::Func(..) => return Err("a function value is never written as a result".into()),
+        Ty::Cap { .. } => return Err("a capability is never written as a result".into()),
+    })
+}
