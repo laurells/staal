@@ -1,7 +1,8 @@
 # Staal as an MCP server: design
 
 Status: design, agreed before implementation (phase 0 of the ecosystem plan); the
-manifest format in section 2 is frozen for version 1. Nothing here is built yet except
+manifest format in section 2 is frozen for version 1, as revised after the first
+outside review (deadlines, required timeouts, `server.keep`). Nothing here is built yet except
 `staalc schema` (section 4). When the implementation and this note disagree, the note
 is updated in the same change.
 
@@ -28,7 +29,8 @@ problem gives. Unknown keys are refused at every level.
 ```json
 {
   "server": { "name": "shop-actions", "journals": "/var/lib/staal/mcp" },
-  "model": { "provider": "anthropic", "model": "claude-sonnet-5-5", "api_key": { "env": "ANTHROPIC_API_KEY" } },
+  "model": { "provider": "anthropic", "model": "claude-sonnet-5-5", "api_key": { "env": "ANTHROPIC_API_KEY" },
+             "timeout_ms": 60000, "retries": 2 },
   "tools": [
     {
       "name": "refund_order",
@@ -42,6 +44,8 @@ problem gives. Unknown keys are refused at every level.
                             "post": { "cap": "net.http.post", "only": ["https://api.stripe.com/v1/refunds"], "idempotency_key": true },
                             "key": { "env": "STRIPE_SECRET_KEY" } } }
       },
+      "net": { "timeout_ms": 10000 },
+      "deadline": "120s",
       "quota": { "window": "24h", "calls": 100, "money": { "amount": "500.00", "currency": "USD" } }
     }
   ]
@@ -52,6 +56,9 @@ problem gives. Unknown keys are refused at every level.
   directory that holds every run's journal and the quota ledger; it is created with
   mode 0700 if missing. `server.notify`, optional, is a command (an array: the program
   and its fixed arguments) run when a run stops for an operator (section 7).
+  `server.keep` is how many days finished runs' journals are kept (section 7).
+- A tool's `deadline`, optional, bounds how long its runs may keep starting actions
+  (section 3).
 - `model` is the run config's `model`, used by every tool unless a tool gives its own.
 - Each tool has `name` (1 to 128 characters of `A-Z a-z 0-9 _ - .`, unique in the
   manifest), an optional `title`, a `description` (required: a model chooses tools by
@@ -67,6 +74,18 @@ by building a run config from it with placeholder inputs (as `staalc config` mak
 them) and validating it as `staalc run` would, without running anything. A program
 with check errors, or a config that would be refused, stops the server.
 
+Two things a program could do under `staalc run` are refused in a tool, because they
+would reach the protocol stream or wait without end:
+
+- **Console input.** A program that can reach `read_line()` is refused: the server's
+  standard input is the MCP stream, so a read would consume the client's messages.
+- **Listening for connections.** A grant of `net.tcp.accept` is refused: an accept
+  waits until a client connects, with no time limit today (DEFERRED.md), so a call
+  could hold its quota reservation for ever.
+
+`print` stays allowed. In a tool, printed lines never go to standard output; they are
+recorded in the run's log, as always, and nothing else (section 3).
+
 The manifest holds environment variable names, never secret values, so it can be kept
 in version control.
 
@@ -75,6 +94,17 @@ in version control.
 Version 1 speaks stdio: newline-delimited JSON-RPC 2.0 messages, one per line, with no
 embedded newlines. The server writes only MCP messages to stdout and its own log lines
 to stderr, and it exits when stdin closes.
+
+The stream is protected at the level of file descriptors, not by care alone. Before
+the server reads its manifest, it duplicates descriptors 0 and 1 to private ones used
+only by the protocol reader and writer, then points descriptor 1 at standard error and
+descriptor 0 at `/dev/null`. Anything else in the process that writes to standard
+output (a Staal `print` that somehow reached it, a panic message, a C library called
+through `cap ffi`) lands on standard error, and nothing else can read the client's
+messages. The protocol writer emits each message as one `write` of a complete line,
+under a lock, so concurrent answers never interleave. A test runs a tool whose program
+prints and whose C library writes to standard output, and checks every line the
+client receives is a valid MCP message.
 
 It supports two protocol versions:
 
@@ -98,6 +128,27 @@ Unknown methods get `-32601`. Notifications the server does not use are ignored.
 `notifications/cancelled` for a call in progress is honoured only before its run
 starts; once a run has started it finishes or stops, because stopping it halfway would
 leave its last action in doubt (section 7).
+
+### How long a call can take
+
+A run cannot hang for ever, but it can take long. Each operation that waits is bounded
+by its own timeout: HTTP by `net.timeout_ms` (default 30 s), a model call by the
+model's `timeout_ms` times its attempts (by default 600 s, three times), databases and
+TCP by theirs; computation by `max_steps`; and listening is refused (section 2). Those
+defaults suit a script, not a tool call, so in a tool they are required: the manifest
+must give `net.timeout_ms` and, for a tool that can reach a model, the model's
+`timeout_ms` and `retries`, and the server refuses to start otherwise.
+
+On top of those, a tool may set `deadline` (for example `"deadline": "120s"`). The
+runtime checks it before it starts each external operation, never during one: past
+the deadline, the run fails as `deadline` instead of starting the next action. So a
+deadline never cuts an action in half and never leaves one in doubt; the most a call
+can take is the deadline plus the longest single operation. The check is recorded in
+the journal like the clock, so a resumed run makes the same decision. This needs one
+addition to the runtime, for both engines, in phase 1.
+
+A client that wants to know a long call is alive gets `notifications/progress` if it
+sent a `progressToken`, once at the start of each external operation.
 
 ## 4. Listing tools
 
@@ -139,7 +190,7 @@ For `tools/call` with a tool `name` and `arguments`:
 | --- | --- |
 | `done` | `structuredContent` = the result; `content` = one text item holding the same JSON; `isError: false` |
 | `failed`, kind `capability` | `isError: true`; the text is the broker's message, e.g. "'payments.stripe.refund' allows at most 50.00 USD per action; this action needs 300.00 USD" |
-| `failed`, kind `validation`, `action`, `value`, `provider` or `budget` | `isError: true`; the text is the failure's kind and message |
+| `failed`, kind `validation`, `action`, `value`, `provider`, `budget` or `deadline` | `isError: true`; the text is the failure's kind and message |
 | `failed`, kind `internal` | `isError: true`; the text says an internal error happened and names the run id; the details go to stderr |
 | `stopped` | `isError: true`; the text says the action may already have happened, that the run is waiting for an operator, its run id, and not to call the tool again for it; `structuredContent` = `{"status": "waiting_for_operator", "run": "<run id>"}` (section 7) |
 | a config or input problem (`error`) | `isError: true` with the problem, so the model can correct its arguments |
@@ -195,10 +246,19 @@ because the action in doubt may have spent money.
 `settle`), each written and flushed with `fsync` before the call it belongs to goes on.
 Only one server process may hold it (an OS lock, freed if the process dies). A torn last
 line is discarded; any other damage stops the server, as a damaged journal does. Events
-older than the longest window are compacted away at start.
+older than the longest window are compacted away at start, except reservations not yet
+settled, which are kept whatever their age.
 
-Windows use the system clock. A clock moved backwards makes a window last longer, never
-shorter; moved forwards, it can free a quota early. That is stated, not hidden.
+**Time.** Each event records the wall-clock time, in UTC milliseconds since 1970, so
+time zones and daylight saving never enter into it. The ledger's time never goes
+backwards: an event is stamped with the later of the clock and the last event's time,
+and a clock found behind the ledger is logged as a warning. So a clock set back cannot
+make a window shorter or reorder events. A clock set forwards can free a quota early,
+and nothing inside one machine can detect that; an operator who needs it guarded
+should run the server where the clock is kept by NTP and alarms on large steps.
+
+A monotonic clock was considered and refused: it does not survive a restart, and a
+quota has to, so the ledger would still depend on the wall clock at every start.
 
 **What the runtime must add for this:** a run's result reports, for each root grant,
 the uses counted and the money charged. Today the C interface does not, so this is part
@@ -257,6 +317,17 @@ A journal is tied to its program, config and runtime version, so upgrading `staa
 changing a tool with runs still stopped makes those runs refuse to resume. `staalc mcp
 status` warns about them, and the release notes of each version say so.
 
+### Keeping files
+
+Journals are kept as `<journals>/<tool>/<first two characters of the run id>/<run
+id>.journal`, so no directory holds more than about a 256th of a tool's runs. A
+journal is the record of what a run did, so the server never deletes one on its own
+initiative; `server.keep` sets how many days a finished run's journal and log are
+kept (at least 1, default 90). At each start, and once a day while running, journals
+of finished runs older than that are deleted. A run that is running, stopped or has an
+unsettled reservation is never deleted, whatever its age. `staal_run_status` answers
+"unknown run" for one that has been deleted.
+
 ## 8. Security
 
 What the server trusts: the manifest, the programs and libraries it names, and the
@@ -288,6 +359,13 @@ environment that holds the secrets. What it does not: everything that arrives on
 - Crashes: the server is killed at every journal write and every ledger write during a
   call; after restart, the world and the ledger match an uninterrupted call.
 - Secrets: as in section 8.
+- The stream: a tool that prints, and one whose C library writes to standard output,
+  never put anything but MCP messages on the client's stream; a program that can reach
+  `read_line()`, and a grant of `net.tcp.accept`, are refused at start.
+- Deadlines: a run past its deadline fails before its next action and never during
+  one, on both engines, and a resumed run decides the same way.
+- Keeping files: finished journals older than `server.keep` are deleted, and a running,
+  stopped or unsettled run's never is.
 - Operators: a stopped run leaves its `waiting` record before the caller is answered,
   including when the server is killed between the two; a failing notify command is run
   again at the next start until it succeeds; `staal_run_status` reports every state,
