@@ -30,6 +30,7 @@ export type FailureKind =
   | 'provider'
   | 'step_limit'
   | 'depth_limit'
+  | 'deadline'
   | 'internal'
   | 'journal'
   | 'in_doubt';
@@ -39,8 +40,17 @@ export interface Failure {
   message: string;
 }
 
+/** What one granted capability used over a run (RUNTIME.md section 6). */
+export interface GrantUsage {
+  capability: string;
+  uses: number;
+  charged: { amount: string; currency: string }[];
+}
+
 interface Ran {
   log: LogEvent[];
+  /** For each capability parameter of the entry function, by name. */
+  usage: { [parameter: string]: GrantUsage };
   /** Present when the run loaded C code, which Staal cannot check (RUNTIME.md section 19). */
   unchecked?: Json[];
 }

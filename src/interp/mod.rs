@@ -47,6 +47,9 @@ pub enum FailKind {
     Provider,
     StepLimit,
     DepthLimit,
+    /// The run passed its deadline (`limits.deadline_ms`) and was stopped before it
+    /// started another action or model call.
+    Deadline,
     /// A state the compiler should have ruled out: a bug, reported instead of crashing.
     Internal,
     /// The journal could not be written, or replay diverged from it (RUNTIME.md section 11).
@@ -71,9 +74,12 @@ impl FailKind {
             | FailKind::Value
             | FailKind::Budget
             | FailKind::Provider => true,
-            FailKind::StepLimit | FailKind::DepthLimit | FailKind::Internal | FailKind::Journal | FailKind::InDoubt => {
-                false
-            }
+            FailKind::StepLimit
+            | FailKind::DepthLimit
+            | FailKind::Deadline
+            | FailKind::Internal
+            | FailKind::Journal
+            | FailKind::InDoubt => false,
         }
     }
 }
@@ -89,6 +95,7 @@ impl fmt::Display for FailKind {
             FailKind::Provider => "provider",
             FailKind::StepLimit => "step_limit",
             FailKind::DepthLimit => "depth_limit",
+            FailKind::Deadline => "deadline",
             FailKind::Internal => "internal",
             FailKind::Journal => "journal",
             FailKind::InDoubt => "in_doubt",
@@ -133,11 +140,14 @@ pub struct Limits {
     pub max_steps: u64,
     pub max_depth: usize,
     pub default_max_tokens: u64,
+    /// How long this run (or this resume of it) may keep starting actions and model
+    /// calls, from when it began. Checked before each one starts, never during one.
+    pub deadline: Option<std::time::Duration>,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_steps: 1_000_000, max_depth: 256, default_max_tokens: 1024 }
+        Limits { max_steps: 1_000_000, max_depth: 256, default_max_tokens: 1024, deadline: None }
     }
 }
 
@@ -161,6 +171,11 @@ const MAX_PARALLEL: usize = 16;
 pub struct RunResult {
     pub result: Result<Json, Failure>,
     pub log: Vec<Json>,
+    /// For each capability parameter of the entry function, by name: the capability,
+    /// the actions attempted through it and the money charged through it, counting
+    /// everything narrowed from it, over the whole run (a resumed run's replay
+    /// included). Empty if the run failed before its grants were made.
+    pub usage: Json,
 }
 
 impl RunResult {
@@ -322,7 +337,7 @@ pub fn same_run(a: &RunResult, b: &RunResult) -> bool {
             _ => text,
         }
     };
-    result(a) == result(b) && log(a) == log(b)
+    result(a) == result(b) && log(a) == log(b) && a.usage == b.usage
 }
 
 /// Runs a checked program without a journal, as `run_config_engine` does, keeping
@@ -458,6 +473,8 @@ struct RuntimeSettings {
 enum Arg {
     Data(Value),
     Grant {
+        /// The entry function's parameter it is given to.
+        name: String,
         path: String,
         limits: broker::Limits,
         idempotency_key: bool,
@@ -957,6 +974,7 @@ impl Setup {
                     let want = path.join(".");
                     let pg = parse_grant(g, &at, &want, declared, &types, prog, &mut runtime)?;
                     args.push(Arg::Grant {
+                        name: p.name.clone(),
                         path: want,
                         limits: pg.limits,
                         idempotency_key: pg.idempotency_key,
@@ -994,6 +1012,7 @@ impl Setup {
                 let n = v.as_u64().filter(|n| *n > 0).ok_or(format!("limits.{k}: expected a positive whole number"))?;
                 match k.as_str() {
                     "max_steps" => limits.max_steps = n,
+                    "deadline_ms" => limits.deadline = Some(std::time::Duration::from_millis(n)),
                     "default_max_tokens" => limits.default_max_tokens = n,
                     "max_depth" => {
                         if n > MAX_DEPTH_CEILING as u64 {
@@ -1163,6 +1182,11 @@ struct Interp<'p> {
     /// How many `parallel` calls this interpreter has made: with the item's position,
     /// what names each task, the same on every run.
     spawns: u64,
+    /// When this run, or this resume of it, began: what `limits.deadline` counts from.
+    started: std::time::Instant,
+    /// The entry function's capability parameters and the broker handle each was
+    /// granted, for `RunResult::usage`.
+    granted: Vec<(String, usize)>,
 }
 
 /// What a profiled run spent in one function. Steps are the runtime's own count
@@ -1289,6 +1313,8 @@ impl<'p> Interp<'p> {
             debug_stack: Vec::new(),
             task: String::new(),
             spawns: 0,
+            started: std::time::Instant::now(),
+            granted: Vec::new(),
         }
     }
 
@@ -1323,8 +1349,9 @@ impl<'p> Interp<'p> {
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
-                Arg::Grant { path, limits, idempotency_key, needs, foreign, postgres } => {
+                Arg::Grant { name, path, limits, idempotency_key, needs, foreign, postgres } => {
                     let h = self.broker().grant(path, limits.clone());
+                    self.granted.push((name.clone(), h));
                     if let Some(p) = postgres {
                         self.postgres.insert(h, p.clone());
                     }
@@ -1400,13 +1427,47 @@ impl<'p> Interp<'p> {
             Ok(v) => self.emit("run_end", json!({ "ok": true, "result": v })),
             Err(f) => self.emit("run_end", json!({ "ok": false, "failure": f.kind.to_string(), "message": f.message })),
         }
-        RunResult { result, log: std::mem::take(&mut self.log) }
+        let usage = self.usage();
+        RunResult { result, log: std::mem::take(&mut self.log), usage }
     }
 
     /// Ends a run that failed before its entry function started.
     fn finish_early(&mut self, f: Failure) -> RunResult {
         self.emit("run_end", json!({ "ok": false, "failure": f.kind.to_string(), "message": f.message }));
-        RunResult { result: Err(f), log: std::mem::take(&mut self.log) }
+        let usage = self.usage();
+        RunResult { result: Err(f), log: std::mem::take(&mut self.log), usage }
+    }
+
+    /// What each granted capability used (`RunResult::usage`).
+    fn usage(&self) -> Json {
+        let broker = self.broker();
+        let mut out = serde_json::Map::new();
+        for (name, h) in &self.granted {
+            let (Ok(path), Ok((uses, charged))) = (broker.path(*h), broker.usage(*h)) else { continue };
+            let charged: Vec<Json> =
+                charged.iter().map(|m| json!({ "amount": m.amount_string(), "currency": m.currency.code })).collect();
+            out.insert(name.clone(), json!({ "capability": path, "uses": uses, "charged": charged }));
+        }
+        Json::Object(out)
+    }
+
+    /// Before an action or a model call starts for the first time: whether the run is
+    /// past its deadline. An operation already in the journal is never refused, since
+    /// it happened (or is being retried after being in doubt). A run whose journal
+    /// records that it ended at its deadline ends the same way when replayed, whatever
+    /// the clock says now, so a resumed run makes the same decision.
+    fn check_deadline(&mut self, what: &str) -> Result<(), Failure> {
+        let Some(deadline) = self.limits.deadline else { return Ok(()) };
+        let (replay, ended_at_deadline) = {
+            let j = self.journal();
+            (j.replays_next(&self.task), j.recorded_failure() == Some("deadline"))
+        };
+        if replay || !(ended_at_deadline || self.started.elapsed() > deadline) {
+            return Ok(());
+        }
+        let ms = deadline.as_millis();
+        self.emit("deadline", json!({ "deadline_ms": ms, "before": what }));
+        fail(FailKind::Deadline, format!("the run passed its deadline of {ms} ms; it stopped before starting the {what}"))
     }
 
     /// A capability flowing into a slot with limits gets a child with those limits.
@@ -1926,6 +1987,9 @@ impl<'p> Interp<'p> {
             debug_stack: Vec::new(),
             task: id,
             spawns: 0,
+            // A task counts from when its run began, not from when it was forked.
+            started: self.started,
+            granted: Vec::new(),
         }
     }
 
@@ -3038,6 +3102,9 @@ impl<'p> Interp<'p> {
         what: &str,
         live: impl FnOnce(&mut Self, &str) -> Answer,
     ) -> Result<(Result<Json, String>, bool), Failure> {
+        if matches!(op, "action" | "count" | "model") {
+            self.check_deadline(what)?;
+        }
         let step = match self.journal().begin(&self.task, op, body) {
             Ok(step) => step,
             Err(e) => return fail(FailKind::Journal, e),
@@ -4033,6 +4100,7 @@ mod same_run_tests {
         RunResult {
             result: result.map(|n| json!(n)).map_err(|(kind, m)| Failure { kind, message: m.into(), raised: None }),
             log: vec![json!({ "event": "run_start", "run_id": id }), json!({ "event": "x", "key": format!("{id}-{key}") })],
+            usage: json!({}),
         }
     }
 

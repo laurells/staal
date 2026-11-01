@@ -150,6 +150,8 @@ fn run_program(program: String, config: String, journal_path: Option<String>, re
             json!({ "status": status, "failure": { "kind": f.kind.to_string(), "message": f.message }, "log": res.log })
         }
     };
+    // What each grant used, so a host can account for a run (RUNTIME.md section 6).
+    out["usage"] = res.usage;
     // A run that loaded C code says so (RUNTIME.md section 19).
     if !unchecked.is_empty() {
         out["unchecked"] = json!(unchecked);

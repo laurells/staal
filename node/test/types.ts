@@ -14,8 +14,10 @@ const config: RunConfig = {
 async function handle(): Promise<string> {
   const out: RunResult = await staal.run('refund.staal', config, { journal: 'run.journal', engine: 'native' });
   switch (out.status) {
-    case 'done':
-      return String(out.result);
+    case 'done': {
+      const charged: string[] = Object.values(out.usage).flatMap((u) => u.charged.map((m) => `${m.amount} ${m.currency}`));
+      return `${String(out.result)} (${charged.join(', ')})`;
+    }
     case 'failed':
       return `refused (${out.failure.kind}): ${out.failure.message}`;
     case 'stopped': {

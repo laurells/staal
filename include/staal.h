@@ -10,7 +10,9 @@
  *   "error"    a bad argument, file, config or journal; "error" says why; nothing ran
  *   "ok"       (staal_check) the program is valid
  *   "resolved" (staal_resolve) the action in doubt was resolved
- * Runs also carry "log", the run's events.
+ * Runs also carry "log", the run's events, and "usage": for each capability parameter
+ * of the entry function, {"capability", "uses", "charged": [money...]} (RUNTIME.md
+ * section 6).
  *
  * Arguments are UTF-8 strings, borrowed for the call. journal_path and engine may be
  * NULL; engine is "interpreter" (the default) or "native". The functions may be

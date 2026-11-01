@@ -2,8 +2,9 @@
 
 Status: design, agreed before implementation (phase 0 of the ecosystem plan); the
 manifest format in section 2 is frozen for version 1, as revised after the first
-outside review (deadlines, required timeouts, `server.keep`). Nothing here is built yet except
-`staalc schema` (section 4). When the implementation and this note disagree, the note
+outside review (deadlines, required timeouts, `server.keep`). The server itself is not built yet.
+What it relies on from the runtime is: `staalc schema` (section 4), `limits.deadline_ms`
+(section 3), each run's `usage` (section 6) and the `reads_console` check (section 2). When the implementation and this note disagree, the note
 is updated in the same change.
 
 ## 1. What it is for
@@ -79,6 +80,8 @@ would reach the protocol stream or wait without end:
 
 - **Console input.** A program that can reach `read_line()` is refused: the server's
   standard input is the MCP stream, so a read would consume the client's messages.
+  `staalc schema` reports it as `reads_console`, following calls and the library
+  capabilities the function is given.
 - **Listening for connections.** A grant of `net.tcp.accept` is refused: an accept
   waits until a client connects, with no time limit today (DEFERRED.md), so a call
   could hold its quota reservation for ever.
@@ -143,9 +146,11 @@ On top of those, a tool may set `deadline` (for example `"deadline": "120s"`). T
 runtime checks it before it starts each external operation, never during one: past
 the deadline, the run fails as `deadline` instead of starting the next action. So a
 deadline never cuts an action in half and never leaves one in doubt; the most a call
-can take is the deadline plus the longest single operation. The check is recorded in
-the journal like the clock, so a resumed run makes the same decision. This needs one
-addition to the runtime, for both engines, in phase 1.
+can take is the deadline plus the longest single operation. A resumed run makes the same decision:
+an operation already in the journal is replayed, and a run the journal records as
+ended at its deadline ends there again. The tool's `deadline` sets the run's
+`limits.deadline_ms`, which is built and tested on both engines (RUNTIME.md section 4,
+`tests/deadline_test.rs`).
 
 A client that wants to know a long call is alive gets `notifications/progress` if it
 sent a `progressToken`, once at the start of each external operation.
@@ -260,9 +265,11 @@ should run the server where the clock is kept by NTP and alarms on large steps.
 A monotonic clock was considered and refused: it does not survive a restart, and a
 quota has to, so the ledger would still depend on the wall clock at every start.
 
-**What the runtime must add for this:** a run's result reports, for each root grant,
-the uses counted and the money charged. Today the C interface does not, so this is part
-of phase 1, for the interpreter and for native runs alike.
+**What settling reads:** a run's result reports `usage`: for each capability parameter
+of the entry function, the actions attempted and the money charged, per currency,
+counting everything narrowed from it and a resumed run's replay (RUNTIME.md section 6).
+It is built, the same on both engines, and tested (`tests/deadline_test.rs`,
+`tests/capi_test.rs`).
 
 ## 7. Crashes and restarts
 

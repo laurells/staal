@@ -108,3 +108,21 @@ fn the_python_quickstart_prints_what_the_readme_says() {
         "Refunded 35.00 USD for order 4417\n'payments.refund' allows at most 50.00 USD per action; this action needs 300.00 USD\n"
     );
 }
+
+#[test]
+fn a_run_reports_what_each_grant_used() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("capi-usage");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let prog_path = dir.join("refund.staal");
+    std::fs::write(&prog_path, "fn f(pay: cap payments.refund) -> Int {\n    let a = pay.refund(\"o-1\", 12.50 NGN)\n    return 1\n}\n").unwrap();
+    let prog = CString::new(prog_path.to_str().unwrap()).unwrap();
+    let cfg = CString::new(r#"{"entry": "f", "grants": {"pay": {"cap": "payments.refund"}}, "model": {"provider": "script", "responses": []}}"#).unwrap();
+    // SAFETY: NUL-terminated strings that live for the call.
+    let r = take(unsafe { staal_run(prog.as_ptr(), cfg.as_ptr(), std::ptr::null(), std::ptr::null()) });
+    assert_eq!(r["status"], "done", "{r}");
+    assert_eq!(
+        r["usage"],
+        serde_json::json!({ "pay": { "capability": "payments.refund", "uses": 1, "charged": [{ "amount": "12.50", "currency": "NGN" }] } })
+    );
+}

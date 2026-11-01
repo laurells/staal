@@ -1061,6 +1061,7 @@ mod test_cmd_tests {
         RunResult {
             result: result.map(|n| json!(n)).map_err(|m| Failure { kind: FailKind::Action, message: m.into(), raised: None }),
             log: vec![json!({ "event": "run_start", "run_id": id }), json!({ "event": "x", "key": format!("{id}-1{extra}") })],
+            usage: json!({}),
         }
     }
 

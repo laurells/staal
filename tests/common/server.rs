@@ -4,6 +4,7 @@
 //   /send          200 {"message_id": "sent"}, deduplicating by Idempotency-Key the way
 //                  payment APIs do: a key seen before gets the same answer, with no new effect
 //   /fixed         200, body "fixed" (an answer that never changes)
+//   /slow          200, body "slow", after 400 ms
 //   /echo-auth     200, the request's Authorization header as the body
 //   /redirect      302 to /ok (a client must not follow it)
 //   /big           200, a body of 4096 bytes
@@ -221,6 +222,10 @@ fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mu
         }
         "/api/chat.postMessage" => (200, format!("{{\"ok\": true, \"ts\": \"170000000{n}.0001\"}}").into_bytes()),
         "/fixed" => (200, b"fixed".to_vec()),
+        "/slow" => {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            (200, b"slow".to_vec())
+        }
         "/echo-auth" => (200, headers.get("authorization").cloned().unwrap_or_default().into_bytes()),
         "/redirect" => (302, Vec::new()),
         "/big" => (200, vec![b'x'; 4096]),

@@ -15,6 +15,16 @@ the language or its file formats.
   described with its currency's decimal places. Checked against the runtime's own
   input rules on 39 values: they agree on all but a money amount too large to hold
   exactly, which the runtime refuses and the schema cannot express.
+- `limits.deadline_ms`: how long a run (or each resume of it) may keep starting
+  actions and model calls. Checked before each one starts, never during one, so it
+  never cuts an action in half; fatal (`deadline`), so `try` cannot catch it; and a
+  resumed run decides as its journal says it did. On both engines, concurrent tasks
+  included.
+- A run's result reports `usage`: for each capability parameter of the entry function,
+  the actions attempted and the money charged through it, per currency, whatever its
+  limits, counting a resumed run's replay. From the C interface, Python and Node.js.
+- `staalc schema` reports `reads_console`: whether the function can reach
+  `read_line()`, through its calls and the library capabilities it is given.
 - `docs/MCP.md`: the design of `staalc mcp`, which will serve Staal programs to MCP
   clients, with quotas across calls. Not built yet.
 - `CONTRIBUTING.md` says what to expect from review (a first response within two

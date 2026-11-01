@@ -37,6 +37,10 @@ struct CapState {
     spent: i64,
     /// Actions attempted through this capability and its children.
     used: u64,
+    /// Money charged through this capability and its children, one total per
+    /// currency, whatever its limits: what a run reports it spent (RUNTIME.md
+    /// section 6). `spent` is the part a `max` is checked against.
+    charged: Vec<Money>,
     parent: Option<usize>,
     /// For `net.http`: the operator has stated that the service deduplicates requests
     /// by an `Idempotency-Key` header, so one left in doubt may be retried. Set only by
@@ -52,7 +56,15 @@ pub struct Broker {
 impl Broker {
     /// A root capability, created only from a grant.
     pub fn grant(&mut self, path: &str, limits: Limits) -> usize {
-        self.caps.push(CapState { path: path.to_string(), limits, spent: 0, used: 0, parent: None, idempotency_key: false });
+        self.caps.push(CapState {
+            path: path.to_string(),
+            limits,
+            spent: 0,
+            used: 0,
+            charged: Vec::new(),
+            parent: None,
+            idempotency_key: false,
+        });
         self.caps.len() - 1
     }
 
@@ -72,7 +84,7 @@ impl Broker {
     pub fn narrow(&mut self, parent: usize, limits: Limits) -> Result<usize, String> {
         let p = self.caps.get(parent).ok_or("unknown capability handle")?;
         let (path, idempotency_key) = (p.path.clone(), p.idempotency_key);
-        self.caps.push(CapState { path, limits, spent: 0, used: 0, parent: Some(parent), idempotency_key });
+        self.caps.push(CapState { path, limits, spent: 0, used: 0, charged: Vec::new(), parent: Some(parent), idempotency_key });
         Ok(self.caps.len() - 1)
     }
 
@@ -163,8 +175,19 @@ impl Broker {
             if c.limits.max.is_some() {
                 c.spent = c.spent.checked_add(amount.minor).ok_or("amount overflow")?;
             }
+            match c.charged.iter_mut().find(|m| m.currency == amount.currency) {
+                Some(m) => m.minor = m.minor.checked_add(amount.minor).ok_or("amount overflow")?,
+                None => c.charged.push(amount),
+            }
         }
         Ok(())
+    }
+
+    /// What capability `h` and everything narrowed from it used: the actions attempted
+    /// and the money charged, one total per currency in the order first charged.
+    pub fn usage(&self, h: usize) -> Result<(u64, Vec<Money>), String> {
+        let c = self.caps.get(h).ok_or("unknown capability handle")?;
+        Ok((c.used, c.charged.clone()))
     }
 }
 
@@ -193,6 +216,26 @@ mod tests {
 
     fn max(minor: i64) -> Limits {
         Limits { max: Some(usd(minor)), ..Limits::default() }
+    }
+
+    #[test]
+    fn usage_counts_every_action_and_charge_through_children_whatever_the_limits() {
+        let mut b = Broker::default();
+        // No money limit at all on the root: what it charged is still counted.
+        let root = b.grant("payments.refund", Limits { uses: Some(5), ..Limits::default() });
+        let child = b.narrow(root, Limits { each: Some(usd(50)), ..Limits::default() }).unwrap();
+        b.count_use(child).unwrap();
+        b.charge(child, Some(usd(30))).unwrap();
+        b.count_use(root).unwrap();
+        b.charge(root, Some(usd(20))).unwrap();
+        let ngn = Money { minor: 700, currency: Currency::parse("NGN").unwrap() };
+        b.count_use(root).unwrap();
+        b.charge(root, Some(ngn)).unwrap();
+        // A failed attempt is a use without a charge.
+        b.count_use(child).unwrap();
+        assert_eq!(b.usage(root).unwrap(), (4, vec![usd(50), ngn]));
+        assert_eq!(b.usage(child).unwrap(), (2, vec![usd(30)]));
+        assert!(b.usage(99).is_err());
     }
 
     #[test]

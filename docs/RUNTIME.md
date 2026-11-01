@@ -86,7 +86,9 @@ agent framework): `input`, a JSON Schema (2020-12) of the `inputs` it takes, whe
 parameter with a default is not required and each declared record or enum is a
 `$defs` entry referred to by `$ref`, so recursive types are described exactly;
 `output`, a JSON Schema of the result as a run writes it; and `grants` and `secrets`,
-the parameters only an operator gives, which are never inputs. Money is described
+the parameters only an operator gives, which are never inputs; and `reads_console`,
+whether the function can reach `read_line()`, which a host whose standard input is
+not a console must refuse. Money is described
 with its currency's decimal places. The runtime's own check of inputs (section 3)
 still decides: the one thing it refuses that the schema accepts is a money amount too
 large to hold exactly.
@@ -526,6 +528,19 @@ Two deployment limits apply to every run; exceeding either is a failure
 - `max_steps` (default 1,000,000) counts statements executed and loop iterations.
 - `max_depth` (default 256) bounds nested function calls.
 
+A third is optional:
+
+- `deadline_ms` (no default) is how long the run may keep starting actions and model
+  calls, counted from when this run, or this resume of it, began. It is checked
+  before each action and each model call starts, never during one: past it, the run
+  fails with `deadline` instead of starting the next, so a deadline never cuts an
+  action in half or leaves one in doubt, and a run can take at most the deadline plus
+  its longest single operation. An operation already in the journal is replayed
+  whatever the clock says, and a run whose journal records that it ended at its
+  deadline ends the same way when resumed, without starting anything. Concurrent
+  tasks count from when their run began. Each resume has a deadline of its own, so an
+  operator who resolves a run in doubt can resume it to finish.
+
 These limits are safeguards, like a timeout; they are not part of a program's
 meaning, and whether they trigger can depend on data (see the timing note in
 the README).
@@ -705,6 +720,14 @@ grant in the run config.
 - **After approval,** the use is counted and the adapter performs the action.
   Success yields a `Receipt`, and the amount is charged to `max` through the
   chain only on success. An adapter failure is a failure of kind `action`.
+- **What a run reports it used.** A run's result (from the C interface, and so from
+  Python and Node.js) carries `usage`: for each capability parameter of the entry
+  function, by name, the capability, `uses` (actions attempted through it and
+  everything narrowed from it, refused ones not included) and `charged` (the money
+  charged through them, one total per currency, whatever the grant's limits). It
+  covers the whole run: a resumed run's replayed actions count, exactly as the broker
+  counts them. A host uses it to account across runs (an MCP server's quotas,
+  `docs/MCP.md`).
 
 ## 7. Budgets
 
@@ -726,6 +749,7 @@ A failure has a kind and a message:
 | `budget` | a model call would exceed a token limit or a budget |
 | `provider` | the model provider failed or misbehaved |
 | `step_limit`, `depth_limit` | a deployment limit was reached |
+| `deadline` | the run passed `limits.deadline_ms` before starting an action or model call (section 4) |
 | `internal` | a state the compiler should have ruled out (a bug in staalc), reported instead of crashing |
 | `journal`, `in_doubt` | durability failures (section 11) |
 
@@ -747,7 +771,7 @@ what `.failure` holds is always of the type the callee declares. A capability's
 action cannot declare `fails`. `.failure`, like the rest of an Outcome, is
 untrusted. Both engines raise and carry typed errors.
 
-`step_limit`, `depth_limit`, `internal`, `journal` and `in_doubt` are **fatal**: `try` never catches
+`step_limit`, `depth_limit`, `deadline`, `internal`, `journal` and `in_doubt` are **fatal**: `try` never catches
 them, and they always end the run. The deployment limits are safeguards, not
 part of the program's meaning, so a program must not be able to observe them
 (a runaway loop or recursion must not end in a "successful" run). An

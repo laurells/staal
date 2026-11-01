@@ -145,3 +145,16 @@ fn the_command_prints_the_interface_and_refuses_bad_programs() {
     assert_eq!(out.status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_program_that_can_read_the_console_says_so() {
+    let reads = "fn ask() -> Text {\n    match read_line() {\n        some(l) => { return l }\n        none => { return \"\" }\n    }\n}\nfn main() -> Text { return ask() }";
+    assert_eq!(interface(reads, None).unwrap()["reads_console"], true);
+    // Through a library capability's action as well as a plain call.
+    let lib = "capability shop.ask {\n    needs http: cap net.http.post\n    canonical(t: Text) -> Text {\n        return t\n    }\n    action question(to: Text @target) -> Text {\n        let line = read_line()\n        let r = http.post(\"https://example.com/q\", to)\n        return r.body\n    }\n}\nfn main(q: cap shop.ask.question) -> Receipt { return q.question(\"x\") }";
+    assert_eq!(interface(lib, None).unwrap()["reads_console"], true);
+    assert_eq!(interface("fn main() -> Text { return \"x\" }", None).unwrap()["reads_console"], false);
+    // A function the entry never reaches does not count.
+    let other = "fn ask() -> Text {\n    match read_line() {\n        some(l) => { return l }\n        none => { return \"\" }\n    }\n}\nfn main() -> Int { return 1 }";
+    assert_eq!(interface(other, None).unwrap()["reads_console"], false);
+}

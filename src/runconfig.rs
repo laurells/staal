@@ -156,33 +156,35 @@ fn grant(prog: &Program, path: &[String], limits: &CapLimits) -> Json {
     Json::Object(g)
 }
 
-/// What one expression does that matters here: whether it asks a model, and the
-/// functions it names (called, or taken as a value, which may be called later).
-fn scan(e: &Expr, asks: &mut bool, names: &mut Vec<String>) {
-    match e {
-        Expr::Propose { .. } => *asks = true,
-        Expr::Call { name, .. } | Expr::Closure { name, .. } | Expr::Var(name, _) => names.push(name.clone()),
-        _ => {}
+/// Whether any expression in `e` passes `test`, and the functions it names (called,
+/// or taken as a value, which may be called later).
+fn scan(e: &Expr, test: &dyn Fn(&Expr) -> bool, found: &mut bool, names: &mut Vec<String>) {
+    if test(e) {
+        *found = true;
+    }
+    if let Expr::Call { name, .. } | Expr::Closure { name, .. } | Expr::Var(name, _) = e {
+        names.push(name.clone());
     }
     for c in e.children() {
-        scan(c, asks, names);
+        scan(c, test, found, names);
     }
 }
 
-fn scan_block(body: &[Stmt], asks: &mut bool, names: &mut Vec<String>) {
+fn scan_block(body: &[Stmt], test: &dyn Fn(&Expr) -> bool, found: &mut bool, names: &mut Vec<String>) {
     for s in body {
         for e in s.exprs() {
-            scan(e, asks, names);
+            scan(e, test, found, names);
         }
         for b in s.blocks() {
-            scan_block(b, asks, names);
+            scan_block(b, test, found, names);
         }
     }
 }
 
-/// Whether running `f` can ask a model: through it, the functions it reaches, or the
-/// library capabilities it is given.
-fn reaches_a_model(prog: &Program, f: &FnDecl) -> bool {
+/// Whether running `f` can reach an expression that passes `test`: in it, in the
+/// functions it reaches (called, or named as values), or in the library capabilities
+/// it is given. Conservative: a function named anywhere counts as reached.
+fn reaches(prog: &Program, f: &FnDecl, test: &dyn Fn(&Expr) -> bool) -> bool {
     let mut todo = vec![f.name.clone()];
     for p in &f.params {
         if let Ty::Cap { path, .. } = &p.ty {
@@ -201,13 +203,26 @@ fn reaches_a_model(prog: &Program, f: &FnDecl) -> bool {
             continue;
         }
         let Some(g) = prog.fns.iter().find(|g| g.name == n) else { continue };
-        let mut asks = false;
-        scan_block(&g.body, &mut asks, &mut todo);
-        if asks {
+        let mut found = false;
+        scan_block(&g.body, test, &mut found, &mut todo);
+        if found {
             return true;
         }
     }
     false
+}
+
+/// Whether running `f` can ask a model.
+fn reaches_a_model(prog: &Program, f: &FnDecl) -> bool {
+    reaches(prog, f, &|e| matches!(e, Expr::Propose { .. }))
+}
+
+/// Whether running `entry` (or `main`) can read the console with `read_line()`: what a
+/// host whose standard input is not a console (an MCP server, whose standard input is
+/// the protocol) must refuse.
+pub fn reads_console(prog: &Program, entry: Option<&str>) -> Result<bool, String> {
+    let f = entry_fn(prog, entry)?;
+    Ok(reaches(prog, f, &|e| matches!(e, Expr::Builtin { f: crate::ast::Builtin::ReadLine, .. })))
 }
 
 /// `staalc config`: a run config to fill in for `entry` (or `main`).
@@ -295,7 +310,9 @@ pub fn interface(prog: &Program, entry: Option<&str>) -> Result<Json, String> {
         }
         other => other,
     };
-    Ok(json!({ "entry": f.name, "input": Json::Object(input), "output": output, "grants": grants, "secrets": secrets }))
+    let reads = reads_console(prog, entry)?;
+    Ok(json!({ "entry": f.name, "input": Json::Object(input), "output": output, "grants": grants, "secrets": secrets,
+               "reads_console": reads }))
 }
 
 /// A `$ref` to a declared record or enum, its definition added to `defs` once. A

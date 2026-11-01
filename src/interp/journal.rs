@@ -334,6 +334,18 @@ impl Journal {
         Ok(Step::Perform { n, key })
     }
 
+    /// Whether the next operation of `task` is already in the journal (it is replayed,
+    /// or retried after being in doubt), rather than about to be made for the first time.
+    pub fn replays_next(&self, task: &str) -> bool {
+        self.streams.get(task).is_some_and(|s| !s.pending.is_empty())
+    }
+
+    /// The failure kind the journal records the run as having ended with, if it ended
+    /// with one.
+    pub fn recorded_failure(&self) -> Option<&str> {
+        self.recorded_end.as_ref().filter(|e| e["ok"] == false).and_then(|e| e["failure"].as_str())
+    }
+
     /// Records the result of operation `n` of `task`.
     pub fn finish(&mut self, task: &str, n: u64, result: Result<Json, String>) -> Result<(), String> {
         self.failpoint.before_result(&op_id(task, n));
