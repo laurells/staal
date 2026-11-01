@@ -15,6 +15,8 @@
 //   staalc yank    --registry <registry folder> --package <name> --version <version> [--undo]
 //   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
 //   staalc config  <file.staal> [--entry <function>]
+//   staalc schema  <file.staal> [--entry <function>]
+//   staalc mcp     <manifest.json> | status <manifest.json>
 //   staalc run     <file.staal> (--config <run.json> | [--entry <function>] [--input <name>=<value>]...)
 //                  [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
 //   staalc resume  <file.staal> (--config <run.json> | ...as run) --journal <run.journal> [--log <run.jsonl>] [--engine native]
@@ -56,6 +58,8 @@ const USAGE: &str = "usage:
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
   staalc config  <file.staal> [--entry <function>]      (prints a run config to fill in)
   staalc schema  <file.staal> [--entry <function>]      (prints the entry's input and output JSON Schemas)
+  staalc mcp     <manifest.json>                        (serves programs as MCP tools on standard input and output)
+  staalc mcp     status <manifest.json>                 (lists unfinished runs and quota use)
   staalc run     <file.staal> (--config <run.json> | [--entry <function>] [--input <name>=<value>]...)
                  [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
   staalc resume  <file.staal> (--config <run.json> | ...as run) --journal <run.journal> [--log <run.jsonl>] [--engine native]
@@ -143,6 +147,10 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
             Ok((None, _)) => u("schema needs a program file"),
             Err(e) => u(&e),
         },
+        #[cfg(unix)]
+        "mcp" => crate::mcp::main(rest),
+        #[cfg(not(unix))]
+        "mcp" => u("staalc mcp runs on Linux and macOS only"),
         "fetch" => match parse(rest, &[], &[]) {
             Ok((dir, _)) => fetch(dir.as_deref().unwrap_or("."), crate::packages::Update::Nothing),
             Err(e) => u(&e),

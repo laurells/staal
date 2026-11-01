@@ -194,7 +194,10 @@ from other languages, with packages for Python (`python/`) and for Node.js and
 TypeScript (`node/`): your application decides the policy, Staal enforces it
 (GUIDE.md, "Policy from your app"). `staalc schema` prints the JSON Schemas of a
 function's inputs and result, so a program can be described as a tool to agent
-frameworks.
+frameworks, and `staalc mcp` serves programs as tools to any Model Context Protocol
+client, with each call an ordinary run under the grants the operator's manifest gives,
+plus quotas across calls and `once` for calls that must not run twice
+([docs/MCP.md](docs/MCP.md)).
 
 **An explicit boundary with native code.** A program can call C libraries, granted
 by the library's SHA-256 and each function's exact signature. Staal cannot check what
@@ -269,6 +272,8 @@ To build without the native compiler (smaller, interpreter only):
 | `staalc run <file.staal> --config <run.json>` | Runs a program with the inputs, grants and model a run config gives; add `--journal` for crash-safe runs and `--engine native` for native code |
 | `staalc config <file.staal> [--entry <fn>]` | Prints a run config to fill in for a program |
 | `staalc schema <file.staal> [--entry <fn>]` | Prints the JSON Schemas of a function's inputs and result, for describing it as a tool |
+| `staalc mcp <manifest.json>` | Serves programs as tools to MCP clients, on standard input and output ([docs/MCP.md](docs/MCP.md)) |
+| `staalc mcp status <manifest.json>` | Lists a server's unfinished runs and each tool's quota use |
 | `staalc resume <file.staal> --config <run.json> --journal <run.journal>` | Continues a run that stopped or crashed |
 | `staalc resolve --journal <run.journal> ...` | Records an operator's decision on an action left in doubt |
 | `staalc fetch [<project folder>]` | Fetches the packages named in `staal.json` and writes `staal.lock` |
@@ -295,6 +300,7 @@ continued.
 | [docs/TUTORIAL.md](docs/TUTORIAL.md) | Staal in one hour: from install to a program that sends messages and asks a model |
 | [docs/GUIDE.md](docs/GUIDE.md) | The language: rules, syntax, capabilities, packages, native code |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | The runtime specification: semantics, the journal, failure behaviour |
+| [docs/MCP.md](docs/MCP.md) | `staalc mcp`: the manifest, the protocol, quotas, `once`, crashes and operators |
 | [docs/RELEASING.md](docs/RELEASING.md) | How a release is made, and what it holds |
 | [editors/vscode](editors/vscode) | The VS Code extension: highlighting and the language server |
 | [docs/GRAMMAR.md](docs/GRAMMAR.md) | The complete syntax, checked against the parser by the tests |
@@ -309,7 +315,8 @@ Staal is pre-release and not yet ready for production use. Built and tested:
 the compiler and all eight safety rules, the reference runtime, Claude as a
 model provider, exact money, the capability broker, budgets, the crash-safe
 journal, modules, HTTP, file, TCP, SQLite and PostgreSQL capabilities,
-capabilities declared by libraries, packages with versions and registries,
+capabilities declared by libraries, packages with versions and registries, an MCP
+server (`staalc mcp`, checked against the official Python and TypeScript SDKs),
 fetched from git and locked by hash, native code, executables, the C interface,
 and calling C libraries (runs that do are marked unchecked); enums and `match`, optional values, tuples, maps
 and sets, typed errors, methods, generic functions, interfaces, function values and

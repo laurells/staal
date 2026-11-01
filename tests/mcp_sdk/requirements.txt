@@ -1,0 +1,2 @@
+# The official MCP Python SDK, run against staalc mcp by tests/mcp_sdk_test.rs.
+mcp==2.3.0

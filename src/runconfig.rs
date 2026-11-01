@@ -225,6 +225,12 @@ pub fn reads_console(prog: &Program, entry: Option<&str>) -> Result<bool, String
     Ok(reaches(prog, f, &|e| matches!(e, Expr::Builtin { f: crate::ast::Builtin::ReadLine, .. })))
 }
 
+/// Whether entry function `entry` (or `main`) can reach a model call, through the
+/// functions it calls and the library capabilities it is given.
+pub fn reaches_model(prog: &Program, entry: Option<&str>) -> Result<bool, String> {
+    Ok(reaches_a_model(prog, entry_fn(prog, entry)?))
+}
+
 /// `staalc config`: a run config to fill in for `entry` (or `main`).
 pub fn skeleton(prog: &Program, entry: Option<&str>) -> Result<Json, String> {
     let f = entry_fn(prog, entry)?;

@@ -207,6 +207,10 @@ pub enum Durability<'a> {
     None,
     /// A new run with a new journal at this path, which must not exist.
     Create(&'a Path),
+    /// As `Create`, with the run id given instead of drawn: for a host that names the
+    /// run before it starts (the MCP server records it in its ledger first). It must be
+    /// 32 lowercase hexadecimal characters, from `journal::new_run_id`.
+    CreateWithId(&'a Path, &'a str),
     /// Continue the run recorded in this journal.
     Resume(&'a Path),
 }
@@ -340,6 +344,122 @@ pub fn same_run(a: &RunResult, b: &RunResult) -> bool {
     result(a) == result(b) && log(a) == log(b) && a.usage == b.usage
 }
 
+/// What a host needs to know about a run config before running it: the config is
+/// checked exactly as a run would check it, and nothing runs, nothing is journaled and
+/// nothing is contacted.
+#[derive(Debug, Clone)]
+pub struct Plan {
+    /// Every data parameter's value as the run would receive it, defaults filled in,
+    /// as JSON in the runtime's own form (money as written by the runtime, keys
+    /// sorted): two configs whose inputs mean the same give the same `inputs`.
+    pub inputs: Map<String, Json>,
+    /// The grants, in the entry function's parameter order.
+    pub grants: Vec<GrantPlan>,
+}
+
+/// One grant of a `Plan`.
+#[derive(Debug, Clone)]
+pub struct GrantPlan {
+    /// The entry function's parameter it is given to.
+    pub name: String,
+    /// The capability, e.g. `payments.refund` or `net.http.get`.
+    pub path: String,
+    /// Whether it is a capability a library declares (with `capability ... { }`).
+    pub library: bool,
+    /// For a library capability, the runtime capabilities its grant supplies as needs.
+    pub needs: Vec<String>,
+    /// Whether the grant (or, for a library capability, any of its needs) was given
+    /// `idempotency_key`.
+    pub idempotency_key: bool,
+    /// Whether an action through it can be charged money: an adapter's capability, or
+    /// a library action with an `@amount`. The runtime's own capabilities never are.
+    pub spends: bool,
+    /// The most money the actions through it can be charged in one run, from the
+    /// grant's limits and the slot's own together: the smaller of `max` and of `each`
+    /// times `uses` (each the tighter of the grant's and the slot's). None when
+    /// nothing bounds it.
+    pub worst: Option<Money>,
+}
+
+/// Checks `config` for `prog` as a run would, without running anything, and says what
+/// it grants. The model and adapter settings are checked too.
+pub fn plan(prog: &Program, config: &Json) -> Result<Plan, String> {
+    let setup = Setup::from_config(prog, config)?;
+    let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
+    provider::of_run(cfg.get("model"))?;
+    SimulatedAdapter::from_config(cfg.get("adapters"))?;
+    let f = prog
+        .fns
+        .iter()
+        .find(|f| f.name == setup.entry)
+        .ok_or_else(|| format!("run config: no function named '{}'", setup.entry))?;
+    let mut inputs = Map::new();
+    let mut grants = Vec::new();
+    for (p, arg) in f.params.iter().zip(&setup.args) {
+        match arg {
+            Arg::Data(Value::Secret(_)) => {}
+            Arg::Data(v) => {
+                inputs.insert(p.name.clone(), to_json(v, false)?);
+            }
+            Arg::Grant { name, path, limits, idempotency_key, needs, .. } => {
+                let Ty::Cap { limits: declared, .. } = &p.ty else {
+                    return Err(format!("grants.{name}: is not a capability parameter; this is a bug in staalc"));
+                };
+                let declared = runtime_limits(declared)?;
+                let lib = prog.caps.iter().find_map(|c| c.actions.iter().find(|a| c.action_path(&a.name) == *path));
+                let need_caps: Vec<(&String, bool)> = needs
+                    .iter()
+                    .filter_map(|n| match n {
+                        NeedArg::Cap { path, idempotency_key, .. } => Some((path, *idempotency_key)),
+                        NeedArg::Data(_) => None,
+                    })
+                    .collect();
+                let spends = match lib {
+                    Some(a) => a.amount.is_some(),
+                    None => !is_runtime_cap(path),
+                };
+                let smaller = |a: Option<Money>, b: Option<Money>| match (a, b) {
+                    (Some(x), Some(y)) => Some(if x.minor <= y.minor { x } else { y }),
+                    (x, None) => x,
+                    (None, y) => y,
+                };
+                let max = smaller(limits.max, declared.max);
+                let each = smaller(limits.each, declared.each);
+                let uses = match (limits.uses, declared.uses) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, None) => a,
+                    (None, b) => b,
+                };
+                // Both bounds hold at once, so the smaller is the bound. (`max` and
+                // `each` are checked to be in one currency.)
+                let per_use = match (each, uses) {
+                    (Some(e), Some(u)) => {
+                        let minor = i64::try_from(u).ok().and_then(|u| e.minor.checked_mul(u));
+                        Some(Money { minor: minor.unwrap_or(i64::MAX), currency: e.currency })
+                    }
+                    _ => None,
+                };
+                if let (Some(m), Some(p)) = (max, per_use)
+                    && m.currency != p.currency
+                {
+                    return Err(format!("grants.{name}: its limits are in {} and {}, so no action could satisfy both", m.currency.code, p.currency.code));
+                }
+                let worst = smaller(max, per_use);
+                grants.push(GrantPlan {
+                    name: name.clone(),
+                    path: path.clone(),
+                    library: lib.is_some(),
+                    needs: need_caps.iter().map(|(p, _)| (*p).clone()).collect(),
+                    idempotency_key: *idempotency_key || need_caps.iter().any(|(_, k)| *k),
+                    spends,
+                    worst,
+                });
+            }
+        }
+    }
+    Ok(Plan { inputs, grants })
+}
+
 /// Runs a checked program without a journal, as `run_config_engine` does, keeping
 /// what it prints instead of writing it to standard output: for the REPL, which runs
 /// a session again for each input and shows only what is new.
@@ -403,6 +523,7 @@ fn run_impl(
     let journal = match durability {
         Durability::None => Journal::memory()?,
         Durability::Create(path) => Journal::create(path, &program_sha, &config_sha)?,
+        Durability::CreateWithId(path, id) => Journal::create_with_id(path, id, &program_sha, &config_sha)?,
         Durability::Resume(path) => Journal::resume(path, &program_sha, &config_sha)?,
     };
     // The interpreter recurses once per nested call, so it runs on a thread with a

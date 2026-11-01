@@ -25,8 +25,20 @@ the language or its file formats.
   limits, counting a resumed run's replay. From the C interface, Python and Node.js.
 - `staalc schema` reports `reads_console`: whether the function can reach
   `read_line()`, through its calls and the library capabilities it is given.
-- `docs/MCP.md`: the design of `staalc mcp`, which will serve Staal programs to MCP
-  clients, with quotas across calls. Not built yet.
+- `staalc mcp <manifest.json>`: Staal programs served as tools to Model Context
+  Protocol clients over stdio, under 2025-11-25 (after `initialize`) and 2026-07-28
+  (per request), as docs/MCP.md describes. A tool call is an ordinary run: the
+  manifest gives the grants, secrets, model and timeouts, and the arguments are only
+  ever inputs. Across calls the server adds quotas (calls and money per window, each
+  run reserving its worst case until it settles), concurrency limits, deadlines and
+  `once`, which makes repeated calls of one operation one run. A ledger, fsync'd
+  before each step, has a recovery rule for every crash point; a run left in doubt
+  waits for an operator, who is told by a waiting record and an optional notify
+  command run with a cleared environment. `staal_run_status` reports any run;
+  `staalc mcp status` lists unfinished runs and quota use. Tested end to end, killed at
+  every journal and ledger write, and against the official Python (`mcp` 2.3.0) and
+  TypeScript (`@modelcontextprotocol/client` 2.3.1) SDK clients.
+- `docs/MCP.md`: the design of `staalc mcp`, kept as its reference.
 - `CONTRIBUTING.md` says what to expect from review (a first response within two
   working days) and how to take a first issue; `packages/README.md` lists what every
   package must meet.

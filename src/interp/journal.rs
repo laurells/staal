@@ -131,6 +131,14 @@ impl Journal {
 
     /// Creates a new journal for a new run. Fails if the file already exists.
     pub fn create(path: &Path, program_sha256: &str, config_sha256: &str) -> Result<Journal, String> {
+        Journal::create_with_id(path, &new_run_id()?, program_sha256, config_sha256)
+    }
+
+    /// As `create`, for a run whose id the caller drew with `new_run_id`.
+    pub fn create_with_id(path: &Path, run_id: &str, program_sha256: &str, config_sha256: &str) -> Result<Journal, String> {
+        if run_id.len() != 32 || !run_id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            return Err(format!("run id '{run_id}' is not 32 lowercase hexadecimal characters"));
+        }
         let shown = path.display();
         let mut opts = OpenOptions::new();
         opts.append(true).create_new(true);
@@ -145,7 +153,7 @@ impl Journal {
             }
         })?;
         lock(&file, path)?;
-        let run_id = new_run_id()?;
+        let run_id = run_id.to_string();
         let mut j = Journal::with(Some(file), run_id.clone(), BTreeMap::new(), None);
         j.write(&json!({
             "j": "start", "version": VERSION, "run_id": run_id,
@@ -449,6 +457,33 @@ fn open_existing(path: &Path) -> Result<(File, Vec<Json>), String> {
         records.push(rec);
     }
     Ok((file, records))
+}
+
+/// A journal's complete records, read without opening it for writing or locking it:
+/// for a reader that must change nothing (a status query). A torn last line is left
+/// out, as resuming would cut it off; any other damage is an error. A file with no
+/// complete record gives an empty list.
+pub fn read_records(path: &Path) -> Result<Vec<Json>, String> {
+    let shown = path.display();
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read journal {shown}: {e}"))?;
+    let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let text = std::str::from_utf8(&bytes[..complete]).map_err(|_| format!("journal {shown} is corrupt: not UTF-8"))?;
+    let mut records = Vec::new();
+    for (i, line) in text.split_terminator('\n').enumerate() {
+        let rec: Json = serde_json::from_str(line).map_err(|e| format!("journal {shown} is corrupt at line {}: {e}", i + 1))?;
+        if !rec.is_object() {
+            return Err(format!("journal {shown} is corrupt at line {}: not a record", i + 1));
+        }
+        records.push(rec);
+    }
+    Ok(records)
+}
+
+/// Whether a run could be resumed from the journal whose first record is `start`:
+/// the same journal version, the identical program and the identical config. A host
+/// checks this for every unfinished run before resuming any (RUNTIME.md section 11).
+pub fn check_resumable(start: &Json, program_source: &str, config: &Json, path: &Path) -> Result<(), String> {
+    check_start(start, &sha256_hex(program_source.as_bytes()), &sha256_hex(config.to_string().as_bytes()), path)
 }
 
 fn check_start(start: &Json, program_sha256: &str, config_sha256: &str, path: &Path) -> Result<(), String> {

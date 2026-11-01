@@ -9,3 +9,4 @@ __pycache__/
 /node/LICENSE
 /node/NOTICE
 /node/LICENSE-THIRD-PARTY.txt
+/tests/mcp_sdk/node_modules

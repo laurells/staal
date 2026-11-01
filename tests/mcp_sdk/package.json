@@ -1,0 +1,9 @@
+{
+  "name": "staal-mcp-sdk-conformance",
+  "private": true,
+  "type": "module",
+  "description": "The official MCP TypeScript SDK client, run against staalc mcp by tests/mcp_sdk_test.rs.",
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.3.1"
+  }
+}

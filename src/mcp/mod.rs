@@ -1,0 +1,439 @@
+// `staalc mcp`: Staal programs served as tools to Model Context Protocol clients
+// (docs/MCP.md). A tool call is an ordinary Staal run, with the same checks, broker,
+// journal and recovery as `staalc run`; the server adds bounds across calls (quotas,
+// concurrency, `once`) and never removes one.
+//
+//   staalc mcp <manifest.json>          serve on standard input and output
+//   staalc mcp status <manifest.json>   what is waiting, and quota use per tool
+//
+// This file reads the protocol and answers it; `server` runs calls and recovers,
+// `ledger` records runs, `manifest` reads and checks the manifest.
+
+pub mod ledger;
+pub mod manifest;
+pub mod proto;
+pub mod server;
+
+use manifest::{Tool, STATUS_TOOL};
+use proto::{Line, Writer};
+use serde_json::{json, Map, Value as Json};
+use server::{log, Answer, Ctl, Server};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// The protocol version served per request, with `_meta`.
+pub const MODERN: &str = "2026-07-28";
+/// The protocol version served after `initialize`.
+pub const LEGACY: &str = "2025-11-25";
+/// How long a client may consider the tool list and the discovery result fresh. The
+/// list never changes while the server runs.
+const TTL_MS: u64 = 60 * 60 * 1000;
+
+const VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
+const CAPABILITIES_KEY: &str = "io.modelcontextprotocol/clientCapabilities";
+const SERVER_INFO_KEY: &str = "io.modelcontextprotocol/serverInfo";
+
+const USAGE: &str = "usage:\n  staalc mcp <manifest.json>\n  staalc mcp status <manifest.json>";
+
+/// `staalc mcp ...`. Returns the exit code.
+pub fn main(args: &[String]) -> u8 {
+    match args {
+        [cmd, path] if cmd == "status" => status_cmd(std::path::Path::new(path)),
+        [path] if !path.starts_with('-') => serve(std::path::Path::new(path)),
+        _ => {
+            eprintln!("staalc: {USAGE}");
+            2
+        }
+    }
+}
+
+fn serve(path: &std::path::Path) -> u8 {
+    // First, before anything can write to standard output or read standard input.
+    let (input, output) = match proto::take_stdio() {
+        Ok(io) => io,
+        Err(e) => {
+            log(&e);
+            return 2;
+        }
+    };
+    let server = match manifest::load(path).and_then(Server::start) {
+        Ok(s) => s,
+        Err(e) => {
+            log(&e);
+            return 2;
+        }
+    };
+    log(&format!("serving {} tool(s) from {}", server.m.tools.len(), path.display()));
+    let session = Arc::new(Session {
+        server: server.clone(),
+        out: Writer::new(output),
+        legacy: AtomicBool::new(false),
+        calls: Mutex::new(HashMap::new()),
+        threads: Mutex::new(Vec::new()),
+    });
+    // Files past `server.keep` are deleted once a day while the server runs.
+    let stop = Arc::new(AtomicBool::new(false));
+    let sweeper = {
+        let (server, stop) = (server.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut last = std::time::Instant::now();
+            while !stop.load(Ordering::SeqCst) {
+                std::thread::park_timeout(std::time::Duration::from_secs(1));
+                if last.elapsed() >= server::SWEEP_EVERY {
+                    last = std::time::Instant::now();
+                    if let Err(e) = server.sweep() {
+                        log(&e);
+                    }
+                }
+            }
+        })
+    };
+    let mut reader = proto::Reader::new(input);
+    loop {
+        match reader.next_line() {
+            Ok(None) => break,
+            Ok(Some(Line::TooLong)) => {
+                let msg = format!("a message longer than {} bytes was refused unread", proto::MAX_LINE_BYTES);
+                session.out.error(&Json::Null, proto::PARSE_ERROR, &msg, None);
+            }
+            Ok(Some(Line::Text(bytes))) => session.handle(&bytes),
+            Err(e) => {
+                log(&format!("cannot read standard input: {e}"));
+                break;
+            }
+        }
+        if session.out.broken() {
+            log("the client is gone (a write to it failed); finishing the runs in progress");
+            break;
+        }
+    }
+    // Calls in progress finish (or stop) as they would have; then the process ends.
+    let threads: Vec<_> = session.threads.lock().map(|mut t| std::mem::take(&mut *t)).unwrap_or_default();
+    for t in threads {
+        let _ = t.join();
+    }
+    server.wait_for_notifies();
+    stop.store(true, Ordering::SeqCst);
+    sweeper.thread().unpark();
+    let _ = sweeper.join();
+    0
+}
+
+struct Session {
+    server: Arc<Server>,
+    out: Writer,
+    /// Whether a client has sent `initialize`: requests without per-request `_meta`
+    /// are then served as 2025-11-25.
+    legacy: AtomicBool,
+    /// Calls in progress, by their request id as JSON text.
+    calls: Mutex<HashMap<String, Arc<Ctl>>>,
+    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Era {
+    Legacy,
+    Modern,
+}
+
+fn valid_id(id: &Json) -> bool {
+    id.is_string() || id.is_i64() || id.is_u64()
+}
+
+impl Session {
+    fn handle(self: &Arc<Self>, bytes: &[u8]) {
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return;
+        }
+        if proto::nesting(bytes, proto::MAX_DEPTH) > proto::MAX_DEPTH {
+            let msg = format!("a message nested deeper than {} levels was refused", proto::MAX_DEPTH);
+            return self.out.error(&Json::Null, proto::INVALID_REQUEST, &msg, None);
+        }
+        let msg: Json = match serde_json::from_slice(bytes) {
+            Ok(m) => m,
+            Err(e) => return self.out.error(&Json::Null, proto::PARSE_ERROR, &format!("not JSON: {e}"), None),
+        };
+        let Some(o) = msg.as_object() else {
+            let why = if msg.is_array() { "batches are not part of MCP; send one message per line" } else { "a message must be an object" };
+            return self.out.error(&Json::Null, proto::INVALID_REQUEST, why, None);
+        };
+        let id = o.get("id");
+        if id.is_some_and(|i| !valid_id(i)) {
+            return self.out.error(&Json::Null, proto::INVALID_REQUEST, "a request id must be a string or an integer", None);
+        }
+        let Some(method) = o.get("method").and_then(Json::as_str) else {
+            // A response (the server sends no requests, so it answers nothing) or junk.
+            if id.is_some() && (o.contains_key("result") || o.contains_key("error")) {
+                return;
+            }
+            return self.out.error(id.unwrap_or(&Json::Null), proto::INVALID_REQUEST, "a request needs a \"method\"", None);
+        };
+        if o.get("jsonrpc").and_then(Json::as_str) != Some("2.0") {
+            return self.out.error(id.unwrap_or(&Json::Null), proto::INVALID_REQUEST, "\"jsonrpc\" must be \"2.0\"", None);
+        }
+        let empty = Map::new();
+        let params = match o.get("params") {
+            None => &empty,
+            Some(Json::Object(p)) => p,
+            Some(_) => {
+                if let Some(id) = id {
+                    self.out.error(id, proto::INVALID_PARAMS, "\"params\" must be an object", None);
+                }
+                return;
+            }
+        };
+        match id {
+            None => self.notification(method, params),
+            Some(id) => self.request(id, method, params),
+        }
+    }
+
+    fn notification(&self, method: &str, params: &Map<String, Json>) {
+        if method == "notifications/cancelled"
+            && let Some(req) = params.get("requestId")
+            && let Ok(calls) = self.calls.lock()
+            && let Some(ctl) = calls.get(&req.to_string())
+        {
+            ctl.cancelled.store(true, Ordering::SeqCst);
+        }
+        // Every other notification (`notifications/initialized` among them) needs nothing.
+    }
+
+    fn request(self: &Arc<Self>, id: &Json, method: &str, params: &Map<String, Json>) {
+        if method == "initialize" {
+            self.legacy.store(true, Ordering::SeqCst);
+            let r = json!({
+                "protocolVersion": LEGACY,
+                "capabilities": { "tools": { "listChanged": false } },
+                "serverInfo": self.server_info(),
+            });
+            return self.out.result(id, r);
+        }
+        let meta = params.get("_meta").and_then(Json::as_object);
+        let era = match meta.and_then(|m| m.get(VERSION_KEY)) {
+            Some(v) => {
+                if v.as_str() != Some(MODERN) {
+                    let data = json!({ "supported": [MODERN], "requested": v });
+                    return self.out.error(id, proto::UNSUPPORTED_VERSION, "Unsupported protocol version", Some(data));
+                }
+                if !meta.and_then(|m| m.get(CAPABILITIES_KEY)).is_some_and(Json::is_object) {
+                    let msg = format!("_meta[\"{CAPABILITIES_KEY}\"] is required on every request");
+                    return self.out.error(id, proto::INVALID_PARAMS, &msg, None);
+                }
+                Era::Modern
+            }
+            None if self.legacy.load(Ordering::SeqCst) => Era::Legacy,
+            None => {
+                let msg = format!(
+                    "_meta[\"{VERSION_KEY}\"] and _meta[\"{CAPABILITIES_KEY}\"] are required on every request; \
+                     this server serves {MODERN} per request, and {LEGACY} after `initialize`"
+                );
+                return self.out.error(id, proto::INVALID_PARAMS, &msg, None);
+            }
+        };
+        match (era, method) {
+            (Era::Legacy, "ping") => self.out.result(id, json!({})),
+            (Era::Modern, "server/discover") => {
+                let r = json!({
+                    "supportedVersions": [MODERN],
+                    "capabilities": { "tools": { "listChanged": false } },
+                    "ttlMs": TTL_MS,
+                    "cacheScope": "private",
+                });
+                self.out.result(id, self.modern(r));
+            }
+            (_, "tools/list") => {
+                if params.contains_key("cursor") {
+                    return self.out.error(id, proto::INVALID_PARAMS, "this server gives no cursors; the list is never paged", None);
+                }
+                let mut tools: Vec<Json> = self.server.m.tools.iter().map(describe).collect();
+                tools.push(status_tool());
+                let mut r = json!({ "tools": tools });
+                if era == Era::Modern {
+                    r["ttlMs"] = json!(TTL_MS);
+                    r["cacheScope"] = json!("private");
+                    r = self.modern(r);
+                }
+                self.out.result(id, r);
+            }
+            (_, "tools/call") => self.call(id, era, params),
+            _ => self.out.error(id, proto::METHOD_NOT_FOUND, &format!("unknown method '{method}'"), None),
+        }
+    }
+
+    fn server_info(&self) -> Json {
+        json!({ "name": self.server.m.server.name, "version": env!("CARGO_PKG_VERSION") })
+    }
+
+    /// A 2026-07-28 result: `resultType` and the server's identity.
+    fn modern(&self, mut r: Json) -> Json {
+        r["resultType"] = json!("complete");
+        let meta = r.as_object_mut().map(|o| o.entry("_meta").or_insert_with(|| json!({})));
+        if let Some(m) = meta.and_then(Json::as_object_mut) {
+            m.insert(SERVER_INFO_KEY.into(), self.server_info());
+        }
+        r
+    }
+
+    fn call(self: &Arc<Self>, id: &Json, era: Era, params: &Map<String, Json>) {
+        let Some(name) = params.get("name").and_then(Json::as_str) else {
+            return self.out.error(id, proto::INVALID_PARAMS, "tools/call needs the tool's \"name\"", None);
+        };
+        let args = match params.get("arguments") {
+            None => Map::new(),
+            Some(Json::Object(a)) => a.clone(),
+            Some(_) => return self.out.error(id, proto::INVALID_PARAMS, "\"arguments\" must be an object", None),
+        };
+        let tool: Option<usize> = self.server.m.tools.iter().position(|t| t.name == name);
+        if tool.is_none() && name != STATUS_TOOL {
+            return self.out.error(id, proto::INVALID_PARAMS, &format!("unknown tool '{name}'"), None);
+        }
+        let token = params
+            .get("_meta")
+            .and_then(|m| m.get("progressToken"))
+            .filter(|t| t.is_string() || t.is_i64() || t.is_u64())
+            .cloned();
+        let ctl = Arc::new(Ctl::default());
+        let key = id.to_string();
+        {
+            let Ok(mut calls) = self.calls.lock() else { return };
+            // Threads are bounded too: far more calls than runs are answered at once.
+            if calls.len() >= 4 * self.server.m.server.max_concurrent_runs + 16 {
+                drop(calls);
+                let a = Answer::error("the server is busy with other calls; nothing was done; try again later");
+                return self.out.result(id, self.wrap(era, &a));
+            }
+            calls.insert(key.clone(), ctl.clone());
+        }
+        let (me, id) = (self.clone(), id.clone());
+        let h = std::thread::spawn(move || {
+            let answer = match tool {
+                None => Some(me.status(&args)),
+                Some(i) => {
+                    let t: &Tool = &me.server.m.tools[i];
+                    let started = |run: &str| {
+                        if let Some(token) = &token {
+                            me.out.send(&json!({
+                                "jsonrpc": "2.0",
+                                "method": "notifications/progress",
+                                "params": { "progressToken": token, "progress": 0, "message": format!("run {run} started") },
+                            }));
+                        }
+                    };
+                    me.server.call(t, &args, &ctl, &started)
+                }
+            };
+            if let Ok(mut calls) = me.calls.lock() {
+                calls.remove(&key);
+            }
+            if let Some(a) = answer {
+                me.out.result(&id, me.wrap(era, &a));
+            }
+        });
+        if let Ok(mut t) = self.threads.lock() {
+            t.retain(|h| !h.is_finished());
+            t.push(h);
+        }
+    }
+
+    fn wrap(&self, era: Era, a: &Answer) -> Json {
+        let r = a.to_json();
+        if era == Era::Modern { self.modern(r) } else { r }
+    }
+
+    fn status(&self, args: &Map<String, Json>) -> Answer {
+        let run = args.get("run").and_then(Json::as_str);
+        let ok = args.len() == 1 && run.is_some_and(|r| r.len() == 32 && r.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+        let Some(run) = run.filter(|_| ok) else {
+            return Answer::error(format!("{STATUS_TOOL} takes {{\"run\": \"<the run id a tool's result gave: 32 hexadecimal characters>\"}}"));
+        };
+        let s = self.server.status(run);
+        Answer { text: s.to_string(), structured: Some(s), is_error: false }
+    }
+}
+
+fn describe(t: &Tool) -> Json {
+    let mut d = json!({
+        "name": t.name,
+        "description": t.description,
+        "inputSchema": t.input_schema,
+        "outputSchema": t.output_schema,
+        "annotations": t.annotations,
+    });
+    if let Some(title) = &t.title {
+        d["title"] = json!(title);
+    }
+    d
+}
+
+fn status_tool() -> Json {
+    json!({
+        "name": STATUS_TOOL,
+        "title": "Status of a run",
+        "description": "Reports what happened to a run of this server's tools, by the run id a tool's result gave: \
+            running, waiting_for_operator, done (with its result), failed (with why), not_started, expired \
+            (its record is past the server's retention) or unknown. It only reads.",
+        "inputSchema": {
+            "type": "object",
+            "properties": { "run": { "type": "string", "pattern": "^[0-9a-f]{32}$" } },
+            "required": ["run"],
+            "additionalProperties": false
+        },
+        "outputSchema": {
+            "type": "object",
+            "properties": {
+                "run": { "type": "string" },
+                "status": { "enum": ["running", "waiting_for_operator", "done", "failed", "not_started", "expired", "unknown"] },
+                "observed_at": { "type": "string" },
+                "result": {},
+                "failure": { "type": "object" },
+                "reason": { "type": "string" }
+            },
+            "required": ["run", "status", "observed_at"]
+        },
+        "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
+    })
+}
+
+/// `staalc mcp status <manifest>`: reads the ledger beside a running server without
+/// changing anything, and lists what waits and what each tool's quota holds.
+fn status_cmd(path: &std::path::Path) -> u8 {
+    let m = match manifest::load(path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            return 2;
+        }
+    };
+    let l = match ledger::Ledger::read_only(&m.server.journals.join("server.ledger")) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            return 2;
+        }
+    };
+    let now = l.now();
+    let mut open = 0;
+    for (id, r) in l.runs().filter(|(_, r)| r.end.is_none()) {
+        open += 1;
+        let waiting = m.server.journals.join("waiting").join(format!("{id}.json"));
+        let what = match std::fs::read_to_string(&waiting).ok().and_then(|t| serde_json::from_str::<Json>(&t).ok()) {
+            Some(w) => format!(
+                "waiting for an operator ({}): {}\n    resolve with: staalc resolve --journal {} ...",
+                w["kind"].as_str().unwrap_or("?"),
+                w["in_doubt"].as_str().unwrap_or("?"),
+                m.server.journals.join(&r.tool).join(&id[..2]).join(format!("{id}.journal")).display()
+            ),
+            None => "in progress, or interrupted (the server resumes it when it next starts)".into(),
+        };
+        println!("run {id} (tool {}): {what}", r.tool);
+    }
+    if open == 0 {
+        println!("no run is unfinished");
+    }
+    for t in &m.tools {
+        println!("tool {}: {}", t.name, server::describe_quota(&l, t, now));
+    }
+    0
+}

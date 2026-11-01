@@ -37,6 +37,12 @@ jobs:
         env:
           STAAL_REQUIRE_EVERY_LICENCE_TARGET: "1"
         run: cargo test --features failpoints --no-fail-fast
+      - name: MCP server against the official Python and TypeScript SDK clients
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mcpenv"
+          "$RUNNER_TEMP/mcpenv/bin/pip" install --quiet -r tests/mcp_sdk/requirements.txt
+          (cd tests/mcp_sdk && npm ci)
+          STAAL_MCP_SDK=1 STAAL_MCP_PYTHON="$RUNNER_TEMP/mcpenv/bin/python" cargo test --test mcp_sdk_test
       - name: Tests without native code
         run: cargo test --no-default-features --no-fail-fast
       - name: VS Code extension (grammar, client, and the server through VS Code's protocol library)

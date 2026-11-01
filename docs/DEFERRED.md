@@ -45,6 +45,27 @@ one. The runtime never answers twice and says plainly when a request was lost
 idempotency key. If wanted, document that pattern with an example; there is nothing
 to fix in the runtime.
 
+## The MCP server (`staalc mcp`)
+
+Deferred on 2026-11-01, when version 1 shipped (docs/MCP.md).
+
+### Progress per operation
+
+A call sends one `notifications/progress`, when its run starts. Sending one at the
+start of each action and model call needs an event hook in the interpreter, which
+runs on both engines and inside concurrent tasks. Needed: a hook that cannot change
+what a run does (it only observes), called from the same place the run's log is
+written, on both engines. Done when: a test sees one progress message per external
+operation in order, on both engines and with tasks, and the engines' logs and
+journals are unchanged.
+
+### Remote transport
+
+Streamable HTTP with OAuth, where `once` keys and status queries are scoped to the
+authenticated client and grants may be chosen per principal (docs/MCP.md section 10).
+Done when: designed in docs/MCP.md, reviewed, then built with the same test bar as
+stdio.
+
 ## MongoDB
 
 Deferred on 2026-10-26, when PostgreSQL was built (`db.postgres`). Needed: `db.mongo`

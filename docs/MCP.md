@@ -1,11 +1,15 @@
 # Staal as an MCP server: design
 
-Status: design, agreed before implementation (phase 0 of the ecosystem plan), revised
-after two outside reviews. The manifest format in section 2 is frozen for version 1.
-The server itself is not built yet. What it relies on from the runtime is built and
-tested: `staalc schema` (section 4), `limits.deadline_ms` (section 3), each run's
-`usage` (section 6) and the `reads_console` check (section 2). When the implementation
-and this note disagree, the note is updated in the same change.
+Status: version 1 is built (`staalc mcp`, `src/mcp/`) and tested
+(`tests/mcp_test.rs`, `tests/mcp_crash_test.rs`, `tests/mcp_sdk_test.rs`). The design
+was agreed before implementation (phase 0 of the ecosystem plan) and revised after two
+outside reviews; the manifest format in section 2 is frozen for version 1. Where
+building it settled a detail the design had left open, this note says what was built.
+When the implementation and this note disagree, the note is updated in the same change.
+
+Running it: `staalc mcp <manifest.json>` serves on standard input and output, the way
+an MCP client starts a local server; `staalc mcp status <manifest.json>` lists, beside a
+running server, the runs that are unfinished and each tool's quota use.
 
 ## 0. Invariants
 
@@ -85,16 +89,20 @@ problem gives. Unknown keys are refused at every level.
   or `"forever"`; the default is 90 (section 7).
 - `server.max_concurrent_runs` is the most runs in progress at once across all tools,
   1 to 256, default 8 (section 5).
-- `server.notify`, optional, is a command (an array: the program and its fixed
-  arguments) run when a run stops for an operator; `server.notify_env` lists the
-  environment variables it may see (section 7).
+- `server.notify`, optional, is a command (an array: the program, absolute or relative
+  to the manifest and resolved at start, and its fixed arguments) run when a run stops
+  for an operator; `server.notify_env` lists the further environment variables it may
+  see (section 7).
 - A tool's `deadline`, optional, bounds how long its runs may keep starting actions
   (section 3). Its `max_concurrent_runs`, optional, is the most of its runs in
-  progress at once. Its `once`, optional, makes a call one logical operation
-  (section 5).
+  progress at once, at most `server.max_concurrent_runs`. Its `once`, optional, makes
+  a call one logical operation (section 5). Its `engine`, optional, is `"interpreter"`
+  (the default) or `"native"`, as `staalc run --engine`.
 - `model` is the run config's `model`, used by every tool unless a tool gives its own.
-- Each tool has `name` (1 to 128 characters of `A-Z a-z 0-9 _ - .`, unique in the
-  manifest), an optional `title`, a `description` (required: a model chooses tools by
+- The manifest's own keys are `server`, `model` and `tools` (at least one tool).
+- Each tool has `name` (1 to 128 characters of `A-Z a-z 0-9 _ - .`, not only dots,
+  since it names the tool's folder of journals, and unique in the manifest), an
+  optional `title`, a `description` (required: a model chooses tools by
   it), `program` (a path relative to the manifest) and `entry` (default `main`).
   Paths are resolved once, at start, to absolute paths with every symbolic link
   followed; the program is read and hashed then, so a file changed or replaced while
@@ -122,8 +130,8 @@ would reach the protocol stream or wait without end:
   waits until a client connects, with no time limit today (DEFERRED.md), so a call
   could hold its quota reservation for ever.
 
-`print` stays allowed. In a tool, printed lines never go to standard output; they are
-recorded in the run's log, as always, and nothing else (section 3).
+`print` stays allowed. In a tool, printed lines never reach the protocol stream: they
+go to the server's standard error (section 3) and are journaled, as every print is.
 
 The manifest holds environment variable names, never secret values, so it can be kept
 in version control.
@@ -166,23 +174,30 @@ It supports two protocol versions:
   `_meta["io.modelcontextprotocol/protocolVersion"]` and
   `_meta["io.modelcontextprotocol/clientCapabilities"]`; a request missing either is
   refused with `-32602`. A request naming a version the server does not support gets
-  `UnsupportedProtocolVersionError` (`-32022`) listing the two it does. The server
-  serves `server/discover` (supported versions, capabilities and server identity),
-  `tools/list` and `tools/call`; `ping`, which this version removed, gets `-32601`.
-  Every result carries `resultType: "complete"` and
-  `_meta["io.modelcontextprotocol/serverInfo"]`. `tools/list` also carries the
-  `ttlMs` and `cacheScope` this version requires on list results: `cacheScope:
-  "private"`, and `ttlMs` of one hour, since the list never changes while the server
-  runs. The server never sends `notifications/message`, which this version allows
+  `UnsupportedProtocolVersionError` (`-32022`) whose `data` is
+  `{"supported": ["2026-07-28"], "requested": ...}`: the version it serves per
+  request (2025-11-25 is reached through `initialize`, so listing it there would send
+  a client round in a circle). The server serves `server/discover` (supported
+  versions, capabilities and server identity), `tools/list` and `tools/call`; `ping`,
+  which this version removed, gets `-32601`. Every result carries `resultType:
+  "complete"` and `_meta["io.modelcontextprotocol/serverInfo"]`. `server/discover` and
+  `tools/list` also carry the `ttlMs` and `cacheScope` this version requires on them:
+  `cacheScope: "private"`, and `ttlMs` of one hour, since nothing they describe
+  changes while the server runs. The server never sends `notifications/message`, which this version allows
   only for requests that ask for a log level.
 
 Each version has its own request handler; they share the code that lists tools and
 runs calls, not the code that reads and writes messages, so a field one version
 requires never leaks into the other.
 
-A connection that begins with `initialize` is treated as 2025-11-25 throughout; any
-other first request is treated per request, as 2026-07-28 requires. The server keeps no
-state between requests except the ledger and the journals, which are on disk.
+Which version a request is served under follows from the request, as the 2026-07-28
+specification has a dual-era server do: one carrying
+`_meta["io.modelcontextprotocol/protocolVersion"]` is served as 2026-07-28; once a
+client has sent `initialize`, one without it is served as 2025-11-25; before that, one
+without it is refused with `-32602`. Both can be served on the same connection, and the
+official Python and TypeScript SDKs connect in either mode and with their own probe
+(section 9). The server keeps no state between requests except the ledger and the
+journals, which are on disk.
 
 Errors are kept apart by what went wrong. A line that is not JSON is `-32700`; a
 message that is not a valid JSON-RPC request is `-32600`; an unknown method is
@@ -199,7 +214,8 @@ cut in half and left in doubt. So a cancelled call's run carries on to its end, 
 server, as both protocol versions require, sends nothing more for that request. The
 client is never told the call was cancelled when it may have acted: the run's outcome
 is in its journal and in `staal_run_status`, under the run id that a
-`notifications/progress` message, if the client asked for progress, gave at the start.
+`notifications/progress` message, if the client asked for progress, gave at the start,
+or in the server's log.
 
 ### How long a call can take
 
@@ -234,8 +250,9 @@ ended at its deadline ends there again. The tool's `deadline` sets the run's
 `limits.deadline_ms`, which is built and tested on both engines (RUNTIME.md section 4,
 `tests/deadline_test.rs`).
 
-A client that sent a `progressToken` gets `notifications/progress` when the run starts,
-carrying its run id, and once at the start of each external operation.
+A client that sent a `progressToken` gets one `notifications/progress` when the run
+starts, whose message carries its run id. Version 1 sends nothing per operation: the
+runtime has no hook for it yet (DEFERRED.md, "Progress per operation").
 
 ## 4. Listing tools
 
@@ -248,7 +265,10 @@ may not use that name.
   listing those without a default, `additionalProperties: false`, and `$defs` for
   declared records and enums. Capability and `Secret` parameters are not in it; they
   come from the manifest. Money is described with its currency's decimal places.
-- `outputSchema` is the `output` of the same command.
+- `outputSchema` is `{"type": "object", "properties": {"result": <the output of the
+  same command>}, "required": ["result"]}`, with its `$defs` at the top: MCP requires
+  an object for both schemas and for `structuredContent`, and a Staal function may
+  return text, a number or a list.
 - `annotations` are derived from the grants (section 5), never written by hand.
 
 `staalc schema` is built and tested (`tests/interface_test.rs`). Its schemas agree with
@@ -281,7 +301,7 @@ For `tools/call` with a tool `name` and `arguments`:
 
 | Outcome | MCP result |
 | --- | --- |
-| `done` | `structuredContent` = the result; `content` = one text item holding the same JSON; `isError: false` |
+| `done` | `structuredContent` = `{"result": <the result>}`; `content` = one text item holding the result's JSON; `isError: false` |
 | `failed`, kind `capability` | `isError: true`; the text is the broker's message, e.g. "'payments.stripe.refund' allows at most 50.00 USD per action; this action needs 300.00 USD" |
 | `failed`, kind `validation`, `action`, `value`, `provider`, `budget` or `deadline` | `isError: true`; the text is the failure's kind and message |
 | `failed`, kind `internal` | `isError: true`; the text says an internal error happened and names the run id; the details go to stderr |
@@ -322,8 +342,12 @@ moment a repeated call finds it. A call whose key is found never starts a run:
 
 A repeated key with different arguments (the same order, a different amount) is
 refused with `isError: true`: it is a different operation pretending to be the same
-one. A key is remembered for `keep` (at most `server.keep`, which the manifest check
-enforces), counted from the run's end; after that, the same arguments start a new run.
+one. Arguments are compared as the runtime reads them, defaults filled in, so
+`{"amount": "35", "currency": "USD"}` and `"35.00"` are the same. A key is remembered
+for `keep` (a whole number and `m`, `h` or `d`; at most `server.keep`, which the
+manifest check enforces; `server.keep` when left out), counted from the run's end;
+after that, the same arguments start a new run. A call that never started (refused
+as busy or over its quota, or released at start) holds no key.
 Over stdio, one server serves one client, so keys are scoped to the tool; with a
 remote transport they will be scoped to the authenticated client too.
 
@@ -336,16 +360,24 @@ Neither replaces the other, and a payment grant keeps `idempotency_key` with or 
 The server runs at most `server.max_concurrent_runs` runs at once (and each tool at
 most its own `max_concurrent_runs`), so a model sending a hundred calls at once gets a
 handful of runs and many "busy" answers, not a hundred model requests and open
-connections. Runs resumed at start count against the limits like any other.
+connections. Runs resumed at start are resumed one after another, before anything is
+served. Calls waiting to be checked are bounded too: with more than four times
+`server.max_concurrent_runs` plus 16 in progress, a call is answered busy at once.
 
 Annotations, derived from the tool's grants:
 
 - `readOnlyHint: true` only when every grant is a read: `net.http.get`, `fs.read`,
   `db.sqlite.query` or `db.postgres.query`, and the tool has no library capability.
 - `destructiveHint: false` only when `readOnlyHint` is true.
-- `idempotentHint: true` only when every grant is read-only or granted
-  `idempotency_key`.
-- `openWorldHint: true` whenever any grant reaches the network.
+- `idempotentHint: true` only when `readOnlyHint` is true or the tool has `once`.
+  An idempotency key does not make a tool idempotent: the keys are the run's own
+  (section 7), so a second call is a second run with new keys and acts again. Only
+  `once` turns the same arguments into the same run. (The design first said
+  `idempotency_key` was enough; building it showed that would claim more than the
+  broker enforces.)
+- `openWorldHint: true` whenever the tool can reach a model, any grant (or any of a
+  library capability's needs) reaches the network or loads C code, or a grant goes to
+  an adapter's capability, which may be a service.
 
 Clients treat annotations as hints from an untrusted server; they change nothing about
 what the broker allows, and they never claim more than the broker enforces. Each rule
@@ -385,17 +417,21 @@ because the action in doubt may have spent money.
 **The ledger** is `<journals>/server.ledger`, one JSON line per event, each written and
 flushed with `fsync` before anything that depends on it happens. It is the authority on
 which runs exist and what they hold: a run exists from its `reserve` event, and its
-journal is named by the run id that event records. Only one server process may hold
-the ledger (an OS lock, freed if the process dies). A torn last line is discarded; any
+journal is named by the run id that event records (the runtime creates the journal
+with that id, so the idempotency keys a service sees carry it too). Only one server
+process may use a journal directory: it holds an OS lock on `<journals>/server.lock`,
+freed if the process dies, and a second server waits up to five seconds for it (an
+SDK's probe, or a restart, may still be letting go) and then refuses to start. A torn last line is discarded; any
 other damage stops the server, as a damaged journal does.
 
 Events: `reserve` (run id, tool, time, calls and money held, and the `once` key and
 arguments hash if any), `settle` (run id, money actually charged, the outcome kind),
 `release` (run id; a reservation whose run never started). Each run has exactly one
 `reserve` and at most one `settle` or `release`; recovery checks this, and writing a
-second one for a run is a bug the server refuses to commit. Compaction at start keeps
-every event of a run that is unsettled, holds a `once` key not yet expired, or ended
-within the longest window; it writes the new ledger to a temporary file, flushes it,
+second one for a run is a bug the server refuses to commit. Compaction, at start and at each daily sweep, keeps
+every event of a run that is unsettled, whose files are still kept (section 7), that
+was reserved within its tool's quota window, or that holds a `once` key not yet
+expired, and drops released runs, which never started and hold nothing; it writes the new ledger to a temporary file, flushes it,
 and renames it over the old one, so a crash during compaction leaves one or the other.
 
 **Time.** Each event records the wall-clock time, in UTC milliseconds since 1970, so
@@ -426,17 +462,25 @@ A call moves through these states, each made durable before the next begins:
 | Step | Durable record | If the server dies here, at the next start |
 | --- | --- | --- |
 | 1. reserve | `reserve` in the ledger | there is no journal: the run never started, so it gets a `release` |
-| 2. create the journal | the journal's first line | the journal is there and empty of operations: the run is resumed, which runs it from the start |
-| 3. run | the journal's records | the run is resumed, exactly as `staalc resume` would; it finishes, fails, or stops in doubt |
-| 4. waiting record (a stopped run) | `waiting/<run id>.json` | the run is resumed again and stops again, rewriting the record |
-| 5. settle | `settle` in the ledger | done: the run's journal records its end, and the ledger its settlement |
-| 6. answer | none | nothing to recover; a repeated call is answered from the ledger and journal |
+| 2. keep the arguments | `<run id>.inputs.json` beside the journal | still no journal: as step 1 (the file is removed) |
+| 3. create the journal | the journal's first line | the journal is there and empty of operations: the run is resumed, which runs it from the start |
+| 4. run | the journal's records | the run is resumed, exactly as `staalc resume` would, from its journal and its kept arguments; it finishes, fails, or stops in doubt |
+| 5. waiting record (a stopped run) | `waiting/<run id>.json` | the run is resumed again and stops again; the record stays as first written |
+| 6. settle | `settle` in the ledger | done: the run's journal records its end, and the ledger its settlement; the arguments file is removed |
+| 7. answer | none | nothing to recover; a repeated call is answered from the ledger and journal |
+
+The arguments are kept only while a run may need resuming: a settled run's file is
+removed at once, and at every start whatever is left of one. A run's log goes beside
+its journal as `<run id>.log.jsonl`.
 
 At start, before it answers anything, the server goes through the ledger and the
 journal directory together:
 
 - **A `reserve` with no journal** gets a `release`: the run never started.
-- **A `reserve` whose journal records no end** is resumed. If it ends, it is settled
+- **A `reserve` whose journal records no end** is resumed. Before any run is resumed,
+  every unfinished run is checked: its tool is still in the manifest, its arguments
+  file is there, and its journal was started with the identical program and config.
+  Any failure stops the server, naming each run (see Upgrades below). If it ends, it is settled
   from the `usage` its result reports, which counts the replayed actions too; if it
   stops in doubt, it keeps its reservation and its waiting record is rewritten.
 - **A `reserve` whose journal records an end, with no `settle`** (the server died
@@ -445,16 +489,26 @@ journal directory together:
   is therefore idempotent: it always reads the same usage from the same journal.
 - **A journal with no `reserve`** cannot come from the server, which writes the
   `reserve` first. The server refuses to start and names it, for an operator to look
-  at, rather than guess whether it ran.
+  at, rather than guess whether it ran. The same holds for an arguments file.
+- **A released run's files** (a journal with no records, an arguments file) are
+  removed, so that once compaction forgets the run nothing is left that no reservation
+  explains.
+- **A run the runtime could not finish** (it refused at the start, or its thread
+  crashed): if its journal holds nothing past its start record, nothing happened and
+  the run is released; otherwise it is kept as stopped, kind `internal`, and resumed
+  at the next start.
 - **A `settle` for a run whose journal is gone** is ordinary once the journal is past
   `server.keep`: the run is reported as expired (below).
 
 Settling never releases a reservation that should stay: a run that stopped in doubt is
 not settled at all until it is resolved and resumed to an end.
 
-`staalc mcp status <manifest>` lists runs that are stopped, with what is in doubt, and
-quota use per tool. An operator resolves a stopped run with `staalc resolve`, unchanged,
-and the next start of the server resumes it.
+`staalc mcp status <manifest>` lists unfinished runs: those waiting for an operator,
+with what is in doubt and the `staalc resolve --journal ...` path to resolve each,
+and any other (in progress, or interrupted and resumed at the next start). It also
+gives each tool's quota use. It reads the ledger without locking or changing it, so it
+can run beside the server. An operator resolves a stopped run with `staalc resolve`,
+unchanged, and the next start of the server resumes it.
 
 ### When a run waits for an operator
 
@@ -479,9 +533,11 @@ What each side is told:
   this server process right now, which the server knows from memory; a run that was in
   progress when an earlier process died is resumed at start, before any status is
   answered, so `running` never describes a dead process. Otherwise the status comes
-  from the ledger (`waiting_for_operator` for an unsettled run that stopped, `done` or
-  `failed` once settled, with the result read from the journal's end record), and a run
-  past retention is `expired`. A run id the ledger has never seen is `unknown`. It
+  from the ledger (`waiting_for_operator` for an unsettled run that stopped, with the
+  `failure` its waiting record holds; `done` or `failed` once settled, with the result
+  or failure read from the journal's end record, an internal failure's message left
+  out as in section 5; `not_started` for a call released before its run started), and
+  a run past retention is `expired`. A run id the ledger has never seen is `unknown`. It
   answers only about runs this server's ledger holds, and a run id is 32 random
   hexadecimal characters, so one caller cannot find another's runs by guessing.
   It opens nothing for writing and takes no lock: a journal is read as it stands, a
@@ -492,12 +548,15 @@ What each side is told:
 - **The operator** is told outside MCP, durably. When a run stops, the server writes a
   record to `<journals>/waiting/<run id>.json` (tool, run id, what is in doubt, when),
   flushed before the caller is answered, and logs it to stderr. If the manifest names a
-  `server.notify` command, the server runs it with the record's path as its only
-  argument, without a shell. The command's exit status is recorded beside the record;
-  a command that fails or cannot start is run again at each later start of the server,
-  until it succeeds. The record is removed once the run is resolved and resumed.
-  The command runs with a cleared environment: only `PATH`, `HOME`, `LANG` and `TZ`,
-  plus the variables `server.notify_env` names. It never inherits a model key, a
+  `server.notify` command, the server runs it with the record's path as its last
+  argument, without a shell. How it ended is recorded beside the record, in
+  `waiting/<run id>.notify` (`ok`, or `failed:` and why); a command that fails or cannot
+  start is run again at each later start of the server, until it succeeds. A run that
+  stops again in the same way when it is resumed keeps its first record, and its
+  operator is not told again. The record is removed once the run is resolved and resumed.
+  The command runs with a cleared environment: only `PATH`, `HOME`, `LANG` and `TZ`
+  (those that are set), plus the variables `server.notify_env` names (which may not
+  repeat those four, and need a `server.notify`). It never inherits a model key, a
   payment key or any other secret the server holds, and the manifest is refused if
   `notify_env` names a variable that a grant, a secret or the model uses. Its standard
   input is `/dev/null` and its output goes to the server's standard error; it is given
@@ -538,9 +597,9 @@ compaction has removed those too.
 What the server trusts: the manifest, the programs and libraries it names, and the
 environment that holds the secrets. What it does not: everything that arrives on stdin.
 
-- Arguments are inputs and nothing more (section 5, step 3).
-- A secret is read from its environment variable when the server starts and is only
-  ever given to the run that needs it; secret values are scrubbed from every message
+- Arguments are inputs and nothing more (section 5, step 6).
+- A secret's variable is checked when the server starts (a missing one stops it), and
+  its value is read for each run and only ever given to the run that needs it; secret values are scrubbed from every message
   the runtime produces, and tests check the server's stdout, stderr, journals and
   ledger for each secret.
 - The client sees tool names, descriptions, schemas, results and failure messages. It
@@ -563,9 +622,11 @@ environment that holds the secrets. What it does not: everything that arrives on
 
 ## 9. How it is tested
 
-- Conformance: the official Python and TypeScript MCP SDK clients start the server, list
-  its tools and call them, under both protocol versions, in CI on Linux x86_64, Linux
-  arm64, Apple Silicon and Intel macOS.
+- Conformance: the official Python SDK (`mcp` 2.3.0) and TypeScript SDK
+  (`@modelcontextprotocol/client` 2.3.1) clients start the server, list its tools and
+  call them, under 2025-11-25, under 2026-07-28 and with each SDK's own probe
+  (`tests/mcp_sdk_test.rs`), in CI on Linux x86_64, Linux arm64, Apple Silicon and
+  Intel macOS.
 - Outcomes: each row of the table in section 5 has a test, against the local fake
   services in `bench/agent`, checking that a refused action never reached the service.
 - Quotas: calls, money, concurrent calls, a run in doubt holding its reservation, and
