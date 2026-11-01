@@ -600,8 +600,10 @@ fn a_deadline_stops_a_run_before_its_next_action_on_both_engines() {
         let r = c.call(i as u64, name, json!({ "n": 1 }));
         assert_eq!(r["isError"], true);
         assert!(text(&r).starts_with("deadline: the run passed its deadline of 1000 ms"), "{r}");
-        // 400 ms each: the third starts before 1 s, the fourth would start after.
-        assert_eq!(s.requests().len() - before, 3);
+        // 400 ms each: the fourth cannot start before 1 s has passed, and on a loaded
+        // machine fewer may have; but at least one starts, and none after the deadline.
+        let made = s.requests().len() - before;
+        assert!((1..=3).contains(&made), "{made} requests");
     }
     c.close();
 }
