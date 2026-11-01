@@ -10,7 +10,7 @@
 <p align="center">
   <b>The programming language for agents.</b><br>
   Not a wrapper around your prompts. A language whose compiler and runtime enforce what an agent may do,<br>
-  so limits, permissions and crash recovery hold even when the code around them changes.
+  putting permissions, spending limits and crash recovery in the language instead of in code you have to keep right.
 </p>
 
 <p align="center">
@@ -28,11 +28,12 @@
 ## Benchmarks
 
 The same support agent, built twice: in Python alone and in Python with Staal, with
-the same limits, permissions, retries and crash recovery. Both face 47 scenarios:
-prompt injection, malformed model output, permission escalation, failing services,
-and crashes before and after every external call. Then six realistic later changes
-are made to each. See [bench/agent](bench/agent) for the code, the scenarios and
-what this does not show.
+the same limits, permissions, retries and crash recovery. A model reads a ticket and
+proposes at most one refund (through a simulated Stripe) and one email. Both versions
+face 47 scenarios: policy, prompt injection, malformed model output, permission
+escalation, failing services and lost answers, and crashes before and after every
+external call. A scenario passes when the effects the simulated world ends up with
+are ones the scenario allows and no rule of the specification broke.
 
 | Metric | Python alone | Python with Staal |
 | --- | --- | --- |
@@ -41,21 +42,60 @@ what this does not show.
 | Risky later changes that shipped broken | 6 of 6 | 0 of 6 (4 refused before running, 2 held at run time) |
 | Operator interventions (emails in doubt) | 4 | 4 |
 
-Careful Python can match Staal on the day it is written. The difference is what
-happens to the guarantees as the code changes.
+Code is counted as lines that are neither blank nor comments. Neither version has
+tests of its own; the 47 scenarios and the simulated world are shared and not
+counted. The Python version's 312 lines are one file that holds, among the rest, its own journal (78 lines), deciding
+whether a request was sent (20), calling and checking the model (60), and the policy
+and actions (82). The Staal version's 159 are the agent (39), the app's grants, run,
+resume and resolve (59), and the Stripe and mail libraries (61), which a team would
+take from packages, leaving 98.
+
+The six later changes, made identically to both versions:
+
+| Change | Python alone | Python with Staal |
+| --- | --- | --- |
+| Put the ticket into the model's instruction | ships; all 47 scenarios break the rule | refused before it runs (E006) |
+| Drop validation of the model's plan | ships; 4 scenarios act on malformed plans, 1 crashes the job | refused before it runs (E001) |
+| Ask the model again to polish the email | ships; 24 scenarios go over the budget | refused before it runs (E004) |
+| Log every request, headers included | ships; the API keys land in a log | refused before it runs (E101) |
+| Refactor each step into its own helper | ships; two refunds go through where one is allowed | runs; the limits still hold |
+| Resend the email if the mail service fails | ships; a customer is emailed twice when an answer is lost | runs; the limits still hold |
+
+This is one agent, one specification and six changes. Both versions were written by
+one person who knew the scenarios in advance, which favours the Python version. Careful Python can meet
+the same specification, and on the day it is written it does. What the benchmark
+measures is how much code has to stay right for those guarantees to hold as the
+system changes. Three control changes, to the policy or the order of business (for
+example raising a limit), come out the same in both versions, because neither
+language can tell what the business meant. [bench/agent](bench/agent) has the code, every scenario, the
+controls and the rest of what this does not show.
 
 ## What it is
 
 Agents should not act on prompts and hope. Staal is a programming language built
 for what agents do: moving money, sending messages, changing files and records,
-and calling AI models. Its compiler proves, before a program runs, that every action
-has the authority it needs, that untrusted model output is validated before it is
-used, and that model spending stays inside a declared budget. Its runtime records
-every effect durably, so a program that crashes halfway through resumes without
-repeating a payment or a message.
+and calling AI models.
+
+The work is split in two. Before a program runs, the compiler checks that it follows
+the language's safety rules: every action has a capability in scope, no capability is
+widened, a model's output is validated before it is used, untrusted text never
+becomes a model's instruction, and model use cannot exceed its declared budget. While
+it runs, the capability broker enforces the permissions and limits your application
+actually granted, and a journaled run records every external effect, so after a
+crash it resumes without blindly repeating a payment or a message.
 
 Staal is said "stahl": it is Dutch and Afrikaans for steel. This repository holds
 `staalc`, the Staal compiler and reference runtime, written in Rust.
+
+## Where Staal fits
+
+You do not build your application in Staal. Your API, frontend, database layer and
+business logic stay in the languages and frameworks you use now. Staal is for the
+paths where an AI agent takes actions with consequences: a support agent that issues
+refunds, an agent that sends SMS, email or Slack messages, one that changes records in
+PostgreSQL or SQLite or files on disk, or one that calls any HTTP API through a
+library capability. Your application decides what each run may do; Staal checks the
+program and enforces those permissions while it runs.
 
 ## Quick start
 
@@ -98,6 +138,12 @@ Refunded 35.00 USD for order 4417
 'payments.refund' allows at most 50.00 USD per action; this action needs 300.00 USD
 ```
 
+The tier comes from your application's own records, such as the signed-in
+customer's account, never from the model. This example shows capability enforcement
+only; to make a run crash-safe, give it a journal
+(`lib.run(..., journal="refund-4417.journal")`), and a crashed run then continues with
+`lib.resume`.
+
 No account or key is needed: with no payment service configured, Staal uses a
 simulated one. The same in Node.js, and both files in full, are in
 `examples/quickstart/`; the test suite checks this output. Next, the
@@ -121,10 +167,23 @@ manifest, and the compiler refuses code that reaches beyond it.
 floating point. Overflow, division by zero, mixed currencies and out-of-range
 indexes are failures, not wrong answers. Every list declares a maximum length.
 
-**Crash-safe by construction.** Every external effect is written to a journal
-before it happens and after it returns. A crashed run resumes where it stopped;
-an action whose outcome is unknown is stopped for an operator to resolve, never
-retried blindly.
+**Bounded model use.** A function declares a budget of model calls and tokens
+(`budget(calls: 1, tokens: 400)`). The compiler refuses a function whose worst-case
+use can exceed it (E004) and a model call inside an unbounded loop (E005). At run
+time, a call that the remaining budget cannot cover is refused before it is sent, and
+the budget is charged from the usage the provider reports. Untrusted data is sent to
+the model in a section marked as data, never as its instruction (E006), data marked
+blinded never reaches a model (E007), and a model's output is a `Proposed` value
+that must pass `validate` before it can reach an action (E001).
+
+**Crash recovery built into the runtime.** A journaled run (`--journal`, or
+`journal=` from Python and Node.js) records every external effect before it happens
+and after its outcome is known. If the process crashes, the run resumes from the
+journal without repeating anything whose outcome it recorded. When an action may
+have happened but its outcome was not recorded, it is never guessed: an action the
+service deduplicates by key is made again on resume with the same idempotency key,
+so the service returns its original result, and any other action stops the run until
+an operator records what happened (`staalc resolve`).
 
 **Native code and standalone executables.** Pure functions compile to machine
 code through Cranelift, with results, errors and journals identical to the
@@ -133,7 +192,15 @@ interpreter. `staalc build` links a program into a single executable.
 **Callable from any language.** A C interface (`include/staal.h`) runs programs
 from other languages, with packages for Python (`python/`) and for Node.js and
 TypeScript (`node/`): your application decides the policy, Staal enforces it
-(GUIDE.md, "Policy from your app").
+(GUIDE.md, "Policy from your app"). `staalc schema` prints the JSON Schemas of a
+function's inputs and result, so a program can be described as a tool to agent
+frameworks.
+
+**An explicit boundary with native code.** A program can call C libraries, granted
+by the library's SHA-256 and each function's exact signature. Staal cannot check what
+C code does, so every run granted a C function is marked unchecked: in its log, on
+the command line and in the C interface's result. The guarantees above end at that
+boundary, and Staal says so where it applies.
 
 ## A first program
 
@@ -250,10 +317,15 @@ closures; and a standard library of text, number, list, hashing, encoding and da
 functions, with printing, the clock and random numbers journaled so a resumed run
 replays them.
 
+Platforms: CI runs the whole test suite on every change on Linux (x86_64 and arm64)
+and macOS (Apple Silicon and Intel), including the Python wheel installed and used
+with no Rust. Two features are Linux only so far and refuse elsewhere: `staalc build`
+and the `db.sqlite` capabilities. The Node.js package's crash-injection tests run on
+Linux. Releases, the PyPI wheels and the npm package cover all four platforms.
+
 Not yet done: runs against the live services (Claude, Termii, Stripe, Resend,
 Slack) with real keys, which so far are tested against local stand-ins; other
-model providers; Windows; proof on macOS (everything has been tested on Linux;
-`staalc build` is Linux only for now); a Python package on PyPI; MongoDB; and an
+model providers; Windows; `staalc build` and SQLite outside Linux; MongoDB; and an
 independent security review. docs/DEFERRED.md lists the work decided on and
 put off.
 

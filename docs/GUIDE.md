@@ -1395,7 +1395,7 @@ Nothing checks what C code does, so **every run granted a C function is marked
 unchecked**: in its log, on the command line, and in the C interface's result. Use
 it for what Staal cannot do itself, keep the declaration exact (a wrong one is wrong
 code), and prefer a runtime capability when one exists. Linux and macOS on x86_64
-and aarch64 only (tested so far on Linux x86_64). RUNTIME.md section 19 has the
+and aarch64 only (tested in CI on all four). RUNTIME.md section 19 has the
 details.
 
 How this is tested: ten tests call a C library built from `tests/ffi/staaltest.c` on
