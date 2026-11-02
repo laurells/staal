@@ -354,7 +354,7 @@ mod tests {
     /// but must never return the outside file's contents.
     #[test]
     fn a_folder_swapped_for_a_link_mid_read_never_leaks() {
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
         use std::sync::Arc;
         let d = dir("race");
         let store = d.join("allowed/.store");
@@ -363,23 +363,31 @@ mod tests {
         fs::write(d.join("outside/secret"), "SECRET").unwrap();
         let sw = d.join("allowed/sw");
         let stop = Arc::new(AtomicBool::new(false));
+        let rounds = Arc::new(AtomicU64::new(0));
         let swapper = {
-            let (stop, d, sw, store) = (stop.clone(), d.clone(), sw.clone(), store.clone());
+            let (stop, rounds, d, sw, store) = (stop.clone(), rounds.clone(), d.clone(), sw.clone(), store.clone());
             std::thread::spawn(move || {
-                let mut rounds = 0u64;
                 while !stop.load(Ordering::SeqCst) {
                     fs::rename(&store, &sw).unwrap(); // a real folder
                     fs::rename(&sw, &store).unwrap();
                     symlink(d.join("outside"), &sw).unwrap(); // a link to the outside
                     fs::remove_file(&sw).unwrap();
-                    rounds += 1;
+                    rounds.fetch_add(1, Ordering::SeqCst);
                 }
-                rounds
             })
         };
         let target = s(&sw.join("secret"));
-        let (mut allowed, mut refused) = (0, 0);
-        for _ in 0..20000 {
+        let (mut allowed, mut refused) = (0u64, 0u64);
+        // Reads go on until the race has really been run (many swaps, and reads that met
+        // both states), however fast this machine's threads are scheduled; a cap on time
+        // keeps a machine that never interleaves them from hanging the test.
+        let started = std::time::Instant::now();
+        let mut reads = 0u64;
+        while reads < 20_000 || rounds.load(Ordering::SeqCst) <= 100 || refused == 0 || allowed == 0 {
+            if started.elapsed() > std::time::Duration::from_secs(60) {
+                break;
+            }
+            reads += 1;
             match read(&target, 100) {
                 Ok(text) => {
                     assert_eq!(text, "ALLOWED", "a read through a swapped folder leaked");
@@ -389,8 +397,9 @@ mod tests {
             }
         }
         stop.store(true, Ordering::SeqCst);
-        let rounds = swapper.join().unwrap();
-        assert!(rounds > 100, "the swapper only ran {rounds} rounds");
+        swapper.join().unwrap();
+        let rounds = rounds.load(Ordering::SeqCst);
+        assert!(rounds > 100, "the swapper only ran {rounds} rounds in 60 s");
         assert!(refused > 0, "no read met the link ({allowed} allowed)");
         println!("{rounds} swaps; {allowed} reads of the real folder, {refused} refused");
     }
