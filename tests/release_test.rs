@@ -1,5 +1,6 @@
 // One version everywhere a release states it: staalc itself, the Python package, the
-// Node package and its addon, the VS Code extension, and the changelog's latest release.
+// Node package and its addon, the VS Code extension, their lock files, the site, the bug
+// report template, and the changelog's latest release.
 
 use std::fs;
 use std::path::Path;
@@ -73,6 +74,23 @@ fn every_part_of_a_release_has_staalcs_version() {
     let addon = read("node/Cargo.toml");
     let addon_version = addon.lines().find_map(|l| l.strip_prefix("version = \"")?.strip_suffix('"')).unwrap();
     assert_eq!(addon_version, VERSION, "node/Cargo.toml");
+    // The lock files, which builds with --locked refuse to change: each records the
+    // version of the crate or package it locks.
+    for (lock, names) in [("Cargo.lock", &["staalc"][..]), ("node/Cargo.lock", &["staalc", "staal-node"][..]), ("fuzz/Cargo.lock", &["staalc"][..])] {
+        let text = read(lock);
+        for name in names {
+            let at = text.find(&format!("\nname = \"{name}\"\n")).unwrap_or_else(|| panic!("{lock} has no {name}"));
+            let version = text[at..].lines().nth(2).and_then(|l| l.strip_prefix("version = \"")?.strip_suffix('"'));
+            assert_eq!(version, Some(VERSION), "{lock}: {name}");
+        }
+    }
+    for lock in ["node/package-lock.json", "editors/vscode/package-lock.json"] {
+        let l: serde_json::Value = serde_json::from_str(&read(lock)).unwrap();
+        assert_eq!((&l["version"], &l["packages"][""]["version"]), (&serde_json::json!(VERSION), &serde_json::json!(VERSION)), "{lock}");
+    }
+    // What people see: the site's stamp and the bug report's example version.
+    assert!(read("site/index.html").contains(&format!("Preview <b>v{VERSION}</b>")), "site/index.html");
+    assert!(read(".github/ISSUE_TEMPLATE/bug_report.yml").contains(&format!("placeholder: staalc {VERSION}")), "bug_report.yml");
     // The changelog: what is not released yet first, then the latest release, which
     // is this version, with its date.
     let log = read("CHANGELOG.md");

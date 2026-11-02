@@ -9,7 +9,12 @@ GitHub release holding them all, with the changelog's notes for the version.
 
 1. Move the changelog's `## Unreleased` entries under `## X.Y.Z — YYYY-MM-DD`.
 2. Set version X.Y.Z in `Cargo.toml`, `python/pyproject.toml`,
-   `editors/vscode/package.json`, `node/package.json` and `node/Cargo.toml`.
+   `editors/vscode/package.json`, `node/package.json` and `node/Cargo.toml`; in the
+   lock files that record it (`Cargo.lock`, `node/Cargo.lock` for `staalc` and
+   `staal-node`, `fuzz/Cargo.lock`, and the two `"version"` fields of
+   `node/package-lock.json` and `editors/vscode/package-lock.json`), since builds with
+   `--locked` refuse to change them; in `site/index.html`'s stamp; and in the
+   placeholder of `.github/ISSUE_TEMPLATE/bug_report.yml`.
    `cargo test --test release_test` fails until all of them and the changelog agree.
 3. Commit, then tag and push: `git tag -a vX.Y.Z -m "staalc X.Y.Z"` and
    `git push origin vX.Y.Z`. The workflow refuses a tag that is not `v` and the
