@@ -8,6 +8,10 @@ on:
   pull_request:
 permissions:
   contents: read
+env:
+  # Line numbers in backtraces, without full debug info: every test binary holds the
+  # compiler and Cranelift, and full debug info for each filled a Linux runner's disk.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 jobs:
   test:
     strategy:
@@ -25,6 +29,11 @@ jobs:
           else
             rustup toolchain install 1.97.0 --profile minimal --component clippy && rustup default 1.97.0
           fi
+      - name: Disk space on Linux (the image's preinstalled SDKs this build does not use)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: PostgreSQL for the db.postgres tests on Linux, where the image has none
         if: runner.os == 'Linux'
         run: test -d /usr/lib/postgresql || { sudo apt-get update -q && sudo apt-get install -y -q postgresql; }
@@ -79,3 +88,6 @@ jobs:
           (cd "$RUNNER_TEMP/npm-app" && for e in @staal/node @staal/node/openai-agents @staal/node/langgraph @staal/node/package.json; do node -e "require.resolve('$e')" || exit 1; done)
       - name: Clippy
         run: cargo clippy --all-targets --features failpoints -- -D warnings
+      - name: Disk space left
+        if: always()
+        run: df -h .
