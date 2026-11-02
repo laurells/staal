@@ -212,8 +212,13 @@ request's `_meta`; a 2025-11-25 client starts with `initialize` and uses the ver
 negotiated. The server does not hold a connection to one lifecycle, because each request
 says which it is; that is deliberate, so a client probing with one and settling on the
 other works, and the official Python and TypeScript SDKs connect in either mode and
-with their own probe (section 9). Clients should not mix the two otherwise. The server keeps no state between requests except the ledger and the
-journals, which are on disk.
+with their own probe (section 9). Clients should not mix the two otherwise.
+
+The server holds in memory only what active requests need: whether a client has sent
+`initialize`, the calls in progress (for cancellation), and the runs in progress with
+their concurrency slots. Everything about an operation that must outlive the process
+(which runs exist, what they reserve, quota use, `once` keys, what each run did) is
+in the ledger and the journals, on disk.
 
 Errors are kept apart by what went wrong. A line that is not JSON is `-32700`; a
 message that is not a valid JSON-RPC request is `-32600`; an unknown method is
@@ -238,9 +243,11 @@ or in the server's log.
 
 ### How long a call can take
 
-Every operation the runtime performs is bounded by its own timeout, so a run can take
-long but not for ever, with one exception: C code called through `cap ffi`, which no
-timeout can stop (below the table).
+Every external operation for which the runtime has an enforceable timeout is bounded
+by it (the table). Outside that guarantee: C code called through `cap ffi`, which no
+timeout can stop (below the table), and stalls of the machine itself, such as a disk
+that does not complete a journal write or `fsync`; a run waits for those like any
+program does.
 
 
 | Operation | Bounded by |
@@ -277,9 +284,17 @@ ended at its deadline ends there again. The tool's `deadline` sets the run's
 `limits.deadline_ms`, which is built and tested on both engines (RUNTIME.md section 4,
 `tests/deadline_test.rs`).
 
-A client that sent a `progressToken` gets one `notifications/progress` when the run
-starts, whose message carries its run id. Version 1 sends nothing per operation: the
-runtime has no hook for it yet (DEFERRED.md, "Progress per operation").
+A client that sent a `progressToken` gets one notification when the run starts, after
+its reservation:
+
+```json
+{"jsonrpc": "2.0", "method": "notifications/progress",
+ "params": {"progressToken": <the client's token>, "progress": 0, "message": "run <run id> started"}}
+```
+
+It says only that the run began, and gives its run id for `staal_run_status`; it has no
+`total`, and promises nothing about when the run ends. Version 1 sends nothing per
+operation: the runtime has no hook for it yet (DEFERRED.md, "Progress per operation").
 
 ## 4. Listing tools
 
@@ -475,12 +490,21 @@ and renames it over the old one, so a crash during compaction leaves one or the 
 time zones and daylight saving never enter into it. The ledger's time never goes
 backwards: an event is stamped with the later of the clock and the last event's time,
 and a clock found behind the ledger is logged as a warning. So a clock set back cannot
-make a window shorter or reorder events. A clock set forwards can free a quota early,
-and nothing inside one machine can detect that; an operator who needs it guarded
-should run the server where the clock is kept by NTP and alarms on large steps.
+make a window shorter or reorder events. When compaction drops the event that held the
+latest time, a `clock` event (`{"e":"clock","t":MS}`) keeps it, so this holds across a
+compaction and a restart too.
 
-A monotonic clock was considered and refused: it does not survive a restart, and a
-quota has to, so the ledger would still depend on the wall clock at every start.
+A clock set forward is the dangerous direction: it would free a quota early and, worse,
+expire a `once` key early, so a repeated payment could start a new run. While a host
+has its ledger open, this cannot happen: the ledger reads the clock as at most one
+minute ahead of the time since boot (`CLOCK_BOOTTIME` on Linux, `CLOCK_MONOTONIC` on
+macOS, both counting sleep and neither set by anyone) counted from when it opened, so a
+jump moves nothing on, and the first one is logged as a warning. Across a restart there
+is no such reference: the host warns when it finds the clock more than a day ahead of
+the ledger's last event, and cannot tell a jump from a long shutdown, so it warns
+rather than refuses. For a tool that moves money, give `once` a key kept for ever
+(`server.keep` `"forever"`), which no clock can expire, and run the host where the
+clock is kept by NTP.
 
 **What settling reads:** a run's result reports `usage`: for each capability parameter
 of the entry function, the actions attempted and the money charged, per currency,
@@ -541,7 +565,23 @@ journal directory together:
   `server.keep`: the run is reported as expired (below).
 
 Settling never releases a reservation that should stay: a run that stopped in doubt is
-not settled at all until it is resolved and resumed to an end.
+not settled at all until it is resolved and resumed to an end. A restart frees the
+concurrency slots, which live in memory, never a reservation, which lives in the
+ledger.
+
+**A crash inside a C function.** A call to C is an action like any other (RUNTIME.md
+section 19): journaled before it is made, its value recorded after. A process killed
+while the function runs leaves the call in doubt. On restart the run is resumed, and
+the call is made again only if its grant says `"repeatable": true`; otherwise the run
+stops, keeps its reservation, and waits for an operator, who can only record it as
+failed or have it retried, since nothing outside the process saw what it returned
+(`tests/ffi_test.rs`).
+
+**Deletions are flushed too.** Removing a file (a finished run's journal, log or run
+file, a released run's leftovers, a resolved run's waiting record) flushes its folder
+before anything else happens, so the ledger never forgets a run whose file could come
+back after a power loss: such a file would be one no reservation explains, which stops
+the next start.
 
 `staalc mcp status <manifest>` lists unfinished runs: those waiting for an operator,
 with what is in doubt and the `staalc resolve --journal ...` path to resolve each,
@@ -668,10 +708,9 @@ environment that holds the secrets. What it does not: everything that arrives on
 - The journal directory must belong to the server's user and not be writable by
   others (section 2): a journal decides what a resumed run replays, so whoever can
   write one can make a run "remember" things that never happened.
-- The clock. A forward step can free a quota early (section 6). The server records the
-  time at each start and logs a warning when it finds the clock more than a day ahead
-  of the ledger's last event, so an operator watching the log sees large jumps; it
-  cannot tell a jump from a long shutdown, so it warns rather than refuses.
+- The clock. A forward step while a host runs moves nothing on; across a restart it
+  can free a quota or expire a `once` key early, which the host warns about at start
+  when the clock is more than a day ahead of the ledger (section 6).
 
 ## 9. How it is tested
 
@@ -698,6 +737,13 @@ environment that holds the secrets. What it does not: everything that arrives on
   calls racing for a money quota that fits one worst case make exactly one run, and
   the others reserve nothing (python/tests/test_tool.py). Splitting the lock between
   the `once` check and the reservation fails the first of these.
+- Scope: two tenants making the same `once` call get two runs and see only their
+  own; a run's status asked from another scope, or none, is `unknown`; a conflict is
+  told without anything of the other tenant; a malformed scope is refused (Python and
+  Node.js tests). Dropping the scope from the key, or from the status check, fails them.
+- The clock: the latest time survives a compaction that drops its event and a
+  restart, and a clock set forward while the ledger is open stamps nothing ahead of
+  the time since boot (`src/host/ledger.rs`).
 - Changed code: a module a program imports is changed while a run is unfinished; the
   directory refuses to open, naming the run, and opens and finishes it once the module
   is restored (python/tests/test_tool.py, with crash injection).
@@ -813,6 +859,22 @@ A call's answer is `{status, run, text, structured, is_error}`, with `status` on
 call of a run still going) and `not_run` (refused before any run: arguments the types
 refuse, a quota, a busy host, grants a check refuses). `text` is what an MCP client
 would be given: for `done`, the result as JSON, so a text result keeps its quotes.
+
+**Scope: more than one tenant or user.** The MCP server serves one client. An app can
+serve many from one journal directory, and two of them can make the same call: two
+shops each refunding their order 123. So a call can carry a trusted *scope* (a
+tenant's or a user's id, 1 to 256 characters, no control characters), given by the
+app from its own records, never taken from the arguments (`scope=` in Python and
+Node.js, a function of the call's context like `grants`). The scope is recorded with
+the run's reservation, and:
+
+- A `once` key is held within its scope: the same arguments in two scopes are two
+  runs, and a conflict is found only against the same scope's runs.
+- A run's status is given only to a question in its scope; asked from any other scope,
+  or with none, a run made in a scope is `unknown`, as a run never made is, so even
+  its existence is not revealed. A run id is an identifier, not an authorization.
+- Quotas and the concurrency limit stay per tool, across scopes: they bound what the
+  tool does in total. A per-tenant limit belongs in the grants the app computes.
 
 **One process per journal directory.** The lock of section 6 holds across the MCP
 server and apps alike. In one process, opening a directory again gives the same host

@@ -101,9 +101,12 @@ class Host {
     return new Host(out.host, journals);
   }
 
-  /** What happened to a run, by its id. Changes nothing. */
-  async status(run) {
-    return ok(parse(await addon.runStatus(this._handle, str(run, 'run'))));
+  /**
+   * What happened to a run, by its id. Changes nothing. A run made in a scope is
+   * described only when `options.scope` is that scope; otherwise it is unknown.
+   */
+  async status(run, options = {}) {
+    return ok(parse(await addon.runStatus(this._handle, str(run, 'run'), scopeOf(options.scope))));
   }
 
   async close() {
@@ -115,17 +118,29 @@ class Host {
   }
 }
 
+function scopeOf(scope) {
+  if (scope === undefined || scope === null) return undefined;
+  if (typeof scope !== 'string') throw new TypeError("staal: a scope must be a string (a tenant's or a user's id, from the app's own records)");
+  return scope;
+}
+
 const SPEC_KEYS = ['title', 'entry', 'quota', 'once', 'deadline', 'max_concurrent_runs', 'engine',
   'model', 'secrets', 'net', 'fs', 'adapters', 'limits'];
 
 /**
  * A program's entry function as a tool. `grants` is an object, the same for every
  * call, or a function of the call's context that returns that call's grants, so the
- * app's policy decides each call's limits. Give `journals` (a directory) or `host`.
+ * app's policy decides each call's limits. `scope`, if given, is a function of the
+ * same context returning the call's trusted scope as a string (a tenant's or a user's
+ * id, from the app's own records, never from the arguments): a `once` key is held
+ * within its scope, and a run's status is given only in its scope. An app serving more
+ * than one tenant or user from one journal directory gives a scope. Give `journals`
+ * (a directory) or `host`.
  */
 class Tool {
   static async open(program, options) {
-    const { name, description, grants, journals, host, ...spec } = options || {};
+    const { name, description, grants, scope, journals, host, ...spec } = options || {};
+    if (scope !== undefined && typeof scope !== 'function') throw new TypeError("staal: Tool: scope is a function of the call's context");
     for (const k of Object.keys(spec)) {
       if (!SPEC_KEYS.includes(k)) throw new TypeError(`staal: Tool: unknown option '${k}'`);
     }
@@ -144,7 +159,7 @@ class Tool {
       if (ownHost) await h.close();
       throw e;
     }
-    const t = new Tool(out, h, ownHost, typeof grants === 'function' ? grants : null);
+    const t = new Tool(out, h, ownHost, typeof grants === 'function' ? grants : null, scope || null);
     if (t.perCallGrants && t._grants === null) {
       await t.close();
       throw new TypeError('staal: Tool: the program needs grants; give grants (an object or a function of the context)');
@@ -156,8 +171,9 @@ class Tool {
     return t;
   }
 
-  constructor(out, host, ownHost, grants) {
+  constructor(out, host, ownHost, grants, scope) {
     this._handle = out.tool;
+    this._scope = scope;
     this.host = host;
     this._ownHost = ownHost;
     this._grants = grants;
@@ -183,7 +199,8 @@ class Tool {
       if (g === null || typeof g !== 'object' || Array.isArray(g)) throw new TypeError('staal: the grants function must return an object');
       grants = JSON.stringify(g);
     }
-    const out = ok(parse(await addon.toolCall(this._handle, JSON.stringify(args), grants)));
+    const scope = this._scope ? scopeOf(await this._scope(options.context)) : undefined;
+    const out = ok(parse(await addon.toolCall(this._handle, JSON.stringify(args), grants, scope)));
     return {
       status: out.status,
       isError: out.is_error,
@@ -194,8 +211,10 @@ class Tool {
     };
   }
 
-  async status(run) {
-    return this.host.status(run);
+  /** A run's status, in the scope the tool's scope function gives for `options.context`. */
+  async status(run, options = {}) {
+    const scope = this._scope ? scopeOf(await this._scope(options.context)) : undefined;
+    return this.host.status(run, { scope });
   }
 
   async close() {

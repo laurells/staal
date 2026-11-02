@@ -102,7 +102,8 @@ export class Host {
   static open(journals: string, options?: HostOptions): Promise<Host>;
   readonly journals: string;
   /** What happened to a run, by its id. Changes nothing. */
-  status(run: string): Promise<RunStatus>;
+  /** A run made in a scope is described only when the same scope is given. */
+  status(run: string, options?: { scope?: string }): Promise<RunStatus>;
   close(): Promise<void>;
 }
 
@@ -120,6 +121,12 @@ export interface ToolOptions<Context = unknown> {
   description: string;
   /** The same grants for every call, or a function of the call's context giving that call's. */
   grants?: { [name: string]: Json } | ((context: Context) => { [name: string]: Json } | Promise<{ [name: string]: Json }>);
+  /**
+   * The call's trusted scope (a tenant's or a user's id, from the app's own records,
+   * never from the arguments), from its context: `once` keys are held within a scope,
+   * and a run's status is given only in its scope.
+   */
+  scope?: (context: Context) => string | Promise<string>;
   /** A journal directory, or an open host: one is required. */
   journals?: string;
   host?: Host;
@@ -163,6 +170,7 @@ export class Tool<Context = unknown> {
   readonly perCallGrants: boolean;
   readonly host: Host;
   call(args?: { [name: string]: Json }, options?: { context?: Context }): Promise<ToolResult>;
-  status(run: string): Promise<RunStatus>;
+  /** A run's status, in the scope the tool's scope function gives for the context. */
+  status(run: string, options?: { context?: Context }): Promise<RunStatus>;
   close(): Promise<void>;
 }

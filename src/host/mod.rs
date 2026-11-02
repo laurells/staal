@@ -138,9 +138,12 @@ fn sync_dir(path: &Path) -> Result<(), String> {
 }
 
 /// Removes a file that may already be gone.
+/// A removal is flushed into the folder before this returns: the ledger may next forget
+/// the run, and a file that came back after a power loss would then be one no
+/// reservation explains, which stops the next start.
 fn remove(path: &Path) -> Result<(), String> {
     match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
+        Ok(()) => sync_dir(path),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("cannot remove {}: {e}", path.display())),
     }
@@ -331,14 +334,26 @@ impl Host {
 
     /// Runs one call of `tool`, with `grants` when the tool takes them per call. None:
     /// the call was cancelled before its run started, so nothing is answered.
+    ///
+    /// `scope` is the trusted scope an app gives the call (a tenant, a user), never taken
+    /// from the arguments: a `once` key is held within its scope, so two scopes calling
+    /// with the same arguments get two runs, and a run's status is given only to a
+    /// question in its scope. The MCP server serves one client and gives none.
+    #[allow(clippy::too_many_arguments)]
     pub fn call(
         &self,
         tool: &Tool,
         args: &Map<String, Json>,
         grants: Option<&Map<String, Json>>,
+        scope: Option<&str>,
         ctl: &Ctl,
         started: &dyn Fn(&str),
     ) -> Option<Answer> {
+        if let Some(s) = scope
+            && !ledger::valid_scope(s)
+        {
+            return Some(Answer::error("scope: expected 1 to 256 characters, with no control characters"));
+        }
         // 1. The arguments (and grants), checked by the runtime as the run would check them.
         let checked = tool.config(args, grants).and_then(|cfg| {
             let plan = interp::plan(&tool.prog, &cfg)?;
@@ -351,8 +366,13 @@ impl Host {
         };
         let once = tool.once.as_ref().map(|o| {
             let named: Map<String, Json> = o.by.iter().filter_map(|k| plan.inputs.get(k).map(|v| (k.clone(), v.clone()))).collect();
+            // Without a scope, the key is the one the MCP server has always written.
+            let key = match scope {
+                None => json!([tool.name, named]),
+                Some(s) => json!([tool.name, named, { "scope": s }]),
+            };
             OnceRef {
-                key: sha256(&json!([tool.name, named]).to_string()),
+                key: sha256(&key.to_string()),
                 args: sha256(&Json::Object(plan.inputs.clone()).to_string()),
                 keep: o.keep_ms,
             }
@@ -402,7 +422,7 @@ impl Host {
                 Err(e) => return Some(Answer::error(e)),
             };
             let window = tool.quota.as_ref().map(|q| q.window_ms);
-            if let Err(e) = st.ledger.reserve(&run, &tool.name, reserve, window, once) {
+            if let Err(e) = st.ledger.reserve(&run, &tool.name, reserve, window, once, scope) {
                 log(&format!("tool {}: {e}", tool.name));
                 return Some(Answer::error("the server could not record the call; nothing was done; the operator must restart it"));
             }
@@ -636,14 +656,16 @@ impl Host {
     // -------------------------------------------------------------------------------
     // Status
 
-    /// `staal_run_status`: a snapshot of one run, read without changing anything.
-    pub fn status(&self, run: &str) -> Json {
+    /// `staal_run_status`: a snapshot of one run, read without changing anything. A run
+    /// made in a scope is described only to a question in that scope; to any other it
+    /// is `unknown`, as a run never made is, so its existence is not revealed either.
+    pub fn status(&self, run: &str, scope: Option<&str>) -> Json {
         let (known, running, now) = match self.state() {
             Ok(st) => (st.ledger.run(run).cloned(), st.running.contains_key(run), st.ledger.now()),
             Err(e) => return json!({ "run": run, "status": "unknown", "reason": e, "observed_at": rfc3339(ledger::clock_ms()) }),
         };
         let mut s = json!({ "run": run, "observed_at": rfc3339(now) });
-        let Some(r) = known else {
+        let Some(r) = known.filter(|r| r.scope.as_deref() == scope) else {
             s["status"] = json!("unknown");
             return s;
         };

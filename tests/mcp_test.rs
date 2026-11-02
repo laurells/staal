@@ -386,6 +386,11 @@ fn quotas_hold_across_calls_and_restarts() {
 
 #[test]
 fn a_stopped_run_is_told_to_the_operator_and_finishes_once_resolved() {
+    // What this test process holds before it starts any server: descriptors the
+    // environment passed down (a CI runner leaves some open), which every child has.
+    let ambient: Vec<String> = std::fs::read_dir("/proc/self/fd")
+        .map(|d| d.flatten().filter_map(|e| std::fs::read_link(e.path()).ok()).map(|p| p.to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
     let s = Server::start();
     let dir = case_dir("operator");
     write(&dir, "doubt.staal", &format!("fn main(note: Text, post: cap net.http.post) -> Int {{\n    let r = post.post(\"{}\", note)\n    return r.status\n}}\n", s.url("/hang")));
@@ -429,9 +434,9 @@ fn a_stopped_run_is_told_to_the_operator_and_finishes_once_resolved() {
     // The protocol's private descriptors are close-on-exec: the command holds no pipe or
     // socket beyond its standard ones (Linux, where /proc shows them).
     if cfg!(target_os = "linux") {
-        // Beyond 0 to 2 the shell holds only the script it reads and, while it redirects,
-        // a copy of its own standard output (the server's standard error); anything else
-        // was inherited.
+        // Beyond 0 to 2 the shell holds only the script it reads, a copy of its own
+        // standard output (the server's standard error) while it redirects, and what the
+        // environment gave this test; anything else came from the server.
         let fds = std::fs::read_to_string(dir.join("notify.fds")).unwrap();
         let fds: Vec<(u32, &str)> = fds
             .lines()
@@ -441,7 +446,8 @@ fn a_stopped_run_is_told_to_the_operator_and_finishes_once_resolved() {
         let own = fds.iter().find(|(fd, _)| *fd == 2).map(|(_, t)| *t).unwrap();
         for (fd, target) in &fds {
             if *fd > 2 {
-                assert!(*target == own || target.ends_with("/notify.sh"), "the command inherited fd {fd}: {target} ({fds:?})");
+                let allowed = *target == own || target.ends_with("/notify.sh") || ambient.iter().any(|a| a == target);
+                assert!(allowed, "the command inherited fd {fd}: {target} ({fds:?})");
             }
         }
     }

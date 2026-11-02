@@ -61,7 +61,9 @@ the language or its file formats.
   program becomes a tool an agent calls many times, with quotas across calls, `once`,
   and crash recovery, from the same code as `staalc mcp` (now `src/host/`). Grants are
   fixed, or computed by the app for each call and checked as a manifest's are; they are
-  never an argument. One process uses a journal directory at a time.
+  never an argument. An app serving several tenants or users gives each call a trusted
+  scope (`scope=`, from the app's own records): `once` keys are held within it, and a
+  run's status is given only in it. One process uses a journal directory at a time.
 - Framework adapters: `staal.openai_agents.function_tool` and
   `staal.langgraph.structured_tool` (extras `staal[openai-agents]`,
   `staal[langgraph]`), and `@staal/node/openai-agents` and `@staal/node/langgraph`
@@ -90,6 +92,11 @@ the language or its file formats.
   server from starting. Editing a program or upgrading `staalc` with runs unfinished
   still does. Ledger `reserve` events record the quota window and how long a `once`
   key is kept, so compaction no longer depends on the manifest.
+- The ledger reads the clock as at most a minute ahead of the time since boot while it
+  is open, so a clock set forward frees no quota and expires no `once` key early until
+  the host restarts; a `clock` event keeps the latest time through compaction. Removing
+  a file flushes its folder, so a removal is never undone by a power loss after the
+  ledger forgot the run.
 - A SQLite statement (`db.sqlite.query`, `execute`) is stopped once it runs longer
   than `net.timeout_ms` (30 s by default), as a PostgreSQL statement already was; a
   stopped `execute` is rolled back and changes nothing. Before, a statement had no

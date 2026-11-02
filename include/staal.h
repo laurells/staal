@@ -55,13 +55,20 @@ char *staal_resolve(const char *journal_path, const char *resolution_json);
  *   repeated call of an operation still running) or "not_run" (refused before any
  *   run: its arguments, the quota, the concurrency limit), and "structured" is
  *   {"result": <value>} for a done run. It returns when the run ends.
- * staal_run_status returns {"run", "status", "observed_at", "result"?, "failure"?}. */
+ * scope (or NULL): the trusted scope of the call, such as a tenant or a user, from the
+ *   app's own records and never from the arguments; 1 to 256 characters, no control
+ *   characters. A `once` key is held within its scope, so the same arguments in two
+ *   scopes are two runs.
+ * staal_run_status returns {"run", "status", "observed_at", "result"?, "failure"?}. A
+ *   run made in a scope is described only when the same scope is given; otherwise it
+ *   is "unknown", as a run never made is. */
 char *staal_host_open(const char *settings_json);
 char *staal_host_close(const char *host);
 char *staal_tool_open(const char *host, const char *spec_json);
-char *staal_tool_call(const char *tool, const char *arguments_json, const char *grants_json /* or NULL */);
+char *staal_tool_call(const char *tool, const char *arguments_json, const char *grants_json /* or NULL */,
+                      const char *scope /* or NULL */);
 char *staal_tool_close(const char *tool);
-char *staal_run_status(const char *host, const char *run);
+char *staal_run_status(const char *host, const char *run, const char *scope /* or NULL */);
 
 void staal_free(char *s);
 /* A static string: do not free it. */

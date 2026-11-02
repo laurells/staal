@@ -246,3 +246,35 @@ test('once makes a repeated call one run, and a tool needs grants only when its 
     staal.StaalError,
   );
 });
+
+test("tenants of one app never share a run or see each other's", async () => {
+  const tool = await staal.Tool.open(refundProgram, {
+    name: 'refund_tenants',
+    description: 'Refund part of an order.',
+    grants: policy,
+    scope: (ctx) => ctx.tenant,
+    journals: path.join(scratch, 'tool-tenants'),
+    once: { by: ['order'] },
+  });
+  try {
+    const args = { order: '123', amount: usd('5.00') };
+    const acme = { limit: '100.00', tenant: 'acme' };
+    const globex = { limit: '100.00', tenant: 'globex' };
+    const a1 = await tool.call(args, { context: acme });
+    const b1 = await tool.call(args, { context: globex });
+    const a2 = await tool.call(args, { context: acme });
+    assert.deepEqual([a1.status, b1.status, a2.status], ['done', 'done', 'done']);
+    assert.notEqual(a1.run, b1.run, 'the same arguments in two scopes are two runs');
+    assert.equal(a1.run, a2.run, 'the same scope again is the same run');
+    assert.equal((await tool.status(a1.run, { context: acme })).status, 'done');
+    for (const other of [await tool.status(a1.run, { context: globex }), await tool.host.status(a1.run)]) {
+      assert.equal(other.status, 'unknown');
+      assert.equal(other.result, undefined);
+    }
+    const bad = await tool.call(args, { context: { limit: '100.00', tenant: '' } });
+    assert.equal(bad.status, 'not_run');
+    await assert.rejects(tool.call(args, { context: { limit: '100.00', tenant: 7 } }), TypeError);
+  } finally {
+    await tool.close();
+  }
+});

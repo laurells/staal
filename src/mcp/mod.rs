@@ -328,7 +328,7 @@ impl Session {
                             }));
                         }
                     };
-                    me.server.call(t, &args, None, &ctl, &started)
+                    me.server.call(t, &args, None, None, &ctl, &started)
                 }
             };
             if let Ok(mut calls) = me.calls.lock() {
@@ -355,7 +355,7 @@ impl Session {
         let Some(run) = run.filter(|_| ok) else {
             return Answer::error(format!("{STATUS_TOOL} takes {{\"run\": \"<the run id a tool's result gave: 32 hexadecimal characters>\"}}"));
         };
-        let s = self.server.status(run);
+        let s = self.server.status(run, None);
         Answer { status: "done", run: None, text: s.to_string(), structured: Some(s), is_error: false }
     }
 }

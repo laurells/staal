@@ -83,10 +83,15 @@ and a way around any of them is in scope:
   timeout, a tool's `deadline` stops a run starting new actions, and the concurrency
   limit refuses calls beyond it rather than queueing them. A C function (`cap ffi`)
   cannot be interrupted; a tool granted one is warned about at start.
+- **Tenants stay apart.** In an app serving several tenants or users from one
+  directory, a call's trusted scope comes from the app, never from the arguments; a
+  `once` key is held within its scope, and a run's status is given only in its scope.
 - **One process owns a journal directory**, by an OS lock, so two processes cannot
   both act on one ledger.
 
-What these do not cover: a model choosing a harmful action that the grants allow (the
+A forward jump of the clock while a host runs moves no quota or `once` key on; across a
+restart it can, which the host warns about (docs/MCP.md section 6). What these do not
+cover: a model choosing a harmful action that the grants allow (the
 grants are the operator's statement of what is allowed), a client showing a tool's
 result to a model as instructions (results are data; treat them as untrusted), and
 anyone who can write to the journal directory, which must belong to the host's user.

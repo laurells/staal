@@ -143,6 +143,34 @@ def at_once(n, call):
     return out
 
 
+# Two tenants of one app, one journal directory: the same arguments are two
+# operations, and neither tenant can see the other's run.
+tenants = staal.Tool(PROGRAM, name="refund_tenants", description="d", grants=grants,
+                     scope=lambda c: c["tenant"], journals=os.path.join(scratch, "tenants"), once={"by": ["order"]})
+acme = dict(gold, tenant="acme")
+globex = dict(gold, tenant="globex")
+a1 = tenants({"order": "123", "amount": usd("5.00")}, context=acme)
+b1 = tenants({"order": "123", "amount": usd("5.00")}, context=globex)
+a2 = tenants({"order": "123", "amount": usd("5.00")}, context=acme)
+expect(a1.status == b1.status == a2.status == "done", f"all done: {a1} {b1} {a2}")
+expect(a1.run != b1.run, "the same arguments in two scopes are two runs")
+expect(a1.run == a2.run, "the same scope again is the same run")
+expect(tenants.status(a1.run, context=acme)["status"] == "done", "a run is described in its scope")
+for other in (tenants.status(a1.run, context=globex), tenants.host.status(a1.run)):
+    expect(other["status"] == "unknown" and "result" not in other, f"and unknown anywhere else: {other}")
+c1 = tenants({"order": "123", "amount": usd("6.00")}, context=globex)
+expect(c1.status == "not_run" and "different arguments" in c1.text, f"a conflict is found within the scope: {c1}")
+expect("acme" not in c1.text and a1.run not in c1.text, f"nothing of the other tenant is told: {c1}")
+for bad in ("", "a\nb", "x" * 257):
+    r = tenants({"order": "124", "amount": usd("5.00")}, context=dict(gold, tenant=bad))
+    expect(r.status == "not_run" and "scope" in r.text, f"a malformed scope is refused: {bad!r} {r}")
+try:
+    tenants({"order": "124", "amount": usd("5.00")}, context=dict(gold, tenant=7))
+    expect(False, "a scope that is not text")
+except TypeError:
+    expect(True, "a scope that is not text")
+tenants.close()
+
 # Many identical `once` calls at the same moment: one run, one refund.
 race_dir = os.path.join(scratch, "race")
 race = staal.Tool(PROGRAM, name="refund_race", description="d", grants=grants, journals=race_dir, once={"by": ["order"]})

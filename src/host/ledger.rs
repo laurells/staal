@@ -3,14 +3,19 @@
 // that depends on it happens:
 //
 //   {"e":"reserve","run":ID,"tool":NAME,"t":MS,"money":MONEY?,"window":MS?,
-//    "once":{"key":HEX,"args":HEX,"keep":MS|null}?}
+//    "once":{"key":HEX,"args":HEX,"keep":MS|null}?,"scope":TEXT?}
 //   {"e":"settle","run":ID,"t":MS,"charged":[MONEY...],"outcome":"done"|"failed"}
 //   {"e":"release","run":ID,"t":MS}
+//   {"e":"clock","t":MS}
 //
 // where MONEY is {"amount": "12.50", "currency": "USD"} and MS is UTC milliseconds since
 // 1970 (or, for `window` and `keep`, a length of time). `window` is the tool's quota
 // window and `once.keep` how long its key is held after the run ends (null: as long as
-// its files), so the ledger can be compacted without the tools' definitions. A run exists from its `reserve`; it has at most one `settle` or `release`.
+// its files), so the ledger can be compacted without the tools' definitions. `scope` is
+// the trusted scope an app gave the call (a tenant, a user), which a status question
+// must give again. A `clock` event keeps the latest time when compaction drops the
+// event that held it. A run exists from its `reserve`; it has at most one `settle` or
+// `release`.
 // Rules:
 //  - An event is applied to memory only once it is durable; a failed write poisons the
 //    ledger, which then refuses every write.
@@ -18,6 +23,10 @@
 //    ledger is opened; any other damage is refused.
 //  - Time never goes backwards: an event is stamped with the later of the clock and
 //    the last event's time.
+//  - Time does not leap forwards while the ledger is open: the clock is read as at most
+//    a minute ahead of the time since boot counted from when the ledger was opened, so
+//    a clock set forward while a host runs frees no quota and expires no `once` key
+//    early. Across a restart only the warning at start remains (docs/MCP.md section 6).
 
 use crate::interp::money::{Currency, Money};
 use serde_json::{json, Value as Json};
@@ -54,6 +63,8 @@ pub struct Run {
     /// Its tool's quota window when it was reserved, if the tool had a quota.
     pub window: Option<u64>,
     pub once: Option<OnceRef>,
+    /// The trusted scope the app gave the call, if any.
+    pub scope: Option<String>,
     pub end: Option<End>,
 }
 
@@ -81,8 +92,32 @@ pub struct Ledger {
     order: Vec<String>,
     /// Whether the clock was found behind the ledger at the last stamp.
     pub clock_behind: bool,
+    /// Whether the clock has been found leaping ahead of the time since boot.
+    pub clock_jumped: bool,
+    /// The wall clock and the time since boot when the ledger was opened.
+    anchor: (u64, u64),
     writes: u64,
     failpoint: Option<u64>,
+}
+
+/// How far the wall clock may run ahead of the time since boot before it is taken as
+/// set forward.
+pub const LEAP_MS: u64 = 60_000;
+
+/// Time since boot, in milliseconds, counting time asleep, from a clock nothing sets:
+/// CLOCK_BOOTTIME on Linux, CLOCK_MONOTONIC (which counts sleep) on macOS.
+pub fn boot_ms() -> u64 {
+    #[cfg(target_os = "linux")]
+    let id = libc::CLOCK_BOOTTIME;
+    #[cfg(not(target_os = "linux"))]
+    let id = libc::CLOCK_MONOTONIC;
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: `ts` is a valid timespec to write; the clock id is supported here.
+    let r = unsafe { libc::clock_gettime(id, &mut ts) };
+    if r != 0 {
+        return 0;
+    }
+    (ts.tv_sec as u64).saturating_mul(1000).saturating_add(ts.tv_nsec as u64 / 1_000_000)
 }
 
 /// The wall clock, in milliseconds since 1970 (UTC).
@@ -133,6 +168,8 @@ impl Ledger {
             runs: HashMap::new(),
             order: Vec::new(),
             clock_behind: false,
+            clock_jumped: false,
+            anchor: (clock_ms(), boot_ms()),
             writes: 0,
             failpoint: failpoint(),
         };
@@ -160,6 +197,8 @@ impl Ledger {
             runs: HashMap::new(),
             order: Vec::new(),
             clock_behind: false,
+            clock_jumped: false,
+            anchor: (clock_ms(), boot_ms()),
             writes: 0,
             failpoint: None,
         };
@@ -191,9 +230,17 @@ impl Ledger {
         self.last_t
     }
 
-    /// The ledger's notion of now: the clock, but never before the last event.
+    /// The ledger's notion of now: the clock, never before the last event, and never
+    /// more than LEAP_MS ahead of the time since boot counted from the opening.
     pub fn now(&self) -> u64 {
-        clock_ms().max(self.last_t)
+        self.trusted().0
+    }
+
+    /// (now, whether the clock was found leaping ahead).
+    fn trusted(&self) -> (u64, bool) {
+        let wall = clock_ms();
+        let steady = self.anchor.0.saturating_add(boot_ms().saturating_sub(self.anchor.1)).saturating_add(LEAP_MS);
+        (wall.min(steady).max(self.last_t), wall > steady)
     }
 
     pub fn poisoned(&self) -> bool {
@@ -205,9 +252,18 @@ impl Ledger {
         self.runs().filter(|(_, r)| !r.released() && r.once.as_ref().is_some_and(|o| o.key == key)).last()
     }
 
-    pub fn reserve(&mut self, id: &str, tool: &str, money: Option<Money>, window: Option<u64>, once: Option<OnceRef>) -> Result<(), String> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve(
+        &mut self,
+        id: &str,
+        tool: &str,
+        money: Option<Money>,
+        window: Option<u64>,
+        once: Option<OnceRef>,
+        scope: Option<&str>,
+    ) -> Result<(), String> {
         let t = self.stamp();
-        let r = Run { tool: tool.to_string(), t, money, window, once, end: None };
+        let r = Run { tool: tool.to_string(), t, money, window, once, scope: scope.map(String::from), end: None };
         self.commit(reserve_event(id, &r))
     }
 
@@ -223,9 +279,17 @@ impl Ledger {
     }
 
     fn stamp(&mut self) -> u64 {
-        let now = clock_ms();
-        self.clock_behind = now < self.last_t;
-        now.max(self.last_t)
+        self.clock_behind = clock_ms() < self.last_t;
+        let (now, leapt) = self.trusted();
+        if leapt && !self.clock_jumped {
+            super::log(&format!(
+                "warning: the clock is more than {} s ahead of the time since this host opened its ledger; \
+                 it was set forward, so until the host restarts its quotas and `once` keys count time since boot instead",
+                LEAP_MS / 1000
+            ));
+        }
+        self.clock_jumped |= leapt;
+        now
     }
 
     fn commit(&mut self, ev: Json) -> Result<(), String> {
@@ -254,11 +318,15 @@ impl Ledger {
 
     /// Whether `ev` is a well-formed event that may follow the ledger as it stands.
     fn check(&self, ev: &Json) -> Result<(), String> {
-        let id = ev["run"].as_str().filter(|s| is_run_id(s)).ok_or("an event without a valid run id")?;
         let t = ev["t"].as_u64().ok_or("an event without a time")?;
         if t < self.last_t {
             return Err(format!("an event at {t} follows one at {}: time went backwards", self.last_t));
         }
+        if ev["e"] == "clock" {
+            let only = ev.as_object().is_some_and(|m| m.keys().all(|k| k == "e" || k == "t"));
+            return if only { Ok(()) } else { Err("a clock event with other fields".into()) };
+        }
+        let id = ev["run"].as_str().filter(|s| is_run_id(s)).ok_or("an event without a valid run id")?;
         let fields: Vec<&str> = ev.as_object().ok_or("an event that is not an object")?.keys().map(String::as_str).collect();
         let allow = |allowed: &[&str]| -> Result<(), String> {
             match fields.iter().find(|f| !allowed.contains(f)) {
@@ -268,7 +336,10 @@ impl Ledger {
         };
         match ev["e"].as_str() {
             Some("reserve") => {
-                allow(&["e", "run", "tool", "t", "money", "window", "once"])?;
+                allow(&["e", "run", "tool", "t", "money", "window", "once", "scope"])?;
+                if ev.get("scope").is_some_and(|v| !v.as_str().is_some_and(valid_scope)) {
+                    return Err("a reserve with a malformed scope".into());
+                }
                 if self.runs.contains_key(id) {
                     return Err(format!("run {id} is reserved twice"));
                 }
@@ -327,7 +398,8 @@ impl Ledger {
                 });
                 let tool = ev["tool"].as_str().unwrap_or_default().to_string();
                 let window = ev["window"].as_u64();
-                self.runs.insert(id.clone(), Run { tool, t, money, window, once, end: None });
+                let scope = ev["scope"].as_str().map(String::from);
+                self.runs.insert(id.clone(), Run { tool, t, money, window, once, scope, end: None });
                 self.order.push(id);
             }
             Some("settle") => {
@@ -374,10 +446,15 @@ impl Ledger {
             }
         }
         events.sort_by_key(|(t, i, _)| (*t, *i));
-        // The last event's time is kept, so time still never goes backwards.
+        // The latest time is kept, in a clock event when no kept event holds it, so time
+        // never goes backwards across a compaction and a restart.
         let mut text = String::new();
         for (_, _, ev) in &events {
             text.push_str(&ev.to_string());
+            text.push('\n');
+        }
+        if events.last().is_none_or(|(t, _, _)| *t < self.last_t) {
+            text.push_str(&json!({ "e": "clock", "t": self.last_t }).to_string());
             text.push('\n');
         }
         let tmp = self.path.with_extension("ledger.tmp");
@@ -410,7 +487,15 @@ fn reserve_event(id: &str, r: &Run) -> Json {
     if let Some(o) = &r.once {
         ev["once"] = json!({ "key": o.key, "args": o.args, "keep": o.keep });
     }
+    if let Some(s) = &r.scope {
+        ev["scope"] = json!(s);
+    }
     ev
+}
+
+/// A scope an app may give: 1 to 256 characters, none of them a control character.
+pub fn valid_scope(s: &str) -> bool {
+    !s.is_empty() && s.chars().count() <= 256 && !s.chars().any(char::is_control)
 }
 
 fn sync_dir(path: &Path) -> Result<(), String> {
@@ -441,6 +526,7 @@ mod tests {
 
     const A: &str = "0123456789abcdef0123456789abcdef";
     const B: &str = "fedcba9876543210fedcba9876543210";
+    const C: &str = "00112233445566778899aabbccddeeff";
 
     fn usd(a: &str) -> Money {
         Money::parse(a, Currency::parse("USD").unwrap()).unwrap()
@@ -452,9 +538,9 @@ mod tests {
         let p = d.join("server.ledger");
         let mut l = Ledger::open(&p).unwrap();
         let once = OnceRef { key: "a".repeat(64), args: "b".repeat(64), keep: Some(60_000) };
-        l.reserve(A, "refund", Some(usd("50.00")), Some(3_600_000), Some(once.clone())).unwrap();
+        l.reserve(A, "refund", Some(usd("50.00")), Some(3_600_000), Some(once.clone()), None).unwrap();
         l.settle(A, &[usd("12.50")], "done").unwrap();
-        l.reserve(B, "refund", None, None, None).unwrap();
+        l.reserve(B, "refund", None, None, None, None).unwrap();
         drop(l);
         // A crash in the middle of a write leaves part of a line.
         let mut f = OpenOptions::new().append(true).open(&p).unwrap();
@@ -485,8 +571,8 @@ mod tests {
     fn a_run_ends_once() {
         let d = dir("once");
         let mut l = Ledger::open(&d.join("server.ledger")).unwrap();
-        l.reserve(A, "t", None, None, None).unwrap();
-        assert!(l.reserve(A, "t", None, None, None).unwrap_err().contains("twice"));
+        l.reserve(A, "t", None, None, None, None).unwrap();
+        assert!(l.reserve(A, "t", None, None, None, None).unwrap_err().contains("twice"));
         l.release(A).unwrap();
         assert!(l.settle(A, &[], "done").unwrap_err().contains("second end"));
         assert!(l.release(B).unwrap_err().contains("never reserved"));
@@ -513,9 +599,9 @@ mod tests {
         let d = dir("compact");
         let p = d.join("server.ledger");
         let mut l = Ledger::open(&p).unwrap();
-        l.reserve(A, "t", None, None, None).unwrap();
+        l.reserve(A, "t", None, None, None, None).unwrap();
         l.release(A).unwrap();
-        l.reserve(B, "t", Some(usd("5.00")), Some(60_000), None).unwrap();
+        l.reserve(B, "t", Some(usd("5.00")), Some(60_000), None, None).unwrap();
         let last = l.last_time();
         assert_eq!(l.compact(|id, _| id == B).unwrap(), 1);
         assert!(l.run(A).is_none());
@@ -524,6 +610,60 @@ mod tests {
         let reopened = Ledger::open(&p).unwrap();
         assert!(reopened.run(A).is_none() && reopened.run(B).is_some());
         assert!(!d.join("server.ledger.tmp").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_latest_time_survives_a_compaction_and_a_restart() {
+        let d = dir("high-water");
+        let p = d.join("server.ledger");
+        let mut l = Ledger::open(&p).unwrap();
+        l.reserve(A, "t", None, None, None, None).unwrap();
+        l.release(A).unwrap();
+        // B's events hold the latest time (as if the clock had been ahead), then go.
+        l.last_t = clock_ms() + 86_400_000;
+        l.reserve(B, "t", None, None, None, None).unwrap();
+        l.release(B).unwrap();
+        let latest = l.last_time();
+        assert_eq!(l.compact(|id, _| id == A).unwrap(), 1);
+        let reopened = Ledger::open(&p).unwrap();
+        assert!(reopened.run(B).is_none());
+        assert_eq!(reopened.last_time(), latest, "a clock event keeps it");
+        assert!(reopened.now() >= latest);
+        let mut reopened = reopened;
+        reopened.reserve(C, "t", None, None, None, None).unwrap();
+        assert!(reopened.run(C).unwrap().t >= latest, "a new event is never stamped earlier");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_clock_set_forward_while_open_does_not_move_the_ledger_on() {
+        let d = dir("leap");
+        let mut l = Ledger::open(&d.join("server.ledger")).unwrap();
+        // As if the clock was set ten minutes forward just after the ledger was opened.
+        let now = clock_ms();
+        l.anchor = (now - 600_000, boot_ms());
+        let seen = l.now();
+        assert!(seen <= now - 600_000 + LEAP_MS + 5_000, "now() follows the time since boot: {seen} vs {now}");
+        l.reserve(A, "t", None, None, None, None).unwrap();
+        assert!(l.clock_jumped);
+        assert!(l.run(A).unwrap().t < now - 500_000);
+        // A clock within the allowance is taken as it is.
+        let mut ok = Ledger::open(&d.join("ok.ledger")).unwrap();
+        ok.reserve(A, "t", None, None, None, None).unwrap();
+        assert!(!ok.clock_jumped);
+        assert!(ok.run(A).unwrap().t + 5_000 >= clock_ms());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_scope_is_kept_with_its_run() {
+        let d = dir("scope");
+        let p = d.join("server.ledger");
+        let mut l = Ledger::open(&p).unwrap();
+        l.reserve(A, "t", None, None, None, Some("tenant-1")).unwrap();
+        assert_eq!(Ledger::open(&p).unwrap().run(A).unwrap().scope.as_deref(), Some("tenant-1"));
+        assert!(l.commit(json!({ "e": "reserve", "run": B, "tool": "t", "t": l.now(), "scope": "" })).unwrap_err().contains("scope"));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

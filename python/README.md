@@ -48,7 +48,10 @@ computed by your app for each call from a context it passes:
     # r.status: "done", "failed", "stopped", "in_progress" or "not_run"; r.text, r.value, r.run
 
 The arguments are only ever inputs: a grant is never an argument, and the model never
-sees one. One process uses a journal directory at a time (an OS lock; another process
+sees one. An app serving several tenants or users from one directory also gives
+`scope=lambda customer: customer["tenant_id"]`, from its own records: `once` keys are
+then held per scope, and a run's status is given only in its scope
+(`refund.status(run, context=customer)`). One process uses a journal directory at a time (an OS lock; another process
 waits five seconds, then is refused), so give each worker process its own directory,
 whose quotas are then its own, or send the calls through one process. The tool's
 other settings (`quota`, `once`, `deadline`, `model`, `net`, `secrets`, `engine`)

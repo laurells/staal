@@ -59,7 +59,7 @@ class Library:
         self.has_tools = hasattr(self._lib, "staal_tool_open")
         if self.has_tools:
             for name, nargs in [("staal_host_open", 1), ("staal_host_close", 1), ("staal_tool_open", 2),
-                                ("staal_tool_call", 3), ("staal_tool_close", 1), ("staal_run_status", 2)]:
+                                ("staal_tool_call", 4), ("staal_tool_close", 1), ("staal_run_status", 3)]:
                 fn = getattr(self._lib, name)
                 fn.argtypes = [ctypes.c_char_p] * nargs
                 fn.restype = ctypes.c_void_p
@@ -128,10 +128,12 @@ class Host:
         self._handle = _ok(self._lib._call("staal_host_open", json.dumps(settings)))["host"]
         self.journals = os.fspath(journals)
 
-    def status(self, run):
+    def status(self, run, *, scope=None):
         """What happened to a run, by its id: running, waiting_for_operator, done (with
-        its result), failed, not_started, expired or unknown. Changes nothing."""
-        return _ok(self._lib._call("staal_run_status", self._handle, run))
+        its result), failed, not_started, expired or unknown. Changes nothing. A run
+        made in a scope is described only when the same scope is given; otherwise it is
+        unknown."""
+        return _ok(self._lib._call("staal_run_status", self._handle, run, _scope(scope)))
 
     def close(self):
         if self._handle is not None:
@@ -143,6 +145,12 @@ class Host:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def _scope(scope):
+    if scope is not None and not isinstance(scope, str):
+        raise TypeError("a scope must be a string (a tenant's or a user's id, from the app's own records)")
+    return scope
 
 
 class Result:
@@ -174,12 +182,20 @@ class Tool:
 
     grants is a dict, the same for every call, or a function of the call's context
     (whatever the app passes as context=) that returns the grants for that call, so the
-    app's policy decides each call's limits. Either journals (a directory) or host is
+    app's policy decides each call's limits. scope, if given, is a function of the same
+    context returning the call's trusted scope as a string (a tenant's or a user's id,
+    from the app's own records, never from the arguments): a `once` key is held within
+    its scope, and a run's status is given only in its scope. An app serving more than
+    one tenant or user from one journal directory gives a scope. Either journals (a directory) or host is
     required: every call is journaled, and quotas and `once` are kept there. The other
     keyword arguments are those of a tool in an MCP manifest (docs/MCP.md section 2).
     """
 
-    def __init__(self, program, *, name, description, grants=None, journals=None, host=None, library=None, **spec):
+    def __init__(self, program, *, name, description, grants=None, scope=None, journals=None, host=None, library=None,
+                 **spec):
+        if scope is not None and not callable(scope):
+            raise TypeError("Tool: scope is a function of the call's context")
+        self._scope = scope
         unknown = [k for k in spec if k not in _SPEC_KEYS]
         if unknown:
             raise TypeError(f"Tool: unknown argument {unknown[0]!r}")
@@ -227,10 +243,13 @@ class Tool:
             if not isinstance(grants, dict):
                 raise TypeError("the grants function must return a dict")
             grants = json.dumps(grants)
-        return Result(_ok(self._lib._call("staal_tool_call", self._handle, json.dumps(args), grants)))
+        scope = _scope(self._scope(context)) if self._scope is not None else None
+        return Result(_ok(self._lib._call("staal_tool_call", self._handle, json.dumps(args), grants, scope)))
 
-    def status(self, run):
-        return self.host.status(run)
+    def status(self, run, *, context=None):
+        """A run's status, in the scope the tool's scope function gives for context."""
+        scope = _scope(self._scope(context)) if self._scope is not None else None
+        return self.host.status(run, scope=scope)
 
     def close(self):
         if self._handle is not None:

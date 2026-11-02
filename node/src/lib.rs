@@ -81,9 +81,9 @@ impl Task for Job {
                         ToolFn::HostOpen => capi::staal_host_open(a(0)),
                         ToolFn::HostClose => capi::staal_host_close(a(0)),
                         ToolFn::ToolOpen => capi::staal_tool_open(a(0), a(1)),
-                        ToolFn::ToolCall => capi::staal_tool_call(a(0), a(1), a(2)),
+                        ToolFn::ToolCall => capi::staal_tool_call(a(0), a(1), a(2), a(3)),
                         ToolFn::ToolClose => capi::staal_tool_close(a(0)),
-                        ToolFn::RunStatus => capi::staal_run_status(a(0), a(1)),
+                        ToolFn::RunStatus => capi::staal_run_status(a(0), a(1), a(2)),
                     }
                 }
             }
@@ -162,10 +162,11 @@ pub fn tool_open(host: String, spec: String) -> Result<AsyncTask<Job>> {
     tools(ToolFn::ToolOpen, vec![(Some(host), "host"), (Some(spec), "spec")])
 }
 
-/// One call of a tool: its arguments, and its grants when the tool takes them per call.
+/// One call of a tool: its arguments, its grants when the tool takes them per call,
+/// and the trusted scope the app gives it, if any.
 #[napi]
-pub fn tool_call(tool: String, arguments: String, grants: Option<String>) -> Result<AsyncTask<Job>> {
-    tools(ToolFn::ToolCall, vec![(Some(tool), "tool"), (Some(arguments), "arguments"), (grants, "grants")])
+pub fn tool_call(tool: String, arguments: String, grants: Option<String>, scope: Option<String>) -> Result<AsyncTask<Job>> {
+    tools(ToolFn::ToolCall, vec![(Some(tool), "tool"), (Some(arguments), "arguments"), (grants, "grants"), (scope, "scope")])
 }
 
 #[napi]
@@ -174,6 +175,6 @@ pub fn tool_close(tool: String) -> Result<AsyncTask<Job>> {
 }
 
 #[napi]
-pub fn run_status(host: String, run: String) -> Result<AsyncTask<Job>> {
-    tools(ToolFn::RunStatus, vec![(Some(host), "host"), (Some(run), "run")])
+pub fn run_status(host: String, run: String, scope: Option<String>) -> Result<AsyncTask<Job>> {
+    tools(ToolFn::RunStatus, vec![(Some(host), "host"), (Some(run), "run"), (scope, "scope")])
 }

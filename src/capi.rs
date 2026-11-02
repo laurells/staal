@@ -410,7 +410,7 @@ mod tools {
     }
 
     /// One call: a run, or the answer of an earlier one (`once`), or a refusal.
-    pub fn tool_call(tool: &str, arguments: &str, grants: Option<&str>) -> Result<Json, String> {
+    pub fn tool_call(tool: &str, arguments: &str, grants: Option<&str>, scope: Option<&str>) -> Result<Json, String> {
         let tid = id(tool, "tool")?;
         let args = object(arguments, "arguments_json")?;
         let grants = grants.map(|g| object(g, "grants_json")).transpose()?;
@@ -421,7 +421,7 @@ mod tools {
             (host, t.clone())
         };
         let ctl = Ctl::default();
-        let a = host.call(&t, &args, grants.as_ref(), &ctl, &|_| {}).ok_or("the call was cancelled")?;
+        let a = host.call(&t, &args, grants.as_ref(), scope, &ctl, &|_| {}).ok_or("the call was cancelled")?;
         let mut out = json!({ "status": a.status, "is_error": a.is_error, "text": a.text });
         if let Some(run) = a.run {
             out["run"] = json!(run);
@@ -432,14 +432,14 @@ mod tools {
         Ok(out)
     }
 
-    pub fn run_status(host: &str, run: &str) -> Result<Json, String> {
+    pub fn run_status(host: &str, run: &str, scope: Option<&str>) -> Result<Json, String> {
         let hid = id(host, "host")?;
         let ok = run.len() == 32 && run.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
         if !ok {
             return Err(format!("'{run}' is not a run id: 32 lowercase hexadecimal characters"));
         }
         let h = reg()?.hosts.get(&hid).map(|o| o.host.clone()).ok_or(format!("host {hid} is not open"))?;
-        Ok(h.status(run))
+        Ok(h.status(run, scope))
     }
 
 }
@@ -486,14 +486,20 @@ pub unsafe extern "C" fn staal_tool_open(host: *const c_char, spec_json: *const 
 }
 
 /// # Safety
-/// Each argument must be a valid NUL-terminated string; `grants_json` may be NULL.
+/// Each argument must be a valid NUL-terminated string; `grants_json` and `scope` may be
+/// NULL.
 #[cfg(unix)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn staal_tool_call(tool: *const c_char, arguments_json: *const c_char, grants_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn staal_tool_call(
+    tool: *const c_char,
+    arguments_json: *const c_char,
+    grants_json: *const c_char,
+    scope: *const c_char,
+) -> *mut c_char {
     // SAFETY: forwarded from the caller's promise.
-    let a = unsafe { (arg(tool, "tool"), arg(arguments_json, "arguments_json"), arg(grants_json, "grants_json")) };
+    let a = unsafe { (arg(tool, "tool"), arg(arguments_json, "arguments_json"), arg(grants_json, "grants_json"), arg(scope, "scope")) };
     guarded(move || {
-        let r = (|| tools::tool_call(&required(a.0?, "tool")?, &required(a.1?, "arguments_json")?, a.2?.as_deref()))();
+        let r = (|| tools::tool_call(&required(a.0?, "tool")?, &required(a.1?, "arguments_json")?, a.2?.as_deref(), a.3?.as_deref()))();
         r.unwrap_or_else(error)
     })
 }
@@ -512,14 +518,14 @@ pub unsafe extern "C" fn staal_tool_close(tool: *const c_char) -> *mut c_char {
 }
 
 /// # Safety
-/// Each argument must be a valid NUL-terminated string.
+/// Each argument must be a valid NUL-terminated string; `scope` may be NULL.
 #[cfg(unix)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn staal_run_status(host: *const c_char, run: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn staal_run_status(host: *const c_char, run: *const c_char, scope: *const c_char) -> *mut c_char {
     // SAFETY: forwarded from the caller's promise.
-    let a = unsafe { (arg(host, "host"), arg(run, "run")) };
+    let a = unsafe { (arg(host, "host"), arg(run, "run"), arg(scope, "scope")) };
     guarded(move || {
-        let r = (|| tools::run_status(&required(a.0?, "host")?, &required(a.1?, "run")?))();
+        let r = (|| tools::run_status(&required(a.0?, "host")?, &required(a.1?, "run")?, a.2?.as_deref()))();
         r.unwrap_or_else(error)
     })
 }
