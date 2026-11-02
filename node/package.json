@@ -27,7 +27,11 @@
     "README.md",
     "LICENSE",
     "NOTICE",
-    "LICENSE-THIRD-PARTY.txt"
+    "LICENSE-THIRD-PARTY.txt",
+    "openai-agents.js",
+    "openai-agents.d.ts",
+    "langgraph.js",
+    "langgraph.d.ts"
   ],
   "publishConfig": {
     "access": "public"
@@ -50,5 +54,32 @@
   "devDependencies": {
     "@types/node": "22.10.2",
     "typescript": "5.7.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./openai-agents": {
+      "types": "./openai-agents.d.ts",
+      "default": "./openai-agents.js"
+    },
+    "./langgraph": {
+      "types": "./langgraph.d.ts",
+      "default": "./langgraph.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@openai/agents": ">=0.20.0",
+    "@langchain/core": ">=1.2.18"
+  },
+  "peerDependenciesMeta": {
+    "@openai/agents": {
+      "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    }
   }
 }

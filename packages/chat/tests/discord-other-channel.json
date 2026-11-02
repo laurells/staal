@@ -1,0 +1,49 @@
+{
+  "about": "An answer for a message in another channel than the one asked is a failure, never a receipt.",
+  "service": "https://discord.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/v10/channels/*/messages",
+      "status": 200,
+      "body": {
+        "id": "11000000000000000{n}",
+        "channel_id": "5555555555555555555",
+        "content": "Deploy finished.",
+        "type": 0
+      }
+    }
+  ],
+  "program": "import chat.discord\n\nfn main(chat: cap chat.discord.post(uses: 1)) -> Receipt {\n    return chat.post(\" 1234567890123456789 \", \"Deploy finished.\")\n}\n",
+  "grants": {
+    "chat": {
+      "cap": "chat.discord.post",
+      "only": [
+        "1234567890123456789"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/api/v10/channels/*/messages"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        }
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "action",
+      "message": "Discord posted to channel 5555555555555555555, not 1234567890123456789"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/v10/channels/1234567890123456789/messages"
+      }
+    ]
+  }
+}

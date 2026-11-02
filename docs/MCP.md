@@ -418,20 +418,24 @@ because the action in doubt may have spent money.
 flushed with `fsync` before anything that depends on it happens. It is the authority on
 which runs exist and what they hold: a run exists from its `reserve` event, and its
 journal is named by the run id that event records (the runtime creates the journal
-with that id, so the idempotency keys a service sees carry it too). Only one server
-process may use a journal directory: it holds an OS lock on `<journals>/server.lock`,
-freed if the process dies, and a second server waits up to five seconds for it (an
-SDK's probe, or a restart, may still be letting go) and then refuses to start. A torn last line is discarded; any
+with that id, so the idempotency keys a service sees carry it too). Only one process
+may use a journal directory: it holds an OS lock on `<journals>/server.lock`, freed if
+the process dies, and a second process waits up to five seconds for it (an SDK's
+probe, or a restart, may still be letting go) and then refuses to start. This holds
+for an app's tools too (section 11), which use the same code: a directory is served by
+one `staalc mcp` server or one app process, never both. A torn last line is discarded; any
 other damage stops the server, as a damaged journal does.
 
-Events: `reserve` (run id, tool, time, calls and money held, and the `once` key and
-arguments hash if any), `settle` (run id, money actually charged, the outcome kind),
+Events: `reserve` (run id, tool, time, calls and money held, the tool's quota window
+in milliseconds, and the `once` key, arguments hash and how long the key is kept, if
+any), `settle` (run id, money actually charged, the outcome kind),
 `release` (run id; a reservation whose run never started). Each run has exactly one
 `reserve` and at most one `settle` or `release`; recovery checks this, and writing a
 second one for a run is a bug the server refuses to commit. Compaction, at start and at each daily sweep, keeps
 every event of a run that is unsettled, whose files are still kept (section 7), that
 was reserved within its tool's quota window, or that holds a `once` key not yet
-expired, and drops released runs, which never started and hold nothing; it writes the new ledger to a temporary file, flushes it,
+expired (both read from the `reserve` event itself, so compaction does not depend on
+the tools as they are now), and drops released runs, which never started and hold nothing; it writes the new ledger to a temporary file, flushes it,
 and renames it over the old one, so a crash during compaction leaves one or the other.
 
 **Time.** Each event records the wall-clock time, in UTC milliseconds since 1970, so
@@ -462,15 +466,17 @@ A call moves through these states, each made durable before the next begins:
 | Step | Durable record | If the server dies here, at the next start |
 | --- | --- | --- |
 | 1. reserve | `reserve` in the ledger | there is no journal: the run never started, so it gets a `release` |
-| 2. keep the arguments | `<run id>.inputs.json` beside the journal | still no journal: as step 1 (the file is removed) |
+| 2. keep the run file | `<run id>.run.json` beside the journal: the program's path, the engine and the whole run config (arguments, grants, model; secrets only as the names of their variables) | still no journal: as step 1 (the file is removed) |
 | 3. create the journal | the journal's first line | the journal is there and empty of operations: the run is resumed, which runs it from the start |
 | 4. run | the journal's records | the run is resumed, exactly as `staalc resume` would, from its journal and its kept arguments; it finishes, fails, or stops in doubt |
 | 5. waiting record (a stopped run) | `waiting/<run id>.json` | the run is resumed again and stops again; the record stays as first written |
-| 6. settle | `settle` in the ledger | done: the run's journal records its end, and the ledger its settlement; the arguments file is removed |
+| 6. settle | `settle` in the ledger | done: the run's journal records its end, and the ledger its settlement; the run file is removed |
 | 7. answer | none | nothing to recover; a repeated call is answered from the ledger and journal |
 
-The arguments are kept only while a run may need resuming: a settled run's file is
-removed at once, and at every start whatever is left of one. A run's log goes beside
+The run file is kept only while a run may need resuming: a settled run's file is
+removed at once, and at every start whatever is left of one. Because it holds the
+config the run started with, a run is resumed without its tool's definition: what the
+manifest says now does not matter to it. A run's log goes beside
 its journal as `<run id>.log.jsonl`.
 
 At start, before it answers anything, the server goes through the ledger and the
@@ -478,8 +484,9 @@ journal directory together:
 
 - **A `reserve` with no journal** gets a `release`: the run never started.
 - **A `reserve` whose journal records no end** is resumed. Before any run is resumed,
-  every unfinished run is checked: its tool is still in the manifest, its arguments
-  file is there, and its journal was started with the identical program and config.
+  every unfinished run is checked: its run file is there, its program is checked again
+  from the file the run file names, and its journal was started with the identical
+  program, config and runtime version.
   Any failure stops the server, naming each run (see Upgrades below). If it ends, it is settled
   from the `usage` its result reports, which counts the replayed actions too; if it
   stops in doubt, it keeps its reservation and its waiting record is rewritten.
@@ -489,8 +496,8 @@ journal directory together:
   is therefore idempotent: it always reads the same usage from the same journal.
 - **A journal with no `reserve`** cannot come from the server, which writes the
   `reserve` first. The server refuses to start and names it, for an operator to look
-  at, rather than guess whether it ran. The same holds for an arguments file.
-- **A released run's files** (a journal with no records, an arguments file) are
+  at, rather than guess whether it ran. The same holds for a run file.
+- **A released run's files** (a journal with no records, a run file) are
   removed, so that once compaction forgets the run nothing is left that no reservation
   explains.
 - **A run the runtime could not finish** (it refused at the start, or its thread
@@ -569,10 +576,12 @@ So an operator learns of every stopped run even if the notify command is broken:
 record is on disk, `staalc mcp status` lists it, and stderr has it. The notify command
 only makes the news faster.
 
-**Upgrades.** A journal is tied to its program, config and runtime version, so
-upgrading `staalc` or changing a tool while runs are unfinished makes those runs refuse
-to resume. The policy is explicit: before an upgrade or a tool change, the operator
-runs `staalc mcp status` and lets every unfinished run end (resolving any that wait).
+**Upgrades.** A journal is tied to its program, config and runtime version. The config
+comes from the run file, so changing a tool in the manifest (its grants, quota, even
+removing it) does not stop its unfinished runs from resuming as they started. Editing
+a program's file, or upgrading `staalc`, does: those runs refuse to resume. The policy
+is explicit: before an upgrade or a change to a program, the operator runs `staalc mcp
+status` and lets every unfinished run end (resolving any that wait).
 If the server starts and finds an unfinished run it cannot resume for this reason, it
 does not start: it names each such run, so nothing is silently abandoned with money
 reserved. Each release's notes repeat this.
@@ -716,3 +725,53 @@ no reservation) stops it rather than being guessed at.
 **No queue.** When the server is at its concurrency limit, a call is refused at once.
 A queue would be another state to make durable, recover and bound, for a client that
 can simply try again.
+
+## 11. Tools in an app: the C interface, Python and Node.js
+
+The same host serves tools inside an app (`src/host/`): `staalc mcp` and the C
+interface's tool functions (`staal_host_open`, `staal_tool_open`, `staal_tool_call`,
+`staal_run_status`; include/staal.h) share one implementation of sections 5 to 7, so
+quotas, `once`, the ledger, run files, recovery, the waiting records and the notify
+command behave identically. Python's `staal.Tool` and `staal.Host`, and Node's
+`Tool.open` and `Host.open`, are thin layers over those functions.
+
+A tool in an app is defined as a tool in the manifest is (section 2), with the host's
+settings (`journals`, `keep`, `max_concurrent_runs`, `notify`, `notify_env`) given when
+the host opens. The one difference is where grants come from:
+
+- **Fixed**, in the definition, as in a manifest. A function that takes no capability
+  is always this.
+- **Per call**, given by the app with each call: the app computes them from what it
+  knows (the signed-in user, the customer's tier), never from the call's arguments,
+  which are inputs only, as in section 5. Because the grants are not known when the
+  tool is defined, each call's grants are checked as a manifest's are when it loads:
+  `net.tcp.accept` is refused, a tool that reaches the network must set both `net`
+  timeouts, with a money quota every grant that can spend must be bounded (`max`, or
+  `each` and `uses`) in the quota's currency, and no grant may name a variable that
+  `notify_env` passes to the notify command. A call that fails a check is refused
+  before anything is reserved. The tool's annotations claim nothing it cannot know:
+  `readOnlyHint` false and `openWorldHint` true.
+
+A call's answer is `{status, run, text, structured, is_error}`, with `status` one of
+`done`, `failed`, `stopped` (waiting for an operator), `in_progress` (a repeated `once`
+call of a run still going) and `not_run` (refused before any run: arguments the types
+refuse, a quota, a busy host, grants a check refuses). `text` is what an MCP client
+would be given: for `done`, the result as JSON, so a text result keeps its quotes.
+
+**One process per journal directory.** The lock of section 6 holds across the MCP
+server and apps alike. In one process, opening a directory again gives the same host
+(with the same settings; other settings are refused), and it is closed when the last
+holder closes it. An app with several worker processes gives each its own directory,
+and each worker's quotas are then its own; a quota that must hold across workers needs
+the calls sent through one process.
+
+**Framework adapters.** `staal.openai_agents.function_tool` and
+`staal.langgraph.structured_tool` in Python, and `@staal/node/openai-agents` and
+`@staal/node/langgraph` in Node.js, wrap a tool for the OpenAI Agents SDK and for
+LangGraph. The model sees the tool's name, description and argument schema; the grants
+come from the framework's run context through the app's function; the answer's `text`
+goes back to the model as the tool's output, a refusal's message included, and nothing
+is retried. They are tested through each framework's own agent loop with a scripted
+model (python/tests/test_adapters.py, node/test/frameworks/), against the framework
+versions pinned in python/tests/frameworks.txt and node/test/frameworks/package.json.
+

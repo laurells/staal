@@ -65,6 +65,10 @@ fn reference_repo(at: &Path, name: &str) -> String {
     let mut files = Vec::new();
     for e in std::fs::read_dir(&src).unwrap() {
         let e = e.unwrap();
+        // The package's files; its tests/ folder is not part of it.
+        if e.file_type().unwrap().is_dir() {
+            continue;
+        }
         files.push((e.file_name().to_string_lossy().to_string(), std::fs::read_to_string(e.path()).unwrap()));
     }
     let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
@@ -506,6 +510,10 @@ fn local_reference(at: &Path, name: &str, real: &str, local: &str) -> String {
     let mut files = Vec::new();
     for e in std::fs::read_dir(&src).unwrap() {
         let e = e.unwrap();
+        // The package's files; its tests/ folder is not part of it.
+        if e.file_type().unwrap().is_dir() {
+            continue;
+        }
         let text = std::fs::read_to_string(e.path()).unwrap().replace(real, local);
         files.push((e.file_name().to_string_lossy().to_string(), text));
     }
@@ -598,6 +606,10 @@ fn paystack_and_flutterwave_refunds_run_against_local_services() {
     let mut files = Vec::new();
     for e in std::fs::read_dir(&src).unwrap() {
         let e = e.unwrap();
+        // The package's files; its tests/ folder is not part of it.
+        if e.file_type().unwrap().is_dir() {
+            continue;
+        }
         let text = std::fs::read_to_string(e.path())
             .unwrap()
             .replace("https://api.paystack.co", &local)

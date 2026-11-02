@@ -1,0 +1,50 @@
+// Email through Postmark (https://postmarkapp.com).
+//
+// Programs ask for `cap email.postmark.send(only: ["*@clinic.org"], uses: N)` and call
+// `mail.send(to, subject, text)`. The operator grants the HTTP capability, the server
+// token and the sender address under `needs`. Postmark documents no idempotency key,
+// so grant `http` without `idempotency_key`: an email whose answer a crash loses stops
+// the run in doubt, for an operator to check in Postmark's activity, instead of being
+// sent twice.
+//
+// `canonical` refuses addresses with capital letters rather than lowercasing them:
+// the part before '@' may be case-sensitive, and two addresses must never be made one
+// for the sake of an `only` check.
+
+type Email { From: Text, To: Text, Subject: Text, TextBody: Text }
+type Status { ErrorCode: Int }
+type Sent { MessageID: Text }
+
+capability email.postmark {
+    needs http: cap net.http.post(only: ["https://api.postmarkapp.com/email"])
+    needs token: Secret
+    needs sender: Text
+
+    canonical(address: Text) -> Text {
+        let a = trim(address)
+        if lower(a) != a {
+            fail("write the address in lower case: " + a)
+        }
+        if not contains(a, "@") {
+            fail("'" + a + "' is not an email address")
+        }
+        return a
+    }
+
+    action send(to: Text @target, subject: Text, text: Text) -> Text {
+        let email = Email { From: sender, To: trim(to), Subject: subject, TextBody: text }
+        let r = http.post("https://api.postmarkapp.com/email", json(email),
+            [header("Accept", "application/json"),
+                header("Content-Type", "application/json"),
+                header("X-Postmark-Server-Token", token)])
+        if r.status != 200 or not r.complete {
+            fail("Postmark answered " + json(r.status) + ": " + r.body)
+        }
+        let status: Status = validate parse(Status, r.body)
+        if status.ErrorCode != 0 {
+            fail("Postmark refused the email: " + r.body)
+        }
+        let sent: Sent = validate parse(Sent, r.body)
+        return sent.MessageID
+    }
+}

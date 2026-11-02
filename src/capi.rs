@@ -270,6 +270,260 @@ pub unsafe extern "C" fn staal_resolve(journal_path: *const c_char, resolution_j
     })
 }
 
+// ---------------------------------------------------------------------------------
+// Tools (include/staal.h, "Tools"): a program's entry function as a tool an app calls
+// again and again, with quotas, `once`, concurrency and crash recovery across calls,
+// by the same host code `staalc mcp` uses (src/host). Handles are decimal strings.
+
+#[cfg(unix)]
+mod tools {
+    use crate::host::tool::{self, Grants, Tool};
+    use crate::host::{Ctl, Host};
+    use serde_json::{json, Map, Value as Json};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    struct Open {
+        dir: PathBuf,
+        host: Arc<Host>,
+        /// How many `staal_host_open` calls hold it.
+        holders: usize,
+    }
+
+    #[derive(Default)]
+    struct Registry {
+        next: u64,
+        hosts: HashMap<u64, Open>,
+        tools: HashMap<u64, (u64, Arc<Tool>)>,
+    }
+
+    fn registry() -> &'static Mutex<Registry> {
+        static R: OnceLock<Mutex<Registry>> = OnceLock::new();
+        R.get_or_init(|| Mutex::new(Registry::default()))
+    }
+
+    fn reg() -> Result<std::sync::MutexGuard<'static, Registry>, String> {
+        registry().lock().map_err(|_| "the library's tools were lost after a crash in another call".to_string())
+    }
+
+    fn id(s: &str, what: &str) -> Result<u64, String> {
+        s.parse().map_err(|_| format!("{what} '{s}' is not a handle this library gave"))
+    }
+
+    fn object(text: &str, what: &str) -> Result<Map<String, Json>, String> {
+        match serde_json::from_str::<Json>(text) {
+            Ok(Json::Object(o)) => Ok(o),
+            Ok(_) => Err(format!("{what} must be a JSON object")),
+            Err(e) => Err(format!("{what} is not valid JSON: {e}")),
+        }
+    }
+
+    fn cwd() -> Result<PathBuf, String> {
+        std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))
+    }
+
+    /// Opens the host for a journal directory, or gives the one this process already
+    /// has open for it (with the same settings).
+    pub fn host_open(settings: &str) -> Result<Json, String> {
+        let o = object(settings, "settings_json")?;
+        let settings = tool::parse_settings(&o, "settings", &cwd()?, &[])?;
+        let mut r = reg()?;
+        if let Some((hid, open)) = r.hosts.iter_mut().find(|(_, h)| h.dir == settings.journals) {
+            if open.host.settings != settings {
+                return Err(format!(
+                    "{} is already open in this process with other settings; open it with the same settings, or close it first",
+                    settings.journals.display()
+                ));
+            }
+            open.holders += 1;
+            return Ok(json!({ "status": "ok", "host": hid.to_string() }));
+        }
+        let dir = settings.journals.clone();
+        let host = Host::open(settings, "with the tool's status, by its run id", &[])?;
+        r.next += 1;
+        let hid = r.next;
+        r.hosts.insert(hid, Open { dir, host, holders: 1 });
+        Ok(json!({ "status": "ok", "host": hid.to_string() }))
+    }
+
+    /// Lets go of a host; the last holder closes it, with every tool opened on it.
+    pub fn host_close(host: &str) -> Result<Json, String> {
+        let hid = id(host, "host")?;
+        let closed = {
+            let mut r = reg()?;
+            let open = r.hosts.get_mut(&hid).ok_or(format!("host {hid} is not open"))?;
+            open.holders -= 1;
+            if open.holders > 0 {
+                None
+            } else {
+                r.tools.retain(|_, (h, _)| *h != hid);
+                r.hosts.remove(&hid)
+            }
+        };
+        // Outside the registry's lock: notify commands may take their full time.
+        if let Some(open) = closed {
+            open.host.wait_for_notifies();
+        }
+        Ok(json!({ "status": "ok" }))
+    }
+
+    /// Defines a tool on a host: the keys of a tool in an MCP manifest. Without
+    /// "grants", each call gives them.
+    pub fn tool_open(host: &str, spec: &str) -> Result<Json, String> {
+        let hid = id(host, "host")?;
+        let spec_json = Json::Object(object(spec, "spec_json")?);
+        let h = reg()?.hosts.get(&hid).map(|o| o.host.clone()).ok_or(format!("host {hid} is not open"))?;
+        let grants = if spec_json.get("grants").is_some() { Grants::Fixed } else { Grants::PerCall };
+        let mut warnings = Vec::new();
+        let t = tool::parse_tool(&spec_json, "tool", &cwd()?, None, &h.settings, grants, &mut warnings)?;
+        let described = json!({
+            "status": "ok",
+            "name": t.name,
+            "title": t.title,
+            "description": t.description,
+            "input_schema": t.input_schema,
+            "output_schema": t.output_schema,
+            "annotations": t.annotations,
+            "grants": if t.grants == Grants::Fixed { "fixed" } else { "per_call" },
+            "warnings": warnings,
+        });
+        let mut r = reg()?;
+        if !r.hosts.contains_key(&hid) {
+            return Err(format!("host {hid} was closed while the tool was being opened"));
+        }
+        if r.tools.values().any(|(h, x)| *h == hid && x.name == t.name) {
+            return Err(format!("a tool named '{}' is already open on this host", t.name));
+        }
+        r.next += 1;
+        let tid = r.next;
+        r.tools.insert(tid, (hid, Arc::new(t)));
+        let mut out = described;
+        out["tool"] = json!(tid.to_string());
+        Ok(out)
+    }
+
+    pub fn tool_close(tool: &str) -> Result<Json, String> {
+        let tid = id(tool, "tool")?;
+        reg()?.tools.remove(&tid).ok_or(format!("tool {tid} is not open"))?;
+        Ok(json!({ "status": "ok" }))
+    }
+
+    /// One call: a run, or the answer of an earlier one (`once`), or a refusal.
+    pub fn tool_call(tool: &str, arguments: &str, grants: Option<&str>) -> Result<Json, String> {
+        let tid = id(tool, "tool")?;
+        let args = object(arguments, "arguments_json")?;
+        let grants = grants.map(|g| object(g, "grants_json")).transpose()?;
+        let (host, t) = {
+            let r = reg()?;
+            let (hid, t) = r.tools.get(&tid).ok_or(format!("tool {tid} is not open"))?;
+            let host = r.hosts.get(hid).map(|o| o.host.clone()).ok_or(format!("the host of tool {tid} is closed"))?;
+            (host, t.clone())
+        };
+        let ctl = Ctl::default();
+        let a = host.call(&t, &args, grants.as_ref(), &ctl, &|_| {}).ok_or("the call was cancelled")?;
+        let mut out = json!({ "status": a.status, "is_error": a.is_error, "text": a.text });
+        if let Some(run) = a.run {
+            out["run"] = json!(run);
+        }
+        if let Some(s) = a.structured {
+            out["structured"] = s;
+        }
+        Ok(out)
+    }
+
+    pub fn run_status(host: &str, run: &str) -> Result<Json, String> {
+        let hid = id(host, "host")?;
+        let ok = run.len() == 32 && run.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !ok {
+            return Err(format!("'{run}' is not a run id: 32 lowercase hexadecimal characters"));
+        }
+        let h = reg()?.hosts.get(&hid).map(|o| o.host.clone()).ok_or(format!("host {hid} is not open"))?;
+        Ok(h.status(run))
+    }
+
+}
+
+/// Opens the host that keeps tool runs in a journal directory (include/staal.h, Tools).
+///
+/// # Safety
+/// The argument must be a valid NUL-terminated string.
+#[cfg(unix)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn staal_host_open(settings_json: *const c_char) -> *mut c_char {
+    // SAFETY: forwarded from the caller's promise.
+    let a = unsafe { arg(settings_json, "settings_json") };
+    guarded(move || match a.and_then(|a| required(a, "settings_json")).and_then(|s| tools::host_open(&s)) {
+        Ok(v) => v,
+        Err(e) => error(e),
+    })
+}
+
+/// # Safety
+/// The argument must be a valid NUL-terminated string.
+#[cfg(unix)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn staal_host_close(host: *const c_char) -> *mut c_char {
+    // SAFETY: forwarded from the caller's promise.
+    let a = unsafe { arg(host, "host") };
+    guarded(move || match a.and_then(|a| required(a, "host")).and_then(|h| tools::host_close(&h)) {
+        Ok(v) => v,
+        Err(e) => error(e),
+    })
+}
+
+/// # Safety
+/// Each argument must be a valid NUL-terminated string.
+#[cfg(unix)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn staal_tool_open(host: *const c_char, spec_json: *const c_char) -> *mut c_char {
+    // SAFETY: forwarded from the caller's promise.
+    let a = unsafe { (arg(host, "host"), arg(spec_json, "spec_json")) };
+    guarded(move || {
+        let r = (|| tools::tool_open(&required(a.0?, "host")?, &required(a.1?, "spec_json")?))();
+        r.unwrap_or_else(error)
+    })
+}
+
+/// # Safety
+/// Each argument must be a valid NUL-terminated string; `grants_json` may be NULL.
+#[cfg(unix)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn staal_tool_call(tool: *const c_char, arguments_json: *const c_char, grants_json: *const c_char) -> *mut c_char {
+    // SAFETY: forwarded from the caller's promise.
+    let a = unsafe { (arg(tool, "tool"), arg(arguments_json, "arguments_json"), arg(grants_json, "grants_json")) };
+    guarded(move || {
+        let r = (|| tools::tool_call(&required(a.0?, "tool")?, &required(a.1?, "arguments_json")?, a.2?.as_deref()))();
+        r.unwrap_or_else(error)
+    })
+}
+
+/// # Safety
+/// The argument must be a valid NUL-terminated string.
+#[cfg(unix)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn staal_tool_close(tool: *const c_char) -> *mut c_char {
+    // SAFETY: forwarded from the caller's promise.
+    let a = unsafe { arg(tool, "tool") };
+    guarded(move || match a.and_then(|a| required(a, "tool")).and_then(|t| tools::tool_close(&t)) {
+        Ok(v) => v,
+        Err(e) => error(e),
+    })
+}
+
+/// # Safety
+/// Each argument must be a valid NUL-terminated string.
+#[cfg(unix)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn staal_run_status(host: *const c_char, run: *const c_char) -> *mut c_char {
+    // SAFETY: forwarded from the caller's promise.
+    let a = unsafe { (arg(host, "host"), arg(run, "run")) };
+    guarded(move || {
+        let r = (|| tools::run_status(&required(a.0?, "host")?, &required(a.1?, "run")?))();
+        r.unwrap_or_else(error)
+    })
+}
+
 /// Frees a string returned by this library. NULL is ignored.
 ///
 /// # Safety

@@ -36,3 +36,18 @@ async function handle(): Promise<string> {
 const v: string = staal.version;
 void handle;
 void v;
+
+async function tool(): Promise<string> {
+  const refund = await staal.Tool.open<{ limit: string }>('refund.staal', {
+    name: 'refund_order',
+    description: 'Refund part of an order.',
+    grants: (ctx) => ({ pay: { cap: 'payments.refund', each: { amount: ctx.limit, currency: 'USD' } } }),
+    journals: '/var/lib/staal/runs',
+    quota: { window: '1h', calls: 10 },
+  });
+  const r: staal.ToolResult = await refund.call({ order: '4417' }, { context: { limit: '50.00' } });
+  const st: staal.RunStatus = await refund.status(r.run ?? '');
+  await refund.close();
+  return `${r.status} ${st.status}`;
+}
+void tool;

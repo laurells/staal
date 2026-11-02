@@ -2,6 +2,10 @@
   "package": "email",
   "version": "0.1.0",
   "authority": {
-    "net.http.post": ["https://api.resend.com/emails"]
+    "net.http.post": [
+      "https://api.resend.com/emails",
+      "https://api.postmarkapp.com/email",
+      "https://api.sendgrid.com/v3/mail/send"
+    ]
   }
 }

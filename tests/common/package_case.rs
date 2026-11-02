@@ -23,6 +23,9 @@
 // for it. `requests`, when given, is every request the service received, in order:
 // `[]` says the run was refused before any request.
 //
+// Every test runs on both engines (the interpreter, and native code when built with
+// it), each against its own fake service, with the same expectations.
+//
 // Every test also checks that the key never appears in the run's log or journal. Built
 // with the `failpoints` feature, each test is then run again, killed after every
 // journal write and between every action and its result, resumed (and, for an action
@@ -32,6 +35,7 @@
 
 use super::fake::{Fake, Route};
 use serde_json::{json, Map, Value as Json};
+use staalc::interp::{Durability, Engine};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -256,7 +260,26 @@ pub fn run_package(pkg: &Path, work: &Path) -> Result<usize, Vec<String>> {
     if failures.is_empty() { Ok(files.len()) } else { Err(failures) }
 }
 
+/// The engines a test runs on: native code too, when this build has it.
+fn engines() -> Vec<Engine> {
+    if cfg!(feature = "native") { vec![Engine::Interpreter, Engine::Native] } else { vec![Engine::Interpreter] }
+}
+
+fn engine_name(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Interpreter => "interpreter",
+        Engine::Native => "native",
+    }
+}
+
 fn run_case(pkg: &Path, c: &Case, dir: &Path) -> Result<(), String> {
+    for engine in engines() {
+        run_on(pkg, c, &dir.join(engine_name(engine)), engine).map_err(|e| format!("({}) {e}", engine_name(engine)))?;
+    }
+    Ok(())
+}
+
+fn run_on(pkg: &Path, c: &Case, dir: &Path, engine: Engine) -> Result<(), String> {
     let fake = Fake::start(c.routes.clone());
     let base = fake.base().to_string();
     let manifest: Json = serde_json::from_str(&std::fs::read_to_string(pkg.join("staal.json")).map_err(|e| format!("staal.json: {e}"))?)
@@ -294,7 +317,7 @@ fn run_case(pkg: &Path, c: &Case, dir: &Path) -> Result<(), String> {
 
     // The run, uninterrupted.
     let journal = app.join("clean.journal");
-    let out = staalc::interp::run_config_durable(&prog, &checked.fingerprint, &cfg, staalc::interp::Durability::Create(&journal))?;
+    let out = staalc::interp::run_config_engine(&prog, &checked.fingerprint, &cfg, Durability::Create(&journal), engine)?;
     let clean_effects = fake.effects();
     let seen = fake.requests();
     match (&out.result, &c.result, &c.failure) {
@@ -323,7 +346,7 @@ fn run_case(pkg: &Path, c: &Case, dir: &Path) -> Result<(), String> {
     }
     let clean_end = end_of(&journal)?;
     if cfg!(feature = "failpoints") {
-        crashes(&app, &fake, &clean_end, &clean_effects)?;
+        crashes(&app, &fake, &clean_end, &clean_effects, engine)?;
     }
     Ok(())
 }
@@ -349,12 +372,12 @@ fn staalc(app: &Path, args: &[&str], failpoint: Option<&str>) -> std::process::O
 
 /// Kills the run at every point it makes something durable, resumes it, and checks it
 /// ends as `clean_end` with the same effects on the service as the uninterrupted run.
-fn crashes(app: &Path, fake: &Fake, clean_end: &str, clean: &Effects) -> Result<(), String> {
+fn crashes(app: &Path, fake: &Fake, clean_end: &str, clean: &Effects, engine: Engine) -> Result<(), String> {
     let mut points: Vec<String> = Vec::new();
     for kind in ["after_write", "before_result"] {
         for n in 1.. {
             let fp = format!("{kind}:{n}");
-            match crash_once(app, fake, &fp)? {
+            match crash_once(app, fake, &fp, engine)? {
                 Some((end, effects)) => {
                     if end != clean_end {
                         return Err(format!("killed at {fp}, the run ended {end}, not {clean_end}"));
@@ -380,18 +403,21 @@ fn crashes(app: &Path, fake: &Fake, clean_end: &str, clean: &Effects) -> Result<
 
 /// One run killed at `fp`, then resumed (and resolved) to its end. None if `fp` was
 /// never reached. Gives how it ended and what took effect at the service meanwhile.
-fn crash_once(app: &Path, fake: &Fake, fp: &str) -> Result<Option<(String, Effects)>, String> {
+fn crash_once(app: &Path, fake: &Fake, fp: &str, engine: Engine) -> Result<Option<(String, Effects)>, String> {
     let journal = app.join("crash.journal");
     let _ = std::fs::remove_file(&journal);
     let before = fake.effects();
     let seen_before = fake.requests().len();
     let j = journal.to_string_lossy().into_owned();
-    let out = staalc(app, &["run", "main.staal", "--config", "run.json", "--journal", &j], Some(fp));
+    let native: &[&str] = if engine == Engine::Native { &["--engine", "native"] } else { &[] };
+    let run = [&["run", "main.staal", "--config", "run.json", "--journal", &j][..], native].concat();
+    let out = staalc(app, &run, Some(fp));
     if out.status.code().is_some() {
         return Ok(None);
     }
     for _ in 0..5 {
-        let out = staalc(app, &["resume", "main.staal", "--config", "run.json", "--journal", &j], None);
+        let resume = [&["resume", "main.staal", "--config", "run.json", "--journal", &j][..], native].concat();
+        let out = staalc(app, &resume, None);
         match out.status.code() {
             Some(0) | Some(1) => {
                 let after = fake.effects();

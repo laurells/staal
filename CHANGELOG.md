@@ -55,9 +55,49 @@ the language or its file formats.
 - `packages/messaging`: Twilio, with `messaging.twilio.sms` and `whatsapp`. Both
   packages are tested against local fakes of the services' documented answers, not
   yet against live accounts.
+- Tools in an app: `staal.Tool` and `staal.Host` in Python, `Tool.open` and
+  `Host.open` in Node.js, over new C functions (`staal_host_open`, `staal_tool_open`,
+  `staal_tool_call`, `staal_tool_close`, `staal_host_close`, `staal_run_status`). A
+  program becomes a tool an agent calls many times, with quotas across calls, `once`,
+  and crash recovery, from the same code as `staalc mcp` (now `src/host/`). Grants are
+  fixed, or computed by the app for each call and checked as a manifest's are; they are
+  never an argument. One process uses a journal directory at a time.
+- Framework adapters: `staal.openai_agents.function_tool` and
+  `staal.langgraph.structured_tool` (extras `staal[openai-agents]`,
+  `staal[langgraph]`), and `@staal/node/openai-agents` and `@staal/node/langgraph`
+  (optional peer dependencies). Tested through each framework's own agent loop, on
+  pinned versions, with the examples in `examples/frameworks/` run as written.
+- Packages: `email.postmark.send` (the guide's package, finished),
+  `email.sendgrid.send` (Twilio SendGrid v3) and `chat.discord.post` (Discord API v10,
+  as a bot, with mentions never parsed), each tested against a fake of its documented
+  answers. Microsoft Teams is not in this release: Microsoft Graph's tokens expire and
+  must be fetched, which a package's fixed `Secret` cannot do yet.
+- Package tests run on both engines, the crash tests included.
+- `SECURITY.md` says what tools trust and what they do not.
 - `CONTRIBUTING.md` says what to expect from review (a first response within two
   working days) and how to take a first issue; `packages/README.md` lists what every
   package must meet.
+
+### Changed
+
+- **Before upgrading:** run `staalc mcp status` and let every unfinished run end
+  (resolving any that wait for an operator). A run file or journal left by 0.24 is not
+  resumed by this version: 0.24's arguments file is not a run file, so the directory
+  refuses to open and names each such run (docs/MCP.md section 7, "Upgrades").
+- `staalc mcp` keeps a run file (`<run id>.run.json`: the program, engine and run
+  config) in place of the arguments file, so an unfinished run resumes without its
+  tool's definition: changing or removing a tool in the manifest no longer stops the
+  server from starting. Editing a program or upgrading `staalc` with runs unfinished
+  still does. Ledger `reserve` events record the quota window and how long a `once`
+  key is kept, so compaction no longer depends on the manifest.
+- The error when another process holds the journal directory now reads "another
+  process is using ...", since that process may be an app's tools.
+
+### Fixed
+
+- `docs/PACKAGES.md`: the Postmark library checked a success answer against a type
+  that required `MessageID` before reading `ErrorCode`, so a refusal sent with status
+  200 and no `MessageID` was reported as malformed rather than as Postmark's refusal.
 
 ## 0.24.1 — 2026-10-28
 

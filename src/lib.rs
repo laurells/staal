@@ -13,6 +13,8 @@ pub mod interp;
 pub mod lexer;
 pub mod lsp;
 #[cfg(unix)]
+pub mod host;
+#[cfg(unix)]
 pub mod mcp;
 pub mod repl;
 pub mod runconfig;

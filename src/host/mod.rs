@@ -1,9 +1,12 @@
-// What `staalc mcp` does with a tool call, from the arguments to the answer, and what
-// it does at start with whatever an earlier process left (docs/MCP.md sections 5 to 7).
+// The host of tool calls: what `staalc mcp` and the C interface's tools do with a call,
+// from the arguments to the answer, and what a host does when it opens with whatever an
+// earlier process left (docs/MCP.md sections 5 to 7). One host serves one journal
+// directory; the MCP server and an app's tools use the same code, so they cannot drift.
 //
 // A call goes through steps, each made durable before the next begins:
 //   1. reserve       `reserve` in the ledger (with the call's `once` key)
-//   2. inputs        `<run>.inputs.json`, so the run can be resumed after a crash
+//   2. run file      `<run>.run.json`: the program, engine and run config, so the run
+//                    can be resumed after a crash without the tool's definition
 //   3. journal       created by the runtime with the run id from step 1
 //   4. run           the runtime's journal records
 //   5. waiting       `waiting/<run>.json`, for a run that stopped for an operator
@@ -11,10 +14,13 @@
 //   7. answer
 // and `recover` has one rule for a crash after each of them.
 
-use super::ledger::{self, Ledger, OnceRef, Run};
-use super::manifest::{self, Manifest, Tool, STATUS_TOOL};
+pub mod ledger;
+pub mod tool;
+
+use ledger::{Ledger, OnceRef, Run};
+use tool::{Settings, Tool};
 use crate::interp::money::Money;
-use crate::interp::{self, journal, Durability, FailKind, RunResult};
+use crate::interp::{self, journal, Durability, Engine, FailKind, RunResult};
 use serde_json::{json, Map, Value as Json};
 use std::collections::HashMap;
 use std::fs::File;
@@ -42,17 +48,24 @@ pub enum Outcome {
     Stopped { kind: String, message: String },
 }
 
-/// A tool result: what `tools/call` answers, before a protocol version adds its fields.
+/// A tool result: what MCP's `tools/call` answers, before a protocol version adds its
+/// fields, and what the C interface's `staal_tool_call` returns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
+    /// `done`, `failed`, `stopped` (waiting for an operator), `in_progress` (a repeated
+    /// call of an operation still running), or `not_run` (refused before any run).
+    pub status: &'static str,
+    /// The run the answer is about, when there is one.
+    pub run: Option<String>,
     pub text: String,
     pub structured: Option<Json>,
     pub is_error: bool,
 }
 
 impl Answer {
+    /// A refusal before any run started.
     pub fn error(text: impl Into<String>) -> Answer {
-        Answer { text: text.into(), structured: None, is_error: true }
+        Answer { status: "not_run", run: None, text: text.into(), structured: None, is_error: true }
     }
 
     pub fn to_json(&self) -> Json {
@@ -76,8 +89,10 @@ struct State {
     running: HashMap<String, String>,
 }
 
-pub struct Server {
-    pub m: Manifest,
+pub struct Host {
+    pub settings: Settings,
+    /// How a caller follows a run, for messages: "with staal_run_status" for MCP.
+    follow: String,
     state: Mutex<State>,
     /// Held for the server's life: one server per journal directory.
     _lock: File,
@@ -86,9 +101,17 @@ pub struct Server {
     notified: Mutex<std::collections::HashSet<String>>,
 }
 
+static LOG_PREFIX: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Names the process in the log, once: "staalc mcp" for the MCP server. Hosts opened
+/// through the C interface log as "staal".
+pub fn set_log_prefix(prefix: &'static str) {
+    let _ = LOG_PREFIX.set(prefix);
+}
+
 pub fn log(msg: &str) {
-    // Standard error is the server's log; a failed write there has nowhere to go.
-    let _ = writeln!(std::io::stderr(), "staalc mcp: {msg}");
+    // Standard error is the host's log; a failed write there has nowhere to go.
+    let _ = writeln!(std::io::stderr(), "{}: {msg}", LOG_PREFIX.get().copied().unwrap_or("staal"));
 }
 
 fn rfc3339(ms: u64) -> String {
@@ -140,39 +163,62 @@ fn charged(usage: &Json) -> Result<Vec<Money>, String> {
     Ok(out)
 }
 
+fn engine_name(e: Engine) -> &'static str {
+    match e {
+        Engine::Interpreter => "interpreter",
+        Engine::Native => "native",
+    }
+}
+
 fn sha256(s: &str) -> String {
     journal::sha256_hex(s.as_bytes())
 }
 
 /// What a run's outcome tells the client. Used for a run that just ended and for an
-/// earlier run a repeated call finds, so both are answered the same.
-pub fn answer(run: &str, o: &Outcome) -> Answer {
+/// earlier run a repeated call finds, so both are answered the same. `follow` says how
+/// the caller can follow a run ("with staal_run_status").
+pub fn answer(run: &str, o: &Outcome, follow: &str) -> Answer {
+    let made = |status: &'static str, text: String, structured: Option<Json>, is_error: bool| Answer {
+        status,
+        run: Some(run.to_string()),
+        text,
+        structured,
+        is_error,
+    };
     match o {
         Outcome::Done(v) => {
             let text = v.to_string();
             if text.len() > MAX_RESULT_BYTES {
-                return Answer::error(format!(
-                    "run {run} finished, but its result is larger than {} bytes, too large to send; \
-                     it is kept in the run's journal (the operator can read it)",
-                    MAX_RESULT_BYTES
-                ));
+                return made(
+                    "done",
+                    format!(
+                        "run {run} finished, but its result is larger than {MAX_RESULT_BYTES} bytes, too large to send; \
+                         it is kept in the run's journal (the operator can read it)"
+                    ),
+                    None,
+                    true,
+                );
             }
-            Answer { text, structured: Some(json!({ "result": v })), is_error: false }
+            made("done", text, Some(json!({ "result": v })), false)
         }
-        Outcome::Failed { kind, message } if kind == "internal" => Answer::error(format!(
-            "an internal error happened in run {run}; the operator has the details in the server's log"
-        )),
-        Outcome::Failed { kind, message } if kind == "capability" => Answer::error(message.clone()),
-        Outcome::Failed { kind, message } => Answer::error(format!("{kind}: {message}")),
-        Outcome::Stopped { .. } => Answer {
-            text: format!(
+        Outcome::Failed { kind, .. } if kind == "internal" => made(
+            "failed",
+            format!("an internal error happened in run {run}; the operator has the details in the log"),
+            None,
+            true,
+        ),
+        Outcome::Failed { kind, message } if kind == "capability" => made("failed", message.clone(), None, true),
+        Outcome::Failed { kind, message } => made("failed", format!("{kind}: {message}"), None, true),
+        Outcome::Stopped { .. } => made(
+            "stopped",
+            format!(
                 "run {run} stopped before it finished and is waiting for an operator: an action it started may \
                  already have happened, and a person must check before it goes on. Do not call this tool again \
-                 for it: a new call would act again. Follow it with {STATUS_TOOL}."
+                 for it: a new call would act again. Follow it {follow}."
             ),
-            structured: Some(json!({ "status": "waiting_for_operator", "run": run })),
-            is_error: true,
-        },
+            Some(json!({ "status": "waiting_for_operator", "run": run })),
+            true,
+        ),
     }
 }
 
@@ -198,11 +244,12 @@ fn recorded_outcome(path: &Path) -> Result<Outcome, String> {
     Ok(Outcome::Failed { kind, message })
 }
 
-impl Server {
+impl Host {
     /// Takes the journal directory, opens the ledger and recovers whatever an earlier
-    /// process left, before anything is answered.
-    pub fn start(m: Manifest) -> Result<Arc<Server>, String> {
-        let dir = &m.server.journals;
+    /// process left, before anything is answered. `follow` says how a caller follows a
+    /// run, for messages ("with staal_run_status"); `warnings` are logged.
+    pub fn open(settings: Settings, follow: &str, warnings: &[String]) -> Result<Arc<Host>, String> {
+        let dir = &settings.journals;
         let lock_path = dir.join("server.lock");
         let mut opts = std::fs::OpenOptions::new();
         opts.read(true).write(true).create(true).truncate(false);
@@ -217,14 +264,15 @@ impl Server {
                 Err(std::fs::TryLockError::WouldBlock) if Instant::now() < wait_until => std::thread::sleep(Duration::from_millis(50)),
                 Err(std::fs::TryLockError::WouldBlock) => {
                     return Err(format!(
-                        "another staalc mcp is serving {}; only one server may use a journal directory",
+                        "another process is using {} (a staalc mcp server, or an app's tools); only one process may \
+                         use a journal directory at a time",
                         dir.display()
                     ));
                 }
                 Err(std::fs::TryLockError::Error(e)) => return Err(format!("cannot lock {}: {e}", lock_path.display())),
             }
         }
-        manifest::private_dir(&dir.join("waiting"))?;
+        tool::private_dir(&dir.join("waiting"))?;
         let ledger = Ledger::open(&dir.join("server.ledger"))?;
         let last = ledger.last_time();
         let now = ledger::clock_ms();
@@ -238,11 +286,12 @@ impl Server {
                 rfc3339(last)
             ));
         }
-        for w in &m.warnings {
+        for w in warnings {
             log(&format!("warning: {w}"));
         }
-        let s = Arc::new(Server {
-            m,
+        let s = Arc::new(Host {
+            settings,
+            follow: follow.to_string(),
             state: Mutex::new(State { ledger, running: HashMap::new() }),
             _lock: lock,
             notifies: Mutex::new(Vec::new()),
@@ -253,43 +302,50 @@ impl Server {
         Ok(s)
     }
 
-    fn tool(&self, name: &str) -> Option<&Tool> {
-        self.m.tools.iter().find(|t| t.name == name)
-    }
-
     fn state(&self) -> Result<std::sync::MutexGuard<'_, State>, String> {
-        self.state.lock().map_err(|_| "the server's state was lost after a crash in another call; restart the server".to_string())
+        self.state.lock().map_err(|_| "the host's state was lost after a crash in another call; restart the process".to_string())
     }
 
     pub fn run_dir(&self, tool: &str, run: &str) -> PathBuf {
-        self.m.server.journals.join(tool).join(&run[..2])
+        self.settings.journals.join(tool).join(&run[..2])
     }
     pub fn journal_path(&self, tool: &str, run: &str) -> PathBuf {
         self.run_dir(tool, run).join(format!("{run}.journal"))
     }
-    fn inputs_path(&self, tool: &str, run: &str) -> PathBuf {
-        self.run_dir(tool, run).join(format!("{run}.inputs.json"))
+    fn run_file(&self, tool: &str, run: &str) -> PathBuf {
+        self.run_dir(tool, run).join(format!("{run}.run.json"))
     }
     fn log_path(&self, tool: &str, run: &str) -> PathBuf {
         self.run_dir(tool, run).join(format!("{run}.log.jsonl"))
     }
     pub fn waiting_path(&self, run: &str) -> PathBuf {
-        self.m.server.journals.join("waiting").join(format!("{run}.json"))
+        self.settings.journals.join("waiting").join(format!("{run}.json"))
     }
     fn notified_path(&self, run: &str) -> PathBuf {
-        self.m.server.journals.join("waiting").join(format!("{run}.notify"))
+        self.settings.journals.join("waiting").join(format!("{run}.notify"))
     }
 
     // -------------------------------------------------------------------------------
     // A call
 
-    /// Runs one `tools/call` for `tool`. None: the call was cancelled before its run
-    /// started, so nothing is answered.
-    pub fn call(&self, tool: &Tool, args: &Map<String, Json>, ctl: &Ctl, started: &dyn Fn(&str)) -> Option<Answer> {
-        // 1. The arguments, checked by the runtime as the run would check them.
-        let cfg = tool.config(args);
-        let plan = match interp::plan(&tool.prog, &cfg) {
-            Ok(p) => p,
+    /// Runs one call of `tool`, with `grants` when the tool takes them per call. None:
+    /// the call was cancelled before its run started, so nothing is answered.
+    pub fn call(
+        &self,
+        tool: &Tool,
+        args: &Map<String, Json>,
+        grants: Option<&Map<String, Json>>,
+        ctl: &Ctl,
+        started: &dyn Fn(&str),
+    ) -> Option<Answer> {
+        // 1. The arguments (and grants), checked by the runtime as the run would check them.
+        let checked = tool.config(args, grants).and_then(|cfg| {
+            let plan = interp::plan(&tool.prog, &cfg)?;
+            let reserve = tool.check_call(&plan, &cfg)?;
+            Ok((cfg, plan, reserve))
+        });
+        let (cfg, plan, reserve) = match checked {
+            Ok(c) => c,
             Err(e) => return Some(Answer::error(e)),
         };
         let once = tool.once.as_ref().map(|o| {
@@ -297,6 +353,7 @@ impl Server {
             OnceRef {
                 key: sha256(&json!([tool.name, named]).to_string()),
                 args: sha256(&Json::Object(plan.inputs.clone()).to_string()),
+                keep: o.keep_ms,
             }
         });
         let run = {
@@ -314,7 +371,7 @@ impl Server {
             // 2. An earlier call of the same operation.
             if let (Some(o), Some(spec)) = (&once, &tool.once)
                 && let Some((id, r)) = st.ledger.find_once(&o.key)
-                && !once_expired(r, spec.keep_ms, now)
+                && !once_expired(r, now)
             {
                 let (id, r) = (id.clone(), r.clone());
                 let in_progress = st.running.contains_key(&id);
@@ -326,16 +383,16 @@ impl Server {
                         spec.by.join(", ")
                     )));
                 }
-                return Some(self.earlier(tool, &id, &r, in_progress));
+                return Some(self.earlier(&tool.name, &id, &r, in_progress));
             }
             // 3. A concurrency slot.
             let total = st.running.len();
             let mine = st.running.values().filter(|t| **t == tool.name).count();
-            if total >= self.m.server.max_concurrent_runs || tool.max_concurrent_runs.is_some_and(|n| mine >= n) {
+            if total >= self.settings.max_concurrent_runs || tool.max_concurrent_runs.is_some_and(|n| mine >= n) {
                 return Some(Answer::error("the server is busy with other calls; nothing was done; try again later"));
             }
             // 4. The quota.
-            if let Err(e) = quota_check(&st.ledger, tool, now) {
+            if let Err(e) = quota_check(&st.ledger, tool, reserve, now) {
                 return Some(Answer::error(e));
             }
             // 5. Reserve.
@@ -343,7 +400,8 @@ impl Server {
                 Ok(r) => r,
                 Err(e) => return Some(Answer::error(e)),
             };
-            if let Err(e) = st.ledger.reserve(&run, &tool.name, tool.reserve, once) {
+            let window = tool.quota.as_ref().map(|q| q.window_ms);
+            if let Err(e) = st.ledger.reserve(&run, &tool.name, reserve, window, once) {
                 log(&format!("tool {}: {e}", tool.name));
                 return Some(Answer::error("the server could not record the call; nothing was done; the operator must restart it"));
             }
@@ -351,7 +409,7 @@ impl Server {
             run
         };
         started(&run);
-        let a = self.execute(tool, &run, args, &cfg);
+        let a = self.execute(tool, &run, &cfg);
         if let Ok(mut st) = self.state() {
             st.running.remove(&run);
         }
@@ -364,32 +422,42 @@ impl Server {
     }
 
     /// The answer for a repeated call of an operation an earlier run holds.
-    fn earlier(&self, tool: &Tool, id: &str, r: &Run, in_progress: bool) -> Answer {
+    fn earlier(&self, tool: &str, id: &str, r: &Run, in_progress: bool) -> Answer {
         if in_progress {
-            return Answer::error(format!("this operation is already in progress as run {id}; follow it with {STATUS_TOOL}"));
+            return Answer {
+                status: "in_progress",
+                run: Some(id.to_string()),
+                text: format!("this operation is already in progress as run {id}; follow it {}", self.follow),
+                structured: None,
+                is_error: true,
+            };
         }
         if r.settled().is_none() {
-            return answer(id, &Outcome::Stopped { kind: String::new(), message: String::new() });
+            return answer(id, &Outcome::Stopped { kind: String::new(), message: String::new() }, &self.follow);
         }
-        match recorded_outcome(&self.journal_path(&tool.name, id)) {
-            Ok(o) => answer(id, &o),
-            Err(e) => Answer::error(format!(
-                "run {id} already performed this operation, but its record cannot be read ({e}); it was not run again"
-            )),
+        match recorded_outcome(&self.journal_path(tool, id)) {
+            Ok(o) => answer(id, &o, &self.follow),
+            Err(e) => Answer {
+                run: Some(id.to_string()),
+                ..Answer::error(format!(
+                    "run {id} already performed this operation, but its record cannot be read ({e}); it was not run again"
+                ))
+            },
         }
     }
 
     /// Steps 2 to 7 for a reserved run.
-    fn execute(&self, tool: &Tool, run: &str, args: &Map<String, Json>, cfg: &Json) -> Answer {
-        let journal = self.journal_path(&tool.name, run);
-        let inputs = self.inputs_path(&tool.name, run);
-        let prepared = manifest::private_dir(&self.run_dir(&tool.name, run))
-            .and_then(|_| write_durably(&inputs, Json::Object(args.clone()).to_string().as_bytes()));
+    fn execute(&self, t: &Tool, run: &str, cfg: &Json) -> Answer {
+        let tool = t.name.as_str();
+        let journal = self.journal_path(tool, run);
+        let file = json!({ "program": t.program, "engine": engine_name(t.engine), "config": cfg });
+        let prepared = tool::private_dir(&self.run_dir(tool, run))
+            .and_then(|_| write_durably(&self.run_file(tool, run), file.to_string().as_bytes()));
         if let Err(e) = prepared {
-            log(&format!("tool {} run {run}: {e}", tool.name));
-            return self.release(tool, run, "the server could not prepare the run; nothing was done");
+            log(&format!("tool {tool} run {run}: {e}"));
+            return self.release(tool, run, "the host could not prepare the run; nothing was done");
         }
-        let res = interp::run_config_engine(&tool.prog, &tool.fingerprint, cfg, Durability::CreateWithId(&journal, run), tool.engine);
+        let res = interp::run_config_engine(&t.prog, &t.fingerprint, cfg, Durability::CreateWithId(&journal, run), t.engine);
         match res {
             Ok(r) => self.finish(tool, run, &r),
             Err(e) => self.not_run(tool, run, &e),
@@ -398,84 +466,84 @@ impl Server {
 
     /// The runtime refused or crashed. If its journal holds nothing past its start, the
     /// run did nothing and its reservation is released; otherwise it stays, to be resumed.
-    fn not_run(&self, tool: &Tool, run: &str, why: &str) -> Answer {
-        let journal = self.journal_path(&tool.name, run);
+    fn not_run(&self, tool: &str, run: &str, why: &str) -> Answer {
+        let journal = self.journal_path(tool, run);
         let records = if journal.exists() { journal::read_records(&journal) } else { Ok(Vec::new()) };
         match records {
             Ok(recs) if recs.len() <= 1 => {
                 if let Err(e) = remove(&journal) {
-                    log(&format!("tool {} run {run}: {e}", tool.name));
+                    log(&format!("tool {} run {run}: {e}", tool));
                 }
                 self.release(tool, run, &format!("the run could not start: {why}"))
             }
             _ => {
-                log(&format!("tool {} run {run}: the runtime failed part-way ({why}); the run will be resumed at the next start", tool.name));
+                log(&format!("tool {} run {run}: the runtime failed part-way ({why}); the run will be resumed at the next start", tool));
                 let o = Outcome::Stopped { kind: "internal".into(), message: why.to_string() };
                 self.stopped(tool, run, &o);
-                answer(run, &o)
+                answer(run, &o, &self.follow)
             }
         }
     }
 
-    fn release(&self, tool: &Tool, run: &str, told: &str) -> Answer {
-        if let Err(e) = remove(&self.inputs_path(&tool.name, run)) {
-            log(&format!("tool {} run {run}: {e}", tool.name));
+    fn release(&self, tool: &str, run: &str, told: &str) -> Answer {
+        if let Err(e) = remove(&self.run_file(tool, run)) {
+            log(&format!("tool {} run {run}: {e}", tool));
         }
         let released = self.state().and_then(|mut st| st.ledger.release(run));
         if let Err(e) = released {
-            log(&format!("tool {} run {run}: {e}", tool.name));
+            log(&format!("tool {} run {run}: {e}", tool));
         }
         Answer::error(told)
     }
 
     /// Steps 5 to 7 for a run the runtime ended (or stopped).
-    fn finish(&self, tool: &Tool, run: &str, r: &RunResult) -> Answer {
+    fn finish(&self, tool: &str, run: &str, r: &RunResult) -> Answer {
         let lines: Vec<String> = r.log.iter().map(Json::to_string).collect();
-        if let Err(e) = write_durably(&self.log_path(&tool.name, run), (lines.join("\n") + "\n").as_bytes()) {
-            log(&format!("tool {} run {run}: {e}", tool.name));
+        if let Err(e) = write_durably(&self.log_path(tool, run), (lines.join("\n") + "\n").as_bytes()) {
+            log(&format!("tool {} run {run}: {e}", tool));
         }
         if !r.unchecked().is_empty() {
-            log(&format!("tool {} run {run}: unchecked: it loaded C functions {:?}", tool.name, r.unchecked()));
+            log(&format!("tool {} run {run}: unchecked: it loaded C functions {:?}", tool, r.unchecked()));
         }
         let o = outcome_of(r);
         if let Outcome::Failed { kind, message } = &o
             && kind == "internal"
         {
-            log(&format!("tool {} run {run}: internal error: {message}", tool.name));
+            log(&format!("tool {} run {run}: internal error: {message}", tool));
         }
         if let Outcome::Stopped { .. } = &o {
             self.stopped(tool, run, &o);
-            return answer(run, &o);
+            return answer(run, &o, &self.follow);
         }
         let charged = match charged(&r.usage) {
             Ok(c) => c,
             Err(e) => {
-                log(&format!("tool {} run {run}: {e}", tool.name));
+                log(&format!("tool {} run {run}: {e}", tool));
                 return Answer::error(format!("run {run} ended, but the server could not read what it spent; the operator must check it"));
             }
         };
         let kind = if matches!(o, Outcome::Done(_)) { "done" } else { "failed" };
         let settled = self.state().and_then(|mut st| st.ledger.settle(run, &charged, kind));
         let spent: Vec<String> = charged.iter().map(Money::to_string).collect();
-        log(&format!("tool {} run {run}: {kind}; charged [{}]", tool.name, spent.join(", ")));
+        log(&format!("tool {} run {run}: {kind}; charged [{}]", tool, spent.join(", ")));
         if let Err(e) = settled {
-            log(&format!("tool {} run {run}: {e}", tool.name));
+            log(&format!("tool {} run {run}: {e}", tool));
             return Answer::error(format!(
                 "run {run} ended, but the server could not record it; it will be recorded when the server restarts"
             ));
         }
         // The arguments are no longer needed, and a waiting record no longer applies.
-        for p in [self.inputs_path(&tool.name, run), self.waiting_path(run), self.notified_path(run)] {
+        for p in [self.run_file(tool, run), self.waiting_path(run), self.notified_path(run)] {
             if let Err(e) = remove(&p) {
-                log(&format!("tool {} run {run}: {e}", tool.name));
+                log(&format!("tool {} run {run}: {e}", tool));
             }
         }
-        answer(run, &o)
+        answer(run, &o, &self.follow)
     }
 
     /// A run stopped for an operator: its waiting record, durable before the caller is
     /// answered, then the log and the notify command.
-    fn stopped(&self, tool: &Tool, run: &str, o: &Outcome) {
+    fn stopped(&self, tool: &str, run: &str, o: &Outcome) {
         let Outcome::Stopped { kind, message } = o else { return };
         let path = self.waiting_path(run);
         // A run that stops again in the same way (each start resumes it until an
@@ -486,22 +554,22 @@ impl Server {
             .and_then(|t| serde_json::from_str::<Json>(&t).ok())
             .is_some_and(|w| w["run"] == json!(run) && w["kind"] == json!(kind));
         if same {
-            log(&format!("tool {} run {run}: still waiting for an operator ({kind}): {message}", tool.name));
+            log(&format!("tool {} run {run}: still waiting for an operator ({kind}): {message}", tool));
             return;
         }
         let now = self.state().map(|st| st.ledger.now()).unwrap_or_else(|_| ledger::clock_ms());
-        let rec = json!({ "tool": tool.name, "run": run, "kind": kind, "in_doubt": message, "at": rfc3339(now) });
+        let rec = json!({ "tool": tool, "run": run, "kind": kind, "in_doubt": message, "at": rfc3339(now) });
         match write_durably(&path, rec.to_string().as_bytes()) {
             Ok(()) => {
                 failpoint("after_waiting");
-                log(&format!("tool {} run {run}: waiting for an operator ({kind}): {message}; record {}", tool.name, path.display()));
+                log(&format!("tool {} run {run}: waiting for an operator ({kind}): {message}; record {}", tool, path.display()));
                 let _ = remove(&self.notified_path(run));
                 self.notify(run);
             }
             Err(e) => log(&format!(
                 "tool {} run {run}: waiting for an operator ({kind}): {message}; the waiting record could not be written ({e}), \
                  it is written again at the next start",
-                tool.name
+                tool
             )),
         }
     }
@@ -509,7 +577,7 @@ impl Server {
     /// Runs the notify command for a waiting record, in the background, and records
     /// how it ended beside the record.
     fn notify(&self, run: &str) {
-        let Some(cmd) = self.m.server.notify.clone() else { return };
+        let Some(cmd) = self.settings.notify.clone() else { return };
         let first = self.notified.lock().map(|mut n| n.insert(run.to_string())).unwrap_or(false);
         if !first {
             return;
@@ -517,7 +585,7 @@ impl Server {
         let record = self.waiting_path(run);
         let status = self.notified_path(run);
         let mut env: Vec<(String, String)> = Vec::new();
-        for k in ["PATH", "HOME", "LANG", "TZ"].iter().map(|s| s.to_string()).chain(self.m.server.notify_env.iter().cloned()) {
+        for k in ["PATH", "HOME", "LANG", "TZ"].iter().map(|s| s.to_string()).chain(self.settings.notify_env.iter().cloned()) {
             if let Ok(v) = std::env::var(&k) {
                 env.push((k, v));
             }
@@ -620,70 +688,64 @@ impl Server {
         for (tool, id, path) in self.run_files()? {
             match ledger_runs.get(&id) {
                 None => problems.push(format!(
-                    "{} has no reservation in the ledger, so the server cannot tell whether it ran; an operator must look at it",
+                    "{} has no reservation in the ledger, so the host cannot tell whether it ran; an operator must look at it",
                     path.display()
                 )),
                 Some(r) if r.tool != tool => problems.push(format!("{} belongs to tool {}, not {tool}", path.display(), r.tool)),
                 Some(_) => {}
             }
         }
-        // What each unfinished run needs to be resumed.
-        let mut plan: Vec<(String, &Tool, Option<Json>)> = Vec::new();
+        // What each unfinished run needs to be resumed: its run file (the program, the
+        // engine and the config it started with), and a journal started with exactly
+        // that program and config. Programs are checked again from their files.
+        struct Resume {
+            id: String,
+            tool: String,
+            /// None: the run never started.
+            run: Option<(crate::Checked, Engine, Json)>,
+        }
+        let mut plan: Vec<Resume> = Vec::new();
         for (id, r) in &unfinished {
-            let Some(tool) = self.tool(&r.tool) else {
-                problems.push(format!("run {id} of tool '{}' is unfinished, and the manifest no longer has that tool", r.tool));
-                continue;
-            };
-            let journal = self.journal_path(&tool.name, id);
+            let tool = r.tool.clone();
+            let journal = self.journal_path(&tool, id);
             let records = if journal.exists() { journal::read_records(&journal) } else { Ok(Vec::new()) };
             let records = match records {
                 Ok(r) => r,
                 Err(e) => {
-                    problems.push(format!("run {id} of tool '{}': {e}", tool.name));
+                    problems.push(format!("run {id} of tool '{tool}': {e}"));
                     continue;
                 }
             };
             if records.is_empty() {
-                plan.push((id.clone(), tool, None));
+                plan.push(Resume { id: id.clone(), tool, run: None });
                 continue;
             }
-            let inputs = match std::fs::read_to_string(self.inputs_path(&tool.name, id)).map_err(|e| e.to_string()).and_then(|t| {
-                serde_json::from_str::<Json>(&t).map_err(|e| e.to_string())
-            }) {
-                Ok(Json::Object(a)) => a,
-                Ok(_) | Err(_) => {
-                    problems.push(format!("run {id} of tool '{}' is unfinished, but its inputs file is missing or damaged", tool.name));
-                    continue;
-                }
-            };
-            let cfg = tool.config(&inputs);
-            if let Err(e) = journal::check_resumable(&records[0], &tool.fingerprint, &cfg, &journal) {
-                problems.push(format!(
-                    "run {id} of tool '{}' is unfinished and cannot be resumed: {e}. Let every run finish before changing a tool \
-                     or upgrading staalc (docs/MCP.md section 7); to go on, restore the old program, manifest and staalc",
-                    tool.name
-                ));
-                continue;
+            match self.resumable(&tool, id, &records[0], &journal) {
+                Ok(run) => plan.push(Resume { id: id.clone(), tool, run: Some(run) }),
+                Err(e) => problems.push(format!(
+                    "run {id} of tool '{tool}' is unfinished and cannot be resumed: {e}. Let every run finish before \
+                     changing a program or upgrading staalc (docs/MCP.md section 7); to go on, restore the old program and staalc"
+                )),
             }
-            plan.push((id.clone(), tool, Some(cfg)));
         }
         if !problems.is_empty() {
-            return Err(format!("the server will not start:\n  {}", problems.join("\n  ")));
+            return Err(format!("the journal directory {} cannot be opened:\n  {}", self.settings.journals.display(), problems.join("\n  ")));
         }
-        for (id, tool, cfg) in plan {
-            let journal = self.journal_path(&tool.name, &id);
-            let Some(cfg) = cfg else {
+        for Resume { id, tool, run } in plan {
+            let journal = self.journal_path(&tool, &id);
+            let Some((checked, engine, cfg)) = run else {
                 // Reserved, but the run never started: nothing happened.
                 remove(&journal)?;
-                remove(&self.inputs_path(&tool.name, &id))?;
+                remove(&self.run_file(&tool, &id))?;
                 self.state()?.ledger.release(&id)?;
-                log(&format!("tool {} run {id}: released; it had not started", tool.name));
+                log(&format!("tool {tool} run {id}: released; it had not started"));
                 continue;
             };
-            log(&format!("tool {} run {id}: resuming", tool.name));
-            let res = interp::run_config_engine(&tool.prog, &tool.fingerprint, &cfg, Durability::Resume(&journal), tool.engine)
-                .map_err(|e| format!("run {id} of tool '{}' could not be resumed: {e}", tool.name))?;
-            self.finish(tool, &id, &res);
+            log(&format!("tool {tool} run {id}: resuming"));
+            let prog = checked.result.as_ref().map_err(|_| format!("run {id}: its program has check errors"))?;
+            let res = interp::run_config_engine(prog, &checked.fingerprint, &cfg, Durability::Resume(&journal), engine)
+                .map_err(|e| format!("run {id} of tool '{tool}' could not be resumed: {e}"))?;
+            self.finish(&tool, &id, &res);
         }
         // Leftovers of settled runs, and notify commands that did not succeed.
         let st = self.state()?;
@@ -694,7 +756,7 @@ impl Server {
             st.ledger.runs().filter(|(_, r)| r.released()).map(|(i, r)| (i.clone(), r.tool.clone())).collect();
         drop(st);
         for (id, tool) in &settled {
-            remove(&self.inputs_path(tool, id))?;
+            remove(&self.run_file(tool, id))?;
             remove(&self.waiting_path(id))?;
             remove(&self.notified_path(id))?;
         }
@@ -709,7 +771,7 @@ impl Server {
                 }
                 remove(&journal)?;
             }
-            remove(&self.inputs_path(tool, id))?;
+            remove(&self.run_file(tool, id))?;
         }
         for id in waiting {
             let ok = std::fs::read_to_string(self.notified_path(&id)).is_ok_and(|s| s == "ok\n");
@@ -720,9 +782,30 @@ impl Server {
         Ok(())
     }
 
-    /// Every journal and inputs file under the journal directory: (tool, run id, path).
+    /// What a run needs to be resumed, from its run file, checked against its journal's
+    /// start record before anything runs.
+    fn resumable(&self, tool: &str, id: &str, start: &Json, journal: &Path) -> Result<(crate::Checked, Engine, Json), String> {
+        let path = self.run_file(tool, id);
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("its run file {} cannot be read: {e}", path.display()))?;
+        let file: Json = serde_json::from_str(&text).map_err(|e| format!("its run file {} is damaged: {e}", path.display()))?;
+        let program = file["program"].as_str().ok_or(format!("its run file {} names no program", path.display()))?;
+        let engine = match file["engine"].as_str() {
+            Some("interpreter") => Engine::Interpreter,
+            Some("native") => Engine::Native,
+            _ => return Err(format!("its run file {} names no engine", path.display())),
+        };
+        let cfg = file.get("config").filter(|c| c.is_object()).cloned().ok_or(format!("its run file {} holds no config", path.display()))?;
+        let checked = crate::check_path(Path::new(program))?;
+        if checked.result.is_err() {
+            return Err(format!("its program {program} now has check errors"));
+        }
+        journal::check_resumable(start, &checked.fingerprint, &cfg, journal)?;
+        Ok((checked, engine, cfg))
+    }
+
+    /// Every journal and run file under the journal directory: (tool, run id, path).
     fn run_files(&self) -> Result<Vec<(String, String, PathBuf)>, String> {
-        let root = &self.m.server.journals;
+        let root = &self.settings.journals;
         let read = |d: &Path| std::fs::read_dir(d).map_err(|e| format!("cannot read {}: {e}", d.display()));
         let mut out = Vec::new();
         for t in read(root)? {
@@ -739,7 +822,7 @@ impl Server {
                 for f in read(&shard.path())? {
                     let f = f.map_err(|e| e.to_string())?;
                     let file = f.file_name().to_string_lossy().into_owned();
-                    let id = file.strip_suffix(".journal").or_else(|| file.strip_suffix(".inputs.json"));
+                    let id = file.strip_suffix(".journal").or_else(|| file.strip_suffix(".run.json"));
                     if let Some(id) = id {
                         out.push((name.clone(), id.to_string(), f.path()));
                     }
@@ -752,7 +835,7 @@ impl Server {
     /// Deletes the files of runs settled longer ago than `server.keep`, then drops from
     /// the ledger the runs nothing needs any more (docs/MCP.md, "Keeping files").
     pub fn sweep(&self) -> Result<(), String> {
-        let Some(keep) = self.m.server.keep_ms else { return Ok(()) };
+        let Some(keep) = self.settings.keep_ms else { return Ok(()) };
         let (old, now) = {
             let st = self.state()?;
             let now = st.ledger.now();
@@ -766,16 +849,12 @@ impl Server {
         };
         for (id, tool) in &old {
             // The log first, so a failure part-way never leaves a log without its journal.
-            for p in [self.log_path(tool, id), self.journal_path(tool, id), self.inputs_path(tool, id)] {
+            for p in [self.log_path(tool, id), self.journal_path(tool, id), self.run_file(tool, id)] {
                 if let Err(e) = remove(&p) {
                     log(&format!("{e}; it is tried again at the next sweep"));
                 }
             }
         }
-        let windows: HashMap<&str, u64> =
-            self.m.tools.iter().map(|t| (t.name.as_str(), t.quota.as_ref().map_or(0, |q| q.window_ms))).collect();
-        let onces: HashMap<&str, Option<u64>> =
-            self.m.tools.iter().filter_map(|t| t.once.as_ref().map(|o| (t.name.as_str(), o.keep_ms))).collect();
         let mut st = self.state()?;
         let dropped = st.ledger.compact(|id, r| {
             let Some((end, _, _)) = r.settled() else {
@@ -783,8 +862,8 @@ impl Server {
                 return !r.released();
             };
             let files_kept = end.saturating_add(keep) >= now || self.journal_path(&r.tool, id).exists();
-            let in_window = r.t.saturating_add(windows.get(r.tool.as_str()).copied().unwrap_or(0)) > now;
-            let once_held = onces.get(r.tool.as_str()).is_some_and(|k| !once_expired(r, *k, now));
+            let in_window = r.window.is_some_and(|w| r.t.saturating_add(w) > now);
+            let once_held = r.once.is_some() && !once_expired(r, now);
             files_kept || in_window || once_held
         })?;
         if dropped > 0 {
@@ -795,8 +874,10 @@ impl Server {
 
 }
 
-fn once_expired(r: &Run, keep_ms: Option<u64>, now: u64) -> bool {
-    match (r.settled(), keep_ms) {
+/// Whether a run's `once` key is no longer held: it never started, or ended longer ago
+/// than the key's `keep`.
+fn once_expired(r: &Run, now: u64) -> bool {
+    match (r.settled(), r.once.as_ref().and_then(|o| o.keep)) {
         (None, _) => r.released(),
         (Some(_), None) => false,
         (Some((end, _, _)), Some(k)) => end.saturating_add(k) < now,
@@ -837,7 +918,7 @@ fn usage_of(l: &Ledger, tool: &Tool, now: u64) -> Option<Use> {
 }
 
 /// Whether one more call of `tool` fits its quota at `now`, or why not and when it frees up.
-fn quota_check(l: &Ledger, tool: &Tool, now: u64) -> Result<(), String> {
+fn quota_check(l: &Ledger, tool: &Tool, reserve: Option<Money>, now: u64) -> Result<(), String> {
     let (Some(q), Some(u)) = (tool.quota.as_ref(), usage_of(l, tool, now)) else { return Ok(()) };
     let window = window_text(q.window_ms);
     if let Some(limit) = q.calls
@@ -848,7 +929,7 @@ fn quota_check(l: &Ledger, tool: &Tool, now: u64) -> Result<(), String> {
         let at = u.calls[over] + q.window_ms;
         return Err(format!("the quota of {limit} calls per {window} is used up; nothing was done; the next call can start at {}", rfc3339(at)));
     }
-    if let (Some(limit), Some(reserve)) = (q.money, tool.reserve) {
+    if let (Some(limit), Some(reserve)) = (q.money, reserve) {
         let need = i128::from(reserve.minor);
         if u.held + need > i128::from(limit.minor) {
             let mut held = u.held;
@@ -941,18 +1022,18 @@ mod tests {
     #[test]
     fn a_result_too_large_is_not_sent() {
         let big = Json::String("x".repeat(MAX_RESULT_BYTES));
-        let a = answer("r", &Outcome::Done(big));
+        let a = answer("r", &Outcome::Done(big), "x");
         assert!(a.is_error && a.text.contains("too large") && a.structured.is_none());
-        let a = answer("r", &Outcome::Done(json!({ "ok": 1 })));
+        let a = answer("r", &Outcome::Done(json!({ "ok": 1 })), "x");
         assert_eq!(a.structured, Some(json!({ "result": { "ok": 1 } })));
         assert!(!a.is_error);
     }
 
     #[test]
     fn an_internal_failure_hides_its_details() {
-        let a = answer("abc", &Outcome::Failed { kind: "internal".into(), message: "secret detail".into() });
+        let a = answer("abc", &Outcome::Failed { kind: "internal".into(), message: "secret detail".into() }, "x");
         assert!(a.is_error && a.text.contains("abc") && !a.text.contains("secret detail"));
-        let a = answer("abc", &Outcome::Failed { kind: "capability".into(), message: "allows at most 50.00 USD".into() });
+        let a = answer("abc", &Outcome::Failed { kind: "capability".into(), message: "allows at most 50.00 USD".into() }, "x");
         assert_eq!(a.text, "allows at most 50.00 USD");
     }
 

@@ -42,6 +42,18 @@ pub enum Call {
     Check { program: CString },
     Run { program: CString, config: CString, journal: Option<CString>, engine: Option<CString>, resume: bool },
     Resolve { journal: CString, resolution: CString },
+    /// Tools (include/staal.h): the host and tool functions, each with its arguments.
+    Tools { f: ToolFn, args: Vec<Option<CString>> },
+}
+
+#[derive(Clone, Copy)]
+pub enum ToolFn {
+    HostOpen,
+    HostClose,
+    ToolOpen,
+    ToolCall,
+    ToolClose,
+    RunStatus,
 }
 
 pub struct Job(Call);
@@ -63,6 +75,17 @@ impl Task for Job {
                     capi::staal_resume(program.as_ptr(), config.as_ptr(), ptr(journal), ptr(engine))
                 }
                 Call::Resolve { journal, resolution } => capi::staal_resolve(journal.as_ptr(), resolution.as_ptr()),
+                Call::Tools { f, args } => {
+                    let a = |i: usize| args.get(i).map_or(std::ptr::null(), ptr);
+                    match f {
+                        ToolFn::HostOpen => capi::staal_host_open(a(0)),
+                        ToolFn::HostClose => capi::staal_host_close(a(0)),
+                        ToolFn::ToolOpen => capi::staal_tool_open(a(0), a(1)),
+                        ToolFn::ToolCall => capi::staal_tool_call(a(0), a(1), a(2)),
+                        ToolFn::ToolClose => capi::staal_tool_close(a(0)),
+                        ToolFn::RunStatus => capi::staal_run_status(a(0), a(1)),
+                    }
+                }
             }
         };
         take(p)
@@ -115,4 +138,42 @@ pub fn resume(program: String, config: String, journal: String, engine: Option<S
 #[napi]
 pub fn resolve(journal: String, resolution: String) -> Result<AsyncTask<Job>> {
     Ok(AsyncTask::new(Job(Call::Resolve { journal: c(&journal, "journal")?, resolution: c(&resolution, "resolution")? })))
+}
+
+fn tools(f: ToolFn, args: Vec<(Option<String>, &str)>) -> Result<AsyncTask<Job>> {
+    let args = args.into_iter().map(|(v, what)| c_opt(v, what)).collect::<Result<Vec<_>>>()?;
+    Ok(AsyncTask::new(Job(Call::Tools { f, args })))
+}
+
+/// Opens the host for a journal directory (settings: JSON text).
+#[napi]
+pub fn host_open(settings: String) -> Result<AsyncTask<Job>> {
+    tools(ToolFn::HostOpen, vec![(Some(settings), "settings")])
+}
+
+#[napi]
+pub fn host_close(host: String) -> Result<AsyncTask<Job>> {
+    tools(ToolFn::HostClose, vec![(Some(host), "host")])
+}
+
+/// Defines a tool on a host (spec: JSON text).
+#[napi]
+pub fn tool_open(host: String, spec: String) -> Result<AsyncTask<Job>> {
+    tools(ToolFn::ToolOpen, vec![(Some(host), "host"), (Some(spec), "spec")])
+}
+
+/// One call of a tool: its arguments, and its grants when the tool takes them per call.
+#[napi]
+pub fn tool_call(tool: String, arguments: String, grants: Option<String>) -> Result<AsyncTask<Job>> {
+    tools(ToolFn::ToolCall, vec![(Some(tool), "tool"), (Some(arguments), "arguments"), (grants, "grants")])
+}
+
+#[napi]
+pub fn tool_close(tool: String) -> Result<AsyncTask<Job>> {
+    tools(ToolFn::ToolClose, vec![(Some(tool), "tool")])
+}
+
+#[napi]
+pub fn run_status(host: String, run: String) -> Result<AsyncTask<Job>> {
+    tools(ToolFn::RunStatus, vec![(Some(host), "host"), (Some(run), "run")])
 }

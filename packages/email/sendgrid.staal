@@ -1,0 +1,62 @@
+// Email through Twilio SendGrid's v3 Mail Send API
+// (https://www.twilio.com/docs/sendgrid/api-reference/mail-send/mail-send).
+//
+// Programs ask for `cap email.sendgrid.send(only: ["*@clinic.org"], uses: N)` and call
+// `mail.send(to, subject, text)`. The operator grants the HTTP capability, the API key
+// and the sender address under `needs`. SendGrid answers 202 Accepted with no body; the
+// message's id comes back only in the `X-Message-Id` response header, which a Staal
+// `Response` does not carry, so the receipt names the address the email was accepted
+// for. SendGrid documents no idempotency key, so grant `http` without
+// `idempotency_key`: an email whose answer a crash loses stops the run in doubt, for
+// an operator to check in SendGrid's activity feed, instead of being sent twice.
+//
+// Only the global endpoint (api.sendgrid.com) is supported; EU regional subusers use
+// api.eu.sendgrid.com, which this package does not reach.
+//
+// `canonical` refuses addresses with capital letters rather than lowercasing them:
+// the part before '@' may be case-sensitive, and two addresses must never be made one
+// for the sake of an `only` check.
+
+type Address { email: Text }
+type Personalization { to: List<Address, 1> }
+type Content { type: Text, value: Text }
+type Email { personalizations: List<Personalization, 1>, from: Address, subject: Text, content: List<Content, 1> }
+
+capability email.sendgrid {
+    needs http: cap net.http.post(only: ["https://api.sendgrid.com/v3/mail/send"])
+    needs key: Secret
+    needs sender: Text
+
+    canonical(address: Text) -> Text {
+        let a = trim(address)
+        if lower(a) != a {
+            fail("write the address in lower case: " + a)
+        }
+        if not contains(a, "@") {
+            fail("'" + a + "' is not an email address")
+        }
+        return a
+    }
+
+    action send(to: Text @target, subject: Text, text: Text) -> Text {
+        // SendGrid refuses empty content ("You must specify at least one MIME type",
+        // minimum length 1); refusing here keeps the request from being made at all.
+        if text == "" {
+            fail("an email's text cannot be empty")
+        }
+        let address = trim(to)
+        let email = Email {
+            personalizations: [Personalization { to: [Address { email: address }] }],
+            from: Address { email: sender },
+            subject: subject,
+            content: [Content { type: "text/plain", value: text }]
+        }
+        let r = http.post("https://api.sendgrid.com/v3/mail/send", json(email),
+            [header("Authorization", fill_secret("Bearer {secret}", key)),
+                header("Content-Type", "application/json")])
+        if r.status != 202 or not r.complete {
+            fail("SendGrid answered " + json(r.status) + ": " + r.body)
+        }
+        return "accepted for " + address
+    }
+}

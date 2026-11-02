@@ -159,7 +159,7 @@ fn with_once_a_call_sent_again_after_any_crash_refunds_exactly_once() {
         // Nothing is left that no reservation explains, and no arguments are kept.
         let leftovers: Vec<PathBuf> = common::mcp::files_under(&case.dir.join("journals/refund"))
             .into_iter()
-            .filter(|p| p.to_string_lossy().ends_with(".inputs.json"))
+            .filter(|p| p.to_string_lossy().ends_with(".run.json"))
             .collect();
         assert!(leftovers.is_empty(), "{v}: {leftovers:?}");
         // The key appears in no file.

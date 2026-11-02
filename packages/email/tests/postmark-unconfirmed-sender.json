@@ -1,0 +1,20 @@
+{
+  "about": "Postmark's 422 for an unconfirmed sender fails the action with Postmark's answer, and nothing is retried.",
+  "service": "https://api.postmarkapp.com",
+  "routes": [
+    { "method": "POST", "path": "/email", "status": 422,
+      "body": { "ErrorCode": 400, "Message": "The 'From' address you supplied is not a Sender Signature on your account." } }
+  ],
+  "program": "import email.postmark\n\nfn main(mail: cap email.postmark.send) -> Receipt {\n    return mail.send(\"ada@clinic.org\", \"Results\", \"Hello.\")\n}\n",
+  "grants": {
+    "mail": { "cap": "email.postmark.send", "only": ["*@clinic.org"], "needs": {
+      "http": { "cap": "net.http.post", "only": ["{service}/email"] },
+      "token": { "env": "STAAL_PACKAGE_KEY" },
+      "sender": "results@clinic.org"
+    } }
+  },
+  "expect": {
+    "failure": { "kind": "action", "message": "Postmark answered 422" },
+    "requests": [ { "method": "POST", "path": "/email" } ]
+  }
+}

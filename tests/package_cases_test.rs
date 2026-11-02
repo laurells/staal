@@ -47,7 +47,7 @@ fn every_package_passes_its_tests() {
 #[test]
 fn packages_written_for_the_ecosystem_have_tests() {
     // The packages written to the checklist in packages/README.md, and the template.
-    for name in ["code", "messaging", "template"] {
+    for name in ["chat", "code", "email", "messaging", "template"] {
         assert!(Path::new(ROOT).join("packages").join(name).join("tests").is_dir(), "packages/{name} has no tests");
     }
 }

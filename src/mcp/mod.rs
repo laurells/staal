@@ -6,18 +6,17 @@
 //   staalc mcp <manifest.json>          serve on standard input and output
 //   staalc mcp status <manifest.json>   what is waiting, and quota use per tool
 //
-// This file reads the protocol and answers it; `server` runs calls and recovers,
-// `ledger` records runs, `manifest` reads and checks the manifest.
+// This file reads the protocol and answers it; `crate::host` runs calls, records them in
+// its ledger and recovers; `manifest` reads the manifest.
 
-pub mod ledger;
 pub mod manifest;
 pub mod proto;
-pub mod server;
 
-use manifest::{Tool, STATUS_TOOL};
+use crate::host::tool::{Tool, STATUS_TOOL};
+use crate::host::{self, ledger, log, Answer, Ctl, Host};
+use manifest::Manifest;
 use proto::{Line, Writer};
 use serde_json::{json, Map, Value as Json};
-use server::{log, Answer, Ctl, Server};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -57,15 +56,22 @@ fn serve(path: &std::path::Path) -> u8 {
             return 2;
         }
     };
-    let server = match manifest::load(path).and_then(Server::start) {
+    host::set_log_prefix("staalc mcp");
+    let opened = manifest::load(path).and_then(|m| {
+        let follow = format!("with {STATUS_TOOL}");
+        let h = Host::open(m.settings.clone(), &follow, &m.warnings)?;
+        Ok((m, h))
+    });
+    let (m, server) = match opened {
         Ok(s) => s,
         Err(e) => {
             log(&e);
             return 2;
         }
     };
-    log(&format!("serving {} tool(s) from {}", server.m.tools.len(), path.display()));
+    log(&format!("serving {} tool(s) from {}", m.tools.len(), path.display()));
     let session = Arc::new(Session {
+        m,
         server: server.clone(),
         out: Writer::new(output),
         legacy: AtomicBool::new(false),
@@ -80,7 +86,7 @@ fn serve(path: &std::path::Path) -> u8 {
             let mut last = std::time::Instant::now();
             while !stop.load(Ordering::SeqCst) {
                 std::thread::park_timeout(std::time::Duration::from_secs(1));
-                if last.elapsed() >= server::SWEEP_EVERY {
+                if last.elapsed() >= host::SWEEP_EVERY {
                     last = std::time::Instant::now();
                     if let Err(e) = server.sweep() {
                         log(&e);
@@ -121,7 +127,8 @@ fn serve(path: &std::path::Path) -> u8 {
 }
 
 struct Session {
-    server: Arc<Server>,
+    m: Manifest,
+    server: Arc<Host>,
     out: Writer,
     /// Whether a client has sent `initialize`: requests without per-request `_meta`
     /// are then served as 2025-11-25.
@@ -247,7 +254,7 @@ impl Session {
                 if params.contains_key("cursor") {
                     return self.out.error(id, proto::INVALID_PARAMS, "this server gives no cursors; the list is never paged", None);
                 }
-                let mut tools: Vec<Json> = self.server.m.tools.iter().map(describe).collect();
+                let mut tools: Vec<Json> = self.m.tools.iter().map(describe).collect();
                 tools.push(status_tool());
                 let mut r = json!({ "tools": tools });
                 if era == Era::Modern {
@@ -263,7 +270,7 @@ impl Session {
     }
 
     fn server_info(&self) -> Json {
-        json!({ "name": self.server.m.server.name, "version": env!("CARGO_PKG_VERSION") })
+        json!({ "name": self.m.name, "version": env!("CARGO_PKG_VERSION") })
     }
 
     /// A 2026-07-28 result: `resultType` and the server's identity.
@@ -285,7 +292,7 @@ impl Session {
             Some(Json::Object(a)) => a.clone(),
             Some(_) => return self.out.error(id, proto::INVALID_PARAMS, "\"arguments\" must be an object", None),
         };
-        let tool: Option<usize> = self.server.m.tools.iter().position(|t| t.name == name);
+        let tool: Option<usize> = self.m.tools.iter().position(|t| t.name == name);
         if tool.is_none() && name != STATUS_TOOL {
             return self.out.error(id, proto::INVALID_PARAMS, &format!("unknown tool '{name}'"), None);
         }
@@ -299,7 +306,7 @@ impl Session {
         {
             let Ok(mut calls) = self.calls.lock() else { return };
             // Threads are bounded too: far more calls than runs are answered at once.
-            if calls.len() >= 4 * self.server.m.server.max_concurrent_runs + 16 {
+            if calls.len() >= 4 * self.m.settings.max_concurrent_runs + 16 {
                 drop(calls);
                 let a = Answer::error("the server is busy with other calls; nothing was done; try again later");
                 return self.out.result(id, self.wrap(era, &a));
@@ -311,7 +318,7 @@ impl Session {
             let answer = match tool {
                 None => Some(me.status(&args)),
                 Some(i) => {
-                    let t: &Tool = &me.server.m.tools[i];
+                    let t: &Tool = &me.m.tools[i];
                     let started = |run: &str| {
                         if let Some(token) = &token {
                             me.out.send(&json!({
@@ -321,7 +328,7 @@ impl Session {
                             }));
                         }
                     };
-                    me.server.call(t, &args, &ctl, &started)
+                    me.server.call(t, &args, None, &ctl, &started)
                 }
             };
             if let Ok(mut calls) = me.calls.lock() {
@@ -349,7 +356,7 @@ impl Session {
             return Answer::error(format!("{STATUS_TOOL} takes {{\"run\": \"<the run id a tool's result gave: 32 hexadecimal characters>\"}}"));
         };
         let s = self.server.status(run);
-        Answer { text: s.to_string(), structured: Some(s), is_error: false }
+        Answer { status: "done", run: None, text: s.to_string(), structured: Some(s), is_error: false }
     }
 }
 
@@ -406,7 +413,7 @@ fn status_cmd(path: &std::path::Path) -> u8 {
             return 2;
         }
     };
-    let l = match ledger::Ledger::read_only(&m.server.journals.join("server.ledger")) {
+    let l = match ledger::Ledger::read_only(&m.settings.journals.join("server.ledger")) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("staalc: {e}");
@@ -417,13 +424,13 @@ fn status_cmd(path: &std::path::Path) -> u8 {
     let mut open = 0;
     for (id, r) in l.runs().filter(|(_, r)| r.end.is_none()) {
         open += 1;
-        let waiting = m.server.journals.join("waiting").join(format!("{id}.json"));
+        let waiting = m.settings.journals.join("waiting").join(format!("{id}.json"));
         let what = match std::fs::read_to_string(&waiting).ok().and_then(|t| serde_json::from_str::<Json>(&t).ok()) {
             Some(w) => format!(
                 "waiting for an operator ({}): {}\n    resolve with: staalc resolve --journal {} ...",
                 w["kind"].as_str().unwrap_or("?"),
                 w["in_doubt"].as_str().unwrap_or("?"),
-                m.server.journals.join(&r.tool).join(&id[..2]).join(format!("{id}.journal")).display()
+                m.settings.journals.join(&r.tool).join(&id[..2]).join(format!("{id}.journal")).display()
             ),
             None => "in progress, or interrupted (the server resumes it when it next starts)".into(),
         };
@@ -433,7 +440,7 @@ fn status_cmd(path: &std::path::Path) -> u8 {
         println!("no run is unfinished");
     }
     for t in &m.tools {
-        println!("tool {}: {}", t.name, server::describe_quota(&l, t, now));
+        println!("tool {}: {}", t.name, host::describe_quota(&l, t, now));
     }
     0
 }

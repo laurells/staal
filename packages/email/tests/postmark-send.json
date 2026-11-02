@@ -1,0 +1,24 @@
+{
+  "about": "An email within the grant is sent once, as Postmark documents it, with the token in its header.",
+  "service": "https://api.postmarkapp.com",
+  "routes": [
+    { "method": "POST", "path": "/email", "status": 200,
+      "body": { "To": "ada@clinic.org", "SubmittedAt": "2026-11-02T10:00:00Z", "MessageID": "msg-{n}", "ErrorCode": 0, "Message": "OK" } }
+  ],
+  "program": "import email.postmark\n\nfn main(mail: cap email.postmark.send(uses: 1)) -> Receipt {\n    return mail.send(\"ada@clinic.org\", \"Results\", \"Your results are ready.\")\n}\n",
+  "grants": {
+    "mail": { "cap": "email.postmark.send", "only": ["*@clinic.org"], "needs": {
+      "http": { "cap": "net.http.post", "only": ["{service}/email"] },
+      "token": { "env": "STAAL_PACKAGE_KEY" },
+      "sender": "results@clinic.org"
+    } }
+  },
+  "expect": {
+    "result": { "receipt": "msg-1", "capability": "email.postmark.send", "method": "send" },
+    "requests": [
+      { "method": "POST", "path": "/email",
+        "json": { "From": "results@clinic.org", "To": "ada@clinic.org", "Subject": "Results", "TextBody": "Your results are ready." },
+        "headers": { "X-Postmark-Server-Token": "{key}", "Accept": "application/json" } }
+    ]
+  }
+}

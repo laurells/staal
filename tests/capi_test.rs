@@ -126,3 +126,56 @@ fn a_run_reports_what_each_grant_used() {
         serde_json::json!({ "pay": { "capability": "payments.refund", "uses": 1, "charged": [{ "amount": "12.50", "currency": "NGN" }] } })
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn python_tools_keep_quotas_and_once_across_calls_and_recover_after_a_crash() {
+    // python/tests/test_tool.py: staal.Tool and staal.Host over the C interface's tools.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("python-tool");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).unwrap();
+    let out = std::process::Command::new("python3")
+        .arg("-I")
+        .arg(root.join("python/tests/test_tool.py"))
+        .arg(root)
+        .arg(&scratch)
+        .env("STAAL_LIBRARY", shared_library())
+        .env("STAAL_HAS_FAILPOINTS", if cfg!(feature = "failpoints") { "1" } else { "0" })
+        .output()
+        .expect("python3 must be installed to run this test");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "python failed:\n{stdout}\n{stderr}");
+    assert!(stdout.contains("checks passed"), "{stdout}");
+    println!("{}", stdout.trim());
+}
+
+#[cfg(unix)]
+#[test]
+fn python_adapters_run_the_tool_through_each_frameworks_own_loop() {
+    // python/tests/test_adapters.py: the OpenAI Agents SDK and LangGraph adapters, with
+    // the examples in examples/frameworks/. The frameworks are not part of the build, so
+    // this runs only when STAAL_FRAMEWORKS_PYTHON names a Python with
+    // python/tests/frameworks.txt installed, as CI does.
+    let Ok(python) = std::env::var("STAAL_FRAMEWORKS_PYTHON") else {
+        eprintln!("skipped: set STAAL_FRAMEWORKS_PYTHON to a Python with python/tests/frameworks.txt installed");
+        return;
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("python-adapters");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).unwrap();
+    let out = std::process::Command::new(&python)
+        .arg(root.join("python/tests/test_adapters.py"))
+        .arg(root)
+        .arg(&scratch)
+        .env("STAAL_LIBRARY", shared_library())
+        .output()
+        .expect("STAAL_FRAMEWORKS_PYTHON must name a Python");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "python failed:\n{stdout}\n{stderr}");
+    assert!(stdout.contains("8 checks passed"), "{stdout}");
+    println!("{}", stdout.trim());
+}

@@ -197,7 +197,9 @@ function's inputs and result, so a program can be described as a tool to agent
 frameworks, and `staalc mcp` serves programs as tools to any Model Context Protocol
 client, with each call an ordinary run under the grants the operator's manifest gives,
 plus quotas across calls and `once` for calls that must not run twice
-([docs/MCP.md](docs/MCP.md)).
+([docs/MCP.md](docs/MCP.md)). The same tools run inside an app (`staal.Tool` in
+Python, `Tool.open` in Node.js), with grants your app computes for each call, and as
+tools of the OpenAI Agents SDK and LangGraph ([examples/frameworks](examples/frameworks)).
 
 **An explicit boundary with native code.** A program can call C libraries, granted
 by the library's SHA-256 and each function's exact signature. Staal cannot check what

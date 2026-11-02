@@ -1,6 +1,6 @@
 # Packages
 
-Six Staal packages (twelve capabilities), and a template to start a new one from. To
+Six Staal packages (fifteen capabilities), and a template to start a new one from. To
 write one, follow [docs/PACKAGES.md](../docs/PACKAGES.md), "Write your first Staal
 package".
 
@@ -11,7 +11,10 @@ package".
 | `payments` | `payments.paystack.refund(reference @target, amount @amount)` | Paystack | GET `https://api.paystack.co/transaction/verify/*`, POST `https://api.paystack.co/refund` |
 | `payments` | `payments.flutterwave.refund(transaction @target, amount @amount)` | Flutterwave (v3) | GET `https://api.flutterwave.com/v3/transactions/*/verify`, POST `https://api.flutterwave.com/v3/transactions/*/refund` |
 | `email` | `email.resend.send(to @target, subject, text)` | Resend | POST `https://api.resend.com/emails` |
+| `email` | `email.postmark.send(to @target, subject, text)` | Postmark | POST `https://api.postmarkapp.com/email` |
+| `email` | `email.sendgrid.send(to @target, subject, text)` | Twilio SendGrid (v3) | POST `https://api.sendgrid.com/v3/mail/send` |
 | `chat` | `chat.slack.post(channel @target, text)` | Slack | POST `https://slack.com/api/chat.postMessage` |
+| `chat` | `chat.discord.post(channel @target, text)` | Discord (API v10) | POST `https://discord.com/api/v10/channels/*/messages` |
 | `code` | `code.github.comment(issue @target, body)`, `comment_pull(pull @target, body)`, `label(issue @target, label)`, `create_issue(repo @target, title, body)` | GitHub | GET and POST `https://api.github.com/repos/*` |
 | `messaging` | `messaging.twilio.sms(to @target, text)`, `whatsapp(to @target, text)` | Twilio | POST `https://api.twilio.com/2010-04-01/Accounts/*` |
 
@@ -23,8 +26,9 @@ Each of them is also published as its own repository
 ([staal-sms](https://github.com/laurells/staal-sms),
 [staal-payments](https://github.com/laurells/staal-payments),
 [staal-email](https://github.com/laurells/staal-email),
-[staal-chat](https://github.com/laurells/staal-chat)). Depend on one by URL and
-commit:
+[staal-chat](https://github.com/laurells/staal-chat)), with Resend and Slack only:
+Postmark, SendGrid and Discord are in this repository and not yet in those. Depend on
+one by URL and commit:
 
     { "dependencies": { "sms": { "git": "https://github.com/laurells/staal-sms", "commit": "<full commit id>" } } }
 
@@ -41,7 +45,7 @@ operator to check in the dashboard, instead of being sent twice.
 
 Each package's code has been run against a local server standing in for its
 service (`tests/packages_test.rs` for the first four, `tests/*.json` in each folder
-for the rest), and the first four have been fetched from their GitHub repositories
+for the rest, on both engines), and the first four have been fetched from their GitHub repositories
 with `staalc fetch`. Runs against the live services need your own keys.
 
 ### `code`: GitHub
@@ -77,6 +81,52 @@ without `idempotency_key`. A WhatsApp message outside a conversation the custome
 started needs an approved template, which this package does not send yet. Status:
 tested against a local server only.
 
+### `email`: Postmark
+
+The package written in [docs/PACKAGES.md](../docs/PACKAGES.md), finished. Addresses are
+written in lower case; one with capitals is refused, never lowercased. Grant:
+
+    "mail": { "cap": "email.postmark.send", "only": ["*@clinic.org"], "uses": 20,
+              "needs": { "http": { "cap": "net.http.post", "only": ["https://api.postmarkapp.com/email"] },
+                         "token": { "env": "POSTMARK_SERVER_TOKEN" },
+                         "sender": "results@clinic.org" } }
+
+Postmark documents no idempotency key, so `http` is granted without
+`idempotency_key`. An answer of 200 whose `ErrorCode` is not 0 is a refusal. Status:
+tested against a local server only.
+
+### `email`: SendGrid
+
+Email through Twilio SendGrid's v3 Mail Send, plain text, to one address. Grant:
+
+    "mail": { "cap": "email.sendgrid.send", "only": ["*@clinic.org"], "uses": 20,
+              "needs": { "http": { "cap": "net.http.post", "only": ["https://api.sendgrid.com/v3/mail/send"] },
+                         "key": { "env": "SENDGRID_API_KEY" },
+                         "sender": "results@clinic.org" } }
+
+SendGrid answers 202 with no body, and gives the message's id only in its
+`X-Message-Id` response header, which a Staal `Response` does not carry: the receipt is
+`accepted for <address>`. It documents no idempotency key, so `http` is granted
+without `idempotency_key`. Only the global endpoint is reached; EU regional subusers
+(`api.eu.sendgrid.com`) are not supported. An empty text is refused before any request.
+Status: tested against a local server only.
+
+### `chat`: Discord
+
+Messages to a channel, as a bot. Targets are channel ids (digits). The bot needs the
+SEND_MESSAGES permission in the channel. Grant:
+
+    "discord": { "cap": "chat.discord.post", "only": ["1234567890123456789"], "uses": 5,
+                 "needs": { "http": { "cap": "net.http.post", "only": ["https://discord.com/api/v10/channels/1234567890123456789/messages"] },
+                            "token": { "env": "DISCORD_BOT_TOKEN" } } }
+
+Mentions are never parsed (`allowed_mentions` with an empty `parse`), so text from an
+agent cannot ping `@everyone`, a role or a person. A text over Discord's 2000
+characters is refused before any request. Discord's `enforce_nonce` deduplicates only
+"in the past few minutes", which a resumed run is not held to, so it is not used and
+`http` is granted without `idempotency_key`. The receipt is the message's id; an
+answer for another channel is a failure. Status: tested against a local server only.
+
 ## Testing a package
 
 A package's tests are files in its `tests/` folder, each a program run against a
@@ -86,7 +136,7 @@ in `tests/common/package_case.rs`. Run them with
 
     STAAL_PACKAGE=<folder> cargo test --test package_cases_test
 
-Each test checks the result, every request the service received, and that the key
+Each test runs on both engines, and checks the result, every request the service received, and that the key
 appears in neither the log nor the journal. With `--features failpoints`, each is also
 killed at every journal write and between every request and its recorded answer,
 resumed, and must end as the uninterrupted run did, with the same effects on the

@@ -66,6 +66,28 @@ authenticated client and grants may be chosen per principal (docs/MCP.md section
 Done when: designed in docs/MCP.md, reviewed, then built with the same test bar as
 stdio.
 
+## Packages
+
+Deferred on 2026-11-02.
+
+### Microsoft Teams (`chat.teams`)
+
+Posting to a Teams channel goes through Microsoft Graph, whose access tokens are
+fetched from Microsoft's identity platform and expire. A package's `Secret` need is a
+fixed value from the environment, so a package cannot fetch or refresh one, and a token
+put in the environment would stop working within hours. Needed: a way for a library
+to obtain a token that is never itself a value the program can read, journaled so a
+resumed run does not fetch it twice. Done when: designed in RUNTIME.md, then the
+package is written from Microsoft's documentation with tests like the others.
+
+### Response headers
+
+A `Response` holds the status, body and whether it is complete, not the headers, so
+SendGrid's message id (`X-Message-Id`, its only one) cannot be the receipt. Needed: the
+headers in `Response`, on both engines, recorded in the journal so a replay gives the
+same ones, with secrets scrubbed as from the body. Done when: `email.sendgrid` returns
+the message id, and the crash tests pass unchanged.
+
 ## MongoDB
 
 Deferred on 2026-10-26, when PostgreSQL was built (`db.postgres`). Needed: `db.mongo`

@@ -39,7 +39,7 @@ for d in "$stage"/bin/*/; do
 done
 [ -n "$targets" ] || { echo "node_package.sh: no addon to pack" >&2; exit 2; }
 cd "$root/node"
-cp index.js index.d.ts package.json README.md "$stage/"
+cp index.js index.d.ts openai-agents.js openai-agents.d.ts langgraph.js langgraph.d.ts package.json README.md "$stage/"
 cp "$root/LICENSE" "$root/NOTICE" "$stage/"
 STAAL_LICENCE_TARGET="$targets" python3 "$root/scripts/third_party_licenses.py" "$stage/LICENSE-THIRD-PARTY.txt" "$root/node/Cargo.toml"
 (cd "$stage" && npm pack --silent --pack-destination "$out")

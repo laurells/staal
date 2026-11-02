@@ -1,0 +1,73 @@
+// Messages to Discord channels, as a bot, through Discord's HTTP API v10
+// (https://discord.com/developers/docs/resources/message#create-message).
+//
+// Programs ask for `cap chat.discord.post(only: ["1234567890123456789"], uses: N)` and
+// call `discord.post(channel_id, text)`. Targets are channel ids (snowflakes: digits).
+// The operator grants the HTTP capability and the bot token under `needs`; the bot
+// needs the SEND_MESSAGES permission in the channel. The receipt is the message's id.
+//
+// Mentions are never parsed (`allowed_mentions` with an empty `parse`): text written
+// by an agent or a user cannot ping @everyone, a role or a person. Discord limits a
+// message to 2000 characters; a longer text is refused before any request is made.
+//
+// Discord's `nonce` with `enforce_nonce` deduplicates only "in the past few minutes",
+// which a run resumed later is not held to, so it is not used, and `http` is granted
+// without `idempotency_key`: a message whose answer a crash loses stops the run in
+// doubt, for an operator to check in the channel, instead of being posted twice.
+
+type Mentions { parse: List<Text, 3> }
+type Message { content: Text, allowed_mentions: Mentions }
+type Posted { id: Text, channel_id: Text }
+
+capability chat.discord {
+    needs http: cap net.http.post(only: ["https://discord.com/api/v10/channels/*/messages"])
+    needs token: Secret
+
+    canonical(channel: Text) -> Text {
+        return snowflake(trim(channel))
+    }
+
+    action post(channel: Text @target, text: Text) -> Text {
+        let id = snowflake(trim(channel))
+        if text == "" {
+            fail("a message's text cannot be empty")
+        }
+        if len(text) > 2000 {
+            fail("Discord allows at most 2000 characters in a message; this one has " + json(len(text)))
+        }
+        let no_mentions: List<Text, 3> = []
+        let body = Message { content: text, allowed_mentions: Mentions { parse: no_mentions } }
+        let r = http.post("https://discord.com/api/v10/channels/" + url_segment(id) + "/messages", json(body),
+            [header("Authorization", fill_secret("Bot {secret}", token)),
+                header("Content-Type", "application/json"),
+                header("User-Agent", "DiscordBot (https://github.com/laurells/staal, 0.1.0)")])
+        if r.status != 200 or not r.complete {
+            fail("Discord answered " + json(r.status) + ": " + r.body)
+        }
+        let posted: Posted = validate parse(Posted, r.body)
+        if posted.channel_id != id {
+            fail("Discord posted to channel " + posted.channel_id + ", not " + id)
+        }
+        return posted.id
+    }
+}
+
+/// A channel id as Discord writes it: a snowflake (an unsigned 64-bit integer) in
+/// decimal, so 1 to 20 digits with no leading zero. Checked digit by digit rather than
+/// with `to_int`, whose 64-bit signed range would refuse valid snowflakes above it.
+fn snowflake(id: Text) -> Text {
+    let n = len(id)
+    if n < 1 or n > 20 or starts_with(id, "0") {
+        fail("'" + id + "' is not a Discord channel id: write its digits")
+    }
+    let i = 0
+    repeat 20 {
+        if i < n {
+            if not contains("0123456789", slice(id, i, i + 1)) {
+                fail("'" + id + "' is not a Discord channel id: write its digits")
+            }
+        }
+        set i = i + 1
+    }
+    return id
+}

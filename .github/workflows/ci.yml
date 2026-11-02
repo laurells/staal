@@ -43,6 +43,11 @@ jobs:
           "$RUNNER_TEMP/mcpenv/bin/pip" install --quiet -r tests/mcp_sdk/requirements.txt
           (cd tests/mcp_sdk && npm ci)
           STAAL_MCP_SDK=1 STAAL_MCP_PYTHON="$RUNNER_TEMP/mcpenv/bin/python" cargo test --test mcp_sdk_test
+      - name: Framework adapters (OpenAI Agents SDK, LangGraph), Python
+        run: |
+          python3 -m venv "$RUNNER_TEMP/fwenv"
+          "$RUNNER_TEMP/fwenv/bin/pip" install --quiet -r python/tests/frameworks.txt
+          STAAL_FRAMEWORKS_PYTHON="$RUNNER_TEMP/fwenv/bin/python" cargo test --test capi_test python_adapters
       - name: Tests without native code
         run: cargo test --no-default-features --no-fail-fast
       - name: VS Code extension (grammar, client, and the server through VS Code's protocol library)
@@ -63,11 +68,14 @@ jobs:
           cp target/debug/libstaal_node.so "$RUNNER_TEMP/staal-fp.node"
           npm ci
           STAAL_NODE_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 npm test
+          (cd test/frameworks && npm ci && STAAL_NODE_ADDON="$RUNNER_TEMP/staal-fp.node" NODE_PATH="$PWD/node_modules" node --test frameworks.test.mjs)
           npm run types
           cargo clippy --locked -- -D warnings
           ../scripts/node_package.sh "$RUNNER_TEMP/npm"
           mkdir "$RUNNER_TEMP/npm-app"
           (cd "$RUNNER_TEMP/npm-app" && npm init -y >/dev/null && npm install "$RUNNER_TEMP"/npm/staal-node-*.tgz)
           STAAL_PACKAGE="$RUNNER_TEMP/npm-app/node_modules/@staal/node" STAAL_CRASH_ADDON="$RUNNER_TEMP/staal-fp.node" STAAL_HAS_NATIVE=1 node --test test/staal.test.mjs
+          # The adapters ship in the package: each entry point it exports resolves from an app.
+          (cd "$RUNNER_TEMP/npm-app" && for e in @staal/node @staal/node/openai-agents @staal/node/langgraph @staal/node/package.json; do node -e "require.resolve('$e')" || exit 1; done)
       - name: Clippy
         run: cargo clippy --all-targets --features failpoints -- -D warnings

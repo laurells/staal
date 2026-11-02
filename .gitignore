@@ -10,3 +10,8 @@ __pycache__/
 /node/NOTICE
 /node/LICENSE-THIRD-PARTY.txt
 /tests/mcp_sdk/node_modules
+/examples/frameworks/runs
+/node/test/frameworks/node_modules
+/node/test/frameworks/runs
+/node/test/frameworks/*_refund.mjs
+/node/test/frameworks/refund.staal

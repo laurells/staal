@@ -1,0 +1,43 @@
+{
+  "about": "An address with capital letters is refused, never lowercased, before any request is made.",
+  "service": "https://api.postmarkapp.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/email",
+      "status": 200,
+      "body": {
+        "MessageID": "msg-{n}",
+        "ErrorCode": 0
+      }
+    }
+  ],
+  "program": "import email.postmark\n\nfn main(mail: cap email.postmark.send) -> Receipt {\n    return mail.send(\"Ada@clinic.org\", \"Results\", \"Hello.\")\n}\n",
+  "grants": {
+    "mail": {
+      "cap": "email.postmark.send",
+      "only": [
+        "*@clinic.org"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/email"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        },
+        "sender": "results@clinic.org"
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "capability",
+      "message": "write the address in lower case: Ada@clinic.org"
+    },
+    "requests": []
+  }
+}

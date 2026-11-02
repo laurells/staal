@@ -85,3 +85,84 @@ export function check(program: string): Promise<CheckResult>;
 export function run(program: string, config: RunConfig, options?: RunOptions): Promise<RunResult>;
 export function resume(program: string, config: RunConfig, journal: string, options?: Pick<RunOptions, 'engine'>): Promise<RunResult>;
 export function resolve(journal: string, resolution: Resolution): Promise<ResolveResult>;
+
+/** A host or tool could not be opened, or a call was malformed: nothing ran. */
+export class StaalError extends Error {}
+
+export interface HostOptions {
+  /** Days a settled run's files are kept (default 90), or "forever". */
+  keep?: number | 'forever';
+  max_concurrent_runs?: number;
+  notify?: string[];
+  notify_env?: string[];
+}
+
+/** Where tools keep their runs: one journal directory, its ledger and its quotas. */
+export class Host {
+  static open(journals: string, options?: HostOptions): Promise<Host>;
+  readonly journals: string;
+  /** What happened to a run, by its id. Changes nothing. */
+  status(run: string): Promise<RunStatus>;
+  close(): Promise<void>;
+}
+
+export type RunStatus = {
+  run: string;
+  status: 'running' | 'waiting_for_operator' | 'done' | 'failed' | 'not_started' | 'expired' | 'unknown';
+  observed_at: string;
+  result?: Json;
+  failure?: { kind: string; message: string };
+  reason?: string;
+};
+
+export interface ToolOptions<Context = unknown> {
+  name: string;
+  description: string;
+  /** The same grants for every call, or a function of the call's context giving that call's. */
+  grants?: { [name: string]: Json } | ((context: Context) => { [name: string]: Json } | Promise<{ [name: string]: Json }>);
+  /** A journal directory, or an open host: one is required. */
+  journals?: string;
+  host?: Host;
+  title?: string;
+  entry?: string;
+  quota?: { window: string; calls?: number; money?: { amount: string; currency: string } };
+  once?: { by: string[]; keep?: string };
+  deadline?: string;
+  max_concurrent_runs?: number;
+  engine?: 'interpreter' | 'native';
+  model?: Json;
+  secrets?: Json;
+  net?: Json;
+  fs?: Json;
+  adapters?: Json;
+  limits?: Json;
+}
+
+export interface ToolResult {
+  status: 'done' | 'failed' | 'stopped' | 'in_progress' | 'not_run';
+  isError: boolean;
+  /** What to show a model. */
+  text: string;
+  structured?: { result: Json } | { status: 'waiting_for_operator'; run: string };
+  run?: string;
+  /** The program's result, when done. */
+  value?: Json;
+}
+
+/** A program's entry function as a tool, with quotas, once and recovery across calls. */
+export class Tool<Context = unknown> {
+  static open<Context = unknown>(program: string, options: ToolOptions<Context>): Promise<Tool<Context>>;
+  readonly name: string;
+  readonly title?: string;
+  readonly description: string;
+  /** The JSON Schema of its arguments. */
+  readonly schema: Json;
+  readonly outputSchema: Json;
+  readonly annotations: { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean; title?: string };
+  readonly warnings: string[];
+  readonly perCallGrants: boolean;
+  readonly host: Host;
+  call(args?: { [name: string]: Json }, options?: { context?: Context }): Promise<ToolResult>;
+  status(run: string): Promise<RunStatus>;
+  close(): Promise<void>;
+}

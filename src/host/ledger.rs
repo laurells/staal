@@ -2,12 +2,15 @@
 // hold. One JSON object per line, each written and flushed with fsync before anything
 // that depends on it happens:
 //
-//   {"e":"reserve","run":ID,"tool":NAME,"t":MS,"money":MONEY?,"once":{"key":HEX,"args":HEX}?}
+//   {"e":"reserve","run":ID,"tool":NAME,"t":MS,"money":MONEY?,"window":MS?,
+//    "once":{"key":HEX,"args":HEX,"keep":MS|null}?}
 //   {"e":"settle","run":ID,"t":MS,"charged":[MONEY...],"outcome":"done"|"failed"}
 //   {"e":"release","run":ID,"t":MS}
 //
 // where MONEY is {"amount": "12.50", "currency": "USD"} and MS is UTC milliseconds since
-// 1970. A run exists from its `reserve`; it has at most one `settle` or `release`.
+// 1970 (or, for `window` and `keep`, a length of time). `window` is the tool's quota
+// window and `once.keep` how long its key is held after the run ends (null: as long as
+// its files), so the ledger can be compacted without the tools' definitions. A run exists from its `reserve`; it has at most one `settle` or `release`.
 // Rules:
 //  - An event is applied to memory only once it is durable; a failed write poisons the
 //    ledger, which then refuses every write.
@@ -29,6 +32,8 @@ pub struct OnceRef {
     pub key: String,
     /// SHA-256 of all of the call's arguments.
     pub args: String,
+    /// How long after the run ends the key is held; None: as long as the run's files.
+    pub keep: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +51,8 @@ pub struct Run {
     pub t: u64,
     /// What it holds against the money quota until settled.
     pub money: Option<Money>,
+    /// Its tool's quota window when it was reserved, if the tool had a quota.
+    pub window: Option<u64>,
     pub once: Option<OnceRef>,
     pub end: Option<End>,
 }
@@ -198,16 +205,10 @@ impl Ledger {
         self.runs().filter(|(_, r)| !r.released() && r.once.as_ref().is_some_and(|o| o.key == key)).last()
     }
 
-    pub fn reserve(&mut self, id: &str, tool: &str, money: Option<Money>, once: Option<OnceRef>) -> Result<(), String> {
+    pub fn reserve(&mut self, id: &str, tool: &str, money: Option<Money>, window: Option<u64>, once: Option<OnceRef>) -> Result<(), String> {
         let t = self.stamp();
-        let mut ev = json!({ "e": "reserve", "run": id, "tool": tool, "t": t });
-        if let Some(m) = &money {
-            ev["money"] = money_json(m);
-        }
-        if let Some(o) = &once {
-            ev["once"] = json!({ "key": o.key, "args": o.args });
-        }
-        self.commit(ev)
+        let r = Run { tool: tool.to_string(), t, money, window, once, end: None };
+        self.commit(reserve_event(id, &r))
     }
 
     pub fn settle(&mut self, id: &str, charged: &[Money], outcome: &str) -> Result<(), String> {
@@ -267,7 +268,7 @@ impl Ledger {
         };
         match ev["e"].as_str() {
             Some("reserve") => {
-                allow(&["e", "run", "tool", "t", "money", "once"])?;
+                allow(&["e", "run", "tool", "t", "money", "window", "once"])?;
                 if self.runs.contains_key(id) {
                     return Err(format!("run {id} is reserved twice"));
                 }
@@ -275,8 +276,14 @@ impl Ledger {
                 if let Some(m) = ev.get("money") {
                     money_from(m)?;
                 }
+                if ev.get("window").is_some_and(|w| !w.is_u64()) {
+                    return Err("a reserve with a malformed window".into());
+                }
                 if let Some(o) = ev.get("once") {
-                    let ok = o["key"].as_str().is_some_and(is_sha) && o["args"].as_str().is_some_and(is_sha);
+                    let ok = o["key"].as_str().is_some_and(is_sha)
+                        && o["args"].as_str().is_some_and(is_sha)
+                        && (o["keep"].is_null() || o["keep"].is_u64())
+                        && o.as_object().is_some_and(|m| m.keys().all(|k| ["key", "args", "keep"].contains(&k.as_str())));
                     if !ok {
                         return Err("a reserve with a malformed once key".into());
                     }
@@ -316,9 +323,11 @@ impl Ledger {
                 let once = ev.get("once").map(|o| OnceRef {
                     key: o["key"].as_str().unwrap_or_default().to_string(),
                     args: o["args"].as_str().unwrap_or_default().to_string(),
+                    keep: o["keep"].as_u64(),
                 });
                 let tool = ev["tool"].as_str().unwrap_or_default().to_string();
-                self.runs.insert(id.clone(), Run { tool, t, money, once, end: None });
+                let window = ev["window"].as_u64();
+                self.runs.insert(id.clone(), Run { tool, t, money, window, once, end: None });
                 self.order.push(id);
             }
             Some("settle") => {
@@ -354,14 +363,7 @@ impl Ledger {
         let mut events: Vec<(u64, usize, Json)> = Vec::new();
         for (i, id) in kept.iter().enumerate() {
             let r = &self.runs[id];
-            let mut ev = json!({ "e": "reserve", "run": id, "tool": r.tool, "t": r.t });
-            if let Some(m) = &r.money {
-                ev["money"] = money_json(m);
-            }
-            if let Some(o) = &r.once {
-                ev["once"] = json!({ "key": o.key, "args": o.args });
-            }
-            events.push((r.t, 2 * i, ev));
+            events.push((r.t, 2 * i, reserve_event(id, r)));
             match &r.end {
                 Some(End::Settled { t, charged, outcome }) => {
                     let charged: Vec<Json> = charged.iter().map(money_json).collect();
@@ -395,6 +397,20 @@ impl Ledger {
         *self = reopened;
         Ok(dropped)
     }
+}
+
+fn reserve_event(id: &str, r: &Run) -> Json {
+    let mut ev = json!({ "e": "reserve", "run": id, "tool": r.tool, "t": r.t });
+    if let Some(m) = &r.money {
+        ev["money"] = money_json(m);
+    }
+    if let Some(w) = r.window {
+        ev["window"] = json!(w);
+    }
+    if let Some(o) = &r.once {
+        ev["once"] = json!({ "key": o.key, "args": o.args, "keep": o.keep });
+    }
+    ev
 }
 
 fn sync_dir(path: &Path) -> Result<(), String> {
@@ -435,10 +451,10 @@ mod tests {
         let d = dir("reopen");
         let p = d.join("server.ledger");
         let mut l = Ledger::open(&p).unwrap();
-        let once = OnceRef { key: "a".repeat(64), args: "b".repeat(64) };
-        l.reserve(A, "refund", Some(usd("50.00")), Some(once.clone())).unwrap();
+        let once = OnceRef { key: "a".repeat(64), args: "b".repeat(64), keep: Some(60_000) };
+        l.reserve(A, "refund", Some(usd("50.00")), Some(3_600_000), Some(once.clone())).unwrap();
         l.settle(A, &[usd("12.50")], "done").unwrap();
-        l.reserve(B, "refund", None, None).unwrap();
+        l.reserve(B, "refund", None, None, None).unwrap();
         drop(l);
         // A crash in the middle of a write leaves part of a line.
         let mut f = OpenOptions::new().append(true).open(&p).unwrap();
@@ -447,6 +463,7 @@ mod tests {
         let l = Ledger::open(&p).unwrap();
         let a = l.run(A).unwrap();
         assert_eq!(a.once, Some(once));
+        assert_eq!(a.window, Some(3_600_000));
         assert_eq!(a.settled().map(|(_, c, o)| (c.to_vec(), o.to_string())), Some((vec![usd("12.50")], "done".into())));
         assert_eq!(l.run(B).unwrap().end, None);
         assert!(std::fs::read_to_string(&p).unwrap().ends_with('\n'));
@@ -468,8 +485,8 @@ mod tests {
     fn a_run_ends_once() {
         let d = dir("once");
         let mut l = Ledger::open(&d.join("server.ledger")).unwrap();
-        l.reserve(A, "t", None, None).unwrap();
-        assert!(l.reserve(A, "t", None, None).unwrap_err().contains("twice"));
+        l.reserve(A, "t", None, None, None).unwrap();
+        assert!(l.reserve(A, "t", None, None, None).unwrap_err().contains("twice"));
         l.release(A).unwrap();
         assert!(l.settle(A, &[], "done").unwrap_err().contains("second end"));
         assert!(l.release(B).unwrap_err().contains("never reserved"));
@@ -496,9 +513,9 @@ mod tests {
         let d = dir("compact");
         let p = d.join("server.ledger");
         let mut l = Ledger::open(&p).unwrap();
-        l.reserve(A, "t", None, None).unwrap();
+        l.reserve(A, "t", None, None, None).unwrap();
         l.release(A).unwrap();
-        l.reserve(B, "t", Some(usd("5.00")), None).unwrap();
+        l.reserve(B, "t", Some(usd("5.00")), Some(60_000), None).unwrap();
         let last = l.last_time();
         assert_eq!(l.compact(|id, _| id == B).unwrap(), 1);
         assert!(l.run(A).is_none());

@@ -1,0 +1,4 @@
+# The agent frameworks the adapters are tested against (python/tests/test_adapters.py).
+openai-agents==0.24.0
+langgraph==1.2.16
+langchain-core==1.6.12

@@ -1,0 +1,48 @@
+{
+  "about": "An answer of 200 whose ErrorCode is not 0 is a refusal, not a sent email.",
+  "service": "https://api.postmarkapp.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/email",
+      "status": 200,
+      "body": {
+        "ErrorCode": 300,
+        "Message": "Invalid email request"
+      }
+    }
+  ],
+  "program": "import email.postmark\n\nfn main(mail: cap email.postmark.send) -> Receipt {\n    return mail.send(\"ada@clinic.org\", \"Results\", \"Hello.\")\n}\n",
+  "grants": {
+    "mail": {
+      "cap": "email.postmark.send",
+      "only": [
+        "*@clinic.org"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/email"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        },
+        "sender": "results@clinic.org"
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "action",
+      "message": "Postmark refused the email"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/email"
+      }
+    ]
+  }
+}

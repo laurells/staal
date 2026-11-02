@@ -31,14 +31,16 @@ Write these down. Each becomes a line of the library or of a test.
 
 ## 2. Start from the template
 
-Packages are grouped by kind (`email`, `sms`, `chat`). Copy the template into a new
-folder:
+Packages are grouped by kind (`email`, `sms`, `chat`). For a new service, copy the
+template into the folder of its kind, or, if that folder already exists, add your
+library file to it and its URL to its `staal.json`. The Postmark package this guide
+builds is already finished in `packages/email` (`postmark.staal`, and its tests in
+`tests/postmark-*.json`), so to follow along, copy the template into a practice folder
+of your own:
 
-    cp -r packages/template packages/email
+    cp -r packages/template packages/practice
 
-(If the folder already exists, as `packages/email` does for Resend, add your library
-file to it and its URL to its `staal.json` instead.) The template's `notes.staal` and
-its tests show every part; you will replace them.
+The template's `notes.staal` and its tests show every part; you will replace them.
 
 ## 3. Declare the authority
 
@@ -78,7 +80,8 @@ really used:
 // for the sake of an `only` check.
 
 type Email { From: Text, To: Text, Subject: Text, TextBody: Text }
-type Sent { MessageID: Text, ErrorCode: Int }
+type Status { ErrorCode: Int }
+type Sent { MessageID: Text }
 
 capability email.postmark {
     needs http: cap net.http.post(only: ["https://api.postmarkapp.com/email"])
@@ -105,10 +108,11 @@ capability email.postmark {
         if r.status != 200 or not r.complete {
             fail("Postmark answered " + json(r.status) + ": " + r.body)
         }
-        let sent: Sent = validate parse(Sent, r.body)
-        if sent.ErrorCode != 0 {
+        let status: Status = validate parse(Status, r.body)
+        if status.ErrorCode != 0 {
             fail("Postmark refused the email: " + r.body)
         }
+        let sent: Sent = validate parse(Sent, r.body)
         return sent.MessageID
     }
 }
@@ -116,9 +120,10 @@ capability email.postmark {
 
 Three things to notice. The token is a `Secret`: it can go into a header, and nowhere
 else, and the runtime keeps it out of every log and journal. The answer is untrusted
-until `validate parse(...)` checks it against `Sent`, which keeps the fields named and
-drops the rest. And every failure says what the service answered, so an operator can
-act on it.
+until `validate parse(...)` checks it against a type, which keeps the fields named and
+drops the rest; `Status` is checked before `Sent`, so a refusal Postmark sends without a
+`MessageID` is reported as a refusal. And every failure says what the service answered,
+so an operator can act on it.
 
 Delete the template's `notes.staal` now.
 
@@ -216,13 +221,14 @@ Delete the template's tests.
 
 ## 6. Run the tests
 
-    STAAL_PACKAGE=email cargo test --test package_cases_test
+    STAAL_PACKAGE=practice cargo test --test package_cases_test
 
-Each test runs the program against the fake, checks the result and every request,
-and checks the token appears in neither the run's log nor its journal. Then run the
+Each test runs the program against the fake, on the interpreter and as native code,
+checks the result and every request, and checks the token appears in neither the
+run's log nor its journal. Then run the
 crash tests:
 
-    STAAL_PACKAGE=email cargo test --features failpoints --test package_cases_test
+    STAAL_PACKAGE=practice cargo test --features failpoints --test package_cases_test
 
 Each test is run again, killed after every journal write and between every request
 and its recorded answer, then resumed; an email left in doubt is resolved from what

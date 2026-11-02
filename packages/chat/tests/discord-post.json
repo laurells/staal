@@ -1,0 +1,61 @@
+{
+  "about": "A message within the grant is posted once as the bot, with mentions suppressed and the User-Agent Discord requires.",
+  "service": "https://discord.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/v10/channels/*/messages",
+      "status": 200,
+      "body": {
+        "id": "11000000000000000{n}",
+        "channel_id": "1234567890123456789",
+        "content": "Deploy finished.",
+        "type": 0
+      }
+    }
+  ],
+  "program": "import chat.discord\n\nfn main(chat: cap chat.discord.post(uses: 1)) -> Receipt {\n    return chat.post(\" 1234567890123456789 \", \"Deploy finished.\")\n}\n",
+  "grants": {
+    "chat": {
+      "cap": "chat.discord.post",
+      "only": [
+        "1234567890123456789"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/api/v10/channels/*/messages"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        }
+      }
+    }
+  },
+  "expect": {
+    "result": {
+      "receipt": "110000000000000001",
+      "capability": "chat.discord.post",
+      "method": "post"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/v10/channels/1234567890123456789/messages",
+        "json": {
+          "content": "Deploy finished.",
+          "allowed_mentions": {
+            "parse": []
+          }
+        },
+        "headers": {
+          "Authorization": "Bot {key}",
+          "Content-Type": "application/json",
+          "User-Agent": "DiscordBot (https://github.com/laurells/staal, 0.1.0)"
+        }
+      }
+    ]
+  }
+}

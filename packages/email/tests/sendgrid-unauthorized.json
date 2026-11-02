@@ -1,0 +1,53 @@
+{
+  "about": "SendGrid's 401, with its documented `errors` list, fails the action with SendGrid's answer.",
+  "service": "https://api.sendgrid.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/v3/mail/send",
+      "status": 401,
+      "body": {
+        "errors": [
+          {
+            "message": "The provided authorization grant is invalid, expired, or revoked",
+            "field": null,
+            "help": null
+          }
+        ]
+      }
+    }
+  ],
+  "program": "import email.sendgrid\n\nfn main(mail: cap email.sendgrid.send) -> Receipt {\n    return mail.send(\"ada@clinic.org\", \"Results\", \"Your results are ready.\")\n}\n",
+  "grants": {
+    "mail": {
+      "cap": "email.sendgrid.send",
+      "only": [
+        "*@clinic.org"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/v3/mail/send"
+          ]
+        },
+        "key": {
+          "env": "STAAL_PACKAGE_KEY"
+        },
+        "sender": "results@clinic.org"
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "action",
+      "message": "SendGrid answered 401"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/v3/mail/send"
+      }
+    ]
+  }
+}

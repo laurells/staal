@@ -10,8 +10,8 @@ is fixed by upgrading.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.23.x  | Yes       |
-| < 0.23  | No        |
+| 0.24.x  | Yes       |
+| < 0.24  | No        |
 
 ## Reporting a vulnerability
 
@@ -52,6 +52,41 @@ Anything that breaks a guarantee Staal makes, on either engine, for example:
 - a fetched package or registry entry whose contents differ from its recorded hash
   being accepted
 - `install.sh` installing a file whose checksum does not match
+- for tools (`staalc mcp`, and `staal.Tool` or `Tool.open` in an app): anything in
+  [Tools: what is trusted](#tools-what-is-trusted) below that does not hold
+
+## Tools: what is trusted
+
+`staalc mcp` serves programs to an MCP client, and an app's tools serve them to an
+agent framework, through the same host (docs/MCP.md, sections 8 and 11). The client,
+the model and everything it reads are untrusted: a prompt injection can make the model
+call any tool with any arguments, as often as it likes. These hold whatever it sends,
+and a way around any of them is in scope:
+
+- **Arguments never become authority.** They are the entry function's inputs, checked
+  against its types; nothing in them widens, chooses or fills in a grant. Grants come
+  from the manifest, or from the app's own code for each call, never from the call.
+- **Limits hold across calls.** A quota (calls and money per window) is checked and the
+  run's worst-case spend reserved, in a ledger flushed to disk, before the run starts;
+  concurrent calls cannot overspend together, and a crash or restart does not reset
+  it. A `once` key makes a repeated call the same run, never a second one.
+- **Nothing is done twice, and nothing in doubt is guessed.** A run a crash interrupted
+  is resumed from its journal with the program and config it started with; one whose
+  action may have happened waits for an operator, and its resolution never comes over
+  MCP or from the model.
+- **Secrets stay out.** No secret reaches the client, the model, a log line, the
+  ledger, a run file, a journal, a waiting record, or the notify command, which runs
+  with a cleared environment.
+- **No call holds the host without bound.** A tool may not listen for connections,
+  every network wait has a timeout, a tool's `deadline` stops a run starting new
+  actions, and the concurrency limit refuses calls beyond it rather than queueing them.
+- **One process owns a journal directory**, by an OS lock, so two processes cannot
+  both act on one ledger.
+
+What these do not cover: a model choosing a harmful action that the grants allow (the
+grants are the operator's statement of what is allowed), a client showing a tool's
+result to a model as instructions (results are data; treat them as untrusted), and
+anyone who can write to the journal directory, which must belong to the host's user.
 
 ## Out of scope
 

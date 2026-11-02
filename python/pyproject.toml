@@ -20,6 +20,12 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 
+[project.optional-dependencies]
+# Adapters for agent frameworks: staal.openai_agents and staal.langgraph. The core
+# package needs none of them.
+openai-agents = ["openai-agents>=0.24.0"]
+langgraph = ["langgraph>=1.2.16", "langchain-core>=1.6.12"]
+
 [project.urls]
 Homepage = "https://laurells.github.io/staal/"
 Source = "https://github.com/laurells/staal"

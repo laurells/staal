@@ -1,0 +1,40 @@
+{
+  "about": "An email with no text is refused before any request is made: SendGrid requires content of at least one character.",
+  "service": "https://api.sendgrid.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/v3/mail/send",
+      "status": 202,
+      "body": ""
+    }
+  ],
+  "program": "import email.sendgrid\n\nfn main(mail: cap email.sendgrid.send) -> Receipt {\n    return mail.send(\"ada@clinic.org\", \"Results\", \"\")\n}\n",
+  "grants": {
+    "mail": {
+      "cap": "email.sendgrid.send",
+      "only": [
+        "*@clinic.org"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/v3/mail/send"
+          ]
+        },
+        "key": {
+          "env": "STAAL_PACKAGE_KEY"
+        },
+        "sender": "results@clinic.org"
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "action",
+      "message": "an email's text cannot be empty"
+    },
+    "requests": []
+  }
+}

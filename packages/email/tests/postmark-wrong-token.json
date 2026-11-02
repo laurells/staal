@@ -1,0 +1,48 @@
+{
+  "about": "Postmark's 401 for a token it does not accept (its error code 10) fails the action with Postmark's answer.",
+  "service": "https://api.postmarkapp.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/email",
+      "status": 401,
+      "body": {
+        "ErrorCode": 10,
+        "Message": "Bad or missing API token"
+      }
+    }
+  ],
+  "program": "import email.postmark\n\nfn main(mail: cap email.postmark.send) -> Receipt {\n    return mail.send(\"ada@clinic.org\", \"Results\", \"Hello.\")\n}\n",
+  "grants": {
+    "mail": {
+      "cap": "email.postmark.send",
+      "only": [
+        "*@clinic.org"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/email"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        },
+        "sender": "results@clinic.org"
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "action",
+      "message": "Postmark answered 401"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/email"
+      }
+    ]
+  }
+}

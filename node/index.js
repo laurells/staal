@@ -77,4 +77,135 @@ async function resolve(journal, resolution) {
   return parse(await addon.resolve(str(journal, 'journal'), JSON.stringify(resolution)));
 }
 
-module.exports = { version, check, run, resume, resolve };
+class StaalError extends Error {}
+
+function ok(out) {
+  if (out.status === 'error') throw new StaalError(out.error);
+  return out;
+}
+
+/**
+ * Where tools keep their runs: one journal directory, its ledger and its quotas.
+ * Opening it resumes or settles whatever an earlier process left there. One process
+ * uses a directory at a time; opening it again in this process gives the same host.
+ */
+class Host {
+  constructor(handle, journals) {
+    this._handle = handle;
+    this.journals = journals;
+  }
+
+  static async open(journals, options = {}) {
+    const settings = { journals: str(journals, 'journals'), keep: 90, max_concurrent_runs: 8, ...options };
+    const out = ok(parse(await addon.hostOpen(JSON.stringify(settings))));
+    return new Host(out.host, journals);
+  }
+
+  /** What happened to a run, by its id. Changes nothing. */
+  async status(run) {
+    return ok(parse(await addon.runStatus(this._handle, str(run, 'run'))));
+  }
+
+  async close() {
+    if (this._handle !== null) {
+      const h = this._handle;
+      this._handle = null;
+      ok(parse(await addon.hostClose(h)));
+    }
+  }
+}
+
+const SPEC_KEYS = ['title', 'entry', 'quota', 'once', 'deadline', 'max_concurrent_runs', 'engine',
+  'model', 'secrets', 'net', 'fs', 'adapters', 'limits'];
+
+/**
+ * A program's entry function as a tool. `grants` is an object, the same for every
+ * call, or a function of the call's context that returns that call's grants, so the
+ * app's policy decides each call's limits. Give `journals` (a directory) or `host`.
+ */
+class Tool {
+  static async open(program, options) {
+    const { name, description, grants, journals, host, ...spec } = options || {};
+    for (const k of Object.keys(spec)) {
+      if (!SPEC_KEYS.includes(k)) throw new TypeError(`staal: Tool: unknown option '${k}'`);
+    }
+    if ((journals === undefined) === (host === undefined)) {
+      throw new TypeError('staal: Tool: give journals (a directory) or host, not both and not neither');
+    }
+    const ownHost = host === undefined;
+    const h = ownHost ? await Host.open(journals) : host;
+    const body = { name, description, program: str(program, 'program') };
+    if (grants !== undefined && typeof grants !== 'function') body.grants = grants;
+    for (const [k, v] of Object.entries(spec)) if (v !== undefined && v !== null) body[k] = v;
+    let out;
+    try {
+      out = ok(parse(await addon.toolOpen(h._handle, JSON.stringify(body))));
+    } catch (e) {
+      if (ownHost) await h.close();
+      throw e;
+    }
+    const t = new Tool(out, h, ownHost, typeof grants === 'function' ? grants : null);
+    if (t.perCallGrants && t._grants === null) {
+      await t.close();
+      throw new TypeError('staal: Tool: the program needs grants; give grants (an object or a function of the context)');
+    }
+    if (!t.perCallGrants && t._grants !== null) {
+      await t.close();
+      throw new TypeError("staal: Tool: the program's entry function takes no capabilities, so it takes no grants");
+    }
+    return t;
+  }
+
+  constructor(out, host, ownHost, grants) {
+    this._handle = out.tool;
+    this.host = host;
+    this._ownHost = ownHost;
+    this._grants = grants;
+    this.name = out.name;
+    this.title = out.title;
+    this.description = out.description;
+    this.schema = out.input_schema;
+    this.outputSchema = out.output_schema;
+    this.annotations = out.annotations;
+    this.warnings = out.warnings;
+    this.perCallGrants = out.grants === 'per_call';
+  }
+
+  /**
+   * One call. Resolves to { status, isError, text, structured, run, value }: status is
+   * "done", "failed", "stopped" (waiting for an operator), "in_progress" or "not_run";
+   * a refusal is a result too, so a model can be told why.
+   */
+  async call(args = {}, options = {}) {
+    let grants;
+    if (this.perCallGrants) {
+      const g = await this._grants(options.context);
+      if (g === null || typeof g !== 'object' || Array.isArray(g)) throw new TypeError('staal: the grants function must return an object');
+      grants = JSON.stringify(g);
+    }
+    const out = ok(parse(await addon.toolCall(this._handle, JSON.stringify(args), grants)));
+    return {
+      status: out.status,
+      isError: out.is_error,
+      text: out.text,
+      structured: out.structured,
+      run: out.run,
+      value: out.status === 'done' && out.structured ? out.structured.result : undefined,
+    };
+  }
+
+  async status(run) {
+    return this.host.status(run);
+  }
+
+  async close() {
+    if (this._handle !== null) {
+      const t = this._handle;
+      this._handle = null;
+      ok(parse(await addon.toolClose(t)));
+    }
+    if (this._ownHost) await this.host.close();
+  }
+}
+
+module.exports = { version, check, run, resume, resolve, Host, Tool, StaalError };

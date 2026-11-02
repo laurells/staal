@@ -525,7 +525,7 @@ fn a_manifest_that_could_go_wrong_stops_the_server_before_it_answers() {
     std::thread::sleep(std::time::Duration::from_millis(500));
     let (code, err) = start_and_stop(&m, &[]);
     assert_eq!(code, Some(2));
-    assert!(err.contains("another staalc mcp"), "{err}");
+    assert!(err.contains("another process is using"), "{err}");
     c.close();
 }
 
@@ -539,7 +539,7 @@ fn a_notify_variable_may_not_hold_a_secret_a_tool_uses() {
         "tools": [{ "name": "a", "description": "d", "program": "s.staal", "secrets": { "key": { "env": "STAAL_MCP_TEST_KEY" } } }] }));
     let (code, err) = start_and_stop(&m, &[("STAAL_MCP_TEST_KEY", KEY)]);
     assert_eq!(code, Some(2));
-    assert!(err.contains("holds a secret a tool or the model uses"), "{err}");
+    assert!(err.contains("is one of the notify command's variables, and holds a secret this tool uses"), "{err}");
 }
 
 #[test]
@@ -699,13 +699,18 @@ fn what_an_earlier_process_left_is_settled_or_refused_never_guessed() {
     assert_eq!(r["isError"], false);
     c.close();
     // As if the server died after the run ended and before it was settled: no
-    // settle, and the inputs file still there (it goes only once a run is settled).
+    // settle, and the run file still there (it goes only once a run is settled).
     let text = std::fs::read_to_string(&ledger).unwrap();
     let kept: Vec<&str> = text.lines().filter(|l| !l.contains("\"settle\"")).collect();
     std::fs::write(&ledger, kept.join("\n") + "\n").unwrap();
     let journal = files_under(&dir.join("journals/refund_order")).into_iter().find(|p| p.extension().is_some_and(|e| e == "journal")).unwrap();
-    let inputs = journal.with_extension("inputs.json");
-    std::fs::write(&inputs, json!({ "order": "1", "amount": usd("1.00") }).to_string()).unwrap();
+    let config = json!({
+        "entry": "main",
+        "grants": { "pay": { "cap": "payments.refund", "each": usd("50.00"), "uses": 1 } },
+        "inputs": { "order": "1", "amount": usd("1.00") }
+    });
+    let run_file = json!({ "program": dir.join("refund.staal"), "engine": "interpreter", "config": config });
+    std::fs::write(journal.with_extension("run.json"), run_file.to_string()).unwrap();
     write(&dir, "refund.staal", &REFUND.replace("Refunded ", "Refund of "));
     let (code, err) = start_and_stop(&m, &[]);
     assert_eq!(code, Some(2));

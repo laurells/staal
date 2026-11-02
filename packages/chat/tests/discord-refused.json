@@ -1,0 +1,44 @@
+{
+  "about": "A message to a channel outside `only` is refused before any request is made.",
+  "service": "https://discord.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/v10/channels/*/messages",
+      "status": 200,
+      "body": {
+        "id": "11000000000000000{n}",
+        "channel_id": "1234567890123456789",
+        "content": "Deploy finished.",
+        "type": 0
+      }
+    }
+  ],
+  "program": "import chat.discord\n\nfn main(chat: cap chat.discord.post) -> Receipt {\n    return chat.post(\"9876543210987654321\", \"Deploy finished.\")\n}\n",
+  "grants": {
+    "chat": {
+      "cap": "chat.discord.post",
+      "only": [
+        "1234567890123456789"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/api/v10/channels/*/messages"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        }
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "capability",
+      "message": "this action targets \"9876543210987654321\""
+    },
+    "requests": []
+  }
+}

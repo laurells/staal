@@ -2,6 +2,9 @@
   "package": "chat",
   "version": "0.1.0",
   "authority": {
-    "net.http.post": ["https://slack.com/api/chat.postMessage"]
+    "net.http.post": [
+      "https://slack.com/api/chat.postMessage",
+      "https://discord.com/api/v10/channels/*/messages"
+    ]
   }
 }

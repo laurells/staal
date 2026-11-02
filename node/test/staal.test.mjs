@@ -175,3 +175,74 @@ test('a run killed at every journal write resumes through the package', { skip: 
     if (!idempotent) assert.ok(stopped > 0, 'some crash left an action in doubt');
   }
 });
+
+// Tools: a program as a tool the app calls again and again (staal.Tool, include/staal.h).
+const refundProgram = path.join(scratch, 'tool-refund.staal');
+fs.writeFileSync(
+  refundProgram,
+  'fn main(order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -> Text {\n' +
+    '    let receipt = pay.refund(order, amount)\n' +
+    '    return "Refunded " + to_text(amount) + " for order " + order\n' +
+    '}\n',
+);
+const usd = (amount) => ({ amount, currency: 'USD' });
+const policy = (ctx) => ({ pay: { cap: 'payments.refund', each: usd(ctx.limit), uses: 1 } });
+
+test('a tool takes its grants from the app at each call and keeps its quota across calls', async () => {
+  const journals = path.join(scratch, 'tool-runs');
+  const open = () =>
+    staal.Tool.open(refundProgram, {
+      name: 'refund_order',
+      description: 'Refund part of an order.',
+      grants: policy,
+      journals,
+      quota: { window: '1h', calls: 2 },
+    });
+  const tool = await open();
+  assert.equal(tool.perCallGrants, true);
+  assert.deepEqual(tool.schema.required, ['order', 'amount']);
+  assert.deepEqual(tool.outputSchema.properties.result, { type: 'string' });
+  const done = await tool.call({ order: '4417', amount: usd('35.00') }, { context: { limit: '50.00' } });
+  assert.equal(done.status, 'done');
+  assert.equal(done.value, 'Refunded 35.00 USD for order 4417');
+  assert.equal(done.run.length, 32);
+  const refused = await tool.call({ order: '4418', amount: usd('35.00') }, { context: { limit: '20.00' } });
+  assert.equal(refused.status, 'failed');
+  assert.equal(refused.text, "'payments.refund' allows at most 20.00 USD per action; this action needs 35.00 USD");
+  assert.equal((await tool.status(done.run)).status, 'done');
+  await tool.close();
+  // The quota is in the journal directory: two calls were made, a third is refused.
+  const again = await open();
+  const third = await again.call({ order: '1', amount: usd('1.00') }, { context: { limit: '50.00' } });
+  assert.equal(third.status, 'not_run');
+  assert.match(third.text, /quota of 2 calls/);
+  await again.close();
+});
+
+test('once makes a repeated call one run, and a tool needs grants only when its program does', async () => {
+  const tool = await staal.Tool.open(refundProgram, {
+    name: 'refund_once',
+    description: 'Refund once.',
+    grants: policy,
+    journals: path.join(scratch, 'tool-once'),
+    once: { by: ['order'] },
+  });
+  const a = await tool.call({ order: '77', amount: usd('5.00') }, { context: { limit: '50.00' } });
+  const b = await tool.call({ order: '77', amount: usd('5') }, { context: { limit: '50.00' } });
+  assert.equal(a.run, b.run);
+  assert.equal(a.text, b.text);
+  await tool.close();
+  const add = path.join(scratch, 'tool-add.staal');
+  fs.writeFileSync(add, 'fn plus(a: Int, b: Int) -> Int {\n    return a + b\n}\n');
+  const plus = await staal.Tool.open(add, { name: 'plus', description: 'Adds.', entry: 'plus', journals: path.join(scratch, 'tool-plus') });
+  assert.equal((await plus.call({ a: 2, b: 3 })).value, 5);
+  await plus.close();
+  await assert.rejects(
+    staal.Tool.open(refundProgram, { name: 'x', description: 'd', journals: path.join(scratch, 'tool-bad') }),
+    /needs grants/,
+  );
+  await assert.rejects(
+    staal.Tool.open(path.join(scratch, 'missing.staal'), { name: 'x', description: 'd', journals: path.join(scratch, 'tool-bad') }),
+    staal.StaalError,
+  );
+});

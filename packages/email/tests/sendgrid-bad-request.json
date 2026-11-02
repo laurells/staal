@@ -1,0 +1,52 @@
+{
+  "about": "SendGrid's 400 for a request it cannot accept fails the action with SendGrid's answer, and nothing is retried.",
+  "service": "https://api.sendgrid.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/v3/mail/send",
+      "status": 400,
+      "body": {
+        "errors": [
+          {
+            "message": "invalid request",
+            "field": "null"
+          }
+        ]
+      }
+    }
+  ],
+  "program": "import email.sendgrid\n\nfn main(mail: cap email.sendgrid.send) -> Receipt {\n    return mail.send(\"ada@clinic.org\", \"Results\", \"Your results are ready.\")\n}\n",
+  "grants": {
+    "mail": {
+      "cap": "email.sendgrid.send",
+      "only": [
+        "*@clinic.org"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/v3/mail/send"
+          ]
+        },
+        "key": {
+          "env": "STAAL_PACKAGE_KEY"
+        },
+        "sender": "results@clinic.org"
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "action",
+      "message": "SendGrid answered 400"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/v3/mail/send"
+      }
+    ]
+  }
+}
