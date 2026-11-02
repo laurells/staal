@@ -524,6 +524,12 @@ pub fn parse_tool(
         Some(p) => reserve(p, quota.as_ref(), &format!("{at}.grants"))?,
         None => None,
     };
+    if all_paths.iter().any(|p| p.starts_with("ffi.")) {
+        warnings.push(format!(
+            "tool '{name}' calls C code, which no timeout or deadline can stop: a call that never returns holds its \
+             concurrency slot and its reservation until the process is restarted"
+        ));
+    }
     if !spending.is_empty() && once.is_none() {
         warnings.push(format!(
             "tool '{name}' can spend money and has no \"once\": a call sent again is a new run, which can spend again"
@@ -539,9 +545,12 @@ pub fn parse_tool(
     }
     annotations.insert("readOnlyHint".into(), json!(read_only));
     annotations.insert("destructiveHint".into(), json!(!read_only));
-    // The same arguments give the same run only through `once`; a run's idempotency
-    // keys are its own, so they do not make a second call harmless.
-    annotations.insert("idempotentHint".into(), json!(read_only || once.is_some()));
+    // The same arguments give the same run only through `once`, and only while its key
+    // is kept: a key kept for a time lets the same call run again after it, so only a
+    // key kept for ever makes the tool idempotent. A run's idempotency keys are its
+    // own, so they do not make a second call harmless.
+    let once_for_ever = once.as_ref().is_some_and(|o| o.keep_ms.is_none());
+    annotations.insert("idempotentHint".into(), json!(read_only || once_for_ever));
     let open = plan.is_none()
         || uses_model
         || all_paths.iter().any(|p| reaches_network(p) || p.starts_with("ffi."))

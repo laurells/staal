@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 
 root, scratch = sys.argv[1], sys.argv[2]
 sys.path.insert(0, os.path.join(root, "python"))
@@ -118,8 +119,56 @@ b = once({"order": "77", "amount": usd("5")}, context=gold)
 expect(a.status == "done" and b.status == "done" and a.run == b.run and a.text == b.text, f"one run: {a} {b}")
 c = once({"order": "77", "amount": usd("6.00")}, context=gold)
 expect(c.status == "not_run" and "different arguments" in c.text and c.run is None, f"another operation under the same key: {c}")
-expect(once.annotations["idempotentHint"] is True, "once makes the tool idempotent")
+expect(once.annotations["idempotentHint"] is False, "a key kept for a time does not make the tool idempotent")
 once.close()
+
+
+def ledger_events(directory):
+    with open(os.path.join(directory, "server.ledger")) as f:
+        return [json.loads(line) for line in f]
+
+
+def at_once(n, call):
+    """Runs call(i) on n threads released together; the C interface releases the GIL."""
+    out, gate = [None] * n, threading.Barrier(n)
+
+    def go(i):
+        gate.wait()
+        out[i] = call(i)
+    threads = [threading.Thread(target=go, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return out
+
+
+# Many identical `once` calls at the same moment: one run, one refund.
+race_dir = os.path.join(scratch, "race")
+race = staal.Tool(PROGRAM, name="refund_race", description="d", grants=grants, journals=race_dir, once={"by": ["order"]})
+rs = at_once(16, lambda i: race({"order": "88", "amount": usd("5.00")}, context=gold))
+expect(len({r.run for r in rs}) == 1 and all(r.status in ("done", "in_progress") for r in rs),
+       f"simultaneous calls of one operation share one run: {[(r.status, r.run) for r in rs]}")
+reserves = [e for e in ledger_events(race_dir) if e["e"] == "reserve"]
+expect(len(reserves) == 1, f"one reservation: {reserves}")
+expect(race.status(rs[0].run)["status"] == "done", "and it ran")
+race.close()
+
+# Many calls racing for a money quota: each holds its worst case (100.00) until it
+# settles, so of 120.00 only one can be held at a time, and after it settles (35.00
+# spent) no other fits. Exactly one runs, whatever the timing.
+quota_dir = os.path.join(scratch, "quota-race")
+quota_host = staal.Host(quota_dir, max_concurrent_runs=16)
+q = staal.Tool(PROGRAM, name="refund_quota", description="d", grants=grants, host=quota_host,
+               quota={"window": "1h", "money": usd("120.00")})
+rs = at_once(16, lambda i: q({"order": str(1000 + i), "amount": usd("35.00")}, context=gold))
+done = [r for r in rs if r.status == "done"]
+expect(len(done) == 1 and all(r.status == "not_run" for r in rs if r.status != "done"),
+       f"one call within the quota: {[r.status for r in rs]}")
+reserves = [e for e in ledger_events(quota_dir) if e["e"] == "reserve"]
+expect(len(reserves) == 1, f"refused calls reserve nothing: {reserves}")
+q.close()
+quota_host.close()
 
 # Fixed grants, and a function that takes no capabilities.
 fixed = staal.Tool(PROGRAM, name="refund_fixed", description="d", journals=os.path.join(scratch, "fixed"),
@@ -166,6 +215,39 @@ if os.environ.get("STAAL_HAS_FAILPOINTS") == "1":
     host = staal.Host(crash_dir)
     st = host.status(run)
     expect(st["status"] == "done" and st["result"] == "Refunded 3.00 USD for order 9", f"finished when the directory was opened: {st}")
+    host.close()
+
+    # A module the program imports changes while a run is unfinished: the run is not
+    # resumed under the changed code, and the directory refuses to open, naming it.
+    mod_dir = os.path.join(scratch, "module")
+    os.makedirs(mod_dir, exist_ok=True)
+    main = os.path.join(mod_dir, "refund.staal")
+    helper = os.path.join(mod_dir, "wording.staal")
+    with open(main, "w") as f:
+        f.write('import wording\n\n'
+                'fn main(order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -> Text {\n'
+                '    let receipt = pay.refund(order, amount)\n'
+                '    return wording.refunded(order)\n'
+                '}\n')
+    with open(helper, "w") as f:
+        f.write('pub fn refunded(order: Text) -> Text {\n    return "Refunded order " + order\n}\n')
+    runs = os.path.join(mod_dir, "runs")
+    child = subprocess.run([sys.executable, "-I", "-c", code, os.path.join(root, "python"), main, runs],
+                           env=env, capture_output=True, text=True)
+    expect(child.returncode < 0, f"killed in the middle of the run: {child.returncode} {child.stderr}")
+    run = ledger_events(runs)[0]["run"]
+    with open(helper, "w") as f:
+        f.write('pub fn refunded(order: Text) -> Text {\n    return "Order " + order + " refunded"\n}\n')
+    try:
+        staal.Host(runs)
+        expect(False, "a changed module refuses the unfinished run")
+    except staal.StaalError as e:
+        expect(run in str(e) and "cannot be resumed" in str(e), f"names the run: {e}")
+    with open(helper, "w") as f:
+        f.write('pub fn refunded(order: Text) -> Text {\n    return "Refunded order " + order\n}\n')
+    host = staal.Host(runs)
+    st = host.status(run)
+    expect(st["status"] == "done" and st["result"] == "Refunded order 9", f"resumed under the code it started with: {st}")
     host.close()
 
 print(f"{checks} checks passed")

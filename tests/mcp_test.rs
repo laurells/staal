@@ -231,6 +231,14 @@ fn each_outcome_becomes_the_result_the_design_says() {
     assert_eq!(r["isError"], true);
     let t = text(&r);
     assert!(t.contains("too large") && t.contains("run "), "{t}");
+    // Nor is it sent through the status tool.
+    let big_run = &t[t.find("run ").unwrap() + 4..][..32];
+    let st = c.call(90, "staal_run_status", json!({ "run": big_run }));
+    let st = &st["structuredContent"];
+    assert_eq!(st["status"], "done");
+    assert!(st.get("result").is_none(), "{st}");
+    assert_eq!(st["result_bytes"], json!(2 * 1024 * 1024 + 2));
+    assert!(st["reason"].as_str().unwrap().contains("too large to send"), "{st}");
 
     // The status of runs that ended, of an unknown run, and a malformed question.
     let first = c.call(10, "stripe_refund", json!({ "payment": "pi_usd", "amount": usd("2.00") }));
@@ -385,7 +393,7 @@ fn a_stopped_run_is_told_to_the_operator_and_finishes_once_resolved() {
     // The first attempt fails; later ones record what the command saw.
     std::fs::write(
         &notify,
-        "#!/bin/sh\nd=$(dirname \"$0\")\nif [ ! -e \"$d/failed-once\" ]; then touch \"$d/failed-once\"; exit 1; fi\nenv > \"$d/notify.env\"\ncat \"$1\" > \"$d/notify.record\"\n",
+        "#!/bin/sh\nd=$(dirname \"$0\")\nif [ ! -e \"$d/failed-once\" ]; then touch \"$d/failed-once\"; exit 1; fi\nenv > \"$d/notify.env\"\ncat \"$1\" > \"$d/notify.record\"\nif [ -d /proc/$$/fd ]; then ls -l /proc/$$/fd > \"$d/notify.fds\"; fi\n",
     )
     .unwrap();
     std::fs::set_permissions(&notify, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -417,6 +425,25 @@ fn a_stopped_run_is_told_to_the_operator_and_finishes_once_resolved() {
     for line in seen.lines() {
         let k = line.split('=').next().unwrap();
         assert!(["PATH", "HOME", "LANG", "TZ", "STAAL_MCP_NOTIFY_OK", "PWD", "SHLVL", "_", "OLDPWD"].contains(&k), "unexpected {k}");
+    }
+    // The protocol's private descriptors are close-on-exec: the command holds no pipe or
+    // socket beyond its standard ones (Linux, where /proc shows them).
+    if cfg!(target_os = "linux") {
+        // Beyond 0 to 2 the shell holds only the script it reads and, while it redirects,
+        // a copy of its own standard output (the server's standard error); anything else
+        // was inherited.
+        let fds = std::fs::read_to_string(dir.join("notify.fds")).unwrap();
+        let fds: Vec<(u32, &str)> = fds
+            .lines()
+            .filter_map(|l| l.split_once(" -> "))
+            .map(|(left, target)| (left.rsplit(' ').next().unwrap().parse().unwrap(), target))
+            .collect();
+        let own = fds.iter().find(|(fd, _)| *fd == 2).map(|(_, t)| *t).unwrap();
+        for (fd, target) in &fds {
+            if *fd > 2 {
+                assert!(*target == own || target.ends_with("/notify.sh"), "the command inherited fd {fd}: {target} ({fds:?})");
+            }
+        }
     }
     let rec: Json = serde_json::from_str(&std::fs::read_to_string(dir.join("notify.record")).unwrap()).unwrap();
     assert_eq!(rec["run"], run.as_str());
@@ -574,8 +601,17 @@ fn annotations_never_claim_more_than_the_broker_enforces() {
     // An idempotency key makes one run's retries safe, not a second call: not idempotent.
     assert_eq!(hints("post"), (false, true, false, true));
     assert_eq!(hints("refund_order"), (false, true, false, true));
-    assert_eq!(hints("refund_once"), (false, true, true, true));
+    // `once` keeps its key for a time (here server.keep, 90 days): after it, the same
+    // call runs again, so the tool is not idempotent.
+    assert_eq!(hints("refund_once"), (false, true, false, true));
     assert_eq!(a("refund_order")["title"], "Refund an order");
+    c.close();
+    // Kept for ever, it is.
+    let m = write_manifest(&dir, json!({ "server": { "name": "s", "keep": "forever" },
+        "tools": [refund_tool(json!({ "name": "refund_once", "once": { "by": ["order"] } }))] }));
+    let mut c = Mcp::start(&m, &[]);
+    let l = c.request(json!(1), "tools/list", json!({}));
+    assert_eq!(l["result"]["tools"][0]["annotations"]["idempotentHint"], true);
     c.close();
 }
 
@@ -651,9 +687,11 @@ fn settled_runs_files_go_after_server_keep_and_never_before() {
     let ledger = dir.join("journals/server.ledger");
     let old = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 - 3 * 86_400_000;
     let text = std::fs::read_to_string(&ledger).unwrap();
+    // Every event moved by the same amount, so their order and spacing are kept.
+    let first = text.lines().map(|l| serde_json::from_str::<Json>(l).unwrap()["t"].as_u64().unwrap()).min().unwrap();
     let moved: Vec<String> = text.lines().map(|l| {
         let mut v: Json = serde_json::from_str(l).unwrap();
-        v["t"] = json!(old + v["t"].as_u64().unwrap() % 1000);
+        v["t"] = json!(v["t"].as_u64().unwrap() - first + old);
         v.to_string()
     }).collect();
     std::fs::write(&ledger, moved.join("\n") + "\n").unwrap();
@@ -767,6 +805,7 @@ fn a_c_library_writing_to_standard_output_never_reaches_the_stream() {
     let (_, err, raw) = c.close();
     assert!(err.contains(forged), "the C library's line went to standard error: {err}");
     assert!(err.contains("unchecked"), "a run that loaded C code is logged as unchecked: {err}");
+    assert!(err.contains("calls C code, which no timeout or deadline can stop"), "the operator is warned at start: {err}");
     assert_eq!(raw.len(), 1, "only the answer reached the stream: {raw:?}");
     assert!(!raw[0].contains("\"id\":98") && !raw[0].contains("\"id\": 98"));
 }

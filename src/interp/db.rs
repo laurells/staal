@@ -13,6 +13,12 @@
 // ATTACH (which would open another file) and no extensions. Parameters are bound,
 // never spliced into the SQL.
 //
+// Every statement is bounded by a time limit (`net.timeout_ms`, as a PostgreSQL
+// statement is): SQLite checks a progress handler as it runs, and the handler stops the
+// statement once the limit has passed. A statement stopped this way changes nothing:
+// its transaction is rolled back. The limit stops being checked before `COMMIT`, so a
+// change is never cut between being made and being made durable.
+//
 // Rows come back as JSON: one object per row, by column name; INTEGER as a number,
 // TEXT as a string, NULL as null, REAL as the shortest decimal text that reads back
 // as the same number. A BLOB is refused: it is not text.
@@ -24,6 +30,9 @@ use rusqlite::Connection;
 #[cfg(target_os = "linux")]
 use rusqlite::OpenFlags;
 use serde_json::{json, Map, Value as Json};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The most rows one query may give.
 pub const MAX_ROWS: usize = 10_000;
@@ -55,6 +64,51 @@ fn open(path: &str, write: bool) -> Result<Connection, String> {
     }
 }
 
+/// How many SQLite virtual machine steps run between checks of the time limit.
+const CHECK_EVERY: i32 = 1_000;
+
+/// The time limit of one operation, checked by SQLite as it runs.
+struct TimeLimit {
+    /// Set once the limit stopped the statement.
+    stopped: Arc<AtomicBool>,
+    /// Set before `COMMIT`: from then on the limit is no longer checked.
+    off: Arc<AtomicBool>,
+    limit: Duration,
+}
+
+impl TimeLimit {
+    fn on(conn: &mut Connection, limit: Duration) -> TimeLimit {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let off = Arc::new(AtomicBool::new(false));
+        let (s, o, start) = (stopped.clone(), off.clone(), Instant::now());
+        // The handler only reads a clock and two flags, so it cannot fail; returning
+        // true makes SQLite stop the statement with SQLITE_INTERRUPT.
+        let _ = conn.progress_handler(
+            CHECK_EVERY,
+            Some(move || {
+                if o.load(Ordering::SeqCst) || start.elapsed() <= limit {
+                    return false;
+                }
+                s.store(true, Ordering::SeqCst);
+                true
+            }),
+        );
+        TimeLimit { stopped, off, limit }
+    }
+
+    /// The error of an operation, or the time limit's when the limit stopped it.
+    fn error(&self, e: String) -> String {
+        if self.stopped.load(Ordering::SeqCst) {
+            format!(
+                "the statement ran longer than net.timeout_ms ({} ms) and was stopped; it changed nothing",
+                self.limit.as_millis()
+            )
+        } else {
+            e
+        }
+    }
+}
+
 /// One statement prepared, refusing more than one.
 fn prepare<'c>(conn: &'c Connection, path: &str, sql: &str) -> Result<rusqlite::Statement<'c>, String> {
     conn.prepare(sql).map_err(|e| match e {
@@ -75,9 +129,14 @@ fn bind(stmt: &mut rusqlite::Statement<'_>, params: &[String]) -> Result<(), Str
 }
 
 /// The rows of one read-only statement, as a JSON array of objects.
-pub fn query(path: &str, sql: &str, params: &[String], max_bytes: usize) -> Result<Json, String> {
-    let conn = open(path, false)?;
-    let mut stmt = prepare(&conn, path, sql)?;
+pub fn query(path: &str, sql: &str, params: &[String], max_bytes: usize, limit: Duration) -> Result<Json, String> {
+    let mut conn = open(path, false)?;
+    let bound = TimeLimit::on(&mut conn, limit);
+    rows(&conn, path, sql, params, max_bytes).map_err(|e| bound.error(e))
+}
+
+fn rows(conn: &Connection, path: &str, sql: &str, params: &[String], max_bytes: usize) -> Result<Json, String> {
+    let mut stmt = prepare(conn, path, sql)?;
     if !stmt.readonly() {
         return Err("`query` runs only statements that read; use a db.sqlite.execute capability to change the database".into());
     }
@@ -127,8 +186,13 @@ fn real_text(f: f64) -> Result<String, String> {
 /// Runs one statement that changes the database, in a transaction; gives how many rows
 /// it changed. With `key`, the key is recorded in the same transaction, so whether the
 /// statement happened can be known later (`executed`).
-pub fn execute(path: &str, sql: &str, params: &[String], key: Option<&str>) -> Result<u64, String> {
+pub fn execute(path: &str, sql: &str, params: &[String], key: Option<&str>, limit: Duration) -> Result<u64, String> {
     let mut conn = open(path, true)?;
+    let bound = TimeLimit::on(&mut conn, limit);
+    change(&mut conn, path, sql, params, key, &bound.off).map_err(|e| bound.error(e))
+}
+
+fn change(conn: &mut Connection, path: &str, sql: &str, params: &[String], key: Option<&str>, off: &AtomicBool) -> Result<u64, String> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| format!("'{path}': {e}"))?;
     if let Some(k) = key {
         tx.execute_batch(&format!("CREATE TABLE IF NOT EXISTS {KEYS_TABLE} (key TEXT PRIMARY KEY, changes INTEGER NOT NULL)"))
@@ -152,6 +216,8 @@ pub fn execute(path: &str, sql: &str, params: &[String], key: Option<&str>) -> R
         tx.execute(&format!("INSERT INTO {KEYS_TABLE} (key, changes) VALUES (?1, ?2)"), rusqlite::params![k, changes as i64])
             .map_err(|e| format!("'{path}': {e}"))?;
     }
+    // The change is made; from here it is only made durable, which is never cut short.
+    off.store(true, Ordering::SeqCst);
     tx.commit().map_err(|e| format!("'{path}': {e}"))?;
     Ok(changes)
 }
@@ -169,6 +235,8 @@ fn recorded(conn: &Connection, key: &str, path: &str) -> Result<Option<u64>, Str
 mod tests {
     use super::*;
 
+    const T: Duration = Duration::from_secs(30);
+
     fn scratch(name: &str) -> String {
         let d = std::env::temp_dir().join(format!("staal-db-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -179,57 +247,76 @@ mod tests {
     #[test]
     fn statements_change_the_database_and_queries_only_read_it() {
         let db = scratch("basic");
-        assert!(query(&db, "SELECT 1", &[], 1 << 20).unwrap_err().contains("does not exist"));
-        execute(&db, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, score REAL)", &[], None).unwrap();
-        assert_eq!(execute(&db, "INSERT INTO t (name, score) VALUES (?1, ?2)", &["ada".into(), "1.5".into()], None), Ok(1));
-        assert_eq!(execute(&db, "INSERT INTO t (name, score) VALUES (?1, NULL)", &["bola".into()], None), Ok(1));
-        let rows = query(&db, "SELECT id, name, score FROM t ORDER BY id", &[], 1 << 20).unwrap();
+        assert!(query(&db, "SELECT 1", &[], 1 << 20, T).unwrap_err().contains("does not exist"));
+        execute(&db, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, score REAL)", &[], None, T).unwrap();
+        assert_eq!(execute(&db, "INSERT INTO t (name, score) VALUES (?1, ?2)", &["ada".into(), "1.5".into()], None, T), Ok(1));
+        assert_eq!(execute(&db, "INSERT INTO t (name, score) VALUES (?1, NULL)", &["bola".into()], None, T), Ok(1));
+        let rows = query(&db, "SELECT id, name, score FROM t ORDER BY id", &[], 1 << 20, T).unwrap();
         assert_eq!(rows, json!([{ "id": 1, "name": "ada", "score": "1.5" }, { "id": 2, "name": "bola", "score": null }]));
         // A text parameter compares with an INTEGER column by the column's affinity.
-        assert_eq!(query(&db, "SELECT name FROM t WHERE id = ?1", &["2".into()], 1 << 20).unwrap(), json!([{ "name": "bola" }]));
+        assert_eq!(query(&db, "SELECT name FROM t WHERE id = ?1", &["2".into()], 1 << 20, T).unwrap(), json!([{ "name": "bola" }]));
         // Read-only means read-only, whatever the SQL.
-        assert!(query(&db, "DELETE FROM t", &[], 1 << 20).unwrap_err().contains("only statements that read"));
-        assert!(execute(&db, "SELECT * FROM t", &[], None).unwrap_err().contains("change the database"));
+        assert!(query(&db, "DELETE FROM t", &[], 1 << 20, T).unwrap_err().contains("only statements that read"));
+        assert!(execute(&db, "SELECT * FROM t", &[], None, T).unwrap_err().contains("change the database"));
         // One statement; parameters counted; no ATTACH; no BLOBs; no duplicate names.
-        assert!(execute(&db, "DELETE FROM t; DROP TABLE t", &[], None).unwrap_err().contains("more than one statement"));
-        assert!(query(&db, "SELECT ?1", &[], 1 << 20).unwrap_err().contains("1 parameter(s), but 0"));
+        assert!(execute(&db, "DELETE FROM t; DROP TABLE t", &[], None, T).unwrap_err().contains("more than one statement"));
+        assert!(query(&db, "SELECT ?1", &[], 1 << 20, T).unwrap_err().contains("1 parameter(s), but 0"));
         let other = db.replace("t.db", "other.db");
-        assert!(execute(&db, &format!("ATTACH DATABASE '{other}' AS o"), &[], None).is_err());
+        assert!(execute(&db, &format!("ATTACH DATABASE '{other}' AS o"), &[], None, T).is_err());
         assert!(!std::path::Path::new(&other).exists());
-        assert!(query(&db, "SELECT x'00' AS b", &[], 1 << 20).unwrap_err().contains("BLOB"));
-        assert!(query(&db, "SELECT 1 AS a, 2 AS a", &[], 1 << 20).unwrap_err().contains("both named 'a'"));
-        assert!(query(&db, "SELECT name FROM t", &[], 10).unwrap_err().contains("more than 10 bytes"));
+        assert!(query(&db, "SELECT x'00' AS b", &[], 1 << 20, T).unwrap_err().contains("BLOB"));
+        assert!(query(&db, "SELECT 1 AS a, 2 AS a", &[], 1 << 20, T).unwrap_err().contains("both named 'a'"));
+        assert!(query(&db, "SELECT name FROM t", &[], 10, T).unwrap_err().contains("more than 10 bytes"));
         // A failed statement changes nothing: its transaction is rolled back.
-        assert!(execute(&db, "INSERT INTO t (id, name) VALUES (1, 'dup')", &[], None).is_err());
-        assert_eq!(query(&db, "SELECT count(*) AS n FROM t", &[], 1 << 20).unwrap(), json!([{ "n": 2 }]));
+        assert!(execute(&db, "INSERT INTO t (id, name) VALUES (1, 'dup')", &[], None, T).is_err());
+        assert_eq!(query(&db, "SELECT count(*) AS n FROM t", &[], 1 << 20, T).unwrap(), json!([{ "n": 2 }]));
     }
 
     #[test]
     fn a_keyed_statement_happens_once() {
         let db = scratch("keys");
-        execute(&db, "CREATE TABLE t (n INTEGER)", &[], None).unwrap();
-        assert_eq!(execute(&db, "INSERT INTO t VALUES (1)", &[], Some("run-1")), Ok(1));
+        execute(&db, "CREATE TABLE t (n INTEGER)", &[], None, T).unwrap();
+        assert_eq!(execute(&db, "INSERT INTO t VALUES (1)", &[], Some("run-1"), T), Ok(1));
         // The same key again: it already happened, and is not done twice.
-        assert_eq!(execute(&db, "INSERT INTO t VALUES (1)", &[], Some("run-1")), Ok(1));
-        assert_eq!(execute(&db, "INSERT INTO t VALUES (1)", &[], Some("run-2")), Ok(1));
-        assert_eq!(query(&db, "SELECT count(*) AS n FROM t", &[], 1 << 20).unwrap(), json!([{ "n": 2 }]));
+        assert_eq!(execute(&db, "INSERT INTO t VALUES (1)", &[], Some("run-1"), T), Ok(1));
+        assert_eq!(execute(&db, "INSERT INTO t VALUES (1)", &[], Some("run-2"), T), Ok(1));
+        assert_eq!(query(&db, "SELECT count(*) AS n FROM t", &[], 1 << 20, T).unwrap(), json!([{ "n": 2 }]));
         // A statement that fails records no key: it can be made again.
-        assert!(execute(&db, "INSERT INTO nowhere VALUES (1)", &[], Some("run-3")).is_err());
-        assert_eq!(query(&db, &format!("SELECT count(*) AS n FROM {KEYS_TABLE}"), &[], 1 << 20).unwrap(), json!([{ "n": 2 }]));
+        assert!(execute(&db, "INSERT INTO nowhere VALUES (1)", &[], Some("run-3"), T).is_err());
+        assert_eq!(query(&db, &format!("SELECT count(*) AS n FROM {KEYS_TABLE}"), &[], 1 << 20, T).unwrap(), json!([{ "n": 2 }]));
     }
 
     #[test]
     fn links_are_never_followed() {
         let db = scratch("links");
-        execute(&db, "CREATE TABLE t (n INTEGER)", &[], None).unwrap();
+        execute(&db, "CREATE TABLE t (n INTEGER)", &[], None, T).unwrap();
         let link = db.replace("t.db", "link.db");
         std::os::unix::fs::symlink(&db, &link).unwrap();
-        assert!(query(&link, "SELECT 1", &[], 1 << 20).unwrap_err().contains("symbolic link"));
+        assert!(query(&link, "SELECT 1", &[], 1 << 20, T).unwrap_err().contains("symbolic link"));
         let hard = db.replace("t.db", "hard.db");
         std::fs::hard_link(&db, &hard).unwrap();
-        assert!(query(&hard, "SELECT 1", &[], 1 << 20).unwrap_err().contains("hard links"));
+        assert!(query(&hard, "SELECT 1", &[], 1 << 20, T).unwrap_err().contains("hard links"));
         std::fs::remove_file(&hard).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", format!("{db}-journal")).unwrap();
-        assert!(execute(&db, "INSERT INTO t VALUES (1)", &[], None).unwrap_err().contains("-journal' is a symbolic link"));
+        assert!(execute(&db, "INSERT INTO t VALUES (1)", &[], None, T).unwrap_err().contains("-journal' is a symbolic link"));
+    }
+
+    #[test]
+    fn a_statement_past_its_time_limit_is_stopped_and_changes_nothing() {
+        let db = scratch("limit");
+        execute(&db, "CREATE TABLE t (n INTEGER)", &[], None, T).unwrap();
+        let forever = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT x FROM c";
+        let short = Duration::from_millis(200);
+        let start = Instant::now();
+        let e = query(&db, &format!("SELECT count(*) AS n FROM ({forever})"), &[], 1 << 20, short).unwrap_err();
+        assert!(e.contains("ran longer than net.timeout_ms (200 ms) and was stopped"), "{e}");
+        let e = execute(&db, &format!("INSERT INTO t {forever}"), &[], Some("k"), short).unwrap_err();
+        assert!(e.contains("ran longer than net.timeout_ms (200 ms)"), "{e}");
+        assert!(start.elapsed() < Duration::from_secs(10), "stopped soon after the limit: {:?}", start.elapsed());
+        // Rolled back: no row, and no key recorded, so the statement is not taken as done.
+        assert_eq!(query(&db, "SELECT count(*) AS n FROM t", &[], 1 << 20, T).unwrap(), json!([{ "n": 0 }]));
+        assert_eq!(execute(&db, "INSERT INTO t VALUES (1)", &[], Some("k"), T), Ok(1));
+        // A statement within its limit is unaffected by it.
+        assert_eq!(query(&db, "SELECT count(*) AS n FROM t", &[], 1 << 20, short).unwrap(), json!([{ "n": 1 }]));
     }
 }

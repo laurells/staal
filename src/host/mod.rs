@@ -273,6 +273,7 @@ impl Host {
             }
         }
         tool::private_dir(&dir.join("waiting"))?;
+        File::open(dir).and_then(|f| f.sync_all()).map_err(|e| format!("cannot flush {}: {e}", dir.display()))?;
         let ledger = Ledger::open(&dir.join("server.ledger"))?;
         let last = ledger.last_time();
         let now = ledger::clock_ms();
@@ -446,13 +447,28 @@ impl Host {
         }
     }
 
+    /// The folder of a run's files, `<journals>/<tool>/<shard>`. A folder made here has
+    /// the folder holding it flushed, up to the journal directory, so a power loss
+    /// cannot take away a folder whose files were flushed.
+    fn make_run_dir(&self, tool: &str, run: &str) -> Result<(), String> {
+        let dir = self.run_dir(tool, run);
+        if dir.is_dir() {
+            return Ok(());
+        }
+        tool::private_dir(&dir)?;
+        let tool_dir = dir.parent().unwrap_or(&self.settings.journals);
+        for d in [tool_dir, self.settings.journals.as_path()] {
+            File::open(d).and_then(|f| f.sync_all()).map_err(|e| format!("cannot flush {}: {e}", d.display()))?;
+        }
+        Ok(())
+    }
+
     /// Steps 2 to 7 for a reserved run.
     fn execute(&self, t: &Tool, run: &str, cfg: &Json) -> Answer {
         let tool = t.name.as_str();
         let journal = self.journal_path(tool, run);
         let file = json!({ "program": t.program, "engine": engine_name(t.engine), "config": cfg });
-        let prepared = tool::private_dir(&self.run_dir(tool, run))
-            .and_then(|_| write_durably(&self.run_file(tool, run), file.to_string().as_bytes()));
+        let prepared = self.make_run_dir(tool, run).and_then(|_| write_durably(&self.run_file(tool, run), file.to_string().as_bytes()));
         if let Err(e) = prepared {
             log(&format!("tool {tool} run {run}: {e}"));
             return self.release(tool, run, "the host could not prepare the run; nothing was done");
@@ -656,7 +672,17 @@ impl Host {
         match recorded_outcome(&path) {
             Ok(Outcome::Done(v)) => {
                 s["status"] = json!("done");
-                s["result"] = v;
+                // The same limit as a call's answer, so a result too large to send is
+                // not sent this way either; the operator reads it from the journal.
+                let bytes = v.to_string().len();
+                if bytes > MAX_RESULT_BYTES {
+                    s["result_bytes"] = json!(bytes);
+                    s["reason"] = json!(format!(
+                        "the result is larger than {MAX_RESULT_BYTES} bytes, too large to send; it is kept in the run's journal (the operator can read it)"
+                    ));
+                } else {
+                    s["result"] = v;
+                }
             }
             Ok(Outcome::Failed { kind, message }) => {
                 s["status"] = json!("failed");

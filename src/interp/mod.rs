@@ -3096,12 +3096,12 @@ impl<'p> Interp<'p> {
         let keyed = self.broker().idempotency_key(h).or_else(internal)?;
         let (answer, replayed) = match method {
             "query" => self.external("action", jbody, true, &what, |it, _key| {
-                Answer::Done(db::query(&file, sql, &params, it.fs_max_read_bytes).map(|rows| json!({ "text": scrub_text(&it.secrets, &rows.to_string()) })))
+                Answer::Done(db::query(&file, sql, &params, it.fs_max_read_bytes, it.tcp.timeout).map(|rows| json!({ "text": scrub_text(&it.secrets, &rows.to_string()) })))
             })?,
             "execute" => {
                 self.effects += 1;
-                self.external("action", jbody, keyed, &what, |_it, key| {
-                    let changed = db::execute(&file, sql, &params, keyed.then_some(key));
+                self.external("action", jbody, keyed, &what, |it, key| {
+                    let changed = db::execute(&file, sql, &params, keyed.then_some(key), it.tcp.timeout);
                     Answer::Done(changed.map(|n| json!({ "receipt": format!("sqlite:{n}") })))
                 })?
             }

@@ -124,3 +124,28 @@ fn idempotency_keys_are_only_for_execute() {
     assert_eq!(code, Some(2));
     assert!(err.contains("idempotency_key: only for"), "{err}");
 }
+
+#[test]
+fn a_statement_longer_than_net_timeout_ms_is_stopped_on_both_engines() {
+    let dir = scratch("limit");
+    let db = format!("{}/slow.db", dir.display());
+    rusqlite::Connection::open(&db).unwrap().execute_batch("CREATE TABLE t (n INTEGER)").unwrap();
+    let program = dir.join("slow.staal");
+    fs::write(
+        &program,
+        "fn main(read: cap db.sqlite.query, path: Text) -> Text {\n    return read.query(path, \"WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) AS n FROM c\")\n}\n",
+    )
+    .unwrap();
+    let cfg = dir.join("run.json");
+    let grant = json!({ "cap": "db.sqlite.query", "only": [format!("{}/*.db", dir.display())] });
+    let run = json!({ "entry": "main", "inputs": { "path": db }, "grants": { "read": grant }, "net": { "timeout_ms": 300 } });
+    fs::write(&cfg, run.to_string()).unwrap();
+    let engines: &[&str] = if cfg!(feature = "native") { &["interpreter", "native"] } else { &["interpreter"] };
+    for engine in engines {
+        let start = std::time::Instant::now();
+        let (code, out, err) = staalc(&["run", program.to_str().unwrap(), "--config", cfg.to_str().unwrap(), "--engine", engine]);
+        assert_eq!(code, Some(1), "{engine}: {out} {err}");
+        assert!(err.contains("ran longer than net.timeout_ms (300 ms) and was stopped"), "{engine}: {out} {err}");
+        assert!(start.elapsed() < std::time::Duration::from_secs(20), "{engine}: {:?}", start.elapsed());
+    }
+}

@@ -84,7 +84,12 @@ problem gives. Unknown keys are refused at every level.
 - `server.journals` is the directory that holds every run's journal and the ledger.
   It is created with mode 0700 if missing. If it exists, it must be owned by the user
   the server runs as and must not be writable by group or others; otherwise the server
-  refuses to start.
+  refuses to start. Every folder the server makes in it is 0700 and every file it
+  writes (ledger, run files, journals, logs, waiting records, and the temporary files
+  of compaction and of atomic writes) is 0600, since run files hold a call's arguments
+  and journals what it sent and received. Each file is flushed (`fsync`) before
+  anything depends on it, and a file created or renamed into place has its folder
+  flushed too, so a power loss leaves it there whole or not at all.
 - `server.keep` is how many days a finished run's journal and log are kept, at least 1,
   or `"forever"`; the default is 90 (section 7).
 - `server.max_concurrent_runs` is the most runs in progress at once across all tools,
@@ -107,7 +112,10 @@ problem gives. Unknown keys are refused at every level.
   Paths are resolved once, at start, to absolute paths with every symbolic link
   followed; the program is read and hashed then, so a file changed or replaced while
   the server runs is never picked up (a restart picks it up, and journals of unfinished
-  runs then refuse to resume, as section 7 says).
+  runs then refuse to resume, as section 7 says). What is hashed is the whole program:
+  the text of every module it imports, a package's modules included, by module path,
+  and each package's repository and commit; a C library is granted by its SHA-256 in
+  the config, which the journal binds too.
 - A tool's `grants`, `secrets`, `model`, `net`, `fs`, `adapters` and `limits` are
   exactly the run config's keys of the same names (RUNTIME.md section 1), with the same
   rules. `entry` and `inputs` are not allowed: the entry is the tool's, and inputs come
@@ -129,6 +137,9 @@ would reach the protocol stream or wait without end:
 - **Listening for connections.** A grant of `net.tcp.accept` is refused: an accept
   waits until a client connects, with no time limit today (DEFERRED.md), so a call
   could hold its quota reservation for ever.
+
+A third, C code (`cap ffi`), is allowed with a warning at start: it cannot be
+interrupted either (section 3, "How long a call can take").
 
 `print` stays allowed. In a tool, printed lines never reach the protocol stream: they
 go to the server's standard error (section 3) and are journaled, as every print is.
@@ -160,7 +171,8 @@ Limits on what crosses the stream: an incoming line longer than 4 MiB, or nested
 deeper than 64 levels, is refused with `-32700` (or `-32600`) without being parsed
 further. A tool result whose JSON is longer than 1 MiB is not sent: the call answers
 `isError: true` saying the result was too large and naming the run id, and the result
-stays in the journal, where `staal_run_status` and the operator can reach it.
+stays in the journal, where the operator can read it. `staal_run_status` reports such a
+run as done, with the result's size and not the result (section 7).
 
 A line that holds a JSON array is a JSON-RPC batch, which MCP has not allowed since
 2025-06-18; it is refused with `-32600` and nothing in it is run.
@@ -194,9 +206,13 @@ Which version a request is served under follows from the request, as the 2026-07
 specification has a dual-era server do: one carrying
 `_meta["io.modelcontextprotocol/protocolVersion"]` is served as 2026-07-28; once a
 client has sent `initialize`, one without it is served as 2025-11-25; before that, one
-without it is refused with `-32602`. Both can be served on the same connection, and the
-official Python and TypeScript SDKs connect in either mode and with their own probe
-(section 9). The server keeps no state between requests except the ledger and the
+without it is refused with `-32602`. A client uses one lifecycle: a 2026-07-28 client
+starts with `server/discover` (or its first request) and sends the version in each
+request's `_meta`; a 2025-11-25 client starts with `initialize` and uses the version it
+negotiated. The server does not hold a connection to one lifecycle, because each request
+says which it is; that is deliberate, so a client probing with one and settling on the
+other works, and the official Python and TypeScript SDKs connect in either mode and
+with their own probe (section 9). Clients should not mix the two otherwise. The server keeps no state between requests except the ledger and the
 journals, which are on disk.
 
 Errors are kept apart by what went wrong. A line that is not JSON is `-32700`; a
@@ -206,9 +222,12 @@ message that is not a valid JSON-RPC request is `-32600`; an unknown method is
 program's types refuse, is a tool result with `isError: true` (section 5), so the
 model sees it. Notifications the server does not use are ignored.
 
-**Cancellation.** `notifications/cancelled` for a call whose run has not started (it
-is waiting for a concurrency slot, or its arguments are being checked) stops it before
-anything is reserved or run. Once its run has started, cancellation cannot stop it:
+**Cancellation.** The reservation (step 5 of section 5) is the point after which a
+call goes ahead. Cancellation is checked under the same lock that makes the
+reservation, immediately before it: a call cancelled before then reserves nothing and
+runs nothing; once the reservation is written, the call is treated as started, whatever
+arrives afterwards, and its run is never released on account of a cancellation. Once
+its run has started, cancellation cannot stop it:
 stopping a run between operations is possible, but the operation in progress would be
 cut in half and left in doubt. So a cancelled call's run carries on to its end, and the
 server, as both protocol versions require, sends nothing more for that request. The
@@ -219,8 +238,10 @@ or in the server's log.
 
 ### How long a call can take
 
-A run cannot hang for ever, but it can take long. Every operation that waits is bounded
-by its own timeout:
+Every operation the runtime performs is bounded by its own timeout, so a run can take
+long but not for ever, with one exception: C code called through `cap ffi`, which no
+timeout can stop (below the table).
+
 
 | Operation | Bounded by |
 | --- | --- |
@@ -228,9 +249,15 @@ by its own timeout:
 | Model call | the model's `timeout_ms`, times `retries` + 1 attempts, plus the waits between them (at most 60 s each) |
 | TCP and TLS exchange | `net.connect_timeout_ms` and `net.timeout_ms` |
 | PostgreSQL | `net.connect_timeout_ms` and `net.timeout_ms`, per connection and per statement |
-| SQLite | at most 5 s waiting for a locked database; a statement itself has no time limit, so a tool's queries should be ones the operator knows are quick |
+| SQLite | at most 5 s waiting for a locked database, and `net.timeout_ms` per statement (a statement past it is stopped and changes nothing) |
 | Computation | `max_steps` |
 | Listening | refused in a tool (section 2) |
+| A C function (`cap ffi`) | nothing: C code cannot be interrupted |
+
+A tool granted a C function is therefore the one kind of tool whose call can hold its
+concurrency slot and its reservation until the process is restarted, if the function
+never returns. The server says so in a warning at start for each such tool, and a tool
+should be given only C functions the operator knows return.
 
 The defaults suit a script, not a tool call, so in a tool they are required: the
 manifest must give `net.connect_timeout_ms` and `net.timeout_ms` and, for a tool that
@@ -242,8 +269,8 @@ from when the runtime begins executing the run, not from when the request arrive
 bounds when a new action or model call may start, not when the run ends: past the
 deadline, the run fails as `deadline` instead of starting the next one, so a deadline
 never cuts an action in half and never leaves one in doubt. Because every operation is
-bounded (the table above), a run takes at most its deadline plus its longest single
-operation; the run does not end exactly at the deadline, and the public documentation
+bounded (the table above; C functions apart), a run takes at most its deadline plus its
+longest single operation; the run does not end exactly at the deadline, and the public documentation
 says so. A resumed run makes the same decision:
 an operation already in the journal is replayed, and a run the journal records as
 ended at its deadline ends there again. The tool's `deadline` sets the run's
@@ -368,8 +395,14 @@ Annotations, derived from the tool's grants:
 
 - `readOnlyHint: true` only when every grant is a read: `net.http.get`, `fs.read`,
   `db.sqlite.query` or `db.postgres.query`, and the tool has no library capability.
+  The broker enforces the last three (a read-only file, a read-only SQLite connection,
+  a READ ONLY PostgreSQL transaction). `net.http.get` is counted as a read because HTTP
+  defines GET as safe (RFC 9110); a service whose GET changes something breaks that,
+  and Staal cannot tell.
 - `destructiveHint: false` only when `readOnlyHint` is true.
-- `idempotentHint: true` only when `readOnlyHint` is true or the tool has `once`.
+- `idempotentHint: true` only when `readOnlyHint` is true or the tool has `once` with
+  its key kept for ever (`server.keep` `"forever"`). A key kept for a time lets the same
+  call run again once it has gone, so a tool whose key expires is not idempotent.
   An idempotency key does not make a tool idempotent: the keys are the run's own
   (section 7), so a second call is a second run with new keys and acts again. Only
   `once` turns the same arguments into the same run. (The design first said
@@ -536,7 +569,9 @@ What each side is told:
 - **The caller can follow it** with a read-only tool the server adds to every manifest,
   `staal_run_status`, which takes a run id and returns a snapshot:
   `{"run": "<run id>", "status": ..., "observed_at": "<UTC time>"}`, with `result` or
-  `failure` when there is one. The status is `running` only for a run in progress in
+  `failure` when there is one. A result larger than a call's answer may be (1 MiB, section
+  3) is not sent this way either: the snapshot gives `result_bytes` and a `reason`
+  instead, and the operator reads the result from the journal. The status is `running` only for a run in progress in
   this server process right now, which the server knows from memory; a run that was in
   progress when an earlier process died is resumed at start, before any status is
   answered, so `running` never describes a dead process. Otherwise the status comes
@@ -571,6 +606,12 @@ What each side is told:
   secret and no tool arguments, only the tool, the run id, what is in doubt (the
   runtime's message, which never holds a secret) and the time, so it is safe to hand to
   the command.
+
+Delivery is at least once, not exactly once: if the command succeeds and the process
+dies before `ok` is recorded, the command runs again at the next start. The waiting
+record's run id is stable, so a command that must not alert twice deduplicates by it.
+A failed command is run again only at a later start of the server (or the next time an
+app opens the directory), not while it runs.
 
 So an operator learns of every stopped run even if the notify command is broken: the
 record is on disk, `staalc mcp status` lists it, and stderr has it. The notify command
@@ -608,9 +649,12 @@ environment that holds the secrets. What it does not: everything that arrives on
 
 - Arguments are inputs and nothing more (section 5, step 6).
 - A secret's variable is checked when the server starts (a missing one stops it), and
-  its value is read for each run and only ever given to the run that needs it; secret values are scrubbed from every message
+  its value is read for each run and only ever given to the run that needs it; secret
+  values are scrubbed from every message
   the runtime produces, and tests check the server's stdout, stderr, journals and
-  ledger for each secret.
+  ledger for each secret. C code called through `cap ffi` is outside that: it writes
+  what it likes to standard error, so a C function must not be given a secret it may
+  not disclose.
 - The client sees tool names, descriptions, schemas, results and failure messages. It
   never sees grants, limits or the manifest's paths. A failure message can name a limit
   ("allows at most 50.00 USD per action"), which tells the model what it may do; that is
@@ -649,13 +693,24 @@ environment that holds the secrets. What it does not: everything that arrives on
   gets the original result; for one without, the test shows the second refund, as the
   documentation says it can happen. A repeated key with different arguments is refused.
 - Concurrency: with `max_concurrent_runs: 2`, a third simultaneous call is refused as
-  busy before reserving anything, and a fourth succeeds once one finishes.
+  busy before reserving anything, and a fourth succeeds once one finishes. Sixteen
+  identical `once` calls released together make one reservation and one run; sixteen
+  calls racing for a money quota that fits one worst case make exactly one run, and
+  the others reserve nothing (python/tests/test_tool.py). Splitting the lock between
+  the `once` check and the reservation fails the first of these.
+- Changed code: a module a program imports is changed while a run is unfinished; the
+  directory refuses to open, naming the run, and opens and finishes it once the module
+  is restored (python/tests/test_tool.py, with crash injection).
 - The protocol: a batch is refused; `ping` works under 2025-11-25 and is unknown under
   2026-07-28; `tools/list` under 2026-07-28 carries `ttlMs` and `cacheScope`; a 5 MiB
   line, a 100-level nesting and a result over 1 MiB are each handled as section 3 says;
   a call cancelled after its run started gets no answer and its run still ends.
 - Notify: the command sees none of the server's secrets (it prints its environment in
-  the test), and only the variables `notify_env` names.
+  the test), and only the variables `notify_env` names, and on Linux it holds no
+  descriptor beyond its standard ones (the protocol's private ones are close-on-exec;
+  making them inheritable fails the test).
+- Time limits: an endless SQLite statement is stopped at `net.timeout_ms`, on both
+  engines, and a stopped `execute` changes nothing (`tests/db_test.rs`, `src/interp/db.rs`).
 - Secrets: as in section 8.
 - The stream: a tool that prints, and one whose C library writes to standard output,
   never put anything but MCP messages on the client's stream; a program that can reach
@@ -706,7 +761,8 @@ designed with the remote transport, not before.
 
 **Operators are told outside MCP.** Section 7 ("When a run waits for an operator")
 says how: the caller is told the truth and given a status tool, and the operator gets
-a durable record, a notify command retried until it succeeds, and `staalc mcp status`.
+a durable record, a notify command run again at each later start until it succeeds,
+and `staalc mcp status`.
 Resolution stays with `staalc resolve`.
 
 **Duplicates are stopped by `once`, not by the quota.** A quota bounds total exposure

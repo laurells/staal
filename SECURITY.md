@@ -76,10 +76,13 @@ and a way around any of them is in scope:
   MCP or from the model.
 - **Secrets stay out.** No secret reaches the client, the model, a log line, the
   ledger, a run file, a journal, a waiting record, or the notify command, which runs
-  with a cleared environment.
-- **No call holds the host without bound.** A tool may not listen for connections,
-  every network wait has a timeout, a tool's `deadline` stops a run starting new
-  actions, and the concurrency limit refuses calls beyond it rather than queueing them.
+  with a cleared environment and none of the host's descriptors beyond its standard
+  ones. (C code given a secret can print it; that is the operator's grant.)
+- **No call holds the host without bound**, except through C code. A tool may not
+  listen for connections, every network wait and every SQLite statement has a
+  timeout, a tool's `deadline` stops a run starting new actions, and the concurrency
+  limit refuses calls beyond it rather than queueing them. A C function (`cap ffi`)
+  cannot be interrupted; a tool granted one is warned about at start.
 - **One process owns a journal directory**, by an OS lock, so two processes cannot
   both act on one ledger.
 

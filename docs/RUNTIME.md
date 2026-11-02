@@ -1101,6 +1101,13 @@ check: those folders should be writable only by whoever runs the program.
   `synchronous=FULL`: once it returns, the change is on disk, and if it fails
   nothing is changed. It creates the database if it does not exist. Its receipt is
   `sqlite:N`, N the rows changed.
+- Each statement has a time limit, `net.timeout_ms` (30 s by default), as a
+  PostgreSQL statement does: SQLite checks it as the statement runs and stops the
+  statement once it has passed, which fails the action (`action`, "ran longer than
+  net.timeout_ms ... and was stopped; it changed nothing"). A stopped `execute` is
+  rolled back. The limit is not checked once the change is made and only being
+  committed, so a commit is never cut in half. Waiting for another process's lock
+  is bounded separately, at 5 seconds.
 - Either takes exactly one statement, refuses ATTACH (which would open another
   file), and runs schema code without side effects (`trusted_schema=OFF`). The SQL
   must be trusted text (E006), the program's own: values from outside are passed as

@@ -90,11 +90,24 @@ the language or its file formats.
   server from starting. Editing a program or upgrading `staalc` with runs unfinished
   still does. Ledger `reserve` events record the quota window and how long a `once`
   key is kept, so compaction no longer depends on the manifest.
+- A SQLite statement (`db.sqlite.query`, `execute`) is stopped once it runs longer
+  than `net.timeout_ms` (30 s by default), as a PostgreSQL statement already was; a
+  stopped `execute` is rolled back and changes nothing. Before, a statement had no
+  time limit.
+- A tool with `once` is advertised as idempotent (`idempotentHint`) only when its key
+  is kept for ever: a key that expires lets the same call run again.
+- A tool granted a C function is warned about at start: C code cannot be
+  interrupted, so a call that never returns holds its slot and reservation.
 - The error when another process holds the journal directory now reads "another
   process is using ...", since that process may be an app's tools.
 
 ### Fixed
 
+- `staal_run_status` returned a finished run's result whatever its size, so a result
+  too large for the call's answer (over 1 MiB) could be had through it. It now gives
+  the size and a reason instead, as the call does.
+- A run's folder (`<journals>/<tool>/<shard>`) is flushed into its parent when made, so
+  a power loss cannot take away a folder whose journal was already flushed.
 - `docs/PACKAGES.md`: the Postmark library checked a success answer against a type
   that required `MessageID` before reading `ErrorCode`, so a refusal sent with status
   200 and no `MessageID` was reported as malformed rather than as Postmark's refusal.
