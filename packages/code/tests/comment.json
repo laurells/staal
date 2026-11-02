@@ -1,0 +1,66 @@
+{
+  "about": "A comment on an issue the grant allows is posted once, with the token, the media type and the API version GitHub documents.",
+  "service": "https://api.github.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/repos/teamozy/app/issues/*/comments",
+      "status": 201,
+      "body": {
+        "id": "{n}",
+        "html_url": "https://github.com/teamozy/app/issues/12#issuecomment-{n}"
+      }
+    }
+  ],
+  "program": "import code.github\n\nfn main(issue: Text, gh: cap code.github.comment(uses: 1)) -> Receipt {\n    return gh.comment(issue, \"Thanks, this is fixed in 1.2.\")\n}\n",
+  "inputs": {
+    "issue": " TeamOzy/App#12 "
+  },
+  "grants": {
+    "gh": {
+      "cap": "code.github.comment",
+      "only": [
+        "teamozy/app#*"
+      ],
+      "needs": {
+        "get": {
+          "cap": "net.http.get",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "post": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        }
+      }
+    }
+  },
+  "expect": {
+    "result": {
+      "receipt": "https://github.com/teamozy/app/issues/12#issuecomment-1",
+      "capability": "code.github.comment",
+      "method": "comment"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/repos/teamozy/app/issues/12/comments",
+        "json": {
+          "body": "Thanks, this is fixed in 1.2."
+        },
+        "headers": {
+          "Authorization": "Bearer {key}",
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2026-03-10",
+          "User-Agent": "staal-code-github"
+        }
+      }
+    ]
+  }
+}

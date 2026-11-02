@@ -1,0 +1,163 @@
+// Issues and pull requests on GitHub (https://docs.github.com/rest), through its REST
+// API with a token.
+//
+// Programs ask for `cap code.github.comment(only: ["teamozy/app#*"], uses: N)` and the
+// like, and call `gh.comment("teamozy/app#12", "Thanks, fixed in 1.2.")`. Targets are
+// written `owner/repo#number` for an issue or pull request, and `owner/repo` for a
+// repository; `canonical` puts them in lower case (GitHub's names are not case
+// sensitive), so `only` patterns are written in lower case too.
+//
+//   comment(issue, body)          a comment on an issue or a pull request
+//   comment_pull(pull, body)      a comment on a pull request only: the number is
+//                                 checked to be a pull request first
+//   label(issue, label)           adds one label to an issue or a pull request
+//   create_issue(repo, title, body)
+//
+// The operator grants `get` and `post` (net.http.get and net.http.post, narrowed with
+// `only` to the repositories the program may touch) and the token under `needs`.
+// GitHub's REST API does not deduplicate repeated requests, so grant `post` without
+// `idempotency_key`: a comment whose answer a crash loses stops the run in doubt, for
+// an operator to check on GitHub, instead of being posted twice.
+
+type Comment { body: Text }
+type Labels { labels: List<Text, 1> }
+type NewIssue { title: Text, body: Text }
+type Posted { html_url: Text }
+type Pull { number: Int }
+
+capability code.github {
+    needs get: cap net.http.get(only: ["https://api.github.com/repos/*"])
+    needs post: cap net.http.post(only: ["https://api.github.com/repos/*"])
+    needs token: Secret
+
+    canonical(target: Text) -> Text {
+        let t = lower(trim(target))
+        let parts = split(t, "#", 100)
+        if len(parts) > 2 {
+            fail("'" + t + "' is not a target: write owner/repo or owner/repo#number")
+        }
+        repo_of(parts[0])
+        if len(parts) == 2 {
+            number_of(parts[1])
+        }
+        return t
+    }
+
+    action comment(issue: Text @target, body: Text) -> Text {
+        let t = lower(trim(issue))
+        let r = post.post(issue_url(t) + "/comments", json(Comment { body: body }), headers(token))
+        return posted("comment", r)
+    }
+
+    action comment_pull(pull: Text @target, body: Text) -> Text {
+        let t = lower(trim(pull))
+        let check = get.get(pull_url(t), headers(token))
+        if check.status == 404 {
+            fail("'" + t + "' is not a pull request")
+        }
+        if check.status != 200 or not check.complete {
+            fail("GitHub answered " + json(check.status) + " for the pull request: " + check.body)
+        }
+        let p: Pull = validate parse(Pull, check.body)
+        if json(p.number) != number_of(issue_part(t)) {
+            fail("GitHub returned pull request " + json(p.number) + " for " + t)
+        }
+        let r = post.post(issue_url(t) + "/comments", json(Comment { body: body }), headers(token))
+        return posted("comment", r)
+    }
+
+    action label(issue: Text @target, label: Text) -> Text {
+        let t = lower(trim(issue))
+        if trim(label) == "" {
+            fail("a label cannot be empty")
+        }
+        let r = post.post(issue_url(t) + "/labels", json(Labels { labels: [label] }), headers(token))
+        if r.status != 200 or not r.complete {
+            fail("GitHub answered " + json(r.status) + " to the label: " + r.body)
+        }
+        return t + " labelled " + label
+    }
+
+    action create_issue(repo: Text @target, title: Text, body: Text) -> Text {
+        let t = lower(trim(repo))
+        let r = post.post(repo_url(t) + "/issues", json(NewIssue { title: title, body: body }), headers(token))
+        return posted("issue", r)
+    }
+}
+
+/// The headers every request carries: the token, and the media type and API version
+/// GitHub's documentation gives.
+fn headers(token: Secret) -> List<Header, 4> {
+    return [header("Authorization", fill_secret("Bearer {secret}", token)),
+        header("Accept", "application/vnd.github+json"),
+        header("X-GitHub-Api-Version", "2026-03-10"),
+        header("User-Agent", "staal-code-github")]
+}
+
+/// The URL of the result of a created comment or issue, which becomes the receipt.
+fn posted(what: Text, r: Response) -> Text {
+    if r.status != 201 or not r.complete {
+        fail("GitHub answered " + json(r.status) + " to the " + what + ": " + r.body)
+    }
+    let p: Posted = validate parse(Posted, r.body)
+    return p.html_url
+}
+
+/// `owner/repo`, each part one URL segment of the characters GitHub allows.
+fn repo_of(t: Text) -> Text {
+    let parts = split(t, "/", 100)
+    if len(parts) != 2 {
+        fail("'" + t + "' is not a repository: write owner/repo")
+    }
+    name_part(parts[0])
+    name_part(parts[1])
+    return t
+}
+
+/// A part of `owner/repo`. It reaches a URL only through `url_segment`, so no
+/// character can change the URL's shape; this refuses what cannot be a name at all.
+fn name_part(p: Text) -> Text {
+    if p == "" or p == "." or p == ".." or contains(p, " ") or contains(p, "#") or contains(p, "?") {
+        fail("'" + p + "' is not an owner or repository name")
+    }
+    return p
+}
+
+/// The number after `#`, as GitHub writes it: digits, no leading zero.
+fn number_of(n: Text) -> Text {
+    let v = to_int(n)
+    match v {
+        some(i) => {
+            if i < 1 or json(i) != n {
+                fail("'#" + n + "' is not an issue number")
+            }
+            return n
+        }
+        none => {
+            fail("'#" + n + "' is not an issue number")
+        }
+    }
+}
+
+fn issue_part(t: Text) -> Text {
+    let parts = split(t, "#", 2)
+    if len(parts) != 2 {
+        fail("'" + t + "' names no issue or pull request: write owner/repo#number")
+    }
+    return parts[1]
+}
+
+fn repo_url(t: Text) -> Text {
+    let parts = split(repo_of(t), "/", 2)
+    return "https://api.github.com/repos/" + url_segment(parts[0]) + "/" + url_segment(parts[1])
+}
+
+fn issue_url(t: Text) -> Text {
+    let parts = split(t, "#", 2)
+    return repo_url(parts[0]) + "/issues/" + number_of(issue_part(t))
+}
+
+fn pull_url(t: Text) -> Text {
+    let parts = split(t, "#", 2)
+    return repo_url(parts[0]) + "/pulls/" + number_of(issue_part(t))
+}

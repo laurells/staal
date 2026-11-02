@@ -1,6 +1,8 @@
-# Reference packages
+# Packages
 
-Four Staal packages (six capabilities), written as references for how a service becomes a library:
+Six Staal packages (twelve capabilities), and a template to start a new one from. To
+write one, follow [docs/PACKAGES.md](../docs/PACKAGES.md), "Write your first Staal
+package".
 
 | Package | Capability | Service | Authority |
 | --- | --- | --- | --- |
@@ -10,8 +12,14 @@ Four Staal packages (six capabilities), written as references for how a service 
 | `payments` | `payments.flutterwave.refund(transaction @target, amount @amount)` | Flutterwave (v3) | GET `https://api.flutterwave.com/v3/transactions/*/verify`, POST `https://api.flutterwave.com/v3/transactions/*/refund` |
 | `email` | `email.resend.send(to @target, subject, text)` | Resend | POST `https://api.resend.com/emails` |
 | `chat` | `chat.slack.post(channel @target, text)` | Slack | POST `https://slack.com/api/chat.postMessage` |
+| `code` | `code.github.comment(issue @target, body)`, `comment_pull(pull @target, body)`, `label(issue @target, label)`, `create_issue(repo @target, title, body)` | GitHub | GET and POST `https://api.github.com/repos/*` |
+| `messaging` | `messaging.twilio.sms(to @target, text)`, `whatsapp(to @target, text)` | Twilio | POST `https://api.twilio.com/2010-04-01/Accounts/*` |
 
-Each folder is one package, also published as its own repository
+`template` is not a package to depend on: it is the folder to copy (a manifest, a
+library with one action, and its tests, passing from the start).
+
+The first four were written as references for how a service becomes a library.
+Each of them is also published as its own repository
 ([staal-sms](https://github.com/laurells/staal-sms),
 [staal-payments](https://github.com/laurells/staal-payments),
 [staal-email](https://github.com/laurells/staal-email),
@@ -32,9 +40,57 @@ than round it. Neither documents an idempotency key, so grant their `post` witho
 operator to check in the dashboard, instead of being sent twice.
 
 Each package's code has been run against a local server standing in for its
-service (`tests/packages_test.rs`, with the base URL swapped), and all four have
-been fetched from their GitHub repositories with `staalc fetch`. Runs against the
-live services need your own keys.
+service (`tests/packages_test.rs` for the first four, `tests/*.json` in each folder
+for the rest), and the first four have been fetched from their GitHub repositories
+with `staalc fetch`. Runs against the live services need your own keys.
+
+### `code`: GitHub
+
+Targets are `owner/repo#number` for an issue or pull request and `owner/repo` for a
+repository, in lower case. `comment` posts on an issue or a pull request (GitHub
+treats both as issues); `comment_pull` first checks that the number is a pull request
+and refuses otherwise; `label` adds one label. Grant:
+
+    "gh": { "cap": "code.github.comment", "only": ["teamozy/app#*"], "uses": 5,
+            "needs": { "get":  { "cap": "net.http.get",  "only": ["https://api.github.com/repos/teamozy/app/*"] },
+                       "post": { "cap": "net.http.post", "only": ["https://api.github.com/repos/teamozy/app/*"] },
+                       "token": { "env": "GITHUB_TOKEN" } } }
+
+GitHub's REST API does not deduplicate repeated requests, so `post` is granted
+without `idempotency_key`. Status: tested against a local server only.
+
+### `messaging`: Twilio
+
+SMS and WhatsApp through Twilio's Messages resource. Numbers are E.164, written
+`+2348012345678` in `only` patterns. `key` is Twilio's HTTP Basic credentials
+(an API key's SID and secret, or the Account SID and Auth Token) as `SID:SECRET`,
+base64-encoded, so that the value Twilio receives is the secret itself and is removed
+from anything echoed back: `printf '%s' "$SID:$SECRET" | base64 | tr -d '\n'`. Grant:
+
+    "texts": { "cap": "messaging.twilio.sms", "only": ["+234*"], "uses": 20,
+               "needs": { "http": { "cap": "net.http.post", "only": ["https://api.twilio.com/2010-04-01/Accounts/AC.../Messages.json"] },
+                          "key": { "env": "TWILIO_BASIC_CREDENTIALS" },
+                          "account": "AC...", "from": "+14155550100" } }
+
+Twilio's Messages documentation describes no idempotency key, so `http` is granted
+without `idempotency_key`. A WhatsApp message outside a conversation the customer
+started needs an approved template, which this package does not send yet. Status:
+tested against a local server only.
+
+## Testing a package
+
+A package's tests are files in its `tests/` folder, each a program run against a
+fake service described as data: its routes and answers, as the service's
+documentation shows them. The fields are explained in docs/PACKAGES.md (step 5) and
+in `tests/common/package_case.rs`. Run them with
+
+    STAAL_PACKAGE=<folder> cargo test --test package_cases_test
+
+Each test checks the result, every request the service received, and that the key
+appears in neither the log nor the journal. With `--features failpoints`, each is also
+killed at every journal write and between every request and its recorded answer,
+resumed, and must end as the uninterrupted run did, with the same effects on the
+service.
 
 ## What every package must meet
 
@@ -49,9 +105,9 @@ A new package is reviewed against this list, in addition to the rules in
 - A comment at the top of each library saying whether the service deduplicates
   repeated requests, and by which header or key, so an operator knows whether to grant
   `idempotency_key`.
-- A test against a local server that answers as the service's documentation shows,
-  with at least one action refused by `only` before any request is made, and a check
-  that the key never appears in the log.
+- Tests in `tests/*.json` against a fake service answering as the service's
+  documentation shows, with at least one action refused by `only` before any request
+  is made, passing with and without `--features failpoints`.
 - A README section with a grant example.
 - An honest status: tested against a live test-mode account, or tested against a
   local server only.

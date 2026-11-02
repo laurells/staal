@@ -118,36 +118,7 @@ impl Server {
 
 /// Serves one request; returns its path, or None if no request arrived.
 fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mutex<HashMap<String, String>>>) -> Option<String> {
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 4096];
-    let head_end = loop {
-        match conn.read(&mut chunk) {
-            Ok(0) | Err(_) => return None,
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-        }
-        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            break i + 4;
-        }
-    };
-    let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
-    let mut lines = head.split("\r\n");
-    let mut first = lines.next().unwrap_or("").split(' ');
-    let method = first.next().unwrap_or("").to_string();
-    let path = first.next().unwrap_or("").to_string();
-    let mut headers = HashMap::new();
-    for l in lines {
-        if let Some((k, v)) = l.split_once(':') {
-            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
-        }
-    }
-    let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
-    while buf.len() < head_end + len {
-        match conn.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-        }
-    }
-    let body = String::from_utf8_lossy(&buf[head_end..(head_end + len).min(buf.len())]).to_string();
+    let super::http::Request { method, path, headers, body } = super::http::read_request(conn)?;
     let mut effect = true;
     let n = log.lock().unwrap().len() + 1;
     let (status, reply): (u16, Vec<u8>) = match path.as_str() {
@@ -248,13 +219,7 @@ fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mu
         _ => (404, Vec::new()),
     };
     log.lock().unwrap().push(Req { method, path: path.clone(), headers, body, effect });
-    let mut resp = format!("HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n", reply.len());
-    if path == "/redirect" {
-        resp.push_str("Location: /ok\r\n");
-    }
-    resp.push_str("\r\n");
-    let _ = conn.write_all(resp.as_bytes());
-    let _ = conn.write_all(&reply);
-    let _ = conn.flush();
+    let extra = if path == "/redirect" { vec![("Location".to_string(), "/ok".to_string())] } else { Vec::new() };
+    super::http::write_response(conn, status, &extra, &reply);
     Some(path)
 }

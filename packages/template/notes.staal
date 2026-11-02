@@ -1,0 +1,40 @@
+// Notes through Example (https://example.com): the template every new package starts
+// from. Copy this folder, rename the package, and change it to your service.
+//
+// Programs ask for `cap example.notes.send(only: ["*@example.org"], uses: N)` and call
+// `inbox.send("ada@example.org", "The report is ready.")`. The operator grants the
+// HTTP capability and the API key under `needs`.
+//
+// Say here whether the service deduplicates repeated requests, and by which header:
+// that tells an operator whether to grant `http` with "idempotency_key": true. Example
+// documents no idempotency key, so grant it without: a note whose answer a crash
+// loses stops the run in doubt, for an operator to check, instead of being sent twice.
+
+type Note { to: Text, text: Text }
+type Created { id: Text }
+
+capability example.notes {
+    needs http: cap net.http.post(only: ["https://api.example.com/v1/notes"])
+    needs key: Secret
+
+    // One spelling for every target, so `only` patterns mean what they say.
+    canonical(to: Text) -> Text {
+        let a = lower(trim(to))
+        if not contains(a, "@") {
+            fail("'" + to + "' is not an address")
+        }
+        return a
+    }
+
+    action send(to: Text @target, text: Text) -> Text {
+        let note = Note { to: lower(trim(to)), text: text }
+        let r = http.post("https://api.example.com/v1/notes", json(note),
+            [header("Authorization", fill_secret("Bearer {secret}", key)),
+                header("Content-Type", "application/json")])
+        if r.status != 201 or not r.complete {
+            fail("Example answered " + json(r.status) + ": " + r.body)
+        }
+        let created: Created = validate parse(Created, r.body)
+        return created.id
+    }
+}

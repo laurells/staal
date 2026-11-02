@@ -1,0 +1,102 @@
+// SMS and WhatsApp messages through Twilio (https://www.twilio.com/docs/messaging),
+// with its Messages resource: POST /2010-04-01/Accounts/{AccountSid}/Messages.json,
+// form-encoded.
+//
+// Programs ask for `cap messaging.twilio.sms(only: ["+234*"], uses: N)` (or
+// `messaging.twilio.whatsapp`) and call `texts.sms("+234 801 234 5678", "See you at
+// 10.")`. Numbers are E.164: `canonical` keeps the leading `+` and the digits, and drops
+// spaces, dashes, dots and brackets, so `only` patterns are written as "+234*". A
+// WhatsApp message outside a conversation the customer started needs an approved
+// template, which this library does not send: Twilio refuses it, and the action fails.
+//
+// The operator grants under `needs`:
+//   http     net.http.post, narrowed to the account's Messages URL
+//   account  the Account SID (the URL names it)
+//   from     the sending number in E.164, which must be a Twilio number of the account
+//            (for WhatsApp, a WhatsApp sender)
+//   key      Twilio's HTTP Basic credentials, base64-encoded: an API key's SID and
+//            secret (or the Account SID and Auth Token) as "SID:SECRET", encoded, e.g.
+//            printf '%s' "$SID:$SECRET" | base64 | tr -d '\n'
+//            Kept encoded, the value Twilio receives is the secret itself, so the
+//            runtime removes it from anything a response echoes back.
+//
+// Twilio's Messages documentation describes no idempotency key, so grant `http`
+// without `idempotency_key`: a message whose answer a crash loses stops the run in
+// doubt, for an operator to check in Twilio's console, instead of being sent twice.
+
+type Message { To: Text, From: Text, Body: Text }
+type Sent { sid: Text, status: Text }
+
+capability messaging.twilio {
+    needs http: cap net.http.post(only: ["https://api.twilio.com/2010-04-01/Accounts/*"])
+    needs key: Secret
+    needs account: Text
+    needs from: Text
+
+    canonical(phone: Text) -> Text {
+        return e164(phone)
+    }
+
+    action sms(to: Text @target, text: Text) -> Text {
+        let m = message(e164(to), e164(from), text)
+        let r = http.post(messages_url(account), form(m),
+            [header("Authorization", fill_secret("Basic {secret}", key)),
+                header("Content-Type", "application/x-www-form-urlencoded")])
+        return sent(r)
+    }
+
+    action whatsapp(to: Text @target, text: Text) -> Text {
+        let m = message("whatsapp:" + e164(to), "whatsapp:" + e164(from), text)
+        let r = http.post(messages_url(account), form(m),
+            [header("Authorization", fill_secret("Basic {secret}", key)),
+                header("Content-Type", "application/x-www-form-urlencoded")])
+        return sent(r)
+    }
+}
+
+fn message(to: Text, from: Text, text: Text) -> Message {
+    if text == "" {
+        fail("a message cannot be empty")
+    }
+    return Message { To: to, From: from, Body: text }
+}
+
+fn messages_url(account: Text) -> Text {
+    return "https://api.twilio.com/2010-04-01/Accounts/" + url_segment(trim(account)) + "/Messages.json"
+}
+
+/// The message's SID, from Twilio's answer, which becomes the receipt.
+fn sent(r: Response) -> Text {
+    if r.status < 200 or r.status > 299 or not r.complete {
+        fail("Twilio answered " + json(r.status) + ": " + r.body)
+    }
+    let s: Sent = validate parse(Sent, r.body)
+    if s.status == "failed" or s.status == "undelivered" {
+        fail("Twilio could not send the message (" + s.status + ")")
+    }
+    return s.sid
+}
+
+/// A phone number in E.164: `+`, then 8 to 15 digits, the first not 0.
+fn e164(phone: Text) -> Text {
+    let p = replace(replace(replace(replace(replace(replace(trim(phone), " ", ""), "-", ""), ".", ""), "(", ""), ")", ""), "whatsapp:", "")
+    if not starts_with(p, "+") {
+        fail("'" + phone + "' is not an international number: write it with + and the country code")
+    }
+    let digits = slice(p, 1, len(p))
+    let n = len(digits)
+    if n < 8 or n > 15 or starts_with(digits, "0") {
+        fail("'" + phone + "' is not an E.164 number")
+    }
+    match to_int(digits) {
+        some(i) => {
+            if i < 0 {
+                fail("'" + phone + "' is not an E.164 number")
+            }
+        }
+        none => {
+            fail("'" + phone + "' is not an E.164 number")
+        }
+    }
+    return p
+}

@@ -1,0 +1,46 @@
+{
+  "about": "A number outside `only` is refused before any request.",
+  "service": "https://api.twilio.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/2010-04-01/Accounts/AC_TEST_ACCOUNT/Messages.json",
+      "status": 201,
+      "body": {
+        "sid": "SM{n}",
+        "status": "queued",
+        "error_code": null,
+        "error_message": null
+      }
+    }
+  ],
+  "program": "import messaging.twilio\n\nfn main(texts: cap messaging.twilio.sms) -> Receipt {\n    return texts.sms(\"+1 202 555 0143\", \"hello\")\n}\n",
+  "grants": {
+    "texts": {
+      "cap": "messaging.twilio.sms",
+      "only": [
+        "+234*"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/2010-04-01/Accounts/AC_TEST_ACCOUNT/Messages.json"
+          ]
+        },
+        "key": {
+          "env": "STAAL_PACKAGE_KEY"
+        },
+        "account": "AC_TEST_ACCOUNT",
+        "from": "+1 415 555 0100"
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "capability",
+      "message": "this action targets \"+12025550143\""
+    },
+    "requests": []
+  }
+}

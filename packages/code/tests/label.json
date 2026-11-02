@@ -1,0 +1,68 @@
+{
+  "about": "A label is added to an issue as GitHub's documentation shows: an object with a list of labels.",
+  "service": "https://api.github.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/repos/teamozy/app/issues/12/labels",
+      "status": 200,
+      "body": [
+        {
+          "id": 1,
+          "name": "bug",
+          "color": "f29513"
+        }
+      ]
+    }
+  ],
+  "program": "import code.github\n\nfn main(gh: cap code.github.label(uses: 1)) -> Receipt {\n    return gh.label(\"teamozy/app#12\", \"bug\")\n}\n",
+  "grants": {
+    "gh": {
+      "cap": "code.github.label",
+      "only": [
+        "teamozy/app#*"
+      ],
+      "needs": {
+        "get": {
+          "cap": "net.http.get",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "post": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        }
+      }
+    }
+  },
+  "expect": {
+    "result": {
+      "receipt": "teamozy/app#12 labelled bug",
+      "capability": "code.github.label",
+      "method": "label"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/repos/teamozy/app/issues/12/labels",
+        "json": {
+          "labels": [
+            "bug"
+          ]
+        },
+        "headers": {
+          "Authorization": "Bearer {key}",
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2026-03-10",
+          "User-Agent": "staal-code-github"
+        }
+      }
+    ]
+  }
+}

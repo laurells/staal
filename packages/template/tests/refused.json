@@ -1,0 +1,18 @@
+{
+  "about": "A note to an address outside `only` is refused before any request is made.",
+  "service": "https://api.example.com",
+  "routes": [
+    { "method": "POST", "path": "/v1/notes", "status": 201, "body": { "id": "note_{n}" } }
+  ],
+  "program": "import example.notes\n\nfn main(inbox: cap example.notes.send) -> Receipt {\n    return inbox.send(\"eve@elsewhere.com\", \"Hello.\")\n}\n",
+  "grants": {
+    "inbox": { "cap": "example.notes.send", "only": ["*@example.org"], "needs": {
+      "http": { "cap": "net.http.post", "only": ["{service}/v1/notes"] },
+      "key": { "env": "STAAL_PACKAGE_KEY" }
+    } }
+  },
+  "expect": {
+    "failure": { "kind": "capability", "message": "may only act on [\"*@example.org\"]; this action targets \"eve@elsewhere.com\"" },
+    "requests": []
+  }
+}

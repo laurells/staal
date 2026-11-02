@@ -1,0 +1,76 @@
+{
+  "about": "A comment on a pull request is posted after GitHub confirms the number is a pull request.",
+  "service": "https://api.github.com",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/repos/teamozy/app/pulls/7",
+      "status": 200,
+      "body": {
+        "number": 7,
+        "state": "open"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/repos/teamozy/app/issues/*/comments",
+      "status": 201,
+      "body": {
+        "id": "{n}",
+        "html_url": "https://github.com/teamozy/app/issues/12#issuecomment-{n}"
+      }
+    }
+  ],
+  "program": "import code.github\n\nfn main(gh: cap code.github.comment_pull(uses: 1)) -> Receipt {\n    return gh.comment_pull(\"teamozy/app#7\", \"Looks good to me.\")\n}\n",
+  "grants": {
+    "gh": {
+      "cap": "code.github.comment_pull",
+      "only": [
+        "teamozy/app#*"
+      ],
+      "needs": {
+        "get": {
+          "cap": "net.http.get",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "post": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        }
+      }
+    }
+  },
+  "expect": {
+    "result": {
+      "receipt": "https://github.com/teamozy/app/issues/12#issuecomment-2",
+      "capability": "code.github.comment_pull",
+      "method": "comment_pull"
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/repos/teamozy/app/pulls/7",
+        "headers": {
+          "Authorization": "Bearer {key}",
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2026-03-10",
+          "User-Agent": "staal-code-github"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/repos/teamozy/app/issues/7/comments",
+        "json": {
+          "body": "Looks good to me."
+        }
+      }
+    ]
+  }
+}

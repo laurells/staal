@@ -1,0 +1,52 @@
+{
+  "about": "An answer other than 201 fails the action with GitHub's message.",
+  "service": "https://api.github.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/repos/teamozy/app/issues/*/comments",
+      "status": 403,
+      "body": {
+        "message": "Resource not accessible by integration"
+      }
+    }
+  ],
+  "program": "import code.github\n\nfn main(gh: cap code.github.comment) -> Receipt {\n    return gh.comment(\"teamozy/app#12\", \"hello\")\n}\n",
+  "grants": {
+    "gh": {
+      "cap": "code.github.comment",
+      "only": [
+        "teamozy/app#*"
+      ],
+      "needs": {
+        "get": {
+          "cap": "net.http.get",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "post": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        }
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "action",
+      "message": "GitHub answered 403 to the comment: {\"message\":\"Resource not accessible by integration\"}"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/repos/teamozy/app/issues/12/comments"
+      }
+    ]
+  }
+}

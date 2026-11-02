@@ -1,0 +1,61 @@
+{
+  "about": "A WhatsApp message goes to the same resource with whatsapp: before both numbers.",
+  "service": "https://api.twilio.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/2010-04-01/Accounts/AC_TEST_ACCOUNT/Messages.json",
+      "status": 201,
+      "body": {
+        "sid": "SM{n}",
+        "status": "queued",
+        "error_code": null,
+        "error_message": null
+      }
+    }
+  ],
+  "program": "import messaging.twilio\n\nfn main(wa: cap messaging.twilio.whatsapp(uses: 1)) -> Receipt {\n    return wa.whatsapp(\"+2348012345678\", \"Your order has shipped.\")\n}\n",
+  "grants": {
+    "wa": {
+      "cap": "messaging.twilio.whatsapp",
+      "only": [
+        "+234*"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/2010-04-01/Accounts/AC_TEST_ACCOUNT/Messages.json"
+          ]
+        },
+        "key": {
+          "env": "STAAL_PACKAGE_KEY"
+        },
+        "account": "AC_TEST_ACCOUNT",
+        "from": "+1 415 555 0100"
+      }
+    }
+  },
+  "expect": {
+    "result": {
+      "receipt": "SM1",
+      "capability": "messaging.twilio.whatsapp",
+      "method": "whatsapp"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/2010-04-01/Accounts/AC_TEST_ACCOUNT/Messages.json",
+        "form": {
+          "To": "whatsapp:+2348012345678",
+          "From": "whatsapp:+14155550100",
+          "Body": "Your order has shipped."
+        },
+        "headers": {
+          "Authorization": "Basic {key}",
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      }
+    ]
+  }
+}

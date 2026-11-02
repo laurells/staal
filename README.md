@@ -301,11 +301,12 @@ continued.
 | [docs/GUIDE.md](docs/GUIDE.md) | The language: rules, syntax, capabilities, packages, native code |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | The runtime specification: semantics, the journal, failure behaviour |
 | [docs/MCP.md](docs/MCP.md) | `staalc mcp`: the manifest, the protocol, quotas, `once`, crashes and operators |
+| [docs/PACKAGES.md](docs/PACKAGES.md) | Write your first Staal package: one service, from an empty folder to passing tests |
 | [docs/RELEASING.md](docs/RELEASING.md) | How a release is made, and what it holds |
 | [editors/vscode](editors/vscode) | The VS Code extension: highlighting and the language server |
 | [docs/GRAMMAR.md](docs/GRAMMAR.md) | The complete syntax, checked against the parser by the tests |
 | [examples/README.md](examples/README.md) | Programs that call Claude and send real SMS and email, and how to run them with your keys |
-| [packages/README.md](packages/README.md) | The reference packages and how a service becomes a library |
+| [packages/README.md](packages/README.md) | The packages, the template, and how a package is tested |
 | [include/staal.h](include/staal.h) | The C interface |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
 
@@ -351,7 +352,8 @@ src/cli.rs, main.rs               the command line and built executables' entry
 python/staal/                     Python wrapper over the C interface
 docs/                             language guide and runtime specification
 examples/                         example programs and libraries
-packages/                         reference packages: sms, payments, email, chat
+packages/                         packages: sms, payments, email, chat, code, messaging,
+                                  and the template a new one starts from
 site/                             the landing page, published to GitHub Pages
 tests/                            fixtures, runtime cases, crash and engine tests
 ```

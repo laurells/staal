@@ -1,0 +1,22 @@
+{
+  "about": "A note within the grant is sent once, as the service's documentation shows, with the key in its header.",
+  "service": "https://api.example.com",
+  "routes": [
+    { "method": "POST", "path": "/v1/notes", "status": 201, "body": { "id": "note_{n}" } }
+  ],
+  "program": "import example.notes\n\nfn main(to: Text, inbox: cap example.notes.send(uses: 1)) -> Receipt {\n    return inbox.send(to, \"The report is ready.\")\n}\n",
+  "inputs": { "to": " Ada@Example.org " },
+  "grants": {
+    "inbox": { "cap": "example.notes.send", "only": ["*@example.org"], "needs": {
+      "http": { "cap": "net.http.post", "only": ["{service}/v1/notes"] },
+      "key": { "env": "STAAL_PACKAGE_KEY" }
+    } }
+  },
+  "expect": {
+    "result": { "receipt": "note_1", "capability": "example.notes.send", "method": "send" },
+    "requests": [
+      { "method": "POST", "path": "/v1/notes", "json": { "to": "ada@example.org", "text": "The report is ready." },
+        "headers": { "Authorization": "Bearer {key}", "Content-Type": "application/json" } }
+    ]
+  }
+}

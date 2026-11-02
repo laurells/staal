@@ -39,6 +39,22 @@ the language or its file formats.
   every journal and ledger write, and against the official Python (`mcp` 2.3.0) and
   TypeScript (`@modelcontextprotocol/client` 2.3.1) SDK clients.
 - `docs/MCP.md`: the design of `staalc mcp`, kept as its reference.
+- Package tests as data: a package's `tests/*.json` describe a fake service's routes
+  and answers, a program using the package, its grants, and the result and requests
+  expected. `tests/package_cases_test.rs` runs them against a local fake
+  (`tests/common/fake.rs`), with the package fetched through git so its manifest's
+  authority holds, checks the key appears in no log or journal, and, with
+  `--features failpoints`, kills every test at every journal write and between every
+  request and its answer, then checks it ends with the same effects: none lost, none
+  made twice. `STAAL_PACKAGE=<folder>` runs one package.
+- `packages/template`: a package to copy, with one action and its tests.
+- `docs/PACKAGES.md`, "Write your first Staal package": Postmark's email API from an
+  empty folder to passing tests, run by the test suite as written.
+- `packages/code`: GitHub, with `code.github.comment`, `comment_pull` (checked to be a
+  pull request first), `label` and `create_issue`.
+- `packages/messaging`: Twilio, with `messaging.twilio.sms` and `whatsapp`. Both
+  packages are tested against local fakes of the services' documented answers, not
+  yet against live accounts.
 - `CONTRIBUTING.md` says what to expect from review (a first response within two
   working days) and how to take a first issue; `packages/README.md` lists what every
   package must meet.

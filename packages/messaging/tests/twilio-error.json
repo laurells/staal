@@ -1,0 +1,50 @@
+{
+  "about": "An error from Twilio fails the action with Twilio's answer.",
+  "service": "https://api.twilio.com",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/2010-04-01/Accounts/AC_TEST_ACCOUNT/Messages.json",
+      "status": 400,
+      "body": {
+        "code": 21211,
+        "message": "The 'To' number is not a valid phone number.",
+        "status": 400
+      }
+    }
+  ],
+  "program": "import messaging.twilio\n\nfn main(texts: cap messaging.twilio.sms) -> Receipt {\n    return texts.sms(\"+2348012345678\", \"hello\")\n}\n",
+  "grants": {
+    "texts": {
+      "cap": "messaging.twilio.sms",
+      "only": [
+        "+234*"
+      ],
+      "needs": {
+        "http": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/2010-04-01/Accounts/AC_TEST_ACCOUNT/Messages.json"
+          ]
+        },
+        "key": {
+          "env": "STAAL_PACKAGE_KEY"
+        },
+        "account": "AC_TEST_ACCOUNT",
+        "from": "+1 415 555 0100"
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "action",
+      "message": "Twilio answered 400"
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/2010-04-01/Accounts/AC_TEST_ACCOUNT/Messages.json"
+      }
+    ]
+  }
+}

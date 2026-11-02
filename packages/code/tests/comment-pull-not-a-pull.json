@@ -1,0 +1,61 @@
+{
+  "about": "A number that is an issue, not a pull request, is refused after the check and nothing is posted.",
+  "service": "https://api.github.com",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/repos/teamozy/app/pulls/12",
+      "status": 404,
+      "body": {
+        "message": "Not Found"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/repos/teamozy/app/issues/*/comments",
+      "status": 201,
+      "body": {
+        "id": "{n}",
+        "html_url": "https://github.com/teamozy/app/issues/12#issuecomment-{n}"
+      }
+    }
+  ],
+  "program": "import code.github\n\nfn main(gh: cap code.github.comment_pull) -> Receipt {\n    return gh.comment_pull(\"teamozy/app#12\", \"hello\")\n}\n",
+  "grants": {
+    "gh": {
+      "cap": "code.github.comment_pull",
+      "only": [
+        "teamozy/app#*"
+      ],
+      "needs": {
+        "get": {
+          "cap": "net.http.get",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "post": {
+          "cap": "net.http.post",
+          "only": [
+            "{service}/repos/teamozy/app/*"
+          ]
+        },
+        "token": {
+          "env": "STAAL_PACKAGE_KEY"
+        }
+      }
+    }
+  },
+  "expect": {
+    "failure": {
+      "kind": "action",
+      "message": "'teamozy/app#12' is not a pull request"
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/repos/teamozy/app/pulls/12"
+      }
+    ]
+  }
+}

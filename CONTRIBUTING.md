@@ -106,6 +106,12 @@ knowledge of the compiler, only of the service's API, and it is the quickest way
 learn the language. Comment on an issue to take it, so two people do not write the
 same one.
 
+[docs/PACKAGES.md](docs/PACKAGES.md), "Write your first Staal package", takes one
+service from an empty folder to a package with passing tests. Start from
+`packages/template`, describe the service's answers in `tests/*.json`, and run
+`STAAL_PACKAGE=<folder> cargo test --test package_cases_test`; the crash tests come
+with every package (`--features failpoints`).
+
 ## Licence
 
 Staal is licensed under the Apache License, Version 2.0, with the LLVM Exceptions
