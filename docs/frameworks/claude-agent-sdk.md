@@ -39,8 +39,9 @@ fn main(order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -> 
 }
 ```
 
-`each: 500 USD` is the most this program will ever ask for in one refund. Your app can
-grant less, per customer, and the runtime holds every refund to the smaller of the two.
+`each: 500 USD` is the program's own ceiling: the most it will ever ask for in one
+refund, whoever grants it. Your app grants each call its own limit, which can only be
+lower, and the runtime holds every refund to the smaller of the two.
 
 ## 3. Make it a tool
 
@@ -55,8 +56,12 @@ LIMITS = {"gold": "500.00", "standard": "50.00"}  # USD per refund, decided by t
 
 
 def grants(customer):
+    # A tier the policy does not name gets no refund at all, and says why.
+    limit = LIMITS.get(customer.get("tier")) if isinstance(customer, dict) else None
+    if limit is None:
+        raise PermissionError(f"no refund policy for this customer: {customer!r}")
     return {"pay": {"cap": "payments.refund", "uses": 1,
-                    "each": {"amount": LIMITS[customer["tier"]], "currency": "USD"}}}
+                    "each": {"amount": limit, "currency": "USD"}}}
 
 
 refund = staal.Tool("refund.staal", name="refund_order",
@@ -65,7 +70,9 @@ refund = staal.Tool("refund.staal", name="refund_order",
 ```
 
 `grants` is called for each call with the customer, which only your app supplies; it is
-never an argument the model can fill in. `uses: 1` allows one refund per call.
+never an argument the model can fill in. A customer whose tier the policy does not name
+is refused outright, rather than given some default. `each` is the most one refund may
+be, and `uses: 1` allows one refund per call.
 `journals="runs"` is the folder where every call's journal is kept, so a run a crash
 interrupts is finished when the folder is next opened, without refunding twice.
 
@@ -92,7 +99,59 @@ The first refund was refused by Staal's broker, before the payment service was c
 the second was made. `result.text` is what a model is shown: the refusal's message, or
 the result as JSON (hence the quotes).
 
-## 4. The agent
+## 4. Limits across calls
+
+`each` and `uses` hold within one call. A model can call a tool again, so two refunds of
+35 USD each are two calls, each within its limits. Two more settings hold across calls:
+
+- `once` makes a repeated call one operation: the same run, with the same answer.
+- `quota` bounds what all calls together may do within a window of time: how many
+  calls, and how much money. Each call reserves its worst case (here its grant's
+  `each`) until it ends, so calls running at the same moment cannot overspend together.
+
+Save this as `limits.py`:
+
+```python file=limits.py
+import staal
+
+from tools import grants
+
+refund = staal.Tool("refund.staal", name="refund_order",
+                    description="Refund part of an order to the customer's original payment.",
+                    grants=grants, journals="runs-limits",
+                    once={"by": ["order", "amount"]},
+                    quota={"window": "24h", "money": {"amount": "100.00", "currency": "USD"}})
+
+for amount in ["35.00", "35.00", "40.00", "20.00"]:
+    result = refund({"order": "4417", "amount": {"amount": amount, "currency": "USD"}},
+                    context={"tier": "standard"})
+    print(result.status, result.text)
+refund.close()
+```
+
+and run it with `python limits.py`:
+
+```text output=limits.py
+done "Refunded 35.00 USD for order 4417"
+done "Refunded 35.00 USD for order 4417"
+done "Refunded 40.00 USD for order 4417"
+not_run the quota of 100.00 USD per 1d cannot hold this call, which can spend up to 50.00 USD; nothing was done; enough frees up at <time>
+```
+
+(`<time>` stands for the moment enough of the quota frees up, a day after the first
+refund.) The second 35 USD call is the first one again: the same run, and no second
+refund. The
+40 USD refund is a new operation, and fits. The 20 USD one would too by its amount, but
+it reserves its worst case, 50 USD, and 75 USD is already spent of the 100 USD quota, so
+it is refused before anything runs.
+
+Choose `once`'s key with care: it says which calls are the same operation. Keyed by the
+order alone, a corrected request (80 USD refused, then 35 USD) would be refused as the
+same operation with different arguments. A key the app gives each refund request, such
+as a ticket id passed as an argument, is the most exact. The quota here is the tool's,
+across every customer; a limit per customer belongs in the grants your app computes.
+
+## 5. The agent
 
 Save this as `agent.py`:
 
@@ -154,7 +213,7 @@ done: "Refunded 35.00 USD for order 4417"
 Whatever Claude asks for, a standard customer is never refunded more than 50 USD at a
 time. Change `{"tier": "standard"}` to `{"tier": "gold"}` and the 80 USD refund is made.
 
-## 5. In TypeScript
+## 6. In TypeScript
 
 The same agent with `@anthropic-ai/claude-agent-sdk`, for Node.js 18 or newer:
 
@@ -174,7 +233,12 @@ const LIMITS = { gold: '500.00', standard: '50.00' }; // USD per refund, decided
 const refund = await staal.Tool.open('refund.staal', {
   name: 'refund_order',
   description: "Refund part of an order to the customer's original payment.",
-  grants: (customer) => ({ pay: { cap: 'payments.refund', uses: 1, each: { amount: LIMITS[customer.tier], currency: 'USD' } } }),
+  grants: (customer) => {
+    // A tier the policy does not name gets no refund at all, and says why.
+    const limit = Object.hasOwn(LIMITS, customer?.tier) ? LIMITS[customer.tier] : undefined;
+    if (limit === undefined) throw new Error(`no refund policy for this customer: ${JSON.stringify(customer)}`);
+    return { pay: { cap: 'payments.refund', uses: 1, each: { amount: limit, currency: 'USD' } } };
+  },
   journals: 'runs',
 });
 
@@ -205,16 +269,34 @@ await refund.close();
 and run it with `ANTHROPIC_API_KEY=sk-ant-... node agent.mjs`. It prints the same
 answers from Staal as the Python agent does.
 
+## What Claude cannot change
+
+The tool is not a set of instructions Claude is asked to follow. Claude chooses when to
+call it and with which arguments; whatever it chooses, and whatever the prompt or a
+customer's message says, it cannot change:
+
+- who the customer is, or their tier: those come from your app's records;
+- the grants: what may be refunded, how much at a time (`each`), and how often (`uses`);
+- the program's ceiling (`each: 500 USD`) and the services it may reach;
+- the limits across calls (`once`, `quota`);
+- the agent's other tools: with `tools=[]` it has none.
+
+Claude can misread the policy, argue with it, or try to exceed it, and the refund is
+still refused before any payment service is called.
+
 ## What is and isn't covered
 
 What Staal guarantees here: no refund over the customer's limit is made, whatever the
-model asks or the prompt says; the customer's limit comes only from your app; and every
-call is journaled, so a crash never makes a refund twice. What it doesn't: which
-refunds Claude decides to ask for, or what it says to the customer. That is the model's
-part, and you shape it with the system prompt.
+model asks or the prompt says, and the customer's limit comes only from your app. Every
+call is journaled before it acts. If a crash comes after a refund was sent and before
+its answer was recorded, nobody can know from the app alone whether it happened, so
+Staal never sends it again blind. Every refund carries an idempotency key unique to its
+run and step: when the payment service deduplicates by it, as payment providers do, the
+refund is sent again with the same key and the service answers with the original
+result; otherwise the run stops for a person to check the service's own records and
+record what happened (`staalc resolve`).
 
-A call made twice is two refunds unless you say otherwise: give the tool
-`once={"by": ["order"]}` and a repeated call for the same order is the same run, with the
-same answer. Quotas across calls (calls and money per hour or day) are the tool's
-`quota=`. Both are in [docs/MCP.md](../MCP.md), sections 5 and 6, which apply to tools in
+What it doesn't: which refunds Claude decides to ask for, or what it says to the
+customer. That is the model's part, and you shape it with the system prompt. Sections 5
+and 6 of [docs/MCP.md](../MCP.md) give `once` and `quota` in full; they apply to tools in
 your app as they do to `staalc mcp`.

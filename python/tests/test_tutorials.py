@@ -85,7 +85,11 @@ for page in pages:
             lines = got.splitlines(keepends=True)
             expect(lines and lines[-1].startswith("Claude: "), f"{page}: {program} ends with Claude's reply:\n{got}")
             got = "".join(lines[:-1])
-        expect(got == want, f"{page}: {program} printed\n{got}\nwhere the page shows\n{want}")
+        # `<time>` in a page's output stands for a UTC time the program prints, which changes
+        # from run to run; everything else must be exactly as shown.
+        pattern = "".join(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z" if part == "<time>" else re.escape(part)
+                          for part in re.split(r"(<time>)", want))
+        expect(re.fullmatch(pattern, got) is not None, f"{page}: {program} printed\n{got}\nwhere the page shows\n{want}")
         if server:
             # The model was really shown the tool, and asked for each call in the script.
             expect(len(server.seen) == len(SCRIPTS[page]) + 1, f"{page}: {program}: {len(server.seen)} model turns")
