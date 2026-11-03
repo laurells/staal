@@ -267,26 +267,28 @@ for spec, why in [({"app_inputs": {"pay": lambda c: 1}}, "'main' has no input 'p
 
 # What app inputs are for: a record the app picks, read with the app's id, never one
 # a model names. The query is the program's own text, and the id a parameter.
-DB = os.path.join(scratch, "crm.db")
-import sqlite3  # noqa: E402
-with sqlite3.connect(DB) as c:
-    c.execute("drop table if exists customers")
-    c.execute("create table customers (id text primary key, name text)")
-    c.executemany("insert into customers values (?, ?)", [("c1", "Ada"), ("c2", "Bola")])
-READ = os.path.join(scratch, "read.staal")
-with open(READ, "w") as f:
-    f.write('fn main(customer: Text, db: cap db.sqlite.query) -> Text {\n'
-            '    return db.query("' + DB + '", "select id, name from customers where id = ?", [customer])\n'
-            '}\n')
-read = staal.Tool(READ, name="read_customer", description="d", journals=os.path.join(scratch, "read"),
-                  grants={"db": {"cap": "db.sqlite.query", "only": [DB]}}, net={"timeout_ms": 2000},
-                  app_inputs={"customer": lambda c: c["id"]})
-expect(read.schema["properties"] == {} and read.schema["required"] == [], f"nothing for a model to choose: {read.schema}")
-r = read({}, context={"id": "c1"})
-expect(r.status == "done" and json.loads(r.value) == [{"id": "c1", "name": "Ada"}], f"the app's customer: {r}")
-r = read({"customer": "c2"}, context={"id": "c1"})
-expect(r.status == "not_run" and r.text == "inputs.customer: given by the app, never by the caller", f"not the model's: {r}")
-read.close()
+# SQLite actions run on Linux only so far (RUNTIME.md section 12).
+if sys.platform.startswith("linux"):
+    DB = os.path.join(scratch, "crm.db")
+    import sqlite3  # noqa: E402
+    with sqlite3.connect(DB) as c:
+        c.execute("drop table if exists customers")
+        c.execute("create table customers (id text primary key, name text)")
+        c.executemany("insert into customers values (?, ?)", [("c1", "Ada"), ("c2", "Bola")])
+    READ = os.path.join(scratch, "read.staal")
+    with open(READ, "w") as f:
+        f.write('fn main(customer: Text, db: cap db.sqlite.query) -> Text {\n'
+                '    return db.query("' + DB + '", "select id, name from customers where id = ?", [customer])\n'
+                '}\n')
+    read = staal.Tool(READ, name="read_customer", description="d", journals=os.path.join(scratch, "read"),
+                      grants={"db": {"cap": "db.sqlite.query", "only": [DB]}}, net={"timeout_ms": 2000},
+                      app_inputs={"customer": lambda c: c["id"]})
+    expect(read.schema["properties"] == {} and read.schema["required"] == [], f"nothing for a model to choose: {read.schema}")
+    r = read({}, context={"id": "c1"})
+    expect(r.status == "done" and json.loads(r.value) == [{"id": "c1", "name": "Ada"}], f"the app's customer: {r}")
+    r = read({"customer": "c2"}, context={"id": "c1"})
+    expect(r.status == "not_run" and r.text == "inputs.customer: given by the app, never by the caller", f"not the model's: {r}")
+    read.close()
 
 # Fixed grants, and a function that takes no capabilities.
 fixed = staal.Tool(PROGRAM, name="refund_fixed", description="d", journals=os.path.join(scratch, "fixed"),
