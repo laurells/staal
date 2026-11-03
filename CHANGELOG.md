@@ -8,6 +8,33 @@ the language or its file formats.
 
 ### Added
 
+- A tool's run that stops only because actions safe to perform again got no answer (an
+  HTTP request whose grant has `"idempotency_key": true`, an action always safe to
+  repeat) is resumed within the same call, after 0.25 s, 1 s and 2 s, sending the
+  request again with the same key. Before, it waited for the server's next start, and
+  its answer said a person had to check, which was not true. A stop that may need a
+  person's answer is never retried, nor is a model call, a print or a clock read in
+  doubt; a run of parallel tasks is retried only when every operation in doubt is safe
+  to repeat. One still unanswered after the third resume is left for the next start
+  and the operator, its answer now saying so (docs/MCP.md section 7). The runtime's
+  `in_doubt` log event now says `"op"` beside `"retry_on_resume"` (RUNTIME.md
+  section 10).
+- `examples/finops/`: a financial operations agent (customer records, refunds, booking,
+  text messages, daily limits) and `attacks.py`, which attacks it on purpose and judges
+  each attack by the stand-in bank's and SMS service's own ledgers, run by the tests on
+  both engines. `docs/GUARANTEES.md` states each guarantee, what it depends on, how it
+  is tested, and where it stops, with an honest comparison with ordinary application
+  code.
+- App inputs: a tool defined with `"app_inputs"` takes those inputs of its entry
+  function from the app with each call, never from a caller (`app_inputs=` in Python,
+  `appInputs` in Node.js, functions of the call's context like `grants`; the new
+  `staal_tool_call_with_inputs` in C, with `staal_tool_call` unchanged). They are left
+  out of the input schema, a call whose arguments name one is refused, the runtime
+  checks their types, and `once.by` may name them. So a tool can read or act on the
+  record of the customer the app chose, and a model cannot choose another; before,
+  every input came from the caller, and a database grant can only be limited to a
+  file, not to rows. Refused in an MCP manifest, whose tools have no app.
+
 - `@staal/node/vercel-ai`: `aiTool` and `aiTools` give a staal Tool to the Vercel AI
   SDK (`ai` 7), an ES module, as the SDK is. The tool's context is its entry in
   `toolsContext`, passed to the Tool's grants and scope functions and never to the
@@ -53,6 +80,22 @@ the language or its file formats.
 - The Node framework tests install a copy of the package's own files, as `npm install`
   would, so ES module adapters resolve their frameworks as in an app, and
   `npm run types` checks the ES module adapters' types too.
+
+### Fixed
+
+- The runtime's own messages show text from outside (a target, an amount, an argument's
+  or a field's name, a URL or a path) with control characters, line separators,
+  bidirectional formatting characters and backslashes escaped, and cut to its first 100
+  characters with its length. Before, a refusal echoed it as it was: a 1 MB argument came
+  back as a 1 MB message to the model, and escape sequences reached logs and terminals
+  as they were. Found by attacking a tool on purpose; covered by tests in Rust and
+  Python. Only what messages show changed: values reach programs, journals and services
+  unchanged.
+- `staal.Tool` called with arguments that are not a dict raises a TypeError saying so,
+  and Node's `Tool.call` likewise, instead of an error from deep inside.
+- docs/RUNTIME.md said a receipt is `Receipt { id, capability, method }`, which reads as
+  fields a program can use; it holds them, but code cannot read them, and `json(r)` or
+  returning it gives `{"receipt", "capability", "method"}`.
 
 ## 0.25.0 — 2026-11-02
 

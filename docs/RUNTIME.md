@@ -124,7 +124,7 @@ capability need cannot have the name of a constant in scope (E101).
 | `Set<T, N>` | at most N different values of type T, in order |
 | `fn(A, B) -> R` | a function value: a function, and the values it captured |
 | `Proposed<T>` | raw model output (JSON), not yet checked against T |
-| `Receipt` | proof of one completed action: id, capability, method |
+| `Receipt` | proof of one completed action. It holds the service's id for the action, the capability and the method; code cannot read them as fields, and `json(r)` or returning it gives `{"receipt", "capability", "method"}` |
 | `Outcome` | `ok`, `error`, and (hidden) what succeeded |
 | `Done` | a list of evidence values |
 | `cap ...` | a handle to a capability held by the broker (section 6) |
@@ -796,6 +796,14 @@ each budget refusal, each failure caught by `try`, and the run's result and
 evidence. The log contains the data sent to models and so may contain
 sensitive data; it must never be given to a model as context.
 
+When a run stops in doubt, its `in_doubt` event names the operation and what it was.
+An operation that resuming simply performs again, because it is safe to repeat (an
+HTTP request whose grant has `"idempotency_key": true`, an action always safe to
+repeat, a model call, a token count, a print, a clock read), also carries
+`"retry_on_resume": true` and its kind as `"op"` (`"action"`, `"model"`, `"count"`,
+`"print"`, `"clock"`, `"random"` or `"input"`). The tool host uses them to decide
+which stops it may resume at once (docs/MCP.md section 7).
+
 ## 11. Durability: the journal, crashes and resume
 
 A run started with a **journal** survives being killed at any moment (power
@@ -1288,7 +1296,7 @@ Its body holds, in this order:
   or recurse. If it fails, the action is refused (`capability`).
 - `action NAME(params) -> Text { ... }`, one or more. A program calls it as
   `c.NAME(args)` on a `cap PATH.NAME`, and gets a `Receipt`. The action returns the
-  service's own id for it, which becomes the receipt's id.
+  service's own id for it, which becomes the receipt's id (`"receipt"` in its JSON).
 
 Paths are global, not qualified by module: two declarations of one path are an
 error, and paths under `net` and `fs` belong to the runtime (E101).
@@ -1347,7 +1355,8 @@ is refused.
 4. If it returns, it must have made at least one request that reached the world
    (was answered, or performed). Otherwise it fails with `action`: a receipt must
    stand for something that happened.
-5. The amount is charged and the program gets `Receipt { id, capability, method }`.
+5. The amount is charged and the program gets a `Receipt` holding the id, the capability and
+   the method.
 
 If the action fails after a request that may have changed something (any request
 but `net.http.get` or `fs.read`, unless it was certainly never sent), the amount

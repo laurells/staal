@@ -271,6 +271,9 @@ manifest must give `net.connect_timeout_ms` and `net.timeout_ms` and, for a tool
 can reach a model, the model's `timeout_ms` and `retries`, or the server refuses to
 start. A provider that never answers is a timeout like any other.
 
+An action safe to send again that got no answer is sent again within the call, up to
+three times (section 7), each time bounded by the same timeouts.
+
 On top of those, a tool may set `deadline` (for example `"deadline": "120s"`), counted
 from when the runtime begins executing the run, not from when the request arrived. It
 bounds when a new action or model call may start, not when the run ends: past the
@@ -564,6 +567,25 @@ journal directory together:
 - **A `settle` for a run whose journal is gone** is ordinary once the journal is past
   `server.keep`: the run is reported as expired (below).
 
+**An action that got no answer, sent again within the call.** Some stops need no
+operator: an action that is safe to perform again (an HTTP request whose grant has
+`"idempotency_key": true`, or an action always safe to repeat, such as a file read)
+that got no answer, because the connection dropped, a timeout passed or the answer was
+cut off. The runtime stops the run in doubt and marks the operation safe to resume
+(RUNTIME.md section 10). When every operation in doubt in the run's last attempt is
+such an action (a run of parallel tasks can have several), the server resumes the run
+within the same call, after 0.25 s, 1 s and 2 s, as a restart would: the request is
+sent again with the same idempotency key, never as a new request, so a service that
+deduplicates by it does it once and answers with its first answer. If the run ends,
+the call is answered as usual. Otherwise the run stays stopped, its waiting record is
+written and the operator told, as for any stop. The rest waits for the next start or
+for an operator: an action with no idempotency key, whose stop may need a person's
+answer, is never retried; a model call, a print or a clock read in doubt is not
+repeated within the call either, since a model call costs money each time. Each resume
+counts the tool's `deadline` afresh, as a resume at a restart does, so such a call can
+take up to 3.25 s and three more sends of that request longer than one run; the call
+holds its concurrency slot meanwhile.
+
 Settling never releases a reservation that should stay: a run that stopped in doubt is
 not settled at all until it is resolved and resumed to an end. A restart frees the
 concurrency slots, which live in memory, never a reservation, which lives in the
@@ -832,7 +854,7 @@ can simply try again.
 
 The same host serves tools inside an app (`src/host/`): `staalc mcp` and the C
 interface's tool functions (`staal_host_open`, `staal_tool_open`, `staal_tool_call`,
-`staal_run_status`; include/staal.h) share one implementation of sections 5 to 7, so
+`staal_tool_call_with_inputs`, `staal_run_status`; include/staal.h) share one implementation of sections 5 to 7, so
 quotas, `once`, the ledger, run files, recovery, the waiting records and the notify
 command behave identically. Python's `staal.Tool` and `staal.Host`, and Node's
 `Tool.open` and `Host.open`, are thin layers over those functions.
@@ -875,6 +897,27 @@ the run's reservation, and:
   its existence is not revealed. A run id is an identifier, not an authorization.
 - Quotas and the concurrency limit stay per tool, across scopes: they bound what the
   tool does in total. A per-tenant limit belongs in the grants the app computes.
+
+**App inputs: what only the app may say.** Grants limit what a call may do; some
+inputs decide what it is about, and must not come from a caller either: the customer
+a call is for, whose record it reads or whose payment it refunds. A tool defined with
+`"app_inputs": ["customer"]` takes those inputs from the app with each call
+(`app_inputs={"customer": lambda c: c["id"]}` in Python, `appInputs: { customer: (c) =>
+c.id }` in Node.js, functions of the call's context like `grants`;
+`staal_tool_call_with_inputs` in C). Then:
+
+- They are not in the tool's input schema, so a model is never offered them, and a call
+  whose arguments name one is refused (`not_run`, "given by the app, never by the
+  caller") before anything is reserved.
+- The runtime checks the app's values against their types as it checks any input; each
+  call gives them all, and nothing else.
+- They are inputs of the run like the others: journaled, and usable in `once.by`, so
+  the same order for two customers is two operations.
+
+A program reading a record with an app input, `db.query(path, "select ... where id =
+?", [customer])`, reads the customer the app chose: the query is the program's own text
+(model data can never be SQL, E006), and the id a parameter. A manifest's tools have no
+app, so `app_inputs` is refused there.
 
 **One process per journal directory.** The lock of section 6 holds across the MCP
 server and apps alike. In one process, opening a directory again gives the same host

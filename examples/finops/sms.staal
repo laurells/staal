@@ -1,0 +1,25 @@
+// A library capability: text messages through the SMS service's API, which
+// deduplicates by Idempotency-Key.
+
+type Message { to: Text, text: Text }
+type Sent { id: Text }
+
+capability sms.messages {
+    needs post: cap net.http.post
+    needs base: Text
+
+    // A phone number without spaces or dashes: "+234 801 111 1111" is "+2348011111111".
+    canonical(phone: Text) -> Text {
+        return replace(replace(trim(phone), " ", ""), "-", "")
+    }
+
+    action send(to: Text @target, text: Text) -> Text {
+        let r = post.post(base + "/messages", json(Message { to: replace(replace(trim(to), " ", ""), "-", ""), text: text }),
+            [header("Content-Type", "application/json")])
+        if r.status != 200 or not r.complete {
+            fail("the SMS service answered " + json(r.status) + ": " + r.body)
+        }
+        let sent: Sent = validate parse(Sent, r.body)
+        return sent.id
+    }
+}

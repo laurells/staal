@@ -51,7 +51,10 @@ const r = await refund.call({ order: '4417', amount: { amount: '35.00', currency
 A grant is never an argument, and the model never sees one. An app serving several
 tenants or users from one directory also gives `scope: (customer) => customer.tenantId`,
 from its own records: `once` keys are then held per scope, and a run's status is given
-only in its scope (`refund.status(run, { context: customer })`). One process uses a
+only in its scope (`refund.status(run, { context: customer })`). Inputs that only the
+app may give, such as the customer a call is for, are `appInputs: { customer: (customer)
+=> customer.id }`: they are left out of the schema a model sees, and a call whose
+arguments name one is refused. One process uses a
 journal directory at a time, so give each worker its own directory (whose quotas are
 then its own), or send the calls through one process.
 

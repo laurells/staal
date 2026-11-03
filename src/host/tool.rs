@@ -57,6 +57,9 @@ pub struct Tool {
     /// The run config every call starts from: everything but `inputs`.
     pub base: Map<String, Json>,
     pub engine: Engine,
+    /// Inputs the app gives with each call, never a caller: they are not in
+    /// `input_schema`, and a call whose arguments name one is refused.
+    pub app_inputs: Vec<String>,
     /// MCP's `inputSchema` and `outputSchema`.
     pub input_schema: Json,
     pub output_schema: Json,
@@ -86,9 +89,42 @@ pub struct Quota {
 }
 
 impl Tool {
-    /// The run config of one call. Grants are given exactly when the tool takes them
-    /// per call.
-    pub fn config(&self, arguments: &Map<String, Json>, grants: Option<&Map<String, Json>>) -> Result<Json, String> {
+    /// The run config of one call: the caller's arguments and the app's inputs, each
+    /// exactly as the tool declares them. Grants are given exactly when the tool takes
+    /// them per call.
+    pub fn config(
+        &self,
+        arguments: &Map<String, Json>,
+        app_inputs: Option<&Map<String, Json>>,
+        grants: Option<&Map<String, Json>>,
+    ) -> Result<Json, String> {
+        // A caller (a model, often) cannot supply what only the app may.
+        if let Some(k) = arguments.keys().find(|k| self.app_inputs.contains(k)) {
+            return Err(format!("inputs.{k}: given by the app, never by the caller"));
+        }
+        let mut inputs = arguments.clone();
+        match app_inputs {
+            None if self.app_inputs.is_empty() => {}
+            None => {
+                return Err(format!(
+                    "tool '{}' takes app inputs ({}) with each call, and this call gave none",
+                    self.name,
+                    self.app_inputs.join(", ")
+                ))
+            }
+            Some(_) if self.app_inputs.is_empty() => {
+                return Err(format!("tool '{}' takes no app inputs; its definition names none in \"app_inputs\"", self.name))
+            }
+            Some(given) => {
+                if let Some(k) = self.app_inputs.iter().find(|k| !given.contains_key(*k)) {
+                    return Err(format!("app inputs: '{k}' missing"));
+                }
+                if let Some(k) = given.keys().find(|k| !self.app_inputs.contains(k)) {
+                    return Err(format!("app inputs: '{}' is not one of this tool's app inputs", crate::clip::clip(k)));
+                }
+                inputs.extend(given.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+        }
         let mut c = self.base.clone();
         match (self.grants, grants) {
             (Grants::Fixed, None) => {}
@@ -98,7 +134,7 @@ impl Tool {
             }
             (Grants::PerCall, None) => return Err(format!("tool '{}' takes its grants with each call, and this call gave none", self.name)),
         }
-        c.insert("inputs".into(), Json::Object(arguments.clone()));
+        c.insert("inputs".into(), Json::Object(inputs));
         Ok(Json::Object(c))
     }
 
@@ -340,6 +376,7 @@ pub fn parse_tool(
     model: Option<&Json>,
     settings: &Settings,
     grants: Grants,
+    app_inputs_allowed: bool,
     warnings: &mut Vec<String>,
 ) -> Result<Tool, String> {
     let o = v.as_object().ok_or(format!("{at}: expected an object"))?;
@@ -351,7 +388,25 @@ pub fn parse_tool(
         if k == "grants" && grants == Grants::PerCall {
             return Err(format!("{at}.grants: not allowed; this tool's grants come with each call"));
         }
-        let own = ["name", "title", "description", "program", "entry", "engine", "deadline", "max_concurrent_runs", "once", "quota"];
+        if k == "app_inputs" && !app_inputs_allowed {
+            return Err(format!(
+                "{at}.app_inputs: not allowed in a manifest; app inputs are given with each call by an app \
+                 (the C interface, Python and Node.js), and a manifest's tools have no app"
+            ));
+        }
+        let own = [
+            "name",
+            "title",
+            "description",
+            "program",
+            "entry",
+            "engine",
+            "deadline",
+            "max_concurrent_runs",
+            "once",
+            "quota",
+            "app_inputs",
+        ];
         if !own.contains(&k.as_str()) && !RUN_KEYS.contains(&k.as_str()) {
             return Err(format!("{at}: unknown key '{k}'"));
         }
@@ -465,6 +520,21 @@ pub fn parse_tool(
     }
 
     let props = interface["input"]["properties"].as_object().cloned().unwrap_or_default();
+    let mut app_inputs: Vec<String> = Vec::new();
+    if let Some(v) = o.get("app_inputs") {
+        let aa = format!("{at}.app_inputs");
+        let list = v.as_array().filter(|a| !a.is_empty()).ok_or(format!("{aa}: expected a list of at least one input name"))?;
+        for (i, x) in list.iter().enumerate() {
+            let n = x.as_str().ok_or(format!("{aa}[{i}]: expected an input name"))?;
+            if !props.contains_key(n) {
+                return Err(format!("{aa}[{i}]: '{entry}' has no input '{n}' (capabilities and secrets are never inputs)"));
+            }
+            if app_inputs.iter().any(|a| a == n) {
+                return Err(format!("{aa}[{i}]: '{n}' is named twice"));
+            }
+            app_inputs.push(n.to_string());
+        }
+    }
     let once = match o.get("once") {
         None => None,
         Some(v) => {
@@ -477,7 +547,7 @@ pub fn parse_tool(
             for (i, x) in list.iter().enumerate() {
                 let n = x.as_str().ok_or(format!("{oa}.by[{i}]: expected an argument name"))?;
                 if !props.contains_key(n) {
-                    return Err(format!("{oa}.by[{i}]: '{entry}' takes no argument '{n}' from a caller"));
+                    return Err(format!("{oa}.by[{i}]: '{entry}' has no input '{n}'"));
                 }
                 if by.iter().any(|b| b == n) {
                     return Err(format!("{oa}.by[{i}]: '{n}' is named twice"));
@@ -557,7 +627,16 @@ pub fn parse_tool(
         || plan.iter().flat_map(|p| p.grants.iter()).any(|g| !g.library && !p_is_runtime(&g.path));
     annotations.insert("openWorldHint".into(), json!(open));
 
-    let (input_schema, output_schema) = schemas(&interface);
+    let (mut input_schema, output_schema) = schemas(&interface);
+    // What a caller sees: the inputs it may give, without the app's.
+    if let Some(s) = input_schema.as_object_mut() {
+        if let Some(p) = s.get_mut("properties").and_then(Json::as_object_mut) {
+            p.retain(|k, _| !app_inputs.contains(k));
+        }
+        if let Some(r) = s.get_mut("required").and_then(Json::as_array_mut) {
+            r.retain(|k| !k.as_str().is_some_and(|k| app_inputs.iter().any(|a| a == k)));
+        }
+    }
     let mut used = Vec::new();
     env_names(&Json::Object(base.clone()), &mut used);
     if let Some(m) = model {
@@ -576,6 +655,7 @@ pub fn parse_tool(
         fingerprint: checked.fingerprint,
         base,
         engine,
+        app_inputs,
         input_schema,
         output_schema,
         annotations: Json::Object(annotations),

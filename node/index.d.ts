@@ -127,6 +127,13 @@ export interface ToolOptions<Context = unknown> {
    * and a run's status is given only in its scope.
    */
   scope?: (context: Context) => string | Promise<string>;
+  /**
+   * Inputs only the app supplies, such as the customer a call is for: each name, an
+   * input of the entry function, maps to a function of the call's context giving its
+   * value. They are not in the schema a model sees, and a call whose arguments name
+   * one is refused.
+   */
+  appInputs?: { [name: string]: (context: Context) => Json | Promise<Json> };
   /** A journal directory, or an open host: one is required. */
   journals?: string;
   host?: Host;

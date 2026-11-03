@@ -150,7 +150,7 @@ impl Broker {
                     ));
                 };
                 if !only.iter().any(|p| pattern::matches(p, t)) {
-                    return Err(format!("'{}' may only act on {only:?}; this action targets \"{t}\"", c.path));
+                    return Err(format!("'{}' may only act on {only:?}; this action targets \"{}\"", c.path, crate::clip::clip(t)));
                 }
             }
         }

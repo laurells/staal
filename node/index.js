@@ -134,13 +134,22 @@ const SPEC_KEYS = ['title', 'entry', 'quota', 'once', 'deadline', 'max_concurren
  * same context returning the call's trusted scope as a string (a tenant's or a user's
  * id, from the app's own records, never from the arguments): a `once` key is held
  * within its scope, and a run's status is given only in its scope. An app serving more
- * than one tenant or user from one journal directory gives a scope. Give `journals`
- * (a directory) or `host`.
+ * than one tenant or user from one journal directory gives a scope. `appInputs`, if
+ * given, maps names of the entry function's inputs to functions of the same context
+ * that give their values: inputs only the app supplies, such as the customer a call
+ * is for. They are not in the schema a model sees, and a call whose arguments name
+ * one is refused. Give `journals` (a directory) or `host`.
  */
 class Tool {
   static async open(program, options) {
-    const { name, description, grants, scope, journals, host, ...spec } = options || {};
+    const { name, description, grants, scope, appInputs, journals, host, ...spec } = options || {};
     if (scope !== undefined && typeof scope !== 'function') throw new TypeError("staal: Tool: scope is a function of the call's context");
+    if (appInputs !== undefined) {
+      const entries = appInputs !== null && typeof appInputs === 'object' && !Array.isArray(appInputs) ? Object.entries(appInputs) : [];
+      if (entries.length === 0 || !entries.every(([, f]) => typeof f === 'function')) {
+        throw new TypeError("staal: Tool: appInputs maps input names to functions of the call's context");
+      }
+    }
     for (const k of Object.keys(spec)) {
       if (!SPEC_KEYS.includes(k)) throw new TypeError(`staal: Tool: unknown option '${k}'`);
     }
@@ -151,6 +160,7 @@ class Tool {
     const h = ownHost ? await Host.open(journals) : host;
     const body = { name, description, program: str(program, 'program') };
     if (grants !== undefined && typeof grants !== 'function') body.grants = grants;
+    if (appInputs !== undefined) body.app_inputs = Object.keys(appInputs);
     for (const [k, v] of Object.entries(spec)) if (v !== undefined && v !== null) body[k] = v;
     let out;
     try {
@@ -159,7 +169,7 @@ class Tool {
       if (ownHost) await h.close();
       throw e;
     }
-    const t = new Tool(out, h, ownHost, typeof grants === 'function' ? grants : null, scope || null);
+    const t = new Tool(out, h, ownHost, typeof grants === 'function' ? grants : null, scope || null, appInputs ? { ...appInputs } : null);
     if (t.perCallGrants && t._grants === null) {
       await t.close();
       throw new TypeError('staal: Tool: the program needs grants; give grants (an object or a function of the context)');
@@ -171,9 +181,10 @@ class Tool {
     return t;
   }
 
-  constructor(out, host, ownHost, grants, scope) {
+  constructor(out, host, ownHost, grants, scope, appInputs) {
     this._handle = out.tool;
     this._scope = scope;
+    this._appInputs = appInputs;
     this.host = host;
     this._ownHost = ownHost;
     this._grants = grants;
@@ -193,6 +204,9 @@ class Tool {
    * a refusal is a result too, so a model can be told why.
    */
   async call(args = {}, options = {}) {
+    if (args === null || typeof args !== 'object' || Array.isArray(args)) {
+      throw new TypeError(`staal: the arguments are an object (a JSON object), not ${args === null ? 'null' : Array.isArray(args) ? 'an array' : typeof args}`);
+    }
     let grants;
     if (this.perCallGrants) {
       const g = await this._grants(options.context);
@@ -200,7 +214,13 @@ class Tool {
       grants = JSON.stringify(g);
     }
     const scope = this._scope ? scopeOf(await this._scope(options.context)) : undefined;
-    const out = ok(parse(await addon.toolCall(this._handle, JSON.stringify(args), grants, scope)));
+    let inputs;
+    if (this._appInputs) {
+      const values = {};
+      for (const [k, f] of Object.entries(this._appInputs)) values[k] = await f(options.context);
+      inputs = JSON.stringify(values);
+    }
+    const out = ok(parse(await addon.toolCall(this._handle, JSON.stringify(args), inputs, grants, scope)));
     return {
       status: out.status,
       isError: out.is_error,

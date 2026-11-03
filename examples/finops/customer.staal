@@ -1,0 +1,9 @@
+// The customer a call is for, and their orders: `customer` and `database` are the
+// app's, never a caller's.
+
+fn main(customer: Text, database: Text, db: cap db.sqlite.query) -> Text {
+    let who = db.query(database, "select id, name, tier from customers where id = ?", [customer])
+    let orders = db.query(database,
+        "select id, total_cents, refunded_cents from orders where customer = ? order by id", [customer])
+    return "{\"customer\": " + who + ", \"orders\": " + orders + "}"
+}

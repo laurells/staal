@@ -45,7 +45,10 @@ pub enum Outcome {
     Done(Json),
     Failed { kind: String, message: String },
     /// Stopped: an action may have happened, or the journal could not be written.
-    Stopped { kind: String, message: String },
+    /// `retry`: only because a request safe to send again (with its idempotency key,
+    /// or one always safe) got no answer, so resuming sends it again and needs no
+    /// person's answer first.
+    Stopped { kind: String, message: String, retry: bool },
 }
 
 /// A tool result: what MCP's `tools/call` answers, before a protocol version adds its
@@ -212,6 +215,17 @@ pub fn answer(run: &str, o: &Outcome, follow: &str) -> Answer {
         ),
         Outcome::Failed { kind, message } if kind == "capability" => made("failed", message.clone(), None, true),
         Outcome::Failed { kind, message } => made("failed", format!("{kind}: {message}"), None, true),
+        Outcome::Stopped { retry: true, .. } => made(
+            "stopped",
+            format!(
+                "run {run} stopped before it finished: an action it started got no answer. The action is safe to \
+                 send again (with the same idempotency key, never as a new request), and it is sent again when \
+                 the run is resumed at the server's next start. Do not call this tool again for it: a new call \
+                 would act again. Follow it {follow}."
+            ),
+            Some(json!({ "status": "waiting_for_operator", "run": run })),
+            true,
+        ),
         Outcome::Stopped { .. } => made(
             "stopped",
             format!(
@@ -229,11 +243,32 @@ fn outcome_of(r: &RunResult) -> Outcome {
     match &r.result {
         Ok(v) => Outcome::Done(v.clone()),
         Err(f) if matches!(f.kind, FailKind::InDoubt | FailKind::Journal) => {
-            Outcome::Stopped { kind: f.kind.to_string(), message: f.message.clone() }
+            Outcome::Stopped { kind: f.kind.to_string(), message: f.message.clone(), retry: retry_safe(r) }
         }
         Err(f) => Outcome::Failed { kind: f.kind.to_string(), message: f.message.clone() },
     }
 }
+
+/// Whether a run stopped only because actions safe to perform again got no answer, so
+/// that resuming it performs them again (an HTTP request with its idempotency key, or
+/// an action always safe to repeat) and needs no person's answer first. Every
+/// `in_doubt` event of the run's last attempt (after its last `run_start`; a run of
+/// parallel tasks can have several) must say so; a model call, a print or anything
+/// else in doubt is left to the next start.
+fn retry_safe(r: &RunResult) -> bool {
+    if !matches!(&r.result, Err(f) if f.kind == FailKind::InDoubt) {
+        return false;
+    }
+    let start = r.log.iter().rposition(|e| e["event"] == "run_start").unwrap_or(0);
+    let mut doubts = r.log[start..].iter().filter(|e| e["event"] == "in_doubt").peekable();
+    doubts.peek().is_some() && doubts.all(|e| e["retry_on_resume"] == true && e["op"] == "action")
+}
+
+/// How long to wait before each resume of a run that stopped on a request safe to
+/// send again, within the call that made it. Bounded: the call holds its concurrency
+/// slot meanwhile, and a service that does not answer three times is left to the next
+/// start and the operator.
+const RETRY_WAITS: [Duration; 3] = [Duration::from_millis(250), Duration::from_secs(1), Duration::from_secs(2)];
 
 /// How a finished run ended, from its journal's end record.
 fn recorded_outcome(path: &Path) -> Result<Outcome, String> {
@@ -344,6 +379,7 @@ impl Host {
         &self,
         tool: &Tool,
         args: &Map<String, Json>,
+        app_inputs: Option<&Map<String, Json>>,
         grants: Option<&Map<String, Json>>,
         scope: Option<&str>,
         ctl: &Ctl,
@@ -354,8 +390,9 @@ impl Host {
         {
             return Some(Answer::error("scope: expected 1 to 256 characters, with no control characters"));
         }
-        // 1. The arguments (and grants), checked by the runtime as the run would check them.
-        let checked = tool.config(args, grants).and_then(|cfg| {
+        // 1. The arguments, the app's inputs and the grants, checked by the runtime as
+        // the run would check them.
+        let checked = tool.config(args, app_inputs, grants).and_then(|cfg| {
             let plan = interp::plan(&tool.prog, &cfg)?;
             let reserve = tool.check_call(&plan, &cfg)?;
             Ok((cfg, plan, reserve))
@@ -454,7 +491,7 @@ impl Host {
             };
         }
         if r.settled().is_none() {
-            return answer(id, &Outcome::Stopped { kind: String::new(), message: String::new() }, &self.follow);
+            return answer(id, &Outcome::Stopped { kind: String::new(), message: String::new(), retry: false }, &self.follow);
         }
         match recorded_outcome(&self.journal_path(tool, id)) {
             Ok(o) => answer(id, &o, &self.follow),
@@ -495,9 +532,41 @@ impl Host {
         }
         let res = interp::run_config_engine(&t.prog, &t.fingerprint, cfg, Durability::CreateWithId(&journal, run), t.engine);
         match res {
-            Ok(r) => self.finish(tool, run, &r),
+            Ok(r) => {
+                let r = self.retry(t, run, cfg, &journal, r);
+                self.finish(tool, run, &r)
+            }
             Err(e) => self.not_run(tool, run, &e),
         }
+    }
+
+    /// A run that stopped only because a request safe to send again got no answer
+    /// (a lost answer, a timeout, a dropped connection) is resumed here, after each of
+    /// RETRY_WAITS: the runtime sends the request again with the same idempotency key,
+    /// never as a new request. Any other stop is the operator's. The log keeps every
+    /// attempt's events.
+    fn retry(&self, t: &Tool, run: &str, cfg: &Json, journal: &Path, mut r: RunResult) -> RunResult {
+        for wait in RETRY_WAITS {
+            if !retry_safe(&r) {
+                break;
+            }
+            std::thread::sleep(wait);
+            log(&format!("tool {} run {run}: an action got no answer; performing it again, as safe to repeat", t.name));
+            match interp::run_config_engine(&t.prog, &t.fingerprint, cfg, Durability::Resume(journal), t.engine) {
+                Ok(mut next) => {
+                    let mut all = std::mem::take(&mut r.log);
+                    all.append(&mut next.log);
+                    next.log = all;
+                    r = next;
+                }
+                Err(e) => {
+                    // Left as it stopped: resumed at the next start, as any stopped run is.
+                    log(&format!("tool {} run {run}: could not resume it ({e}); it is resumed at the next start", t.name));
+                    break;
+                }
+            }
+        }
+        r
     }
 
     /// The runtime refused or crashed. If its journal holds nothing past its start, the
@@ -514,7 +583,7 @@ impl Host {
             }
             _ => {
                 log(&format!("tool {} run {run}: the runtime failed part-way ({why}); the run will be resumed at the next start", tool));
-                let o = Outcome::Stopped { kind: "internal".into(), message: why.to_string() };
+                let o = Outcome::Stopped { kind: "internal".into(), message: why.to_string(), retry: false };
                 self.stopped(tool, run, &o);
                 answer(run, &o, &self.follow)
             }
@@ -580,7 +649,7 @@ impl Host {
     /// A run stopped for an operator: its waiting record, durable before the caller is
     /// answered, then the log and the notify command.
     fn stopped(&self, tool: &str, run: &str, o: &Outcome) {
-        let Outcome::Stopped { kind, message } = o else { return };
+        let Outcome::Stopped { kind, message, .. } = o else { return };
         let path = self.waiting_path(run);
         // A run that stops again in the same way (each start resumes it until an
         // operator resolves it) keeps its first record, whose message says what
@@ -1075,6 +1144,31 @@ mod tests {
         let a = answer("r", &Outcome::Done(json!({ "ok": 1 })), "x");
         assert_eq!(a.structured, Some(json!({ "result": { "ok": 1 } })));
         assert!(!a.is_error);
+    }
+
+    #[test]
+    fn only_a_run_whose_every_doubt_is_safe_to_repeat_is_retried_in_the_call() {
+        let stopped = |log: Vec<Json>| RunResult {
+            result: Err(interp::Failure { kind: FailKind::InDoubt, message: "m".into(), raised: None }),
+            log,
+            usage: json!({}),
+        };
+        let start = json!({ "event": "run_start" });
+        let keyed = json!({ "event": "in_doubt", "op": "action", "retry_on_resume": true });
+        let unkeyed = json!({ "event": "in_doubt" });
+        let model = json!({ "event": "in_doubt", "op": "model", "retry_on_resume": true });
+        assert!(retry_safe(&stopped(vec![start.clone(), keyed.clone()])));
+        // Parallel tasks: one in doubt with no key is the operator's, whichever comes last.
+        assert!(!retry_safe(&stopped(vec![start.clone(), unkeyed.clone(), keyed.clone()])));
+        assert!(!retry_safe(&stopped(vec![start.clone(), keyed.clone(), unkeyed.clone()])));
+        // A model call, a print or a clock read is never repeated within the call.
+        assert!(!retry_safe(&stopped(vec![start.clone(), model])));
+        // Only the last attempt counts: an earlier one's doubt was resolved by resuming.
+        assert!(retry_safe(&stopped(vec![start.clone(), unkeyed.clone(), start.clone(), keyed.clone()])));
+        assert!(!retry_safe(&stopped(vec![start.clone(), keyed.clone(), start.clone(), unkeyed])));
+        assert!(!retry_safe(&stopped(vec![start.clone()])));
+        let done = RunResult { result: Ok(json!(1)), log: vec![start, keyed], usage: json!({}) };
+        assert!(!retry_safe(&done));
     }
 
     #[test]

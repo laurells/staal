@@ -28,6 +28,7 @@ import ctypes
 import json
 import os
 import sys
+from collections.abc import Mapping
 
 __all__ = ["Library", "Host", "Tool", "Result", "StaalError"]
 
@@ -63,6 +64,11 @@ class Library:
                 fn = getattr(self._lib, name)
                 fn.argtypes = [ctypes.c_char_p] * nargs
                 fn.restype = ctypes.c_void_p
+        # App inputs came in 0.26.0: an older libstaalc runs every other tool.
+        self.has_app_inputs = self.has_tools and hasattr(self._lib, "staal_tool_call_with_inputs")
+        if self.has_app_inputs:
+            self._lib.staal_tool_call_with_inputs.argtypes = [ctypes.c_char_p] * 5
+            self._lib.staal_tool_call_with_inputs.restype = ctypes.c_void_p
         self._lib.staal_free.argtypes = [ctypes.c_void_p]
         self._lib.staal_free.restype = None
         self._lib.staal_version.argtypes = []
@@ -186,16 +192,24 @@ class Tool:
     context returning the call's trusted scope as a string (a tenant's or a user's id,
     from the app's own records, never from the arguments): a `once` key is held within
     its scope, and a run's status is given only in its scope. An app serving more than
-    one tenant or user from one journal directory gives a scope. Either journals (a directory) or host is
+    one tenant or user from one journal directory gives a scope. app_inputs, if given,
+    maps names of the entry function's inputs to functions of the same context that
+    give their values: inputs only the app supplies, such as the customer a call is
+    for. They are not in the schema a model sees, and a call whose arguments name one
+    is refused. Either journals (a directory) or host is
     required: every call is journaled, and quotas and `once` are kept there. The other
     keyword arguments are those of a tool in an MCP manifest (docs/MCP.md section 2).
     """
 
-    def __init__(self, program, *, name, description, grants=None, scope=None, journals=None, host=None, library=None,
-                 **spec):
+    def __init__(self, program, *, name, description, grants=None, scope=None, app_inputs=None, journals=None, host=None,
+                 library=None, **spec):
         if scope is not None and not callable(scope):
             raise TypeError("Tool: scope is a function of the call's context")
         self._scope = scope
+        if app_inputs is not None and (not isinstance(app_inputs, Mapping) or not app_inputs
+                                       or not all(isinstance(k, str) and callable(f) for k, f in app_inputs.items())):
+            raise TypeError("Tool: app_inputs maps input names to functions of the call's context")
+        self._app_inputs = dict(app_inputs) if app_inputs is not None else None
         unknown = [k for k in spec if k not in _SPEC_KEYS]
         if unknown:
             raise TypeError(f"Tool: unknown argument {unknown[0]!r}")
@@ -204,8 +218,14 @@ class Tool:
         self._own_host = host is None
         self.host = Host(journals, library=library) if host is None else host
         self._lib = self.host._lib
+        if self._app_inputs is not None and not self._lib.has_app_inputs:
+            if self._own_host:
+                self.host.close()
+            raise StaalError("this libstaalc has no app inputs: they need libstaalc 0.26.0 or newer")
         self._grants = grants if callable(grants) else None
         body = {"name": name, "description": description, "program": os.fspath(program)}
+        if self._app_inputs is not None:
+            body["app_inputs"] = list(self._app_inputs)
         if grants is not None and not callable(grants):
             body["grants"] = grants
         body.update({k: v for k, v in spec.items() if v is not None})
@@ -236,6 +256,8 @@ class Tool:
         a refusal or failure is a Result too, so a model can be told why."""
         if arguments is not None and kwargs:
             raise TypeError("give the arguments as a dict or as keyword arguments, not both")
+        if arguments is not None and not isinstance(arguments, Mapping):
+            raise TypeError(f"the arguments are a dict (a JSON object), not {type(arguments).__name__}")
         args = dict(arguments if arguments is not None else kwargs)
         grants = None
         if self.per_call_grants:
@@ -244,7 +266,11 @@ class Tool:
                 raise TypeError("the grants function must return a dict")
             grants = json.dumps(grants)
         scope = _scope(self._scope(context)) if self._scope is not None else None
-        return Result(_ok(self._lib._call("staal_tool_call", self._handle, json.dumps(args), grants, scope)))
+        if self._app_inputs is None:
+            return Result(_ok(self._lib._call("staal_tool_call", self._handle, json.dumps(args), grants, scope)))
+        inputs = json.dumps({k: f(context) for k, f in self._app_inputs.items()})
+        return Result(_ok(self._lib._call("staal_tool_call_with_inputs", self._handle, json.dumps(args), inputs, grants,
+                                          scope)))
 
     def status(self, run, *, context=None):
         """A run's status, in the scope the tool's scope function gives for context."""

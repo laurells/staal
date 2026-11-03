@@ -71,6 +71,26 @@ expect(r.status == "failed" and r.text == "'payments.refund' allows at most 20.0
        f"the standard limit, from the app's policy: {r}")
 r = refund({"order": "4419", "amount": "35.00"}, context=gold)
 expect(r.status == "not_run" and r.run is None and "inputs.amount" in r.text, f"arguments the types refuse: {r}")
+for bad in (["4419"], "4419", 7):
+    try:
+        refund(bad, context=gold)
+        expect(False, f"arguments that are not a dict: {bad!r}")
+    except TypeError as e:
+        expect(str(e).startswith("the arguments are a dict (a JSON object), not "), str(e))
+# Text from a caller is shown in a refusal escaped and cut short: it reaches models,
+# logs and terminals, and must not be able to change how the message reads.
+r = refund({"order": "1", "amount": usd("1.00"), "x\u001b[2J" + "y" * 500: 1}, context=gold)
+expect(r.status == "not_run" and r.text == "inputs.x\\u{1b}[2J" + "y" * 95 + "… (505 characters): 'main' has no parameter named 'x\\u{1b}[2J"
+       + "y" * 95 + "… (505 characters)'", f"an unknown argument's name, shown: {r.text!r}")
+r = refund({"order": "1", "amount": usd("-1\u202e00")}, context=gold)
+expect(r.status == "not_run" and r.text == "inputs.amount.amount: invalid USD amount '-1\\u{202e}00': expected digits like \"12.50\"",
+       f"an amount, shown: {r.text!r}")
+pinned = staal.Tool(PROGRAM, name="refund_pinned", description="d", journals=os.path.join(scratch, "pinned"),
+                    grants={"pay": {"cap": "payments.refund", "each": usd("10.00"), "only": ["4417"]}})
+r = pinned({"order": "4417\u0000" + "4" * 2_000_000, "amount": usd("1.00")})
+expect(r.status == "failed" and r.text == "'payments.refund' may only act on [\"4417\"]; this action targets \"4417\\u{0}"
+       + "4" * 95 + "… (2000005 characters)\"", f"a target, shown: {r.text[:300]!r}")
+pinned.close()
 # Money held: 35.00 settled, then each run reserves its worst case (here up to 100.00).
 r = refund({"order": "4420", "amount": usd("1.00")}, context=gold)
 expect(r.status == "not_run" and "can spend up to 100.00 USD" in r.text, f"the money quota holds: {r}")
@@ -197,6 +217,76 @@ reserves = [e for e in ledger_events(quota_dir) if e["e"] == "reserve"]
 expect(len(reserves) == 1, f"refused calls reserve nothing: {reserves}")
 q.close()
 quota_host.close()
+
+# App inputs: inputs only the app supplies, such as the customer a call is for. A
+# model sees no such argument and cannot give one; the app's value reaches the program
+# as any input does, and can key `once`.
+FOR = os.path.join(scratch, "for_customer.staal")
+with open(FOR, "w") as f:
+    f.write('fn main(customer: Text, order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -> Text {\n'
+            '    let receipt = pay.refund(order, amount)\n'
+            '    return "Refunded " + to_text(amount) + " for order " + order + " of customer " + customer\n'
+            '}\n')
+mine = staal.Tool(FOR, name="refund_mine", description="d", journals=os.path.join(scratch, "app-inputs"),
+                  grants=lambda c: {"pay": {"cap": "payments.refund", "each": usd("50.00"), "uses": 1}},
+                  app_inputs={"customer": lambda c: c["id"]}, once={"by": ["customer", "order"]})
+expect(sorted(mine.schema["properties"]) == ["amount", "order"] and mine.schema["required"] == ["order", "amount"],
+       f"the model's schema has no app input: {mine.schema}")
+r = mine({"order": "4417", "amount": usd("5.00")}, context={"id": "c1"})
+expect(r.status == "done" and r.value == "Refunded 5.00 USD for order 4417 of customer c1", f"the app's value reaches the program: {r}")
+first = r.run
+r = mine({"order": "4417", "amount": usd("5.00"), "customer": "c2"}, context={"id": "c1"})
+expect(r.status == "not_run" and r.run is None and r.text == "inputs.customer: given by the app, never by the caller",
+       f"a caller cannot give an app input: {r}")
+r = mine({"order": "4417", "amount": usd("5.00")}, context={"id": "c1"})
+expect(r.status == "done" and r.run == first, f"the same customer and order is the same operation: {r}")
+r = mine({"order": "4417", "amount": usd("5.00")}, context={"id": "c2"})
+expect(r.status == "done" and r.run != first and r.value.endswith("of customer c2"), f"another customer's is another: {r}")
+r = mine({"order": "4418", "amount": usd("5.00")}, context={"id": 7})
+expect(r.status == "not_run" and r.text.startswith("inputs.customer: expected a string"), f"the app's value is checked too: {r}")
+mine.close()
+if os.environ.get("STAAL_HAS_NATIVE") == "1":
+    native = staal.Tool(FOR, name="refund_mine_native", description="d", journals=os.path.join(scratch, "app-inputs-native"),
+                        grants=lambda c: {"pay": {"cap": "payments.refund", "each": usd("50.00"), "uses": 1}},
+                        app_inputs={"customer": lambda c: c["id"]}, engine="native")
+    r = native({"order": "4417", "amount": usd("5.00")}, context={"id": "c1"})
+    expect(r.status == "done" and r.value == "Refunded 5.00 USD for order 4417 of customer c1", f"on the native engine: {r}")
+    r = native({"order": "4417", "amount": usd("5.00"), "customer": "c2"}, context={"id": "c1"})
+    expect(r.status == "not_run" and r.text == "inputs.customer: given by the app, never by the caller", f"native: {r}")
+    native.close()
+for spec, why in [({"app_inputs": {"pay": lambda c: 1}}, "'main' has no input 'pay' (capabilities and secrets are never inputs)"),
+                  ({"app_inputs": {"who": lambda c: 1}}, "'main' has no input 'who'"),
+                  ({"app_inputs": {}}, "app_inputs maps input names to functions"),
+                  ({"app_inputs": {"customer": "c1"}}, "app_inputs maps input names to functions")]:
+    try:
+        staal.Tool(FOR, name="x", description="d", journals=os.path.join(scratch, "bad-app"),
+                   grants=lambda c: {"pay": {"cap": "payments.refund"}}, **spec)
+        expect(False, why)
+    except (TypeError, staal.StaalError) as e:
+        expect(why in str(e), str(e))
+
+# What app inputs are for: a record the app picks, read with the app's id, never one
+# a model names. The query is the program's own text, and the id a parameter.
+DB = os.path.join(scratch, "crm.db")
+import sqlite3  # noqa: E402
+with sqlite3.connect(DB) as c:
+    c.execute("drop table if exists customers")
+    c.execute("create table customers (id text primary key, name text)")
+    c.executemany("insert into customers values (?, ?)", [("c1", "Ada"), ("c2", "Bola")])
+READ = os.path.join(scratch, "read.staal")
+with open(READ, "w") as f:
+    f.write('fn main(customer: Text, db: cap db.sqlite.query) -> Text {\n'
+            '    return db.query("' + DB + '", "select id, name from customers where id = ?", [customer])\n'
+            '}\n')
+read = staal.Tool(READ, name="read_customer", description="d", journals=os.path.join(scratch, "read"),
+                  grants={"db": {"cap": "db.sqlite.query", "only": [DB]}}, net={"timeout_ms": 2000},
+                  app_inputs={"customer": lambda c: c["id"]})
+expect(read.schema["properties"] == {} and read.schema["required"] == [], f"nothing for a model to choose: {read.schema}")
+r = read({}, context={"id": "c1"})
+expect(r.status == "done" and json.loads(r.value) == [{"id": "c1", "name": "Ada"}], f"the app's customer: {r}")
+r = read({"customer": "c2"}, context={"id": "c1"})
+expect(r.status == "not_run" and r.text == "inputs.customer: given by the app, never by the caller", f"not the model's: {r}")
+read.close()
 
 # Fixed grants, and a function that takes no capabilities.
 fixed = staal.Tool(PROGRAM, name="refund_fixed", description="d", journals=os.path.join(scratch, "fixed"),

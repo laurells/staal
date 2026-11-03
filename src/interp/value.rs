@@ -161,8 +161,8 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
             }
             let mut out: Vec<(Value, Value)> = Vec::with_capacity(obj.len());
             for (k, v) in obj {
-                let key = key_from_json(kt, k).ok_or_else(|| format!("{path}: '{k}' is not a {kt} key"))?;
-                let val = from_json_at(vt, v, types, &format!("{path}[{}]", serde_json::to_string(k).unwrap_or_default()), depth + 1, lenient)?;
+                let key = key_from_json(kt, k).ok_or_else(|| format!("{path}: '{}' is not a {kt} key", crate::clip::clip(k)))?;
+                let val = from_json_at(vt, v, types, &format!("{path}[{}]", serde_json::to_string(&crate::clip::clip(k)).unwrap_or_default()), depth + 1, lenient)?;
                 out.push((key, val));
             }
             out.sort_by(|a, b| key_order(&a.0, &b.0));
@@ -184,7 +184,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
             out.sort_by(key_order);
             if let Some(w) = out.windows(2).find(|w| w[0] == w[1]) {
                 let shown = to_json(&w[0], false).map(|j| j.to_string()).unwrap_or_default();
-                return Err(format!("{path}: {shown} appears twice; a set holds each item once"));
+                return Err(format!("{path}: {} appears twice; a set holds each item once", crate::clip::clip(&shown)));
             }
             Ok(Value::Set(out))
         }
@@ -226,12 +226,12 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
                     format!("{path}.kind: expected the name of a {n} variant: {}", names.join(", "))
                 })?;
                 let (variant, fields) = variants.iter().find(|(v, _)| v == kind).ok_or_else(|| {
-                    format!("{path}.kind: '{kind}' is not a {n} variant; expected one of {}", names.join(", "))
+                    format!("{path}.kind: '{}' is not a {n} variant; expected one of {}", crate::clip::clip(kind), names.join(", "))
                 })?;
                 if !lenient {
                     for key in obj.keys() {
                         if key != "kind" && !fields.iter().any(|(f, _)| f == key) {
-                            return Err(format!("{path}: {n}.{variant} has no field '{key}'"));
+                            return Err(format!("{path}: {n}.{variant} has no field '{}'", crate::clip::clip(key)));
                         }
                     }
                 }
@@ -249,7 +249,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
                 if !lenient {
                     for key in obj.keys() {
                         if !fields.iter().any(|(f, _)| f == key) {
-                            return Err(format!("{path}: {n} has no field '{key}'"));
+                            return Err(format!("{path}: {n} has no field '{}'", crate::clip::clip(key)));
                         }
                     }
                 }
@@ -296,7 +296,7 @@ fn money_from_json(json: &Json, path: &str) -> Result<Money, String> {
         .ok_or_else(|| format!("{path}: expected money like {{\"amount\": \"12.50\", \"currency\": \"USD\"}}"))?;
     for key in obj.keys() {
         if key != "amount" && key != "currency" {
-            return Err(format!("{path}: money has no field '{key}'"));
+            return Err(format!("{path}: money has no field '{}'", crate::clip::clip(key)));
         }
     }
     let currency = obj

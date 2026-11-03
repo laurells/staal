@@ -36,7 +36,7 @@ impl Currency {
             .map(|(c, e)| Currency { code: c, exponent: *e })
             .ok_or_else(|| {
                 let known: Vec<&str> = CURRENCIES.iter().map(|(c, _)| *c).collect();
-                format!("unsupported currency '{code}'; supported: {}", known.join(", "))
+                format!("unsupported currency '{}'; supported: {}", crate::clip::clip(code), known.join(", "))
             })
     }
 }
@@ -52,7 +52,7 @@ impl Money {
     /// Parses a decimal string such as "12.50" in the given currency. Rejects signs,
     /// exponents, spaces, empty parts and more decimal places than the currency allows.
     pub fn parse(amount: &str, currency: Currency) -> Result<Money, String> {
-        let bad = || format!("invalid {} amount '{amount}': expected digits like \"12.50\"", currency.code);
+        let bad = || format!("invalid {} amount '{}': expected digits like \"12.50\"", currency.code, crate::clip::clip(amount));
         let (whole, frac) = match amount.split_once('.') {
             Some((w, f)) => (w, Some(f)),
             None => (amount, None),
@@ -69,12 +69,12 @@ impl Money {
         }
         if frac.len() as u32 > currency.exponent {
             return Err(format!(
-                "{} allows at most {} decimal place(s), got '{amount}'",
-                currency.code, currency.exponent
+                "{} allows at most {} decimal place(s), got '{}'",
+                currency.code, currency.exponent, crate::clip::clip(amount)
             ));
         }
         let scale = 10i64.checked_pow(currency.exponent).ok_or_else(bad)?;
-        let whole: i64 = whole.parse().map_err(|_| format!("amount '{amount}' is too large"))?;
+        let whole: i64 = whole.parse().map_err(|_| format!("amount '{}' is too large", crate::clip::clip(amount)))?;
         let mut frac_minor: i64 = if frac.is_empty() { 0 } else { frac.parse().map_err(|_| bad())? };
         // "12.5" in a 2-decimal currency means 50 minor units, not 5.
         for _ in frac.len() as u32..currency.exponent {
@@ -83,7 +83,7 @@ impl Money {
         let minor = whole
             .checked_mul(scale)
             .and_then(|m| m.checked_add(frac_minor))
-            .ok_or_else(|| format!("amount '{amount}' is too large"))?;
+            .ok_or_else(|| format!("amount '{}' is too large", crate::clip::clip(amount)))?;
         Ok(Money { minor, currency })
     }
 

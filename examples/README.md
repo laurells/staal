@@ -21,6 +21,20 @@ an Anthropic API key:
     cargo build --release
     STAAL_LIBRARY=target/release/libstaalc.so ANTHROPIC_API_KEY=... python3 examples/policy/app.py
 
+## A financial operations agent, attacked on purpose
+
+`finops/` is an agent that reads customer records, refunds, books, texts and keeps
+daily limits, and `finops/attacks.py` attacks it: planted instructions, unauthorized
+refunds, malicious arguments, replays, concurrent calls, a process killed mid-refund,
+lost answers, a mistake in the app's policy. Each attack is judged by what the
+stand-in bank and SMS service record, and the tests run it on both engines. It needs
+no account (Linux):
+
+    PYTHONPATH=python STAAL_LIBRARY=target/release/libstaalc.so python3 examples/finops/attacks.py /tmp/finops
+
+[docs/GUARANTEES.md](../docs/GUARANTEES.md) explains what it shows and where the
+guarantees stop.
+
 ## A decision by Claude
 
 `claude/triage.staal` asks Claude whether a complaint deserves a refund and

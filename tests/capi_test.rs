@@ -142,6 +142,7 @@ fn python_tools_keep_quotas_and_once_across_calls_and_recover_after_a_crash() {
         .arg(&scratch)
         .env("STAAL_LIBRARY", shared_library())
         .env("STAAL_HAS_FAILPOINTS", if cfg!(feature = "failpoints") { "1" } else { "0" })
+        .env("STAAL_HAS_NATIVE", if cfg!(feature = "native") { "1" } else { "0" })
         .output()
         .expect("python3 must be installed to run this test");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -149,6 +150,37 @@ fn python_tools_keep_quotas_and_once_across_calls_and_recover_after_a_crash() {
     assert!(out.status.success(), "python failed:\n{stdout}\n{stderr}");
     assert!(stdout.contains("checks passed"), "{stdout}");
     println!("{}", stdout.trim());
+}
+
+// examples/finops/attacks.py: the financial operations agent, attacked on purpose
+// (injected instructions, unauthorized refunds, malicious arguments, replays, concurrent
+// calls, exhausting the daily limits, a process killed mid-refund, lost answers, a
+// mistake in the app's policy), each judged by the stand-in bank's and SMS service's
+// own ledgers, on each engine. SQLite actions are Linux only, as is this test.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_finance_agent_holds_under_attack_on_each_engine() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let engines: &[&str] = if cfg!(feature = "native") { &["interpreter", "native"] } else { &["interpreter"] };
+    for engine in engines {
+        let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("finops").join(engine);
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let out = std::process::Command::new("python3")
+            .arg(root.join("examples/finops/attacks.py"))
+            .arg(&scratch)
+            .arg(engine)
+            .env("PYTHONPATH", root.join("python"))
+            .env("STAAL_LIBRARY", shared_library())
+            .output()
+            .expect("python3 must be installed to run this test");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{engine}:\n{stdout}\n{stderr}");
+        assert!(stdout.ends_with("every guarantee held\n") && !stdout.contains("BROKEN"), "{engine}:\n{stdout}");
+        assert_eq!(stdout.matches("   holds: ").count(), 35, "{engine}: every check ran:\n{stdout}");
+        println!("{engine}:\n{}", stdout.trim());
+    }
 }
 
 #[cfg(unix)]

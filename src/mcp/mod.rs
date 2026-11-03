@@ -294,7 +294,7 @@ impl Session {
         };
         let tool: Option<usize> = self.m.tools.iter().position(|t| t.name == name);
         if tool.is_none() && name != STATUS_TOOL {
-            return self.out.error(id, proto::INVALID_PARAMS, &format!("unknown tool '{name}'"), None);
+            return self.out.error(id, proto::INVALID_PARAMS, &format!("unknown tool '{}'", crate::clip::clip(name)), None);
         }
         let token = params
             .get("_meta")
@@ -328,7 +328,7 @@ impl Session {
                             }));
                         }
                     };
-                    me.server.call(t, &args, None, None, &ctl, &started)
+                    me.server.call(t, &args, None, None, None, &ctl, &started)
                 }
             };
             if let Ok(mut calls) = me.calls.lock() {

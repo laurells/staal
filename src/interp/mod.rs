@@ -1057,13 +1057,19 @@ impl Setup {
             match f.params.iter().find(|p| &p.name == k) {
                 Some(p) if is_secret(p) => {}
                 Some(_) => return Err(format!("secrets.{k}: is not a Secret parameter")),
-                None => return Err(format!("secrets.{k}: '{entry}' has no parameter named '{k}'")),
+                None => {
+                    let k = crate::clip::clip(k);
+                    return Err(format!("secrets.{k}: '{entry}' has no parameter named '{k}'"));
+                }
             }
         }
         let mut runtime = runtime_settings(cfg)?;
         for k in inputs.keys() {
             match f.params.iter().find(|p| &p.name == k) {
-                None => return Err(format!("inputs.{k}: '{entry}' has no parameter named '{k}'")),
+                None => {
+                    let k = crate::clip::clip(k);
+                    return Err(format!("inputs.{k}: '{entry}' has no parameter named '{k}'"));
+                }
                 Some(p) if matches!(p.ty, Ty::Cap { .. }) => {
                     return Err(format!("inputs.{k}: is a capability; capabilities are given in \"grants\""))
                 }
@@ -1078,7 +1084,10 @@ impl Setup {
         }
         for k in grants.keys() {
             match f.params.iter().find(|p| &p.name == k) {
-                None => return Err(format!("grants.{k}: '{entry}' has no parameter named '{k}'")),
+                None => {
+                    let k = crate::clip::clip(k);
+                    return Err(format!("grants.{k}: '{entry}' has no parameter named '{k}'"));
+                }
                 Some(p) if !matches!(p.ty, Ty::Cap { .. }) => {
                     return Err(format!("grants.{k}: is not a capability parameter; give it in \"inputs\""))
                 }
@@ -3265,7 +3274,7 @@ impl<'p> Interp<'p> {
             // An operation that is safe to repeat is made again when the run resumes:
             // nothing needs resolving first.
             Answer::Unknown(e) if retry_in_doubt => {
-                self.emit("in_doubt", json!({ "operation": self.op_json(n), "what": what, "error": e, "retry_on_resume": true }));
+                self.emit("in_doubt", json!({ "operation": self.op_json(n), "op": op, "what": what, "error": e, "retry_on_resume": true }));
                 return fail(
                     FailKind::InDoubt,
                     format!("{what} (operation {id}) did not complete ({e}). Resume the run to make it again"),

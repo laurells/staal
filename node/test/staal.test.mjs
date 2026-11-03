@@ -210,6 +210,9 @@ test('a tool takes its grants from the app at each call and keeps its quota acro
   assert.equal(refused.status, 'failed');
   assert.equal(refused.text, "'payments.refund' allows at most 20.00 USD per action; this action needs 35.00 USD");
   assert.equal((await tool.status(done.run)).status, 'done');
+  for (const [bad, what] of [[['4419'], 'an array'], ['4419', 'string'], [null, 'null'], [7, 'number']]) {
+    await assert.rejects(tool.call(bad, { context: { limit: '50.00' } }), { name: 'TypeError', message: `staal: the arguments are an object (a JSON object), not ${what}` });
+  }
   await tool.close();
   // The quota is in the journal directory: two calls were made, a third is refused.
   const again = await open();
@@ -217,6 +220,45 @@ test('a tool takes its grants from the app at each call and keeps its quota acro
   assert.equal(third.status, 'not_run');
   assert.match(third.text, /quota of 2 calls/);
   await again.close();
+});
+
+test('app inputs come from the app with each call, never from the caller, and can key once', async () => {
+  const program = path.join(scratch, 'tool-for-customer.staal');
+  fs.writeFileSync(program, 'fn main(customer: Text, order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -> Text {\n'
+    + '    let receipt = pay.refund(order, amount)\n'
+    + '    return "Refunded " + to_text(amount) + " for order " + order + " of customer " + customer\n'
+    + '}\n');
+  const tool = await staal.Tool.open(program, {
+    name: 'refund_mine',
+    description: 'd',
+    grants: () => ({ pay: { cap: 'payments.refund', each: usd('50.00'), uses: 1 } }),
+    appInputs: { customer: (c) => c.id },
+    once: { by: ['customer', 'order'] },
+    journals: path.join(scratch, 'tool-app-inputs'),
+  });
+  assert.deepEqual(Object.keys(tool.schema.properties).sort(), ['amount', 'order']);
+  assert.deepEqual(tool.schema.required, ['order', 'amount']);
+  const first = await tool.call({ order: '4417', amount: usd('5.00') }, { context: { id: 'c1' } });
+  assert.equal(first.status, 'done');
+  assert.equal(first.value, 'Refunded 5.00 USD for order 4417 of customer c1');
+  const forged = await tool.call({ order: '4417', amount: usd('5.00'), customer: 'c2' }, { context: { id: 'c1' } });
+  assert.equal(forged.status, 'not_run');
+  assert.equal(forged.text, 'inputs.customer: given by the app, never by the caller');
+  assert.equal((await tool.call({ order: '4417', amount: usd('5.00') }, { context: { id: 'c1' } })).run, first.run);
+  const other = await tool.call({ order: '4417', amount: usd('5.00') }, { context: { id: 'c2' } });
+  assert.notEqual(other.run, first.run);
+  assert.equal(other.value, 'Refunded 5.00 USD for order 4417 of customer c2');
+  // A value the app leaves out is missing, and refused: nothing runs without it.
+  const missing = await tool.call({ order: '4418', amount: usd('5.00') }, { context: {} });
+  assert.equal(missing.status, 'not_run');
+  assert.equal(missing.text, "app inputs: 'customer' missing");
+  await tool.close();
+  for (const appInputs of [{}, { customer: 'c1' }, ['customer'], null]) {
+    await assert.rejects(
+      staal.Tool.open(program, { name: 'x', description: 'd', grants: () => ({}), appInputs, journals: path.join(scratch, 'tool-bad-app') }),
+      { name: 'TypeError', message: "staal: Tool: appInputs maps input names to functions of the call's context" },
+    );
+  }
 });
 
 test('once makes a repeated call one run, and a tool needs grants only when its program does', async () => {

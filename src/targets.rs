@@ -19,21 +19,21 @@
 ///    so `%7e` and `~` are the same target;
 ///  - the fragment is dropped, since it is never sent.
 pub fn canonical_url(s: &str) -> Result<String, String> {
-    let u = url::Url::parse(s).map_err(|e| format!("'{s}' is not a valid URL: {e}"))?;
-    let host = u.host_str().filter(|h| !h.is_empty()).ok_or_else(|| format!("'{s}' has no host"))?;
+    let u = url::Url::parse(s).map_err(|e| format!("'{}' is not a valid URL: {e}", crate::clip::clip(s)))?;
+    let host = u.host_str().filter(|h| !h.is_empty()).ok_or_else(|| format!("'{}' has no host", crate::clip::clip(s)))?;
     match u.scheme() {
         "https" => {}
         "http" if is_loopback(&u) => {}
-        "http" => return Err(format!("'{s}' uses http://; only https:// is allowed (http:// only for localhost)")),
-        other => return Err(format!("'{s}' uses {other}://; only https:// is allowed")),
+        "http" => return Err(format!("'{}' uses http://; only https:// is allowed (http:// only for localhost)", crate::clip::clip(s))),
+        other => return Err(format!("'{}' uses {}://; only https:// is allowed", crate::clip::clip(s), crate::clip::clip(other))),
     }
     if !u.username().is_empty() || u.password().is_some() {
-        return Err(format!("'{s}' contains a user name or password; send credentials in a header"));
+        return Err(format!("'{}' contains a user name or password; send credentials in a header", crate::clip::clip(s)));
     }
     let path = u.path();
     let lower = path.to_ascii_lowercase();
     if lower.contains("%2f") || lower.contains("%5c") {
-        return Err(format!("'{s}' has an encoded '/' or '\\' in its path, which servers interpret differently"));
+        return Err(format!("'{}' has an encoded '/' or '\\' in its path, which servers interpret differently", crate::clip::clip(s)));
     }
     let mut out = format!("{}://{host}", u.scheme());
     if let Some(port) = u.port() {
@@ -101,7 +101,7 @@ fn hex(d: u8) -> u8 {
 /// refuses to follow any when it opens the file, so the canonical text is the file.
 pub fn canonical_path(s: &str) -> Result<String, String> {
     if !s.starts_with('/') {
-        return Err(format!("'{s}' is not an absolute path"));
+        return Err(format!("'{}' is not an absolute path", crate::clip::clip(s)));
     }
     if s.contains('\0') {
         return Err("a file path cannot contain a NUL character".into());
@@ -112,14 +112,14 @@ pub fn canonical_path(s: &str) -> Result<String, String> {
             "" | "." => {}
             ".." => {
                 if parts.pop().is_none() {
-                    return Err(format!("'{s}' goes above /"));
+                    return Err(format!("'{}' goes above /", crate::clip::clip(s)));
                 }
             }
             other => parts.push(other),
         }
     }
     if parts.is_empty() {
-        return Err(format!("'{s}' names / itself, not a file"));
+        return Err(format!("'{}' names / itself, not a file", crate::clip::clip(s)));
     }
     Ok(format!("/{}", parts.join("/")))
 }
@@ -177,15 +177,15 @@ pub fn check_path_pattern(p: &str) -> Result<(), String> {
 /// domain lowercased and in ASCII, an IPv4 address in dotted decimal, an IPv6 address
 /// in brackets, compressed), the port as a decimal number from 1 to 65535.
 pub fn canonical_address(s: &str) -> Result<String, String> {
-    let (host, port) = s.rsplit_once(':').ok_or_else(|| format!("'{s}' is not host:port"))?;
+    let (host, port) = s.rsplit_once(':').ok_or_else(|| format!("'{}' is not host:port", crate::clip::clip(s)))?;
     if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(format!("'{s}': the port must be a number"));
+        return Err(format!("'{}': the port must be a number", crate::clip::clip(s)));
     }
-    let port: u16 = port.parse().ok().filter(|p| *p > 0).ok_or_else(|| format!("'{s}': the port must be from 1 to 65535"))?;
+    let port: u16 = port.parse().ok().filter(|p| *p > 0).ok_or_else(|| format!("'{}': the port must be from 1 to 65535", crate::clip::clip(s)))?;
     if host.is_empty() {
-        return Err(format!("'{s}' names no host"));
+        return Err(format!("'{}' names no host", crate::clip::clip(s)));
     }
-    let h = url::Host::parse(host).map_err(|e| format!("'{s}': {e}"))?;
+    let h = url::Host::parse(host).map_err(|e| format!("'{}': {e}", crate::clip::clip(s)))?;
     let host = match h {
         url::Host::Domain(d) => d,
         url::Host::Ipv4(a) => a.to_string(),

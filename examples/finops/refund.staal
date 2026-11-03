@@ -1,0 +1,44 @@
+// Refunds part of one of the customer's orders, then tells the customer. Never more
+// than is left of the order, never on another customer's payment, and the message
+// goes only to the phone number the app has for the customer. `customer` and
+// `database` are the app's; `order` and `amount` are the caller's.
+
+import bank
+import sms
+
+type Order { payment: Text, total_cents: Int, refunded_cents: Int }
+type Contact { phone: Text }
+
+fn main(customer: Text, database: Text, order: Text, amount: Money,
+        db: cap db.sqlite.query, book: cap db.sqlite.execute,
+        pay: cap bank.payments.refund(each: 500 USD), text: cap sms.messages.send(uses: 1)) -> Text {
+    // The order is looked up as the customer's own: another customer's order is not found.
+    let found: List<Order, 1> = validate parse(List<Order, 1>, db.query(database,
+        "select payment, total_cents, refunded_cents from orders where id = ? and customer = ?", [order, customer]))
+    if len(found) == 0 {
+        fail("this customer has no such order")
+    }
+    let o = found[0]
+    // Orders are in USD, and amounts in two currencies never compare: check it first.
+    if currency(amount) != "USD" {
+        fail("refunds on these orders are in USD")
+    }
+    let left = 0.01 USD * (o.total_cents - o.refunded_cents)
+    if amount <= 0.00 USD {
+        fail("a refund must be more than 0.00 USD")
+    }
+    if amount > left {
+        fail("at most " + to_text(left) + " is left to refund on this order")
+    }
+    // Everything is checked before anything is done.
+    let contact: List<Contact, 1> = validate parse(List<Contact, 1>, db.query(database,
+        "select phone from customers where id = ?", [customer]))
+    if len(contact) == 0 {
+        fail("this customer has no phone number")
+    }
+    let paid = pay.refund(o.payment, amount)
+    let booked = book.execute(database, "update orders set refunded_cents = refunded_cents + ? where id = ?",
+        [to_text(minor_units(amount)), order])
+    let sent = text.send(contact[0].phone, "Your refund of " + to_text(amount) + " for order " + order + " is on its way.")
+    return "Refunded " + to_text(amount) + " for order " + order
+}

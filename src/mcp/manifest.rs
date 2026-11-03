@@ -40,7 +40,7 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
     let mut tools: Vec<Tool> = Vec::new();
     let mut warnings = Vec::new();
     for (i, t) in list.iter().enumerate() {
-        let tool = tool::parse_tool(t, &format!("tools[{i}]"), dir, model, &settings, Grants::Fixed, &mut warnings)?;
+        let tool = tool::parse_tool(t, &format!("tools[{i}]"), dir, model, &settings, Grants::Fixed, false, &mut warnings)?;
         if tools.iter().any(|x| x.name == tool.name) {
             return Err(format!("tools[{i}].name: '{}' is used by an earlier tool", tool.name));
         }

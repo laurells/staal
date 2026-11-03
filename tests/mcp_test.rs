@@ -531,7 +531,8 @@ fn a_manifest_that_could_go_wrong_stops_the_server_before_it_answers() {
     refuse("dots", json!({ "server": { "name": "s" }, "tools": [tool(json!({ "name": ".." }))] }), "not only dots");
     refuse("twice", json!({ "server": { "name": "s" }, "tools": [tool(json!({})), tool(json!({}))] }), "used by an earlier tool");
     refuse("grant", json!({ "server": { "name": "s" }, "tools": [tool(json!({ "grants": {} }))] }), "grants.pay: missing");
-    refuse("once", json!({ "server": { "name": "s" }, "tools": [tool(json!({ "once": { "by": ["pay"] } }))] }), "takes no argument 'pay'");
+    refuse("once", json!({ "server": { "name": "s" }, "tools": [tool(json!({ "once": { "by": ["pay"] } }))] }), "has no input 'pay'");
+    refuse("app-inputs", json!({ "server": { "name": "s" }, "tools": [tool(json!({ "app_inputs": ["order"] }))] }), "app_inputs: not allowed in a manifest");
     refuse("once-keep", json!({ "server": { "name": "s", "keep": 1 }, "tools": [tool(json!({ "once": { "by": ["order"], "keep": "2d" } }))] }), "longer than server.keep");
     refuse("quota-unbounded", json!({ "server": { "name": "s" }, "tools": [tool(json!({
         "grants": { "pay": { "cap": "payments.refund" } }, "quota": { "window": "1h", "money": usd("100.00") } }))] }), "can spend money");

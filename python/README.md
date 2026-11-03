@@ -51,7 +51,10 @@ The arguments are only ever inputs: a grant is never an argument, and the model 
 sees one. An app serving several tenants or users from one directory also gives
 `scope=lambda customer: customer["tenant_id"]`, from its own records: `once` keys are
 then held per scope, and a run's status is given only in its scope
-(`refund.status(run, context=customer)`). One process uses a journal directory at a time (an OS lock; another process
+(`refund.status(run, context=customer)`). Inputs that only the app may give, such as
+the customer a call is for, are `app_inputs={"customer": lambda customer: customer["id"]}`:
+they are left out of the schema a model sees, and a call whose arguments name one is
+refused. One process uses a journal directory at a time (an OS lock; another process
 waits five seconds, then is refused), so give each worker process its own directory,
 whose quotas are then its own, or send the calls through one process. The tool's
 other settings (`quota`, `once`, `deadline`, `model`, `net`, `secrets`, `engine`)

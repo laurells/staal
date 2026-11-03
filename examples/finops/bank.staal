@@ -1,0 +1,26 @@
+// A library capability: refunds through the bank's API. The bank deduplicates by
+// Idempotency-Key, so the operator grants `post` with "idempotency_key": true.
+
+type RefundRequest { payment: Text, amount: Money }
+type Refunded { id: Text }
+
+capability bank.payments {
+    needs post: cap net.http.post
+    // For example https://bank.example.com: the API's base URL.
+    needs base: Text
+
+    // A payment id without surrounding space: the form `only` lists.
+    canonical(payment: Text) -> Text {
+        return trim(payment)
+    }
+
+    action refund(payment: Text @target, amount: Money @amount) -> Text {
+        let r = post.post(base + "/refunds", json(RefundRequest { payment: trim(payment), amount: amount }),
+            [header("Content-Type", "application/json")])
+        if r.status != 200 or not r.complete {
+            fail("the bank answered " + json(r.status) + ": " + r.body)
+        }
+        let refunded: Refunded = validate parse(Refunded, r.body)
+        return refunded.id
+    }
+}

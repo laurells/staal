@@ -49,7 +49,7 @@ char *staal_resolve(const char *journal_path, const char *resolution_json);
  *   "quota", "once", "deadline", "model", "net", ...). With "grants", every call has
  *   them; without, each call gives its own in grants_json, computed by the app.
  *   Returns "tool", "name", "description", "input_schema", "output_schema",
- *   "annotations", "grants" ("fixed" or "per_call") and "warnings".
+ *   "annotations", "grants" ("fixed" or "per_call"), "app_inputs" and "warnings".
  * staal_tool_call returns {"status", "is_error", "text", "structured"?, "run"?}, where
  *   status is "done", "failed", "stopped" (waiting for an operator), "in_progress" (a
  *   repeated call of an operation still running) or "not_run" (refused before any
@@ -59,6 +59,12 @@ char *staal_resolve(const char *journal_path, const char *resolution_json);
  *   app's own records and never from the arguments; 1 to 256 characters, no control
  *   characters. A `once` key is held within its scope, so the same arguments in two
  *   scopes are two runs.
+ * app_inputs (in spec_json): names of the entry function's inputs that the app gives
+ *   with each call, never a caller, such as the customer the call is for: they are not
+ *   in "input_schema", a call whose arguments name one is refused, and they may be
+ *   named in "once". Each call gives them all, and nothing else, in app_inputs_json to
+ *   staal_tool_call_with_inputs (staal_tool_call gives none). Not allowed in an MCP
+ *   manifest, whose tools have no app.
  * staal_run_status returns {"run", "status", "observed_at", "result"?, "failure"?}. A
  *   run made in a scope is described only when the same scope is given; otherwise it
  *   is "unknown", as a run never made is. */
@@ -67,6 +73,9 @@ char *staal_host_close(const char *host);
 char *staal_tool_open(const char *host, const char *spec_json);
 char *staal_tool_call(const char *tool, const char *arguments_json, const char *grants_json /* or NULL */,
                       const char *scope /* or NULL */);
+char *staal_tool_call_with_inputs(const char *tool, const char *arguments_json,
+                                  const char *app_inputs_json /* or NULL */,
+                                  const char *grants_json /* or NULL */, const char *scope /* or NULL */);
 char *staal_tool_close(const char *tool);
 char *staal_run_status(const char *host, const char *run, const char *scope /* or NULL */);
 

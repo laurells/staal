@@ -303,6 +303,7 @@ continued.
 | [docs/GUIDE.md](docs/GUIDE.md) | The language: rules, syntax, capabilities, packages, native code |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | The runtime specification: semantics, the journal, failure behaviour |
 | [docs/MCP.md](docs/MCP.md) | `staalc mcp`: the manifest, the protocol, quotas, `once`, crashes and operators |
+| [docs/GUARANTEES.md](docs/GUARANTEES.md) | What Staal guarantees, what it assumes and where it stops, shown on a finance agent attacked on purpose |
 | [docs/frameworks/claude-agent-sdk.md](docs/frameworks/claude-agent-sdk.md) | A support agent on the Claude Agent SDK that can never refund more than your app allows, in Python and TypeScript |
 | [docs/frameworks/openai-agents.md](docs/frameworks/openai-agents.md) | The same agent on the OpenAI Agents SDK, in Python and TypeScript |
 | [docs/frameworks/langgraph.md](docs/frameworks/langgraph.md) | The same agent on LangGraph, in Python and TypeScript |

@@ -376,7 +376,7 @@ mod tools {
         let h = reg()?.hosts.get(&hid).map(|o| o.host.clone()).ok_or(format!("host {hid} is not open"))?;
         let grants = if spec_json.get("grants").is_some() { Grants::Fixed } else { Grants::PerCall };
         let mut warnings = Vec::new();
-        let t = tool::parse_tool(&spec_json, "tool", &cwd()?, None, &h.settings, grants, &mut warnings)?;
+        let t = tool::parse_tool(&spec_json, "tool", &cwd()?, None, &h.settings, grants, true, &mut warnings)?;
         let described = json!({
             "status": "ok",
             "name": t.name,
@@ -386,6 +386,7 @@ mod tools {
             "output_schema": t.output_schema,
             "annotations": t.annotations,
             "grants": if t.grants == Grants::Fixed { "fixed" } else { "per_call" },
+            "app_inputs": t.app_inputs,
             "warnings": warnings,
         });
         let mut r = reg()?;
@@ -410,9 +411,16 @@ mod tools {
     }
 
     /// One call: a run, or the answer of an earlier one (`once`), or a refusal.
-    pub fn tool_call(tool: &str, arguments: &str, grants: Option<&str>, scope: Option<&str>) -> Result<Json, String> {
+    pub fn tool_call(
+        tool: &str,
+        arguments: &str,
+        app_inputs: Option<&str>,
+        grants: Option<&str>,
+        scope: Option<&str>,
+    ) -> Result<Json, String> {
         let tid = id(tool, "tool")?;
         let args = object(arguments, "arguments_json")?;
+        let app_inputs = app_inputs.map(|i| object(i, "app_inputs_json")).transpose()?;
         let grants = grants.map(|g| object(g, "grants_json")).transpose()?;
         let (host, t) = {
             let r = reg()?;
@@ -421,7 +429,7 @@ mod tools {
             (host, t.clone())
         };
         let ctl = Ctl::default();
-        let a = host.call(&t, &args, grants.as_ref(), scope, &ctl, &|_| {}).ok_or("the call was cancelled")?;
+        let a = host.call(&t, &args, app_inputs.as_ref(), grants.as_ref(), scope, &ctl, &|_| {}).ok_or("the call was cancelled")?;
         let mut out = json!({ "status": a.status, "is_error": a.is_error, "text": a.text });
         if let Some(run) = a.run {
             out["run"] = json!(run);
@@ -499,7 +507,46 @@ pub unsafe extern "C" fn staal_tool_call(
     // SAFETY: forwarded from the caller's promise.
     let a = unsafe { (arg(tool, "tool"), arg(arguments_json, "arguments_json"), arg(grants_json, "grants_json"), arg(scope, "scope")) };
     guarded(move || {
-        let r = (|| tools::tool_call(&required(a.0?, "tool")?, &required(a.1?, "arguments_json")?, a.2?.as_deref(), a.3?.as_deref()))();
+        let r = (|| tools::tool_call(&required(a.0?, "tool")?, &required(a.1?, "arguments_json")?, None, a.2?.as_deref(), a.3?.as_deref()))();
+        r.unwrap_or_else(error)
+    })
+}
+
+/// `staal_tool_call` with the app's inputs for the call, which a tool defined with
+/// "app_inputs" needs (include/staal.h).
+///
+/// # Safety
+/// Each argument must be a valid NUL-terminated string; `app_inputs_json`,
+/// `grants_json` and `scope` may be NULL.
+#[cfg(unix)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn staal_tool_call_with_inputs(
+    tool: *const c_char,
+    arguments_json: *const c_char,
+    app_inputs_json: *const c_char,
+    grants_json: *const c_char,
+    scope: *const c_char,
+) -> *mut c_char {
+    // SAFETY: forwarded from the caller's promise.
+    let a = unsafe {
+        (
+            arg(tool, "tool"),
+            arg(arguments_json, "arguments_json"),
+            arg(app_inputs_json, "app_inputs_json"),
+            arg(grants_json, "grants_json"),
+            arg(scope, "scope"),
+        )
+    };
+    guarded(move || {
+        let r = (|| {
+            tools::tool_call(
+                &required(a.0?, "tool")?,
+                &required(a.1?, "arguments_json")?,
+                a.2?.as_deref(),
+                a.3?.as_deref(),
+                a.4?.as_deref(),
+            )
+        })();
         r.unwrap_or_else(error)
     })
 }
