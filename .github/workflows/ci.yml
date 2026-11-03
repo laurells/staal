@@ -40,6 +40,11 @@ jobs:
       - name: PostgreSQL for the db.postgres tests (Homebrew on macOS)
         if: runner.os == 'macOS'
         run: brew install postgresql@16 && echo "STAAL_POSTGRES_BIN=$(brew --prefix postgresql@16)/bin" >> "$GITHUB_ENV"
+      # Node 22: the Vercel AI SDK (ai 7) the adapter tests use needs it; @staal/node
+      # itself supports Node 18 and newer.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Versions
         run: rustc --version && cargo --version && git --version && python3 --version && node --version
       - name: Tests, with crash injection
@@ -52,7 +57,7 @@ jobs:
           "$RUNNER_TEMP/mcpenv/bin/pip" install --quiet pip==26.2.1 && "$RUNNER_TEMP/mcpenv/bin/pip" install --quiet --uploaded-prior-to=P14D -r tests/mcp_sdk/requirements.txt
           (cd tests/mcp_sdk && npm ci)
           STAAL_MCP_SDK=1 STAAL_MCP_PYTHON="$RUNNER_TEMP/mcpenv/bin/python" cargo test --test mcp_sdk_test
-      - name: Framework adapters (OpenAI Agents SDK, LangGraph), Python
+      - name: Framework adapters (OpenAI Agents SDK, LangGraph, Claude Agent SDK, Google ADK), Python
         run: |
           python3 -m venv "$RUNNER_TEMP/fwenv"
           "$RUNNER_TEMP/fwenv/bin/pip" install --quiet pip==26.2.1 && "$RUNNER_TEMP/fwenv/bin/pip" install --quiet --uploaded-prior-to=P14D -r python/tests/frameworks.txt

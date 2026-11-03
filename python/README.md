@@ -65,11 +65,15 @@ LangGraph (`pip install "staal[langgraph]"`), with the context taken from
 `config["configurable"]["staal_context"]`. `staal.claude_agent_sdk.mcp_server(tools,
 context=customer)` serves tools to the Claude Agent SDK as an in-process MCP server,
 one per session (`pip install "staal[claude-agent-sdk]"`), and `allowed_tools(name,
-tools)` gives their names for `allowed_tools`. A refusal goes back to the model as the
-tool's output, the broker's message included. Each is tested through the framework's
+tools)` gives their names for `allowed_tools`. `staal.google_adk.adk_tool(tool)` gives a
+Google ADK tool (`pip install "staal[google-adk]"`), whose context is the session's
+state under `"staal_context"`, set by the app when it creates the session. A refusal
+goes back to the model as the tool's output (as an error where the framework has a
+way to say so), the broker's message included. Each is tested through the framework's
 own agent loop (openai-agents 0.24.0, langgraph 1.2.16, claude-agent-sdk 0.2.168, whose
 loop runs in the Claude Code CLI it bundles, against a local stand-in for the Messages
-API); the examples are in
+API, and google-adk 2.12.0), and once a week against each framework's latest release;
+the examples are in
 [examples/frameworks](https://github.com/laurells/staal/tree/main/examples/frameworks).
 
 **Platforms.** Python 3.8 or newer, on Linux (x86_64 and arm64, glibc 2.28 or newer)

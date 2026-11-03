@@ -3,3 +3,4 @@ openai-agents==0.24.0
 langgraph==1.2.16
 langchain-core==1.6.12
 claude-agent-sdk==0.2.168
+google-adk==2.12.0

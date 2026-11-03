@@ -23,6 +23,17 @@ the language or its file formats.
   own low-level server, so the schema reaches the model unconverted. Tested through
   the SDK's agent loop in the Claude Code CLI it ships, against a local server
   answering as the Messages API does, with the examples run as written.
+- `staal.google_adk.adk_tool` (extra `staal[google-adk]`): a staal Tool as a Google
+  ADK tool, its schema given as JSON Schema, its context the session's state under
+  `"staal_context"`, and its answer `{"result": ...}` or `{"error": ...}` as ADK's own
+  tools give them. Tested through the Runner's agent loop with a scripted model, on
+  google-adk 2.12.0.
+- A weekly workflow (`frameworks-latest`) runs every adapter test against each
+  framework's latest release, so a framework that changes under an adapter is found
+  before a user finds it. Its first run, by hand, found a test too strict about the
+  Claude Agent SDK's tool list (a newer CLI adds a tool-search placeholder); the test
+  now checks the refund is offered and no built-in tool is.
+- CI runs Node 22, which the Vercel AI SDK's tests need.
 - CI installs the Python test frameworks with `--uploaded-prior-to=P14D`, and the Node
   framework tests' lock file was made with `npm install --before`, so dependencies the
   pins do not name are at least two weeks old too; the one exception is body-parser

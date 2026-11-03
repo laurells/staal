@@ -1,0 +1,45 @@
+# The framework adapters against each framework's latest release, once a week. CI tests
+# them against pinned versions at least two weeks old; this job is the early warning
+# that a framework has changed under an adapter, before a user finds it. It installs
+# whatever is newest, so it never feeds a release: it only tells us. A failure here
+# opens no issue by itself; GitHub notifies the repository's watchers of a failed run.
+name: frameworks-latest
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays, 06:17 UTC
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+jobs:
+  latest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Python adapters, against the latest release of each framework
+        run: |
+          python3 -m venv "$RUNNER_TEMP/fwenv"
+          "$RUNNER_TEMP/fwenv/bin/pip" install --quiet --upgrade pip
+          # The names in python/tests/frameworks.txt, without their pinned versions.
+          sed -n 's/^\([A-Za-z0-9_.-]*\)==.*/\1/p' python/tests/frameworks.txt > "$RUNNER_TEMP/latest.txt"
+          "$RUNNER_TEMP/fwenv/bin/pip" install --quiet --upgrade -r "$RUNNER_TEMP/latest.txt"
+          "$RUNNER_TEMP/fwenv/bin/pip" list | grep -i -f "$RUNNER_TEMP/latest.txt"
+          STAAL_FRAMEWORKS_PYTHON="$RUNNER_TEMP/fwenv/bin/python" cargo test --test capi_test python_adapters
+      - name: Node adapters, against the latest release of each framework
+        working-directory: node
+        run: |
+          cargo build --locked
+          cp target/debug/libstaal_node.so "$RUNNER_TEMP/staal.node"
+          cd test/frameworks
+          # The dependencies of the test project, each at its latest release, with no lock file.
+          node -e 'const d = require("./package.json").dependencies; console.log(Object.keys(d).map((n) => n + "@latest").join("\n"))' > "$RUNNER_TEMP/latest-npm.txt"
+          rm package-lock.json
+          xargs npm install --no-package-lock --no-save < "$RUNNER_TEMP/latest-npm.txt"
+          npm ls --depth=0
+          STAAL_NODE_ADDON="$RUNNER_TEMP/staal.node" node --test frameworks.test.mjs

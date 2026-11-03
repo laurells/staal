@@ -233,9 +233,14 @@ async def run_session(customer):
 
 used, answer = asyncio.run(run_session({"tier": "standard"}))
 tools, outputs = ScriptedMessages.seen[-1]
-expect([t["name"] for t in tools] == ["mcp__staal__refund_order"], f"the model is shown the refund and no built-in tool: {[t['name'] for t in tools]}")
-expect("pay" not in tools[0]["input_schema"]["properties"], "a grant is never an argument")
-expect(tools[0]["description"] == ca.refund.description, "the tool's description")
+# The CLI may add its own placeholders (newer ones add one for tool search); what
+# matters is the refund is there and no built-in tool is.
+names = [t["name"] for t in tools]
+expect("mcp__staal__refund_order" in names and not {"Bash", "Read", "Write", "Edit", "WebFetch"} & set(names),
+       f"the model is shown the refund and no built-in tool: {names}")
+shown = next(t for t in tools if t["name"] == "mcp__staal__refund_order")
+expect("pay" not in shown["input_schema"]["properties"], "a grant is never an argument")
+expect(shown["description"] == ca.refund.description, "the tool's description")
 expect(used == ["mcp__staal__refund_order"] * 2, f"the model called the tool twice: {used}")
 expect(outputs == [(REFUSED, True), (DONE, False)], f"refused as an error with the broker's message, then done: {outputs}")
 expect(answer == f"{REFUSED} | {DONE}", f"the final answer: {answer}")
@@ -253,5 +258,57 @@ for bad, why in [([], "a list of staal.Tool"), ([ca.refund, ca.refund], "two too
 expect(allowed_tools("billing", [ca.refund]) == ["mcp__billing__refund_order"], "allowed_tools")
 ca.refund.close()
 server.shutdown()
+
+# ---------------------------------------------------------------------------
+# Google ADK: the Runner's own agent loop, with a scripted model.
+
+from google.adk.models.base_llm import BaseLlm  # noqa: E402
+from google.adk.models.llm_response import LlmResponse  # noqa: E402
+from google.genai import types as genai  # noqa: E402
+
+
+class ScriptedGemini(BaseLlm):
+    """Asks for each refund in ASK in turn, then answers with what the tool said, and
+    records what ADK showed it."""
+
+    model: str = "scripted"
+    seen: dict = {}
+
+    async def generate_content_async(self, llm_request, stream=False):
+        self.seen["declarations"] = [f for t in (llm_request.config.tools or []) for f in (t.function_declarations or [])]
+        responses = [p.function_response.response for c in llm_request.contents for p in (c.parts or []) if p.function_response]
+        self.seen["responses"] = responses
+        step = len(responses)
+        if step < len(ASK):
+            part = genai.Part(function_call=genai.FunctionCall(name="refund_order", args=ASK[step], id=f"call_{step}"))
+        else:
+            part = genai.Part(text=" | ".join(r.get("result", r.get("error", "")) for r in responses))
+        yield LlmResponse(content=genai.Content(role="model", parts=[part]))
+
+
+adk = example("google_adk_refund")
+model = ScriptedGemini()
+answer = asyncio.run(adk.support(model, "Order 4417 arrived broken. Please refund it.", {"tier": "standard"}))
+decl = model.seen["declarations"]
+expect([d.name for d in decl] == ["refund_order"], f"the model is shown the tool: {[d.name for d in decl]}")
+expect("pay" not in decl[0].parameters_json_schema["properties"] and "$schema" not in decl[0].parameters_json_schema,
+       "a grant is never an argument, and the schema is JSON Schema without $schema")
+expect(model.seen["responses"] == [{"error": REFUSED}, {"result": DONE}], f"refused as an error, then done: {model.seen['responses']}")
+expect(answer == f"{REFUSED} | {DONE}", f"the final answer: {answer}")
+model = ScriptedGemini()
+asyncio.run(adk.support(model, "Refund it.", {"tier": "gold"}))
+expect(model.seen["responses"] == [{"result": '"Refunded 80.00 USD for order 4417"'}, {"result": DONE}],
+       f"a gold customer's session state lets both through: {model.seen['responses']}")
+model = ScriptedGemini()
+asyncio.run(adk.support(model, "Refund it.", None))
+expect("error" in model.seen["responses"][0], f"no context in the session: an error, never a refund: {model.seen['responses']}")
+from staal.google_adk import adk_tool  # noqa: E402
+for bad in ("x", None):
+    try:
+        adk_tool(bad)
+        expect(False, "adk_tool takes a staal.Tool")
+    except TypeError as e:
+        expect("staal.Tool" in str(e), str(e))
+adk.refund.close()
 
 print(f"{checks} checks passed")

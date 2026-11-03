@@ -186,6 +186,6 @@ fn python_adapters_run_the_tool_through_each_frameworks_own_loop() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "python failed:\n{stdout}\n{stderr}");
-    assert!(stdout.contains("19 checks passed"), "{stdout}");
+    assert!(stdout.contains("27 checks passed"), "{stdout}");
     println!("{}", stdout.trim());
 }

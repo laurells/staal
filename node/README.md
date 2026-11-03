@@ -67,7 +67,8 @@ an in-process MCP server, with the session's context bound when the server is ma
 frameworks are optional peer dependencies. Each is tested through the framework's own
 agent loop (@openai/agents 0.20.0, @langchain/langgraph 1.5.1, ai 7.0.145,
 @anthropic-ai/claude-agent-sdk 0.3.304, whose loop runs in the CLI it ships, against a
-local stand-in for the Messages API); the examples are in
+local stand-in for the Messages API), and once a week against each framework's latest
+release; the examples are in
 [examples/frameworks](https://github.com/laurells/staal/tree/main/examples/frameworks).
 
 **Platforms.** Node 18 or newer, on Linux (x86_64 and arm64, glibc 2.28 or newer) and
