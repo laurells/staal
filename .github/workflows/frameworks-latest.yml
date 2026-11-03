@@ -37,9 +37,10 @@ jobs:
           cargo build --locked
           cp target/debug/libstaal_node.so "$RUNNER_TEMP/staal.node"
           cd test/frameworks
-          # The dependencies of the test project, each at its latest release, with no lock file.
-          node -e 'const d = require("./package.json").dependencies; console.log(Object.keys(d).map((n) => n + "@latest").join("\n"))' > "$RUNNER_TEMP/latest-npm.txt"
+          # The dependencies of the test project, each at its latest release: this checkout's
+          # package.json is rewritten to ask for that, and installed with no lock file.
+          node -e 'const fs = require("fs"); const p = JSON.parse(fs.readFileSync("package.json", "utf8")); for (const n of Object.keys(p.dependencies)) p.dependencies[n] = "latest"; fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n")'
           rm package-lock.json
-          xargs npm install --no-package-lock --no-save < "$RUNNER_TEMP/latest-npm.txt"
+          npm install --no-package-lock
           npm ls --depth=0
           STAAL_NODE_ADDON="$RUNNER_TEMP/staal.node" node --test frameworks.test.mjs
