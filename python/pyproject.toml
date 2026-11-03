@@ -21,10 +21,11 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-# Adapters for agent frameworks: staal.openai_agents and staal.langgraph. The core
-# package needs none of them.
+# Adapters for agent frameworks: staal.openai_agents, staal.langgraph and
+# staal.claude_agent_sdk. The core package needs none of them.
 openai-agents = ["openai-agents>=0.24.0"]
 langgraph = ["langgraph>=1.2.16", "langchain-core>=1.6.12"]
+claude-agent-sdk = ["claude-agent-sdk>=0.2.168"]
 
 [project.urls]
 Homepage = "https://laurells.github.io/staal/"

@@ -15,6 +15,18 @@ the language or its file formats.
   `error-text` output with Staal's message. Tested through `generateText`'s own tool
   loop with the SDK's mock model, with `examples/frameworks/vercel_ai_refund.mjs` run
   as written.
+- Claude Agent SDK adapters: `staal.claude_agent_sdk.mcp_server` (extra
+  `staal[claude-agent-sdk]`) and `@staal/node/claude-agent-sdk`'s `mcpServer`, an ES
+  module, serve staal Tools as an in-process MCP server, with the session's context
+  bound when the server is made, since the SDK gives a tool only its arguments; and
+  `allowed_tools` / `allowedTools` give their names. The Node server is the MCP SDK's
+  own low-level server, so the schema reaches the model unconverted. Tested through
+  the SDK's agent loop in the Claude Code CLI it ships, against a local server
+  answering as the Messages API does, with the examples run as written.
+- CI installs the Python test frameworks with `--uploaded-prior-to=P14D`, and the Node
+  framework tests' lock file was made with `npm install --before`, so dependencies the
+  pins do not name are at least two weeks old too; the one exception is body-parser
+  2.4.0, for GHSA-27r3-jxmh-p828.
 - The Node framework tests install a copy of the package's own files, as `npm install`
   would, so ES module adapters resolve their frameworks as in an app, and
   `npm run types` checks the ES module adapters' types too.

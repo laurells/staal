@@ -166,16 +166,26 @@ fn python_adapters_run_the_tool_through_each_frameworks_own_loop() {
     let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("python-adapters");
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).unwrap();
-    let out = std::process::Command::new(&python)
+    // A cleared environment, so that nothing of this machine's own settings (a Claude
+    // Code session, an API key) reaches the frameworks the test drives.
+    let mut cmd = std::process::Command::new(&python);
+    cmd.env_clear();
+    for k in ["PATH", "LANG", "TMPDIR", "SYSTEMROOT"] {
+        if let Ok(v) = std::env::var(k) {
+            cmd.env(k, v);
+        }
+    }
+    let out = cmd
         .arg(root.join("python/tests/test_adapters.py"))
         .arg(root)
         .arg(&scratch)
+        .env("HOME", &scratch)
         .env("STAAL_LIBRARY", shared_library())
         .output()
         .expect("STAAL_FRAMEWORKS_PYTHON must name a Python");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "python failed:\n{stdout}\n{stderr}");
-    assert!(stdout.contains("8 checks passed"), "{stdout}");
+    assert!(stdout.contains("19 checks passed"), "{stdout}");
     println!("{}", stdout.trim());
 }

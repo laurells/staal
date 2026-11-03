@@ -33,7 +33,9 @@
     "langgraph.js",
     "langgraph.d.ts",
     "vercel-ai.mjs",
-    "vercel-ai.d.mts"
+    "vercel-ai.d.mts",
+    "claude-agent-sdk.mjs",
+    "claude-agent-sdk.d.mts"
   ],
   "publishConfig": {
     "access": "public"
@@ -74,12 +76,18 @@
       "types": "./vercel-ai.d.mts",
       "import": "./vercel-ai.mjs"
     },
+    "./claude-agent-sdk": {
+      "types": "./claude-agent-sdk.d.mts",
+      "import": "./claude-agent-sdk.mjs"
+    },
     "./package.json": "./package.json"
   },
   "peerDependencies": {
     "@openai/agents": ">=0.20.0",
     "@langchain/core": ">=1.2.18",
-    "ai": ">=7.0.145"
+    "ai": ">=7.0.145",
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.304",
+    "@modelcontextprotocol/sdk": ">=1.29.0"
   },
   "peerDependenciesMeta": {
     "@openai/agents": {
@@ -89,6 +97,12 @@
       "optional": true
     },
     "ai": {
+      "optional": true
+    },
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
       "optional": true
     }
   }

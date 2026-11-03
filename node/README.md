@@ -61,9 +61,13 @@ Agents SDK tool (grants from the run's `context`), and `structuredTool` from
 `config.configurable.staal_context`). `aiTools` from `@staal/node/vercel-ai` gives
 Vercel AI SDK tools, an ES module for `ai` 7 (Node 22 or newer), whose context is each
 tool's entry in `toolsContext`; a refusal reaches the model as an error with Staal's
-message. The frameworks are optional peer dependencies. Each is tested through the
-framework's own agent loop (@openai/agents 0.20.0, @langchain/langgraph 1.5.1, ai
-7.0.145); the examples are in
+message. `mcpServer` from `@staal/node/claude-agent-sdk` serves tools to the Claude Agent SDK as
+an in-process MCP server, with the session's context bound when the server is made
+(one per query), and `allowedTools` gives their names for `allowedTools`. The
+frameworks are optional peer dependencies. Each is tested through the framework's own
+agent loop (@openai/agents 0.20.0, @langchain/langgraph 1.5.1, ai 7.0.145,
+@anthropic-ai/claude-agent-sdk 0.3.304, whose loop runs in the CLI it ships, against a
+local stand-in for the Messages API); the examples are in
 [examples/frameworks](https://github.com/laurells/staal/tree/main/examples/frameworks).
 
 **Platforms.** Node 18 or newer, on Linux (x86_64 and arm64, glibc 2.28 or newer) and

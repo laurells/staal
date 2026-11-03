@@ -62,9 +62,14 @@ are those of a tool in `staalc mcp`'s manifest
 SDK tool (`pip install "staal[openai-agents]"`), whose grants come from the run's
 `context`; `staal.langgraph.structured_tool(tool)` gives a LangChain tool for
 LangGraph (`pip install "staal[langgraph]"`), with the context taken from
-`config["configurable"]["staal_context"]`. A refusal goes back to the model as the
-tool's output, the broker's message included. Both are tested through the framework's
-own agent loop (openai-agents 0.24.0, langgraph 1.2.16); the examples are in
+`config["configurable"]["staal_context"]`. `staal.claude_agent_sdk.mcp_server(tools,
+context=customer)` serves tools to the Claude Agent SDK as an in-process MCP server,
+one per session (`pip install "staal[claude-agent-sdk]"`), and `allowed_tools(name,
+tools)` gives their names for `allowed_tools`. A refusal goes back to the model as the
+tool's output, the broker's message included. Each is tested through the framework's
+own agent loop (openai-agents 0.24.0, langgraph 1.2.16, claude-agent-sdk 0.2.168, whose
+loop runs in the Claude Code CLI it bundles, against a local stand-in for the Messages
+API); the examples are in
 [examples/frameworks](https://github.com/laurells/staal/tree/main/examples/frameworks).
 
 **Platforms.** Python 3.8 or newer, on Linux (x86_64 and arm64, glibc 2.28 or newer)

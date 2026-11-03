@@ -886,11 +886,16 @@ the calls sent through one process.
 **Framework adapters.** `staal.openai_agents.function_tool` and
 `staal.langgraph.structured_tool` in Python, and `@staal/node/openai-agents`,
 `@staal/node/langgraph` and `@staal/node/vercel-ai` in Node.js, wrap a tool for the
-OpenAI Agents SDK, LangGraph and the Vercel AI SDK. The model sees the tool's name, description and argument schema; the grants
+OpenAI Agents SDK, LangGraph and the Vercel AI SDK. For the Claude Agent SDK,
+`staal.claude_agent_sdk.mcp_server` and `@staal/node/claude-agent-sdk` serve tools as an
+in-process MCP server, made per session with its context, since that SDK gives a tool
+only its arguments. The model sees the tool's name, description and argument schema; the grants
 come from the framework's run context through the app's function; the answer's `text`
 goes back to the model as the tool's output, a refusal's message included (marked as an
 error where the framework has a way to say so, as the AI SDK's `error-text` does), and
 nothing is retried. They are tested through each framework's own agent loop with a scripted
 model (python/tests/test_adapters.py, node/test/frameworks/), against the framework
-versions pinned in python/tests/frameworks.txt and node/test/frameworks/package.json.
+versions pinned in python/tests/frameworks.txt and node/test/frameworks/package.json. The
+Claude Agent SDK's loop runs in the Claude Code CLI it ships, pointed at a local server
+answering as the Messages API does.
 
