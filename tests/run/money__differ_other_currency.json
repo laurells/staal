@@ -1,0 +1,1 @@
+{"entry": "differ", "inputs": {"a": {"amount": "10.00", "currency": "EUR"}, "b": {"amount": "10.00", "currency": "USD"}}, "model": {"provider": "script", "responses": []}, "expect": {"result": true}}

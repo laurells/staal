@@ -225,11 +225,12 @@ model and the world can promise.
   than 0.00 USD`), and that check is the program's job.
 - **The app's own policy.** A grants function that is wrong within the program's
   ceiling is enforced as written.
-- **Amounts in two currencies never compare.** In Staal, `a > b` and `a <= b` are both
-  false when `a` and `b` are in different currencies (RUNTIME.md section 2). A program
-  whose checks compare a caller's amount with its own must check the currency first, as
-  `refund.staal` does. The broker's limits are not affected: an action in a currency
-  other than its limit's is refused.
+- **Amounts in two currencies are never ordered.** In Staal, `a <= b` fails (kind
+  `value`) when `a` and `b` are in different currencies (RUNTIME.md section 2), rather
+  than answering false, which would let a check such as `amount > left` pass unnoticed.
+  The run then stops before acting, saying why; a program that wants a clearer refusal
+  checks the currency first, as `refund.staal` does. The broker's limits hold either
+  way: an action in a currency other than its limit's is refused.
 - **Assumptions about services and the machine** (section 2): deduplication that is
   claimed but not real, a disk that lies about `fsync`, and C code.
 - **Scope of quotas.** Quotas are per tool, across customers. A per-customer limit

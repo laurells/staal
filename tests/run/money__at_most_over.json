@@ -1,0 +1,1 @@
+{"entry": "at_most", "inputs": {"amount": {"amount": "80.00", "currency": "USD"}, "limit": {"amount": "50.00", "currency": "USD"}}, "model": {"provider": "script", "responses": []}, "expect": {"result": false}}

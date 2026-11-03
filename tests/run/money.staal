@@ -20,3 +20,16 @@ fn change(paid: Money) -> Money {
 fn half_written() -> Money {
     return 12.5 USD
 }
+
+// Money in two currencies is never equal, and never ordered: ordering fails.
+fn at_most(amount: Money, limit: Money) -> Bool {
+    return amount <= limit
+}
+
+fn same(a: Money, b: Money) -> Bool {
+    return a == b
+}
+
+fn differ(a: Money, b: Money) -> Bool {
+    return a != b
+}

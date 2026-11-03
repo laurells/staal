@@ -43,20 +43,8 @@
     ]
   },
   "expect": {
-    "result": {
-      "done": [
-        {
-          "receipt": "sim-1",
-          "capability": "email.send",
-          "method": "send"
-        }
-      ]
-    },
-    "performed": [
-      [
-        "email.send",
-        "send"
-      ]
-    ]
+    "failure": "value",
+    "message_contains": "cannot compare 30.00 EUR and 100.00 USD with `<=`: different currencies",
+    "performed": []
   }
 }

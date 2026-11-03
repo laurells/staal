@@ -4033,9 +4033,18 @@ pub(crate) fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, Failure> 
     let ord: Option<Ordering> = match (l, r) {
         (Value::Int(a), Value::Int(b)) => Some(a.cmp(b)),
         (Value::Money(a), Value::Money(b)) if a.currency == b.currency => Some(a.minor.cmp(&b.minor)),
-        // Different currencies: never equal, never ordered (RUNTIME.md section 2).
-        (Value::Money(_), Value::Money(_)) => {
-            return Ok(op == CmpOp::Ne);
+        // Different currencies: never equal, and never ordered: asking which is more
+        // fails, rather than answering false, so that a check such as `amount <= left`
+        // cannot pass unnoticed for an amount in another currency (RUNTIME.md section 2).
+        (Value::Money(a), Value::Money(b)) => {
+            return match op {
+                CmpOp::Eq => Ok(false),
+                CmpOp::Ne => Ok(true),
+                _ => fail(
+                    FailKind::Value,
+                    format!("cannot compare {a} and {b} with `{op}`: different currencies"),
+                ),
+            };
         }
         _ => None,
     };

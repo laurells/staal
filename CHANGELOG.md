@@ -81,6 +81,19 @@ the language or its file formats.
   would, so ES module adapters resolve their frameworks as in an app, and
   `npm run types` checks the ES module adapters' types too.
 
+### Changed
+
+- Ordering money in two different currencies (`<`, `<=`, `>`, `>=`) now fails, as a
+  failure of kind `value` that `try` can catch, instead of answering false. A false
+  answer let a check like `amount > left` pass unnoticed for an amount in another
+  currency: building the finance example found exactly that, where only the broker's
+  currency check stopped the refund. `==` and `!=` are unchanged (never equal), as are
+  `min`, `max` and `sort`, which already failed. A program that compared amounts the
+  caller or a model gives with its own, and relied on a false answer to fall through,
+  now stops with a message naming both amounts; check `currency(x)` first to choose
+  what happens instead. On both engines; the checker counts these comparisons as able
+  to fail.
+
 ### Fixed
 
 - The runtime's own messages show text from outside (a target, an amount, an argument's

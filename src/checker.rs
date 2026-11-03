@@ -1047,13 +1047,16 @@ fn model_calling_fns(prog: &Program) -> HashSet<String> {
 
 /// Whether evaluating `e` itself can fail, apart from what its children do:
 /// arithmetic (overflow, division by zero, money in different currencies or below
-/// zero) and indexing (out of range). Actions and calls are judged separately.
+/// zero), ordering money in different currencies, and indexing (out of range).
+/// Actions and calls are judged separately.
 fn expr_can_fail_itself(e: &Expr) -> bool {
     // `parse` fails on text that is not JSON; `json` on a result too long; `header` on
     // a name or value that is not valid in HTTP.
     matches!(
         e,
         Expr::Arith { .. }
+            // `<`, `<=`, `>`, `>=` of money in different currencies.
+            | Expr::Cmp { op: CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge, .. }
             | Expr::Neg(..)
             | Expr::Index { .. }
             | Expr::Parse { .. }

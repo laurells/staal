@@ -227,10 +227,12 @@ Money is exact; there is no floating point anywhere in the runtime.
 - Supported currencies and their minor-unit exponents: USD 2, EUR 2, GBP 2,
   NGN 2, GHS 2, KES 2, ZAR 2, CAD 2, AUD 2, JPY 0. Any other code is an error.
 - Negative amounts are rejected.
-- Comparisons between Money values in different currencies never fail and are
-  never true for ordering: `<`, `<=`, `>`, `>=` are all false, `==` is false
-  and `!=` is true. So `refund.amount <= order.total` is false when the
-  currencies differ, and the refund does not happen.
+- Money values in different currencies are never equal (`==` is false, `!=` is
+  true), and are never ordered: `<`, `<=`, `>` and `>=` fail, as a failure of kind
+  `value` that `try` can catch, as adding them does. So `refund.amount <=
+  order.total` cannot quietly be false, or true, when the currencies differ; the
+  run fails, saying so, unless the program checks the currency first. (Before
+  0.26.0, these comparisons were all false.)
 - Money literals in source (`12.50 USD`, `0 NGN`, `1000 JPY`) are checked by
   the compiler with the same rules as money from outside: a supported
   currency, at most its number of decimal places, and an amount that fits.
@@ -515,7 +517,8 @@ failures of kind `value`, which `try` around a call can catch:
 
 - an Int result outside the signed 64-bit range, including `-(minimum Int)`;
 - division by zero;
-- Money in two different currencies added or subtracted;
+- Money in two different currencies added, subtracted, or compared with `<`, `<=`,
+  `>` or `>=`;
 - a negative Money result (`5 USD - 10 USD`, or Money times a negative Int);
 - Text longer than 16 MiB;
 - an index that is negative or not less than the list's length.
