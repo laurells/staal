@@ -4,3 +4,4 @@ langgraph==1.2.16
 langchain-core==1.6.12
 claude-agent-sdk==0.2.168
 google-adk==2.12.0
+langchain-anthropic==1.7.6

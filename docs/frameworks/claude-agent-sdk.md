@@ -74,7 +74,8 @@ never an argument the model can fill in. A customer whose tier the policy does n
 is refused outright, rather than given some default. `each` is the most one refund may
 be, and `uses: 1` allows one refund per call.
 `journals="runs"` is the folder where every call's journal is kept, so a run a crash
-interrupts is finished when the folder is next opened, without refunding twice.
+interrupts is finished when the folder is next opened, and a refund it may already
+have sent is never sent again blind (the end of this page says how).
 
 Before any model is involved, try it. Save this as `try_it.py`:
 

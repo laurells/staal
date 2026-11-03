@@ -15,4 +15,4 @@ __pycache__/
 /node/test/frameworks/runs
 /node/test/frameworks/*_refund.mjs
 /node/test/frameworks/refund.staal
-/node/test/frameworks/tutorial-claude
+/node/test/frameworks/tutorial-*

@@ -33,6 +33,13 @@ the language or its file formats.
   and TypeScript. Its files are saved and run as written by the tests
   (`python/tests/test_tutorials.py` and the Node framework tests), against a local
   stand-in for the Messages API, and the output the page shows must be what they print.
+- The same tutorial for the other frameworks, to the same standard and tested the same
+  way: `docs/frameworks/openai-agents.md` and `docs/frameworks/langgraph.md` (Python
+  and TypeScript, against stand-ins for the Responses and Messages APIs),
+  `docs/frameworks/vercel-ai.md` (TypeScript) and `docs/frameworks/google-adk.md`
+  (Python, against a stand-in for the Gemini API). The Node tests now also run every
+  JavaScript program whose output a page shows, not only the agent, and a page in the
+  list that is missing fails the test.
 - A weekly workflow (`frameworks-latest`) runs every adapter test against each
   framework's latest release, so a framework that changes under an adapter is found
   before a user finds it. Its first run, by hand, found a test too strict about the

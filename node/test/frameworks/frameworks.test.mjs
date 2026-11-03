@@ -10,6 +10,7 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -194,14 +195,17 @@ test('aiTools refuses what is not a Staal tool, and two tools of one name', asyn
 // The Claude Agent SDK's loop runs in the Claude Code CLI it ships: it is pointed at a
 // local server answering as the Anthropic Messages API does (streamed), with a
 // scripted model, and given an environment and a home of its own.
-async function scriptedMessages() {
+async function scriptedMessages(toolName = 'mcp__staal__refund_order') {
   const http = await import('node:http');
   const state = { requests: [] };
   const server = http.createServer((req, res) => {
     let data = '';
     req.on('data', (c) => (data += c));
     req.on('end', () => {
-      if (!req.url.startsWith('/v1/messages') || req.url.startsWith('/v1/messages/count_tokens')) {
+      // The Anthropic SDKs add /v1 to the base URL; the AI SDK's provider expects it in
+      // the base URL (as https://api.anthropic.com/v1) and adds only /messages.
+      const where = req.url.split('?')[0];
+      if (where !== '/v1/messages' && where !== '/messages') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end('{"input_tokens":1}');
         return;
@@ -219,7 +223,7 @@ async function scriptedMessages() {
       const step = outputs.length;
       const block =
         step < ASK.length
-          ? { type: 'tool_use', id: `toolu_${step}`, name: 'mcp__staal__refund_order', input: ASK[step] }
+          ? { type: 'tool_use', id: `toolu_${step}`, name: toolName, input: ASK[step] }
           : { type: 'text', text: outputs.map((o) => o.text).join(' | ') };
       const stop = block.type === 'tool_use' ? 'tool_use' : 'end_turn';
       const message = { id: `msg_${step}`, type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
@@ -312,48 +316,106 @@ test('the Claude Agent SDK server answers as an MCP server, and refuses what is 
   await client.close();
 });
 
-// docs/frameworks/claude-agent-sdk.md, "In TypeScript": its agent.mjs saved as written,
-// beside this test's node_modules, and run against the scripted model, prints the same
-// answers from Staal as the Python agent the page shows.
-test('the Claude Agent SDK tutorial works as written, in TypeScript', async () => {
-  const pagePath = path.resolve(nodeDir, '..', 'docs', 'frameworks', 'claude-agent-sdk.md');
-  const page = fs.readFileSync(pagePath, 'utf8');
-  const fence = /^```(\S*)((?: \S+)*)\n([\s\S]*?)^```$/gm;
-  const files = {};
-  const outputs = {};
-  for (const m of page.matchAll(fence)) {
-    for (const w of m[2].trim().split(/\s+/)) {
-      if (w.startsWith('file=')) files[w.slice(5)] = m[3];
-      if (w.startsWith('output=')) outputs[w.slice(7)] = m[3];
-    }
-  }
-  assert.ok(files['agent.mjs'] && files['refund.staal'] && outputs['agent.py'], 'the page has agent.mjs, refund.staal and the agent\'s output');
-  const work = path.join(frameworks, 'tutorial-claude');
-  fs.rmSync(work, { recursive: true, force: true });
-  fs.mkdirSync(work);
-  for (const f of ['agent.mjs', 'refund.staal']) fs.writeFileSync(path.join(work, f), files[f]);
-  const api = await scriptedMessages();
-  const home = path.join(scratch, 'tutorial-home');
-  fs.mkdirSync(home, { recursive: true });
-  try {
-    // Run without blocking this process, which serves the scripted model.
-    const { spawn } = await import('node:child_process');
-    const child = spawn(process.execPath, ['agent.mjs'], {
-      cwd: work,
-      env: { PATH: process.env.PATH, HOME: home, STAAL_NODE_ADDON: process.env.STAAL_NODE_ADDON, ANTHROPIC_BASE_URL: api.url, ANTHROPIC_API_KEY: 'sk-test-not-a-key', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+// A local stand-in for the OpenAI Responses API (POST /v1/responses, not streamed),
+// with the same script: a function_call for each refund in ASK, then a message.
+async function scriptedResponses(toolName) {
+  const http = await import('node:http');
+  const state = { requests: [] };
+  const server = http.createServer((req, res) => {
+    let data = '';
+    req.on('data', (c) => (data += c));
+    req.on('end', () => {
+      const body = JSON.parse(data || '{}');
+      if (!req.url.replace(/\/$/, '').endsWith('/responses') || body.stream) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `the stand-in does not answer ${req.url}`, type: 'invalid_request_error' } }));
+        return;
+      }
+      const items = Array.isArray(body.input) ? body.input : [];
+      const outputs = items.filter((i) => i && i.type === 'function_call_output').map((i) => (typeof i.output === 'string' ? i.output : JSON.stringify(i.output)));
+      state.requests.push({ tools: body.tools || [], outputs });
+      const step = outputs.length;
+      const output =
+        step < ASK.length
+          ? [{ type: 'function_call', id: `fc_${step}`, call_id: `call_${step}`, name: toolName, arguments: JSON.stringify(ASK[step]), status: 'completed' }]
+          : [{ type: 'message', id: `msg_${step}`, role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: outputs.join(' | '), annotations: [] }] }];
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: `resp_${step}`, object: 'response', created_at: Math.floor(Date.now() / 1000), model: body.model || 'scripted', status: 'completed',
+        output, parallel_tool_calls: false, tool_choice: 'auto', tools: body.tools || [], error: null, incomplete_details: null,
+        instructions: null, metadata: {}, temperature: null, top_p: null,
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
+      }));
     });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d));
-    child.stderr.on('data', (d) => (stderr += d));
-    const code = await new Promise((resolve) => child.on('close', resolve));
-    assert.equal(code, 0, `${stdout}\n${stderr}`);
-    const lines = stdout.split('\n').filter((l) => l !== '');
-    assert.ok(lines.at(-1).startsWith('Claude: '), stdout);
-    assert.equal(lines.slice(0, -1).join('\n') + '\n', outputs['agent.py']);
-    assert.equal(api.state.requests.length, ASK.length + 1);
-  } finally {
-    api.server.close();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { server, state, url: `http://127.0.0.1:${server.address().port}/v1` };
+}
+
+// The tutorials in docs/frameworks/ that have a TypeScript agent: its agent.mjs saved as
+// written, beside this test's node_modules, and run against a stand-in for its model's
+// API, must print what the page shows (the agent's own output block, or the Python
+// agent's, which the page says it matches), then the model's reply.
+const TUTORIALS = {
+  'claude-agent-sdk.md': { api: 'messages', tool: 'mcp__staal__refund_order', reply: 'Claude: ' },
+  'openai-agents.md': { api: 'responses', tool: 'refund_order', reply: 'Agent: ' },
+  'langgraph.md': { api: 'messages', tool: 'refund_order', reply: 'Agent: ' },
+  'vercel-ai.md': { api: 'messages', tool: 'refund_order', reply: 'Agent: ' },
+};
+const pagesDir = path.resolve(nodeDir, '..', 'docs', 'frameworks');
+
+for (const [pageName, how] of Object.entries(TUTORIALS)) {
+  test(`the ${pageName} tutorial works as written, in TypeScript`, async () => {
+    const page = fs.readFileSync(path.join(pagesDir, pageName), 'utf8');
+    const fence = /^```(\S*)((?: \S+)*)\n([\s\S]*?)^```$/gm;
+    const files = {};
+    const outputs = {};
+    for (const m of page.matchAll(fence)) {
+      for (const w of m[2].trim().split(/\s+/)) {
+        if (w.startsWith('file=')) files[w.slice(5)] = m[3];
+        if (w.startsWith('output=')) outputs[w.slice(7)] = m[3];
+      }
+    }
+    const want = outputs['agent.mjs'] ?? outputs['agent.py'];
+    assert.ok(files['agent.mjs'] && files['refund.staal'] && want, `${pageName} has agent.mjs, refund.staal and the agent's output`);
+    const work = path.join(frameworks, 'tutorial-' + pageName.replace(/\.md$/, ''));
     fs.rmSync(work, { recursive: true, force: true });
-  }
-});
+    fs.mkdirSync(work);
+    for (const [f, text] of Object.entries(files)) if (f.endsWith('.mjs') || f.endsWith('.staal')) fs.writeFileSync(path.join(work, f), text);
+    const api = how.api === 'messages' ? await scriptedMessages(how.tool) : await scriptedResponses(how.tool);
+    const home = path.join(scratch, 'home-' + pageName);
+    fs.mkdirSync(home, { recursive: true });
+    const env = { PATH: process.env.PATH, HOME: home, STAAL_NODE_ADDON: process.env.STAAL_NODE_ADDON, OPENAI_AGENTS_DISABLE_TRACING: '1' };
+    if (how.api === 'messages') Object.assign(env, { ANTHROPIC_BASE_URL: api.url, ANTHROPIC_API_KEY: 'sk-test-not-a-key', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' });
+    else Object.assign(env, { OPENAI_BASE_URL: api.url, OPENAI_API_KEY: 'sk-test-not-a-key' });
+    try {
+      // Run without blocking this process, which serves the scripted model.
+      const { spawn } = await import('node:child_process');
+      const child = spawn(process.execPath, ['agent.mjs'], { cwd: work, env });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => (stdout += d));
+      child.stderr.on('data', (d) => (stderr += d));
+      const code = await new Promise((resolve) => child.on('close', resolve));
+      assert.equal(code, 0, `${stdout}\n${stderr}`);
+      const lines = stdout.split('\n').filter((l) => l !== '');
+      assert.ok(lines.at(-1).startsWith(how.reply), stdout);
+      assert.equal(lines.slice(0, -1).join('\n') + '\n', want);
+      assert.equal(api.state.requests.length, ASK.length + 1);
+      // Every other JavaScript program the page shows the output of, run as written,
+      // in the page's order, with no model: `<time>` stands for a UTC time, as in
+      // python/tests/test_tutorials.py.
+      for (const [program, shown] of Object.entries(outputs)) {
+        if (program === 'agent.mjs' || !program.endsWith('.mjs')) continue;
+        assert.ok(files[program], `${pageName} shows the output of ${program} but not the program`);
+        const run = spawnSync(process.execPath, [program], { cwd: work, env: { PATH: env.PATH, HOME: home, STAAL_NODE_ADDON: env.STAAL_NODE_ADDON }, encoding: 'utf8' });
+        assert.equal(run.status, 0, `${program}: ${run.stdout}\n${run.stderr}`);
+        const pattern = new RegExp('^' + shown.split('<time>').map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z') + '$');
+        assert.match(run.stdout, pattern, `${program} printed:\n${run.stdout}`);
+      }
+    } finally {
+      api.server.close();
+      fs.rmSync(work, { recursive: true, force: true });
+    }
+  });
+}

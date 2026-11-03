@@ -17,7 +17,9 @@ import sys
 
 root, scratch = sys.argv[1], sys.argv[2]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fake_gemini import GeminiServer  # noqa: E402
 from fake_messages import MessagesServer  # noqa: E402
+from fake_openai import ResponsesServer  # noqa: E402
 
 checks = 0
 
@@ -38,15 +40,22 @@ def blocks(page):
     return [(m.group(2).split(), m.group(3)) for m in FENCE.finditer(text)]
 
 
-# What the scripted model asks for, by tutorial: the calls the page's text describes.
-REFUND = "mcp__staal__refund_order"
+# For each tutorial, the programs that talk to a model: the stand-in for its provider's
+# API, the calls the scripted model makes (the ones the page's text describes), and the
+# prefix of the reply the program prints last, which is the stand-in's.
+ASKED = [{"order": "4417", "amount": {"amount": "80.00", "currency": "USD"}},
+         {"order": "4417", "amount": {"amount": "35.00", "currency": "USD"}}]
 SCRIPTS = {
-    "claude-agent-sdk.md": [(REFUND, {"order": "4417", "amount": {"amount": "80.00", "currency": "USD"}}),
-                            (REFUND, {"order": "4417", "amount": {"amount": "35.00", "currency": "USD"}})],
+    ("claude-agent-sdk.md", "agent.py"): (MessagesServer, "mcp__staal__refund_order", "Claude: "),
+    ("openai-agents.md", "agent.py"): (ResponsesServer, "refund_order", "Agent: "),
+    ("langgraph.md", "agent.py"): (MessagesServer, "refund_order", "Agent: "),
+    ("google-adk.md", "agent.py"): (GeminiServer, "refund_order", "Agent: "),
 }
 
 pages = sorted(f for f in os.listdir(os.path.join(root, "docs", "frameworks")) if f.endswith(".md"))
 expect(pages, "docs/frameworks has tutorials")
+for page, program in SCRIPTS:
+    expect(page in pages, f"docs/frameworks/{page} is there")
 for page in pages:
     work = os.path.join(scratch, page[:-3])
     shutil.rmtree(work, ignore_errors=True)
@@ -67,23 +76,24 @@ for page in pages:
             continue
         env = {k: os.environ[k] for k in ("PATH", "LANG", "STAAL_LIBRARY") if k in os.environ}
         env["PYTHONPATH"] = os.path.join(root, "python")
-        talks_to_claude = "claude_agent_sdk" in open(os.path.join(work, program), encoding="utf-8").read()
+        script = SCRIPTS.get((page, program))
         server = None
-        if talks_to_claude:
-            server = MessagesServer(SCRIPTS[page])
-            home = os.path.join(work, ".home")
-            os.makedirs(home, exist_ok=True)
-            env.update(server.env(home))
-        else:
-            env["HOME"] = work
+        env["HOME"] = os.path.join(work, ".home")
+        os.makedirs(env["HOME"], exist_ok=True)
+        # No telemetry or tracing leaves the machine in a test.
+        env["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
+        if script:
+            kind, tool_name, reply = script
+            server = kind([(tool_name, a) for a in ASKED])
+            env.update(server.env(env["HOME"]) if kind is MessagesServer else server.env())
         out = subprocess.run([sys.executable, program], cwd=work, env=env, capture_output=True, text=True, timeout=300)
         if server:
             server.close()
         expect(out.returncode == 0, f"{page}: {program} failed:\n{out.stdout}\n{out.stderr}")
         got = out.stdout
-        if talks_to_claude:
+        if script:
             lines = got.splitlines(keepends=True)
-            expect(lines and lines[-1].startswith("Claude: "), f"{page}: {program} ends with Claude's reply:\n{got}")
+            expect(lines and lines[-1].startswith(reply), f"{page}: {program} ends with the model's reply:\n{got}")
             got = "".join(lines[:-1])
         # `<time>` in a page's output stands for a UTC time the program prints, which changes
         # from run to run; everything else must be exactly as shown.
@@ -92,7 +102,7 @@ for page in pages:
         expect(re.fullmatch(pattern, got) is not None, f"{page}: {program} printed\n{got}\nwhere the page shows\n{want}")
         if server:
             # The model was really shown the tool, and asked for each call in the script.
-            expect(len(server.seen) == len(SCRIPTS[page]) + 1, f"{page}: {program}: {len(server.seen)} model turns")
+            expect(len(server.seen) == len(ASKED) + 1, f"{page}: {program}: {len(server.seen)} model turns")
         print(f"{page}: {program}:\n{out.stdout}", end="")
 
 print(f"{checks} checks passed")
