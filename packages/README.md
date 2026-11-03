@@ -26,9 +26,9 @@ Each of them is also published as its own repository
 ([staal-sms](https://github.com/laurells/staal-sms),
 [staal-payments](https://github.com/laurells/staal-payments),
 [staal-email](https://github.com/laurells/staal-email),
-[staal-chat](https://github.com/laurells/staal-chat)), with Resend and Slack only:
-Postmark, SendGrid and Discord are in this repository and not yet in those. Depend on
-one by URL and commit:
+[staal-chat](https://github.com/laurells/staal-chat)); staal-email holds Resend,
+Postmark and SendGrid, and staal-chat Slack and Discord. Depend on one by URL and
+commit:
 
     { "dependencies": { "sms": { "git": "https://github.com/laurells/staal-sms", "commit": "<full commit id>" } } }
 
