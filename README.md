@@ -303,6 +303,7 @@ continued.
 | [docs/GUIDE.md](docs/GUIDE.md) | The language: rules, syntax, capabilities, packages, native code |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | The runtime specification: semantics, the journal, failure behaviour |
 | [docs/MCP.md](docs/MCP.md) | `staalc mcp`: the manifest, the protocol, quotas, `once`, crashes and operators |
+| [docs/frameworks/claude-agent-sdk.md](docs/frameworks/claude-agent-sdk.md) | A support agent on the Claude Agent SDK that can never refund more than your app allows, in Python and TypeScript |
 | [docs/PACKAGES.md](docs/PACKAGES.md) | Write your first Staal package: one service, from an empty folder to passing tests |
 | [docs/RELEASING.md](docs/RELEASING.md) | How a release is made, and what it holds |
 | [editors/vscode](editors/vscode) | The VS Code extension: highlighting and the language server |

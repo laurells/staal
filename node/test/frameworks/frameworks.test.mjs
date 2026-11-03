@@ -311,3 +311,49 @@ test('the Claude Agent SDK server answers as an MCP server, and refuses what is 
   assert.deepEqual(calls.map((c) => c[1]), [{ tenant: 't1' }, { tenant: 't1' }, { tenant: 't1' }], 'every call gets the server\'s context');
   await client.close();
 });
+
+// docs/frameworks/claude-agent-sdk.md, "In TypeScript": its agent.mjs saved as written,
+// beside this test's node_modules, and run against the scripted model, prints the same
+// answers from Staal as the Python agent the page shows.
+test('the Claude Agent SDK tutorial works as written, in TypeScript', async () => {
+  const pagePath = path.resolve(nodeDir, '..', 'docs', 'frameworks', 'claude-agent-sdk.md');
+  const page = fs.readFileSync(pagePath, 'utf8');
+  const fence = /^```(\S*)((?: \S+)*)\n([\s\S]*?)^```$/gm;
+  const files = {};
+  const outputs = {};
+  for (const m of page.matchAll(fence)) {
+    for (const w of m[2].trim().split(/\s+/)) {
+      if (w.startsWith('file=')) files[w.slice(5)] = m[3];
+      if (w.startsWith('output=')) outputs[w.slice(7)] = m[3];
+    }
+  }
+  assert.ok(files['agent.mjs'] && files['refund.staal'] && outputs['agent.py'], 'the page has agent.mjs, refund.staal and the agent\'s output');
+  const work = path.join(frameworks, 'tutorial-claude');
+  fs.rmSync(work, { recursive: true, force: true });
+  fs.mkdirSync(work);
+  for (const f of ['agent.mjs', 'refund.staal']) fs.writeFileSync(path.join(work, f), files[f]);
+  const api = await scriptedMessages();
+  const home = path.join(scratch, 'tutorial-home');
+  fs.mkdirSync(home, { recursive: true });
+  try {
+    // Run without blocking this process, which serves the scripted model.
+    const { spawn } = await import('node:child_process');
+    const child = spawn(process.execPath, ['agent.mjs'], {
+      cwd: work,
+      env: { PATH: process.env.PATH, HOME: home, STAAL_NODE_ADDON: process.env.STAAL_NODE_ADDON, ANTHROPIC_BASE_URL: api.url, ANTHROPIC_API_KEY: 'sk-test-not-a-key', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    const code = await new Promise((resolve) => child.on('close', resolve));
+    assert.equal(code, 0, `${stdout}\n${stderr}`);
+    const lines = stdout.split('\n').filter((l) => l !== '');
+    assert.ok(lines.at(-1).startsWith('Claude: '), stdout);
+    assert.equal(lines.slice(0, -1).join('\n') + '\n', outputs['agent.py']);
+    assert.equal(api.state.requests.length, ASK.length + 1);
+  } finally {
+    api.server.close();
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});

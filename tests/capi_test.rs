@@ -189,3 +189,39 @@ fn python_adapters_run_the_tool_through_each_frameworks_own_loop() {
     assert!(stdout.contains("27 checks passed"), "{stdout}");
     println!("{}", stdout.trim());
 }
+
+#[cfg(unix)]
+#[test]
+fn the_framework_tutorials_work_as_written() {
+    // python/tests/test_tutorials.py: each page in docs/frameworks/ saved and run as
+    // written, its programs' output compared with the page. Runs only when
+    // STAAL_FRAMEWORKS_PYTHON names a Python with python/tests/frameworks.txt installed.
+    let Ok(python) = std::env::var("STAAL_FRAMEWORKS_PYTHON") else {
+        eprintln!("skipped: set STAAL_FRAMEWORKS_PYTHON to a Python with python/tests/frameworks.txt installed");
+        return;
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("tutorials");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).unwrap();
+    let mut cmd = std::process::Command::new(&python);
+    cmd.env_clear();
+    for k in ["PATH", "LANG", "TMPDIR", "SYSTEMROOT"] {
+        if let Ok(v) = std::env::var(k) {
+            cmd.env(k, v);
+        }
+    }
+    let out = cmd
+        .arg(root.join("python/tests/test_tutorials.py"))
+        .arg(root)
+        .arg(&scratch)
+        .env("HOME", &scratch)
+        .env("STAAL_LIBRARY", shared_library())
+        .output()
+        .expect("STAAL_FRAMEWORKS_PYTHON must name a Python");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "python failed:\n{stdout}\n{stderr}");
+    assert!(stdout.contains("checks passed"), "{stdout}");
+    println!("{}", stdout.trim());
+}

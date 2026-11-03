@@ -61,7 +61,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/fwenv"
           "$RUNNER_TEMP/fwenv/bin/pip" install --quiet pip==26.2.1 && "$RUNNER_TEMP/fwenv/bin/pip" install --quiet --uploaded-prior-to=P14D -r python/tests/frameworks.txt
-          STAAL_FRAMEWORKS_PYTHON="$RUNNER_TEMP/fwenv/bin/python" cargo test --test capi_test python_adapters
+          STAAL_FRAMEWORKS_PYTHON="$RUNNER_TEMP/fwenv/bin/python" cargo test --test capi_test -- python_adapters the_framework_tutorials
       - name: Tests without native code
         run: cargo test --no-default-features --no-fail-fast
       - name: VS Code extension (grammar, client, and the server through VS Code's protocol library)

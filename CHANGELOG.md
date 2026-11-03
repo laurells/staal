@@ -28,6 +28,11 @@ the language or its file formats.
   `"staal_context"`, and its answer `{"result": ...}` or `{"error": ...}` as ADK's own
   tools give them. Tested through the Runner's agent loop with a scripted model, on
   google-adk 2.12.0.
+- `docs/frameworks/claude-agent-sdk.md`: a tutorial, a support agent on the Claude
+  Agent SDK that can never refund more than the app allows for the customer, in Python
+  and TypeScript. Its files are saved and run as written by the tests
+  (`python/tests/test_tutorials.py` and the Node framework tests), against a local
+  stand-in for the Messages API, and the output the page shows must be what they print.
 - A weekly workflow (`frameworks-latest`) runs every adapter test against each
   framework's latest release, so a framework that changes under an adapter is found
   before a user finds it. Its first run, by hand, found a test too strict about the

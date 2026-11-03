@@ -138,88 +138,20 @@ lg.refund.close()
 # Claude Agent SDK: the SDK's own agent loop, in the Claude Code CLI it bundles, against
 # a local server answering as the Anthropic Messages API does, with a scripted model.
 
-import threading  # noqa: E402
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
-
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from claude_agent_sdk import AssistantMessage, ToolUseBlock  # noqa: E402
+from fake_messages import MessagesServer  # noqa: E402
 
-
-class ScriptedMessages(BaseHTTPRequestHandler):
-    """POST /v1/messages, streamed as server-sent events: a tool_use for each refund in
-    ASK in turn, then a text joining what the tool said. Records what the model was shown."""
-
-    seen = []  # one entry per request: (tools, tool results)
-
-    def log_message(self, *args):
-        pass
-
-    def do_POST(self):
-        body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
-        if not self.path.startswith("/v1/messages") or self.path.startswith("/v1/messages/count_tokens"):
-            self._json({"input_tokens": 1})
-            return
-        results = [b for m in body.get("messages", []) if m["role"] == "user" and isinstance(m["content"], list)
-                   for b in m["content"] if b.get("type") == "tool_result"]
-        outputs = [("".join(c["text"] for c in r["content"] if c["type"] == "text") if isinstance(r["content"], list)
-                    else r["content"], bool(r.get("is_error"))) for r in results]
-        ScriptedMessages.seen.append((body.get("tools", []), outputs))
-        step = len(outputs)
-        if step < len(ASK):
-            block = {"type": "tool_use", "id": f"toolu_{step}", "name": "mcp__staal__refund_order", "input": ASK[step]}
-            stop = "tool_use"
-        else:
-            block = {"type": "text", "text": " | ".join(o[0] for o in outputs)}
-            stop = "end_turn"
-        message = {"id": f"msg_{step}", "type": "message", "role": "assistant", "model": body.get("model"),
-                   "content": [], "stop_reason": None, "stop_sequence": None,
-                   "usage": {"input_tokens": 1, "output_tokens": 1}}
-        if not body.get("stream"):
-            self._json(dict(message, content=[block], stop_reason=stop))
-            return
-        self.send_response(200)
-        self.send_header("content-type", "text/event-stream")
-        self.end_headers()
-
-        def event(kind, data):
-            self.wfile.write(f"event: {kind}\ndata: {json.dumps(data)}\n\n".encode())
-
-        event("message_start", {"type": "message_start", "message": message})
-        if block["type"] == "text":
-            event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
-            event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": block["text"]}})
-        else:
-            start = dict(block, input={})
-            event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": start})
-            event("content_block_delta", {"type": "content_block_delta", "index": 0,
-                                          "delta": {"type": "input_json_delta", "partial_json": json.dumps(block["input"])}})
-        event("content_block_stop", {"type": "content_block_stop", "index": 0})
-        event("message_delta", {"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None},
-                                "usage": {"output_tokens": 1}})
-        event("message_stop", {"type": "message_stop"})
-
-    def _json(self, value):
-        data = json.dumps(value).encode()
-        self.send_response(200)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-
-server = ThreadingHTTPServer(("127.0.0.1", 0), ScriptedMessages)
-threading.Thread(target=server.serve_forever, daemon=True).start()
+server = MessagesServer([("mcp__staal__refund_order", a) for a in ASK])
 home = os.path.join(scratch, "claude-home")
 os.makedirs(home, exist_ok=True)
-# The CLI is pointed at the local server and given a home of its own, so nothing of
-# the machine's own Claude Code settings or MCP servers comes in.
-cli_env = {"ANTHROPIC_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}", "ANTHROPIC_API_KEY": "sk-test-not-a-key",
-           "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "HOME": home}
+cli_env = server.env(home)
 
 ca = example("claude_agent_sdk_refund")
 
 
 async def run_session(customer):
-    ScriptedMessages.seen = []
+    server.seen.clear()
     used = []
     answer = None
     async for message in ca.query(prompt="Order 4417 arrived broken. Please refund it.",
@@ -232,7 +164,7 @@ async def run_session(customer):
 
 
 used, answer = asyncio.run(run_session({"tier": "standard"}))
-tools, outputs = ScriptedMessages.seen[-1]
+tools, outputs = server.seen[-1]
 # The CLI may add its own placeholders (newer ones add one for tool search); what
 # matters is the refund is there and no built-in tool is.
 names = [t["name"] for t in tools]
@@ -246,8 +178,8 @@ expect(outputs == [(REFUSED, True), (DONE, False)], f"refused as an error with t
 expect(answer == f"{REFUSED} | {DONE}", f"the final answer: {answer}")
 # A gold customer's session, through a server made for that customer.
 used, answer = asyncio.run(run_session({"tier": "gold"}))
-expect(ScriptedMessages.seen[-1][1] == [('"Refunded 80.00 USD for order 4417"', False), (DONE, False)],
-       f"a gold customer's limit lets both through: {ScriptedMessages.seen[-1][1]}")
+expect(server.seen[-1][1] == [('"Refunded 80.00 USD for order 4417"', False), (DONE, False)],
+       f"a gold customer's limit lets both through: {server.seen[-1][1]}")
 from staal.claude_agent_sdk import allowed_tools, mcp_server  # noqa: E402
 for bad, why in [([], "a list of staal.Tool"), ([ca.refund, ca.refund], "two tools are named"), (["x"], "a list of staal.Tool")]:
     try:
@@ -257,7 +189,7 @@ for bad, why in [([], "a list of staal.Tool"), ([ca.refund, ca.refund], "two too
         expect(why in str(e), str(e))
 expect(allowed_tools("billing", [ca.refund]) == ["mcp__billing__refund_order"], "allowed_tools")
 ca.refund.close()
-server.shutdown()
+server.close()
 
 # ---------------------------------------------------------------------------
 # Google ADK: the Runner's own agent loop, with a scripted model.
