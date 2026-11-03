@@ -4,6 +4,21 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+### Added
+
+- `@staal/node/vercel-ai`: `aiTool` and `aiTools` give a staal Tool to the Vercel AI
+  SDK (`ai` 7), an ES module, as the SDK is. The tool's context is its entry in
+  `toolsContext`, passed to the Tool's grants and scope functions and never to the
+  model; Staal checks the arguments, and a refusal or failure reaches the model as an
+  `error-text` output with Staal's message. Tested through `generateText`'s own tool
+  loop with the SDK's mock model, with `examples/frameworks/vercel_ai_refund.mjs` run
+  as written.
+- The Node framework tests install a copy of the package's own files, as `npm install`
+  would, so ES module adapters resolve their frameworks as in an app, and
+  `npm run types` checks the ES module adapters' types too.
+
 ## 0.25.0 — 2026-11-02
 
 ### Added

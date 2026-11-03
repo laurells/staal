@@ -4,9 +4,10 @@
   "type": "module",
   "description": "The agent frameworks @staal/node's adapters are tested against (frameworks.test.mjs).",
   "dependencies": {
-    "@openai/agents": "0.20.0",
     "@langchain/core": "1.2.18",
     "@langchain/langgraph": "1.5.1",
+    "@openai/agents": "0.20.0",
+    "ai": "7.0.145",
     "zod": "4.6.7"
   }
 }

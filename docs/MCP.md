@@ -884,12 +884,13 @@ and each worker's quotas are then its own; a quota that must hold across workers
 the calls sent through one process.
 
 **Framework adapters.** `staal.openai_agents.function_tool` and
-`staal.langgraph.structured_tool` in Python, and `@staal/node/openai-agents` and
-`@staal/node/langgraph` in Node.js, wrap a tool for the OpenAI Agents SDK and for
-LangGraph. The model sees the tool's name, description and argument schema; the grants
+`staal.langgraph.structured_tool` in Python, and `@staal/node/openai-agents`,
+`@staal/node/langgraph` and `@staal/node/vercel-ai` in Node.js, wrap a tool for the
+OpenAI Agents SDK, LangGraph and the Vercel AI SDK. The model sees the tool's name, description and argument schema; the grants
 come from the framework's run context through the app's function; the answer's `text`
-goes back to the model as the tool's output, a refusal's message included, and nothing
-is retried. They are tested through each framework's own agent loop with a scripted
+goes back to the model as the tool's output, a refusal's message included (marked as an
+error where the framework has a way to say so, as the AI SDK's `error-text` does), and
+nothing is retried. They are tested through each framework's own agent loop with a scripted
 model (python/tests/test_adapters.py, node/test/frameworks/), against the framework
 versions pinned in python/tests/frameworks.txt and node/test/frameworks/package.json.
 

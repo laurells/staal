@@ -31,7 +31,9 @@
     "openai-agents.js",
     "openai-agents.d.ts",
     "langgraph.js",
-    "langgraph.d.ts"
+    "langgraph.d.ts",
+    "vercel-ai.mjs",
+    "vercel-ai.d.mts"
   ],
   "publishConfig": {
     "access": "public"
@@ -49,7 +51,7 @@
   ],
   "scripts": {
     "test": "node --test test/staal.test.mjs",
-    "types": "tsc --noEmit -p test/tsconfig.json"
+    "types": "tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p test/tsconfig.esm.json"
   },
   "devDependencies": {
     "@types/node": "22.10.2",
@@ -68,17 +70,25 @@
       "types": "./langgraph.d.ts",
       "default": "./langgraph.js"
     },
+    "./vercel-ai": {
+      "types": "./vercel-ai.d.mts",
+      "import": "./vercel-ai.mjs"
+    },
     "./package.json": "./package.json"
   },
   "peerDependencies": {
     "@openai/agents": ">=0.20.0",
-    "@langchain/core": ">=1.2.18"
+    "@langchain/core": ">=1.2.18",
+    "ai": ">=7.0.145"
   },
   "peerDependenciesMeta": {
     "@openai/agents": {
       "optional": true
     },
     "@langchain/core": {
+      "optional": true
+    },
+    "ai": {
       "optional": true
     }
   }
