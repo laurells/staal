@@ -1,0 +1,13 @@
+// expect: E007
+// The same through a function: it orders money, so it can fail, and calling it with
+// the blinded amount decides whether the model call happens.
+type Note { text: Text }
+
+fn large(m: Money) -> Bool {
+    return m > 10.00 USD
+}
+
+fn main(owed: Money @blind, ticket: Text) -> Note budget(calls: 1, tokens: 200) {
+    let l = large(owed)
+    return validate propose(Note, instruct: "Summarise the ticket.", data: [ticket], tokens: 200)
+}

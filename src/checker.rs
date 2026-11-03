@@ -129,6 +129,11 @@ struct Ctx<'a> {
     flow: Option<ActionFlow>,
     /// Functions that may fail: an action, or a call to a failing function, not under `try`.
     fail_fns: HashSet<String>,
+    /// The comparisons that order money (`<`, `<=`, `>`, `>=` of Money), which fail for
+    /// two currencies: given, from a first pass, to decide what can fail; and found,
+    /// as this pass types each comparison.
+    money_orders: HashSet<Pos>,
+    found_money_orders: HashSet<Pos>,
     /// Functions that may never finish: `loop`, recursion, or a call through a function
     /// value (which may be any function), directly or through any call.
     diverge_fns: HashSet<String>,
@@ -743,7 +748,20 @@ fn rewrite_calls(prog: &mut Program, calls: &HashMap<(String, Pos), String>) {
     }
 }
 
+/// Checks a program. Whether an ordering comparison can fail depends on its operands'
+/// type (Money in two currencies), which is known only once the program is typed, and
+/// what can fail is needed while typing (E007). So a program that orders money anywhere
+/// is checked twice: the first pass finds those comparisons, the second decides with
+/// them. A program that orders no money is checked once.
 fn check_once(prog: &Program) -> (Found, Resolutions) {
+    let (first, found) = check_pass(prog, HashSet::new());
+    if found.is_empty() {
+        return first;
+    }
+    check_pass(prog, found).0
+}
+
+fn check_pass(prog: &Program, money_orders: HashSet<Pos>) -> ((Found, Resolutions), HashSet<Pos>) {
     let mut ctx = Ctx {
         known: ["Text", "Int", "Bool", "Money", "Unit", "Receipt"].iter().map(|s| s.to_string()).collect(),
         fields: HashMap::new(),
@@ -754,6 +772,8 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
         fn_blind: Vec::new(),
         model_fns: model_calling_fns(prog),
         fail_fns: HashSet::new(),
+        money_orders,
+        found_money_orders: HashSet::new(),
         diverge_fns: HashSet::new(),
         params: HashSet::new(),
         for_bounds: HashMap::new(),
@@ -772,7 +792,7 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
         lambdas: HashMap::new(),
         lambda_depth: 0,
     };
-    (ctx.fail_fns, ctx.diverge_fns) = partial_fns(prog);
+    (ctx.fail_fns, ctx.diverge_fns) = partial_fns(prog, &ctx.money_orders);
     // Built-in result of `try`.
     ctx.known.insert("Outcome".into());
     ctx.known.insert("Done".into()); // built-in; made only by `done(evidence: [...])`
@@ -995,7 +1015,10 @@ fn check_once(prog: &Program) -> (Found, Resolutions) {
     ctx.diags.retain(|d| seen.insert((d.code, d.pos, d.msg.clone())));
     let mut diags = ctx.diags;
     diags.extend(ctx.method_diags);
-    ((diags, ctx.for_bounds, ctx.capacities), Resolutions { methods: ctx.methods, instances: ctx.instances, lambdas: ctx.lambdas })
+    (
+        ((diags, ctx.for_bounds, ctx.capacities), Resolutions { methods: ctx.methods, instances: ctx.instances, lambdas: ctx.lambdas }),
+        ctx.found_money_orders,
+    )
 }
 
 /// Calls `f` on every expression in `body`, nested blocks included, outermost first.
@@ -1047,16 +1070,17 @@ fn model_calling_fns(prog: &Program) -> HashSet<String> {
 
 /// Whether evaluating `e` itself can fail, apart from what its children do:
 /// arithmetic (overflow, division by zero, money in different currencies or below
-/// zero), ordering money in different currencies, and indexing (out of range).
-/// Actions and calls are judged separately.
-fn expr_can_fail_itself(e: &Expr) -> bool {
+/// zero), ordering money (`money_orders`: in two currencies), and indexing (out of
+/// range). Actions and calls are judged separately.
+fn expr_can_fail_itself(e: &Expr, money_orders: &HashSet<Pos>) -> bool {
+    if let Expr::Cmp { pos, .. } = e {
+        return money_orders.contains(pos);
+    }
     // `parse` fails on text that is not JSON; `json` on a result too long; `header` on
     // a name or value that is not valid in HTTP.
     matches!(
         e,
         Expr::Arith { .. }
-            // `<`, `<=`, `>`, `>=` of money in different currencies.
-            | Expr::Cmp { op: CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge, .. }
             | Expr::Neg(..)
             | Expr::Index { .. }
             | Expr::Parse { .. }
@@ -1214,7 +1238,7 @@ fn cap_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> bool {
 /// `try`, or arithmetic or indexing anywhere) and whether it may never finish (`loop`,
 /// recursion, or a call to such a function; `try` cannot catch that). A `for` always
 /// finishes: its list is bounded. Returns (may_fail, may_diverge).
-fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
+fn partial_fns(prog: &Program, money_orders: &HashSet<Pos>) -> (HashSet<String>, HashSet<String>) {
     #[derive(Default)]
     struct Info {
         fails: bool,
@@ -1223,7 +1247,7 @@ fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
         calls_tried: HashSet<String>,
     }
     /// `tried`: `e` sits directly under `try`.
-    fn scan_expr(e: &Expr, tried: bool, i: &mut Info) {
+    fn scan_expr(e: &Expr, tried: bool, i: &mut Info, money_orders: &HashSet<Pos>) {
         match e {
             Expr::Action { .. } if !tried => i.fails = true,
             // A function value may be any pure function: it may fail, or never end.
@@ -1242,15 +1266,15 @@ fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
                     i.calls_untried.insert(name.clone());
                 }
             }
-            _ if expr_can_fail_itself(e) => i.fails = true,
+            _ if expr_can_fail_itself(e, money_orders) => i.fails = true,
             _ => {}
         }
         let under_try = matches!(e, Expr::Try(..));
         for c in e.children() {
-            scan_expr(c, under_try, i);
+            scan_expr(c, under_try, i, money_orders);
         }
     }
-    fn scan_block(body: &[Stmt], i: &mut Info) {
+    fn scan_block(body: &[Stmt], i: &mut Info, money_orders: &HashSet<Pos>) {
         for s in body {
             if let Stmt::Loop { .. } = s {
                 i.diverges = true; // `loop` may never end
@@ -1259,17 +1283,17 @@ fn partial_fns(prog: &Program) -> (HashSet<String>, HashSet<String>) {
                 i.fails = true;
             }
             for e in s.exprs() {
-                scan_expr(e, false, i);
+                scan_expr(e, false, i, money_orders);
             }
             for b in s.blocks() {
-                scan_block(b, i);
+                scan_block(b, i, money_orders);
             }
         }
     }
     let mut graph: HashMap<String, Info> = HashMap::new();
     for f in &prog.fns {
         let mut i = Info::default();
-        scan_block(&f.body, &mut i);
+        scan_block(&f.body, &mut i, money_orders);
         graph.entry(f.name.clone()).or_insert(i);
     }
     // Recursion: a function that can reach itself through any call may never end.
@@ -1316,7 +1340,7 @@ fn op_is_partial(ctx: &Ctx, e: &Expr, tried: bool) -> bool {
         Expr::Call { name, .. } => ctx.diverge_fns.contains(name) || (!tried && ctx.fail_fns.contains(name)),
         Expr::CallValue { .. } => true,
         Expr::Builtin { f, .. } if f.calls_function() => true,
-        _ => expr_can_fail_itself(e),
+        _ => expr_can_fail_itself(e, &ctx.money_orders),
     }
 }
 
@@ -4231,6 +4255,8 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 ctx.err("E101", *pos, format!("cannot compare {lt} with {rt}"));
             } else if ordered && lt != named("Int") && lt != named("Money") {
                 ctx.err("E101", *pos, format!("`{op}` needs Int or Money, found {lt}"));
+            } else if ordered && lt == named("Money") {
+                ctx.found_money_orders.insert(*pos);
             }
             Some((named("Bool"), ltr && rtr))
         }

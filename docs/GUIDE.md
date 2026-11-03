@@ -30,8 +30,8 @@ runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
 | E901 | Syntax error |
 
 All eight safety checks (E001-E008) are implemented, and tests show each one
-rejecting the programs it should. 52 valid programs compile,
-including the two benchmark workflows (`workflow_*.staal`), and 623 invalid ones
+rejecting the programs it should. 54 valid programs compile,
+including the two benchmark workflows (`workflow_*.staal`), and 628 invalid ones
 are each rejected with the expected code (and, where one code covers many
 rules, the expected message).
 

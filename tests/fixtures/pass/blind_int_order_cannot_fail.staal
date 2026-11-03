@@ -1,0 +1,8 @@
+// Ordering Ints never fails, so comparing a blinded Int, without branching on the
+// answer, does not decide whether a later model call happens.
+type Note { text: Text }
+
+fn main(score: Int @blind, ticket: Text) -> Note budget(calls: 1, tokens: 200) {
+    let high = score > 10
+    return validate propose(Note, instruct: "Summarise the ticket.", data: [ticket], tokens: 200)
+}

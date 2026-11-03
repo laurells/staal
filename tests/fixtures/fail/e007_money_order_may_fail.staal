@@ -1,0 +1,9 @@
+// expect: E007
+// Ordering money fails for two currencies, so whether the model call happens would
+// reveal whether the blinded amount is in USD.
+type Note { text: Text }
+
+fn main(owed: Money @blind, ticket: Text) -> Note budget(calls: 1, tokens: 200) {
+    let large = owed > 10.00 USD
+    return validate propose(Note, instruct: "Summarise the ticket.", data: [ticket], tokens: 200)
+}

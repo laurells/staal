@@ -91,8 +91,14 @@ the language or its file formats.
   `min`, `max` and `sort`, which already failed. A program that compared amounts the
   caller or a model gives with its own, and relied on a false answer to fall through,
   now stops with a message naming both amounts; check `currency(x)` first to choose
-  what happens instead. On both engines; the checker counts these comparisons as able
-  to fail.
+  what happens instead. On both engines.
+
+  At compile time: a comparison that orders money can now fail, so it counts as such
+  for E007. A program that orders a blinded amount and then makes a model call is
+  rejected, since whether the call happens would reveal the amount's currency; it
+  compiled before. Ordering Ints is unaffected: the checker finds which comparisons
+  order money from their types (a second checking pass, only for programs that order
+  money at all).
 
 ### Fixed
 
