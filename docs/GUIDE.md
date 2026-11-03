@@ -911,6 +911,104 @@ this server for everything else. Its README says how to install it from the fold
 
 ## Running programs, and surviving crashes
 
+### Inspect a function's input and result
+
+`staalc schema` prints the JSON Schema for an entry function's inputs and result,
+along with the capabilities and secrets it needs. For the quickstart refund program:
+
+```sh
+$ staalc schema examples/quickstart/refund.staal
+```
+
+The command prints:
+
+```json
+{
+  "entry": "main",
+  "grants": [
+    {
+      "cap": "payments.refund",
+      "name": "pay"
+    }
+  ],
+  "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "amount": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "currency": {
+                "enum": [
+                  "JPY"
+                ]
+              }
+            },
+            "required": [
+              "amount",
+              "currency"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "pattern": "^[0-9]+(\\.[0-9]{1,2})?$",
+                "type": "string"
+              },
+              "currency": {
+                "enum": [
+                  "USD",
+                  "EUR",
+                  "GBP",
+                  "NGN",
+                  "GHS",
+                  "KES",
+                  "ZAR",
+                  "CAD",
+                  "AUD"
+                ]
+              }
+            },
+            "required": [
+              "amount",
+              "currency"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "money: a decimal amount as a string, e.g. {\"amount\": \"12.50\", \"currency\": \"USD\"}"
+      },
+      "order": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "order",
+      "amount"
+    ],
+    "type": "object"
+  },
+  "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "string"
+  },
+  "secrets": []
+}
+```
+
+`input` describes the values callers must supply: an order string and an amount
+in one of the supported money formats. `output` describes the returned value, a
+string. `grants` lists the capability the operator must provide: `pay` needs
+`payments.refund`. `secrets` lists secret inputs; this example needs none.
+
     staalc run     prog.staal --entry greet --input name=Ada
     staalc config  prog.staal --entry remind > run.json      # a config to fill in
     staalc run     prog.staal --config run.json --journal run.journal [--log run.jsonl]
