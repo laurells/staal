@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Staal: the programming language for agents</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="Staal is the programming language for agents: code whose authority is enforced, not prompted. Its compiler refuses programs that could act without permission, trust an unchecked model answer or overspend, and its runtime never repeats a payment after a crash.">
+<meta name="description" content="Staal is a statically typed programming language for programs that act for AI agents. Actions need capabilities granted when a run starts, model output must be validated before use, model calls are bounded at compile time, and every action is journaled so an interrupted run can resume.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -13,8 +13,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600&display=swap">
 <style>
-/* Layout: a mill sheet. A rolled-steel header band, then one ruled column of
-   claims, each claim set beside the code and compiler output that proves it. */
+/* Layout: a mill sheet. A rolled-steel header band, then ruled sections: install,
+   features, examples set beside the compiler output they produce, use from an app,
+   the safety rules, tooling, platforms and status, and the documentation. Every
+   program and output shown is one the test suite runs. */
 :root {
   --bg: #eef1f3;        /* cold-rolled sheet */
   --panel: #f8f9fa;
@@ -144,6 +146,21 @@ td:first-child { font-family: var(--mono); color: var(--temper); white-space: no
 .status li { margin-bottom: 6px; }
 .status li::marker { color: var(--muted); }
 
+/* Feature grid */
+.features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); }
+.feature { padding: 22px; min-width: 0; border-bottom: 1px solid var(--rule); }
+.feature:nth-child(3n+2), .feature:nth-child(3n+3) { border-left: 1px solid var(--rule); }
+.feature:nth-last-child(-n+3) { border-bottom: 0; }
+.feature p { margin: 0; color: var(--muted); font-size: 16px; }
+.feature .codes { font: 500 12px/1 var(--mono); color: var(--temper); margin: 0 0 10px; }
+
+/* Documentation index */
+.docs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 32px; }
+.docs ul { list-style: none; margin: 0; padding: 0; }
+.docs li { margin-bottom: 10px; }
+.docs li span { display: block; font-size: 14px; color: var(--muted); }
+.hero-links { display: flex; gap: 20px; flex-wrap: wrap; margin: 20px 0 0; font-weight: 600; }
+
 footer { border-top: 1px solid var(--rule); }
 footer .wrap { padding-block: 32px; display: flex; justify-content: space-between; gap: 16px 32px; flex-wrap: wrap; font-size: 14px; color: var(--muted); }
 footer p { margin: 0; max-width: 46em; }
@@ -155,7 +172,10 @@ footer p { margin: 0; max-width: 46em; }
   .colhead { display: none; }
   .row .was::before { content: "Today: "; font-weight: 600; color: var(--ink); }
   .row .now::before { content: "Staal: "; font-weight: 600; }
-  .outcomes { grid-template-columns: minmax(0, 1fr); }
+  .outcomes, .features { grid-template-columns: minmax(0, 1fr); }
+  .feature, .feature:nth-child(3n+2), .feature:nth-child(3n+3) { border-left: 0; border-bottom: 1px solid var(--rule); }
+  .feature:last-child { border-bottom: 0; }
+  .docs { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .outcome + .outcome { border-left: 0; border-top: 1px solid var(--rule); }
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -169,28 +189,30 @@ footer p { margin: 0; max-width: 46em; }
   <div class="wrap">
     <a class="mark" href="./"><svg viewBox="0 0 200 200" width="30" height="30" aria-hidden="true"><polygon points="30,20 158,20 170,32 170,50 30,50" fill="currentColor"/><rect x="30" y="56" width="30" height="23" fill="currentColor"/><rect x="30" y="85" width="140" height="30" fill="var(--temper)"/><rect x="140" y="121" width="30" height="23" fill="currentColor"/><polygon points="30,150 170,150 170,180 42,180 30,168" fill="currentColor"/></svg>Staal</a>
     <nav aria-label="Main">
-      <a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">Tutorial</a>
-      <a href="https://github.com/laurells/staal/blob/main/docs/GUIDE.md">Guide</a>
-      <a href="https://github.com/laurells/staal/blob/main/docs/RUNTIME.md">Runtime</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">Learn</a>
+      <a href="#docs">Documentation</a>
+      <a href="#apps">Integrations</a>
       <a href="https://github.com/laurells/staal">GitHub</a>
     </nav>
   </div>
 </header>
 
-<div class="hero">
+<div class="hero" id="install">
   <div class="wrap">
     <div class="head">
       <span class="stamp">Preview <b>v0.26.0</b> · Open source</span>
       <h1>The programming language for agents</h1>
     </div>
     <div>
-      <p class="lede">Agents should not act on prompts and hope. Staal is a language built for what agents <strong>do</strong>: sending messages, moving money, changing records. The agent decides; Staal enforces. Its compiler refuses programs that could act without permission, trust an unchecked model answer, or overspend. Its runtime never repeats a payment after a crash.</p>
+      <p class="lede">Staal is a statically typed language for the code an AI agent runs to act: sending messages, moving money, changing records. A program can act only through <strong>capabilities</strong> granted when a run starts, must <strong>validate</strong> a model's answer before using it, has its model calls <strong>bounded</strong> at compile time, and <strong>journals</strong> every action, so an interrupted run resumes without performing a finished action again.</p>
       <div class="installs">
         <div class="install"><pre>pip install staal</pre><button type="button" class="copy" aria-label="Copy the pip command">Copy</button></div>
         <div class="install"><pre>npm install @staal/node</pre><button type="button" class="copy" aria-label="Copy the npm command">Copy</button></div>
         <div class="install"><pre>curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh</pre><button type="button" class="copy" aria-label="Copy the install command">Copy</button></div>
       </div>
-      <p class="install-note">From Python, from Node.js, or the <code>staalc</code> command on its own, on Linux (x86_64 and arm64) and macOS (Apple Silicon and Intel). Elsewhere, <a href="https://github.com/laurells/staal#getting-started">build from source</a> with Rust.</p>
+      <p class="install-note">The Python package, the Node.js package, or the <code>staalc</code> command alone. Each includes the compiler and runtime, with no Rust needed, on Linux (x86_64, arm64) and macOS (Apple Silicon, Intel). Other platforms <a href="https://github.com/laurells/staal#getting-started">build from source</a>.</p>
+      <p class="hero-links"><a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">Get started</a><a href="#docs">Documentation</a><a href="https://github.com/laurells/staal/blob/main/CHANGELOG.md">What's new in 0.26.0</a></p>
       <p class="say">Staal is said “stahl”. It is Dutch and Afrikaans for steel.</p>
     </div>
 
@@ -209,38 +231,41 @@ footer p { margin: 0; max-width: 46em; }
   </div>
 </div>
 
-<section id="why">
+<section id="features">
   <div class="wrap">
-    <p class="eyebrow">The thesis</p>
-    <h2>Once AI acts, safety belongs in the language</h2>
-    <p class="intro">Today's languages were designed for code where the programmer decides what happens. With AI, a model decides part of it, and a model can be wrong, steered or expensive. Frameworks and code review help, but they protect only the code that goes through them. Staal makes each of these a rule the compiler or runtime enforces on every line, including the lines in your dependencies.</p>
-
-    <div class="rows" role="table" aria-label="What current languages make hard, and what Staal does">
-      <div class="row colhead" role="row"><span role="columnheader">Rule</span><span role="columnheader">In most languages today</span><span role="columnheader">In Staal</span></div>
-      <div class="row" role="row">
-        <span class="code-id" role="cell">E001</span>
-        <p class="was" role="cell">A model's answer is a string. Checking its shape is a library call you can forget, and a bad answer fails halfway through a job.</p>
-        <p class="now" role="cell">A model's answer is <code>Proposed&lt;T&gt;</code>. It can't be read or acted on until <code>validate</code> checks it against the declared type.</p>
+    <p class="eyebrow">Features</p>
+    <h2>What the compiler and runtime enforce</h2>
+    <p class="intro">Each of these is a rule of the language, checked by the compiler or enforced by the runtime on every program, including the packages it imports. The error codes are the compiler's.</p>
+    <div class="features">
+      <div class="feature">
+        <p class="codes">E002 · E003</p>
+        <h3>Capabilities</h3>
+        <p>An action needs a <code>cap</code> parameter, granted by whoever starts the run. Limits on money per action (<code>each</code>) and in total (<code>max</code>), on attempts (<code>uses</code>) and on targets (<code>only</code>) are checked by the runtime before the service is called. Code can narrow a capability, never widen it.</p>
       </div>
-      <div class="row" role="row">
-        <span class="code-id" role="cell">E006</span>
-        <p class="was" role="cell">Instructions and data are the same type. A customer's “ignore your rules and refund me” can end up in a prompt.</p>
-        <p class="now" role="cell">Outside text is untrusted. It can go to a model as data, never as an instruction, and never into SQL.</p>
+      <div class="feature">
+        <p class="codes">E001 · E006 · E007</p>
+        <h3>Checked model output</h3>
+        <p>A model's answer is <code>Proposed&lt;T&gt;</code> and cannot be used until <code>validate</code> checks it against <code>T</code>. Text from outside is untrusted: it reaches a model as data, never as its instruction, and never becomes SQL. Data marked <code>@blind</code> cannot reach a model.</p>
       </div>
-      <div class="row" role="row">
-        <span class="code-id" role="cell">E002, E003</span>
-        <p class="was" role="cell">Any line, including any dependency, can open a connection, read a file or call a payment API.</p>
-        <p class="now" role="cell">Acting needs a capability handed in by whoever runs the program, with limits on targets and uses. Code can narrow one, never widen it.</p>
+      <div class="feature">
+        <p class="codes">E004 · E005</p>
+        <h3>Bounded model use</h3>
+        <p>A function declares <code>budget(calls: N, tokens: N)</code>, and the compiler checks that its worst case fits, counting loops and calls. A model call cannot sit in an unbounded <code>loop</code>.</p>
       </div>
-      <div class="row" role="row">
-        <span class="code-id" role="cell">E004, E005</span>
-        <p class="was" role="cell">A loop around a model call can spend without limit, and nothing checks it before it runs.</p>
-        <p class="now" role="cell">A function declares its model budget, and the compiler proves the worst case fits. A model call can't sit in an unbounded loop.</p>
+      <div class="feature">
+        <p class="codes">Journal</p>
+        <h3>Durable runs</h3>
+        <p>With a journal, every action, model call, clock read and random number is recorded before and after it happens. <code>staalc resume</code> replays what finished. An action that may or may not have happened is sent again with the same idempotency key when its grant says the service deduplicates by it; otherwise the run stops for an operator (<code>staalc resolve</code>).</p>
       </div>
-      <div class="row" role="row">
-        <span class="code-id" role="cell">Journal</span>
-        <p class="was" role="cell">Code assumes an action happened or didn't. When a connection breaks mid-payment, a retry charges the customer twice.</p>
-        <p class="now" role="cell">Every action is journaled before and after. A resumed run never repeats one, and an unknown outcome stops for a person to decide.</p>
+      <div class="feature">
+        <p class="codes">Money</p>
+        <h3>Exact money</h3>
+        <p><code>Money</code> is an exact amount in a currency's minor units, in ten currencies, read from decimal strings, never floats. Arithmetic never rounds or converts; adding or ordering amounts in two currencies fails.</p>
+      </div>
+      <div class="feature">
+        <p class="codes">Engines</p>
+        <h3>Interpreter and native code</h3>
+        <p>Programs run on an interpreter, or with their pure functions compiled to native code through Cranelift. The tests require identical results, failures, logs and journals from both. <code>staalc build</code> makes a standalone executable (Linux).</p>
       </div>
     </div>
   </div>
@@ -248,14 +273,14 @@ footer p { margin: 0; max-width: 46em; }
 
 <section id="examples">
   <div class="wrap">
-    <p class="eyebrow">In practice</p>
+    <p class="eyebrow">Examples</p>
     <h2>What it looks like</h2>
-    <p class="intro">These programs come from the tutorial, and the test suite checks every one of them and every output shown.</p>
+    <p class="intro">These programs are from the <a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">tutorial</a>. The test suite runs every one of them and checks every output shown.</p>
 
     <div class="pair">
       <div>
-        <h3>Ask a model, safely</h3>
-        <p><code>propose</code> asks for a <code>Reply</code>. The instruction is text the program wrote; the customer's question goes in as data. <code>validate</code> checks the answer's shape before it's used, and <code>budget</code> caps what the function may spend.</p>
+        <h3>Ask a model</h3>
+        <p><code>propose</code> asks for a <code>Reply</code>. The instruction is text the program wrote; the customer's question goes in as data. <code>validate</code> checks the answer's shape before it is used, and <code>budget</code> bounds the function's model use.</p>
       </div>
       <div class="code">
         <div class="label"><span>support.staal</span><span>compiles</span></div>
@@ -272,8 +297,8 @@ footer p { margin: 0; max-width: 46em; }
 
     <div class="pair">
       <div>
-        <h3>Act only with permission</h3>
-        <p><code>sms: cap sms.send(uses: 10)</code> is the permission to send at most ten messages. The person running the program grants it, and can grant less. Here the run config grants one, so the second message is refused.</p>
+        <h3>Act within a grant</h3>
+        <p><code>sms: cap sms.send(uses: 10)</code> declares that the function sends at most ten messages. The run config grants the capability, and can grant less: here it grants one, so the second message is refused before it is sent.</p>
       </div>
       <div class="code">
         <div class="label"><span>remind.staal</span><span>one message granted</span></div>
@@ -294,16 +319,41 @@ footer p { margin: 0; max-width: 46em; }
   </div>
 </section>
 
-<section id="crashes">
+<section id="apps">
   <div class="wrap">
-    <p class="eyebrow">Crash safety</p>
-    <h2>Three outcomes, not two</h2>
-    <p class="intro">Give a run a journal and Staal records every action before and after making it. If the process dies, <code>staalc resume</code> carries on: finished actions are replayed from the journal, not made again. The tests kill the process at every point the journal is written and check the resumed run matches an uninterrupted one.</p>
-    <div class="outcomes">
-      <div class="outcome"><span class="tag t-done">Done</span><p>The action happened. On resume its recorded result is replayed, and nothing is sent twice.</p></div>
-      <div class="outcome"><span class="tag t-failed">Failed</span><p>It certainly didn't happen. The program sees the failure and can handle it.</p></div>
-      <div class="outcome"><span class="tag t-unknown">Unknown</span><p>The outcome can't be established, such as when a connection breaks at the moment of commit. Staal stops and asks a person to resolve it. It never guesses.</p></div>
+    <p class="eyebrow">Integrations</p>
+    <h2>Programs as tools for your app and your agents</h2>
+    <p class="intro">An app opens a program as a tool and calls it again and again. The app computes each call's grants from its own records, so a model's arguments are only ever inputs. Across calls, a tool keeps quotas (calls and money in a time window, each call holding its worst case until it ends), <code>once</code> (a repeated operation is one run), and app inputs (values only the app supplies, left out of the model's schema). The same host serves Python, Node.js, C, and the <code>staalc mcp</code> server.</p>
+    <div class="pair">
+      <div>
+        <h3>A tool in Python</h3>
+        <p>A standard customer may be refunded up to 50 USD at a time, a gold one up to 500. The model never sees the grants, and a tier the policy does not name gets no refund.</p>
+        <p>Adapters give the same tool to an agent framework: the OpenAI Agents SDK, LangGraph, the Vercel AI SDK, the Claude Agent SDK and Google's Agent Development Kit. Each has a <a href="https://github.com/laurells/staal/tree/main/docs/frameworks">tutorial</a> whose files and outputs the tests check.</p>
+      </div>
+      <div class="code">
+        <div class="label"><span>tools.py</span><span>pip install staal</span></div>
+<pre><span class="k">import</span> staal
+
+LIMITS = {<span class="s">"gold"</span>: <span class="s">"500.00"</span>, <span class="s">"standard"</span>: <span class="s">"50.00"</span>}  <span class="c"># USD per refund, decided by the app</span>
+
+
+<span class="k">def</span> grants(customer):
+    <span class="c"># A tier the policy does not name gets no refund at all, and says why.</span>
+    limit = LIMITS.get(customer.get(<span class="s">"tier"</span>)) <span class="k">if</span> isinstance(customer, dict) <span class="k">else</span> None
+    <span class="k">if</span> limit <span class="k">is</span> None:
+        <span class="k">raise</span> PermissionError(f<span class="s">"no refund policy for this customer: {customer!r}"</span>)
+    <span class="k">return</span> {<span class="s">"pay"</span>: {<span class="s">"cap"</span>: <span class="s">"payments.refund"</span>, <span class="s">"uses"</span>: 1,
+                    <span class="s">"each"</span>: {<span class="s">"amount"</span>: limit, <span class="s">"currency"</span>: <span class="s">"USD"</span>}}}
+
+
+refund = staal.Tool(<span class="s">"refund.staal"</span>, name=<span class="s">"refund_order"</span>,
+                    description=<span class="s">"Refund part of an order to the customer's original payment."</span>,
+                    grants=grants, journals=<span class="s">"runs"</span>)</pre>
+<pre class="out"><span class="p">&gt;&gt;&gt; </span>print(refund({"order": "4417", "amount": {"amount": "80.00", "currency": "USD"}}, context={"tier": "standard"}).text)
+'payments.refund' allows at most 50.00 USD per action; this action needs 80.00 USD</pre>
+      </div>
     </div>
+    <p class="intro after"><a href="https://github.com/laurells/staal/blob/main/docs/GUARANTEES.md">docs/GUARANTEES.md</a> states each guarantee, what it depends on, how it is tested and where it stops, shown on a finance agent (<code>examples/finops</code>) whose attack suite is judged by its stand-in bank's own ledger.</p>
   </div>
 </section>
 
@@ -311,7 +361,7 @@ footer p { margin: 0; max-width: 46em; }
   <div class="wrap">
     <p class="eyebrow">The safety rules</p>
     <h2>Eight checks before anything runs</h2>
-    <p class="intro">A program that breaks any of these is rejected with its error code and the line and column where it happens. The test suite holds 626 programs that must be rejected and 53 that must compile.</p>
+    <p class="intro">A program that breaks any of these is rejected with its error code and the line and column where it happens. The test suite holds 628 programs that must be rejected and 54 that must compile.</p>
     <div class="table">
       <table>
         <thead><tr><th scope="col">Code</th><th scope="col">Refused when</th></tr></thead>
@@ -322,8 +372,32 @@ footer p { margin: 0; max-width: 46em; }
           <tr><td>E004</td><td>A function's worst-case model use can exceed its declared budget</td></tr>
           <tr><td>E005</td><td>A model call is inside an unbounded loop</td></tr>
           <tr><td>E006</td><td>An untrusted value is used as a model instruction or as SQL</td></tr>
-          <tr><td>E007</td><td>Data marked as blinded can reach a model</td></tr>
-          <tr><td>E008</td><td>A function claims it finished, citing evidence that isn't proof of its own work</td></tr>
+          <tr><td>E007</td><td>Blinded data can reach a model, or decide whether a model call happens</td></tr>
+          <tr><td>E008</td><td>A function claims it finished, citing evidence that is not proof of its own work</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="tooling">
+  <div class="wrap">
+    <p class="eyebrow">Tooling</p>
+    <h2>One command, <code>staalc</code></h2>
+    <div class="table">
+      <table>
+        <thead><tr><th scope="col">Command</th><th scope="col">What it does</th></tr></thead>
+        <tbody>
+          <tr><td>check</td><td>Type and safety checks, with each error's code, line and column</td></tr>
+          <tr><td>run, resume, resolve</td><td>Run a program from a run config, resume it from its journal, record what happened to an action in doubt</td></tr>
+          <tr><td>test</td><td>Run a program's tests, on either engine or both</td></tr>
+          <tr><td>fmt, doc</td><td>Format source; write Markdown documentation from the comments above each declaration</td></tr>
+          <tr><td>repl, debug, profile</td><td>An interactive prompt; a debugger with breakpoints; each function's calls, steps, time, model use and actions</td></tr>
+          <tr><td>lsp</td><td>A language server; the <a href="https://github.com/laurells/staal/tree/main/editors/vscode">VS Code extension</a> uses it</td></tr>
+          <tr><td>fetch, update, publish, yank</td><td>Packages: versions, a lock file with hashes, and registries</td></tr>
+          <tr><td>config, schema</td><td>A run config to fill in, and the entry function's input and output JSON Schemas</td></tr>
+          <tr><td>mcp</td><td>Serve programs as tools over the Model Context Protocol</td></tr>
+          <tr><td>build</td><td>A standalone executable (Linux)</td></tr>
         </tbody>
       </table>
     </div>
@@ -333,30 +407,27 @@ footer p { margin: 0; max-width: 46em; }
 <section id="status">
   <div class="wrap">
     <p class="eyebrow">Status</p>
-    <h2>A preview, with its limits stated</h2>
-    <p class="intro">Staal isn't ready for production use yet. It's narrow on purpose: it's worth using where an AI mistake has a real cost, and other languages are better everywhere else.</p>
+    <h2>Platforms and limits</h2>
+    <p class="intro">Staal is a preview. Before 1.0, a minor version may change the language or its file formats, and the changelog says when one does (0.26.0 did).</p>
     <div class="status">
       <div>
-        <h3>Built and tested</h3>
+        <h3>Supported</h3>
         <ul>
-          <li>The compiler and all eight safety rules</li>
-          <li>Two engines: an interpreter, and native code through Cranelift, which must agree on every result</li>
-          <li>Exact money, capabilities with limits, model budgets, the crash-safe journal</li>
-          <li>HTTP, files, TCP, SQLite and PostgreSQL as capabilities</li>
-          <li>Packages with versions, a lock file and hash checks</li>
-          <li>Formatter, language server, debugger, profiler, REPL and test runner</li>
-          <li>Fuzzing of the parser, formatter, journal, run config and manifest</li>
+          <li>Linux (x86_64, arm64) and macOS (Apple Silicon, Intel): CI runs the whole test suite on all four on every change</li>
+          <li>Python and Node.js packages, and the C interface (<code>include/staal.h</code>)</li>
+          <li>Model calls from Staal code through Claude (Anthropic's Messages API), or a scripted provider for tests; agent frameworks use any model they support and call Staal programs as tools</li>
+          <li>HTTP, files, TCP, SQLite and PostgreSQL as capabilities, and capabilities written in Staal over HTTP</li>
         </ul>
       </div>
       <div>
         <h3>Not yet</h3>
         <ul>
-          <li>Tested on Linux only; macOS and Windows unproven</li>
-          <li>No runs yet against live services with real keys</li>
-          <li>Claude is the only model provider</li>
-          <li>No independent security review</li>
-          <li>No capability for running other programs</li>
-          <li>Calling C code is possible, and runs that do are marked unchecked</li>
+          <li>Windows, Linux with musl, and WebAssembly</li>
+          <li><code>staalc build</code> and SQLite outside Linux</li>
+          <li>Runs against the live services (Claude, Termii, Stripe, Resend, Slack) with real keys; they are tested against local stand-ins</li>
+          <li>Other model providers in <code>propose</code></li>
+          <li>An independent security review</li>
+          <li>Checking what C code does: runs that call C functions are marked unchecked</li>
         </ul>
       </div>
     </div>
@@ -366,8 +437,8 @@ footer p { margin: 0; max-width: 46em; }
 <section id="start">
   <div class="wrap">
     <p class="eyebrow">Get started</p>
-    <h2>Five minutes in your own app</h2>
-    <p class="intro">Your app decides the policy, here a refund limit per customer tier, and Staal enforces it. No account or key is needed: with no payment service configured, Staal uses a simulated one. These files are <code>examples/quickstart/</code>, and the test suite checks the output below.</p>
+    <h2>A first run from your app</h2>
+    <p class="intro">The app decides the policy, here a refund limit per customer tier, and the runtime enforces it. No account or key is needed: with no payment service configured, the runtime uses a simulated one. These files are <code>examples/quickstart/</code>, and the test suite checks the output below.</p>
     <div class="code quick">
       <div class="label"><span>refund.staal</span><span>the part that moves money</span></div>
 <pre>// Refunds an order, never by more than the app allows.
@@ -422,7 +493,47 @@ function refund(tier, order, amount) {
     <div class="code quick"><div class="label"><span>output</span><span>either one</span></div>
 <pre class="out">Refunded 35.00 USD for order 4417
 'payments.refund' allows at most 50.00 USD per action; this action needs 300.00 USD</pre></div>
-    <p class="intro after">Then the <a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">tutorial</a> goes from install to a program that sends messages and asks a model a question safely, in about an hour. The <a href="https://github.com/laurells/staal/blob/main/docs/GUIDE.md">language guide</a> covers the rest. To help build Staal, read <a href="https://github.com/laurells/staal/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <p class="eyebrow">Documentation</p>
+    <h2>Learn, then look things up</h2>
+    <div class="docs">
+      <div>
+        <h3>Learn</h3>
+        <ul>
+          <li><a href="https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md">Tutorial</a><span>From install to a program that sends messages and asks a model</span></li>
+          <li><a href="https://github.com/laurells/staal/tree/main/docs/frameworks">Framework tutorials</a><span>The same tested agent on five frameworks</span></li>
+          <li><a href="https://github.com/laurells/staal/tree/main/examples">Examples</a><span>Programs for real services, and the finance agent</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Reference</h3>
+        <ul>
+          <li><a href="https://github.com/laurells/staal/blob/main/docs/GUIDE.md">Language guide</a><span>Rules, syntax, capabilities, packages, native code</span></li>
+          <li><a href="https://github.com/laurells/staal/blob/main/docs/RUNTIME.md">Runtime specification</a><span>Semantics, the journal, failures</span></li>
+          <li><a href="https://github.com/laurells/staal/blob/main/docs/GRAMMAR.md">Grammar</a><span>The complete syntax, checked against the parser</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Tools and guarantees</h3>
+        <ul>
+          <li><a href="https://github.com/laurells/staal/blob/main/docs/MCP.md">Tools and MCP</a><span>Tools in an app, quotas, <code>once</code>, crashes</span></li>
+          <li><a href="https://github.com/laurells/staal/blob/main/docs/GUARANTEES.md">Guarantees</a><span>What is guaranteed, assumed and not covered</span></li>
+          <li><a href="https://github.com/laurells/staal/blob/main/docs/PACKAGES.md">Writing a package</a><span>One service, from an empty folder to passing tests</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Project</h3>
+        <ul>
+          <li><a href="https://github.com/laurells/staal/blob/main/CHANGELOG.md">Changelog</a><span>Every release, and what changed</span></li>
+          <li><a href="https://github.com/laurells/staal/blob/main/CONTRIBUTING.md">Contributing</a><span>What a change needs</span></li>
+          <li><a href="https://github.com/laurells/staal/blob/main/SECURITY.md">Security</a><span>Reporting a vulnerability</span></li>
+        </ul>
+      </div>
+    </div>
   </div>
 </section>
 

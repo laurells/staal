@@ -94,6 +94,11 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
             println!("staalc {}", env!("CARGO_PKG_VERSION"));
             0
         }
+        // Asked for, the usage is the answer: on standard output, and success.
+        "--help" | "-h" | "help" if rest.is_empty() => {
+            println!("{USAGE}");
+            0
+        }
         "fmt" => fmt_cmd(rest),
         "test" => test_cmd(rest),
         "debug" => match parse(&with_inputs(rest), &["--config", "--entry", "--input"], &[]) {

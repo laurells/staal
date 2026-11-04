@@ -4,6 +4,21 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+### Fixed
+
+- `staalc --help` (and `-h`, `help`) prints the usage on standard output and succeeds.
+  Before, it answered "unknown command --help" with exit code 2.
+- The site (`site/index.html`) states only what the language and runtime do, checked
+  against the code: the journal resends an action in doubt only with the same
+  idempotency key and only when its grant says the service deduplicates (it said a
+  payment is never repeated); the compiler bounds model calls and tokens, while money
+  limits are the runtime's (it said the compiler refuses programs that could
+  overspend); CI runs on macOS too (it said Linux only). It is now laid out as
+  language home pages are: install, features, examples, integrations, the safety
+  rules, tooling, platforms and limits, and an index of the documentation.
+
 ## 0.26.0 — 2026-11-04
 
 This release changes the language: ordering money in two different currencies now
