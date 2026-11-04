@@ -4,7 +4,11 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
-## Unreleased
+## 0.26.0 — 2026-11-04
+
+This release changes the language: ordering money in two different currencies now
+fails instead of answering false. A program that relied on the false answer stops
+with a message instead (see Changed below).
 
 ### Added
 
