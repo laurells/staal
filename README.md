@@ -9,8 +9,8 @@
 
 <p align="center">
   <b>The programming language for agents.</b><br>
-  Not a wrapper around your prompts. A language whose compiler and runtime enforce what an agent may do,<br>
-  putting permissions, spending limits and crash recovery in the language instead of in code you have to keep right.
+  A statically typed language whose compiler and runtime enforce what a program may do:<br>
+  capabilities granted per run, validated model output, bounded model use and journaled actions.
 </p>
 
 <p align="center">
@@ -20,61 +20,11 @@
   <a href="https://github.com/laurells/staal"><img src="https://img.shields.io/github/stars/laurells/staal?style=flat&color=2a5d8f" alt="GitHub stars"></a>
 </p>
 
-<p align="center">
-  <a href="bench/agent"><img src="docs/img/bench-code.svg" width="400" alt="Code to write and keep: Staal 159 lines, Python alone 312 lines"></a>
-  <a href="bench/agent"><img src="docs/img/bench-changes.svg" width="400" alt="Risky later changes that shipped broken: Staal 0 of 6, Python alone 6 of 6"></a>
-</p>
-
-## Benchmarks
-
-The same support agent, built twice: in Python alone and in Python with Staal, with
-the same limits, permissions, retries and crash recovery. A model reads a ticket and
-proposes at most one refund (through a simulated Stripe) and one email. Both versions
-face 47 scenarios: policy, prompt injection, malformed model output, permission
-escalation, failing services and lost answers, and crashes before and after every
-external call. A scenario passes when the effects the simulated world ends up with
-are ones the scenario allows and no rule of the specification broke.
-
-| Metric | Python alone | Python with Staal |
-| --- | --- | --- |
-| Attack and crash scenarios passed | 47 of 47 | 47 of 47 |
-| Code to write and keep | 312 lines | 159 lines |
-| Risky later changes that shipped broken | 6 of 6 | 0 of 6 (4 refused before running, 2 held at run time) |
-| Operator interventions (emails in doubt) | 4 | 4 |
-
-Code is counted as lines that are neither blank nor comments. Neither version has
-tests of its own; the 47 scenarios and the simulated world are shared and not
-counted. The Python version's 312 lines are one file that holds, among the rest, its own journal (78 lines), deciding
-whether a request was sent (20), calling and checking the model (60), and the policy
-and actions (82). The Staal version's 159 are the agent (39), the app's grants, run,
-resume and resolve (59), and the Stripe and mail libraries (61), which a team would
-take from packages, leaving 98.
-
-The six later changes, made identically to both versions:
-
-| Change | Python alone | Python with Staal |
-| --- | --- | --- |
-| Put the ticket into the model's instruction | ships; all 47 scenarios break the rule | refused before it runs (E006) |
-| Drop validation of the model's plan | ships; 4 scenarios act on malformed plans, 1 crashes the job | refused before it runs (E001) |
-| Ask the model again to polish the email | ships; 24 scenarios go over the budget | refused before it runs (E004) |
-| Log every request, headers included | ships; the API keys land in a log | refused before it runs (E101) |
-| Refactor each step into its own helper | ships; two refunds go through where one is allowed | runs; the limits still hold |
-| Resend the email if the mail service fails | ships; a customer is emailed twice when an answer is lost | runs; the limits still hold |
-
-This is one agent, one specification and six changes. Both versions were written by
-one person who knew the scenarios in advance, which favours the Python version. Careful Python can meet
-the same specification, and on the day it is written it does. What the benchmark
-measures is how much code has to stay right for those guarantees to hold as the
-system changes. Three control changes, to the policy or the order of business (for
-example raising a limit), come out the same in both versions, because neither
-language can tell what the business meant. [bench/agent](bench/agent) has the code, every scenario, the
-controls and the rest of what this does not show.
-
 ## What it is
 
-Agents should not act on prompts and hope. Staal is a programming language built
-for what agents do: moving money, sending messages, changing files and records,
-and calling AI models.
+Staal is a statically typed programming language for the code an AI agent runs to
+act: moving money, sending messages, changing files and records, and calling AI
+models.
 
 The work is split in two. Before a program runs, the compiler checks that it follows
 the language's safety rules: every action has a capability in scope, no capability is
@@ -97,12 +47,52 @@ PostgreSQL or SQLite or files on disk, or one that calls any HTTP API through a
 library capability. Your application decides what each run may do; Staal checks the
 program and enforces those permissions while it runs.
 
+## Installing
+
+The Python and Node.js packages each include the compiler and runtime, with no Rust
+needed, on Linux (x86_64, arm64) and macOS (Apple Silicon, Intel):
+
+```
+pip install staal
+npm install @staal/node
+```
+
+The `staalc` command alone, from a release:
+
+```
+curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh
+```
+
+[install.sh](install.sh) downloads the latest release's archive for your machine,
+refuses it unless its SHA-256 matches the release's, unpacks it into `~/.staal`, and
+links `staalc` into `~/.local/bin`. Or unpack the archive yourself and run its
+`staalc`, or install the wheel with `pip install staal-X.Y.Z-py3-none-<platform>.whl`,
+which gives the `staalc` command and the `staal` Python package
+([docs/RELEASING.md](docs/RELEASING.md) says what a release holds). Releases are
+made for Linux on x86_64 and arm64 (glibc 2.28 and later) and macOS on Apple
+Silicon (11 and later) and Intel (10.12 and later); arm64 Linux from 0.24.0.
+
+### From source
+
+Rust 1.89 or newer ([rustup.rs](https://rustup.rs)), `git` to
+fetch packages, and a C compiler (`cc`) to build executables. Developed and
+tested with Rust 1.97.0.
+
+```
+git clone https://github.com/laurells/staal.git
+cd staal
+cargo build --release
+./target/release/staalc check examples/invoice/invoice.staal
+./target/release/staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
+```
+
+To build without the native compiler (smaller, interpreter only):
+`cargo build --release --no-default-features`.
+
 ## Quick start
 
 Keep your app in Python or Node.js; write the part that moves money or messages in
 Staal. Your app decides the policy, Staal enforces it:
-
-    pip install staal            # or: npm install @staal/node
 
 `refund.staal`, the part that moves money:
 
@@ -150,7 +140,33 @@ simulated one. The same in Node.js, and both files in full, are in
 [tutorial](docs/TUTORIAL.md) adds a model's decision, and the guide's "Policy from
 your app" shows the pattern in depth.
 
-## Highlights
+## Example
+
+```
+type Line { item: Text, price: Money, qty: Int }
+
+fn line_total(line: Line) -> Money {
+    return line.price * line.qty
+}
+
+fn total(lines: List<Line, 20>) -> Money {
+    let sum = 0.00 NGN
+    for line in lines {
+        set sum = sum + line_total(line)
+    }
+    return sum
+}
+```
+
+```
+$ staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
+{"amount":"187501.50","currency":"NGN"}
+```
+
+The [language guide](docs/GUIDE.md) covers capabilities, models, budgets,
+evidence, modules, packages and the rest.
+
+## Features
 
 **Safety checked at compile time.** Eight rules (E001 to E008) reject a program
 that would act without a capability, widen a capability, use a model's output
@@ -189,8 +205,8 @@ an operator records what happened (`staalc resolve`).
 code through Cranelift, with results, errors and journals identical to the
 interpreter. `staalc build` links a program into a single executable.
 
-**Callable from any language.** A C interface (`include/staal.h`) runs programs
-from other languages, with packages for Python (`python/`) and for Node.js and
+**Callable from other languages.** A C interface (`include/staal.h`) runs programs
+from any language that can call C, with packages for Python (`python/`) and for Node.js and
 TypeScript (`node/`): your application decides the policy, Staal enforces it
 (GUIDE.md, "Policy from your app"). `staalc schema` prints the JSON Schemas of a
 function's inputs and result, so a program can be described as a tool to agent
@@ -206,64 +222,6 @@ by the library's SHA-256 and each function's exact signature. Staal cannot check
 C code does, so every run granted a C function is marked unchecked: in its log, on
 the command line and in the C interface's result. The guarantees above end at that
 boundary, and Staal says so where it applies.
-
-## A first program
-
-```
-type Line { item: Text, price: Money, qty: Int }
-
-fn line_total(line: Line) -> Money {
-    return line.price * line.qty
-}
-
-fn total(lines: List<Line, 20>) -> Money {
-    let sum = 0.00 NGN
-    for line in lines {
-        set sum = sum + line_total(line)
-    }
-    return sum
-}
-```
-
-```
-$ staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
-{"amount":"187501.50","currency":"NGN"}
-```
-
-The [language guide](docs/GUIDE.md) covers capabilities, models, budgets,
-evidence, modules, packages and the rest.
-
-## Getting started
-
-Without Rust, from a release, on Linux (x86_64 or arm64) or macOS:
-
-```
-curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh
-```
-
-[install.sh](install.sh) downloads the latest release's archive for your machine,
-refuses it unless its SHA-256 matches the release's, unpacks it into `~/.staal`, and
-links `staalc` into `~/.local/bin`. Or unpack the archive yourself and run its
-`staalc`, or install the wheel with `pip install staal-X.Y.Z-py3-none-<platform>.whl`,
-which gives the `staalc` command and the `staal` Python package
-([docs/RELEASING.md](docs/RELEASING.md) says what a release holds). Releases are
-made for Linux on x86_64 and arm64 (glibc 2.28 and later) and macOS on Apple
-Silicon (11 and later) and Intel (10.12 and later); arm64 Linux from 0.24.0.
-
-From source: Rust 1.89 or newer ([rustup.rs](https://rustup.rs)), `git` to
-fetch packages, and a C compiler (`cc`) to build executables. Developed and
-tested with Rust 1.97.0.
-
-```
-git clone https://github.com/laurells/staal.git
-cd staal
-cargo build --release
-./target/release/staalc check examples/invoice/invoice.staal
-./target/release/staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
-```
-
-To build without the native compiler (smaller, interpreter only):
-`cargo build --release --no-default-features`.
 
 ## Command line
 
@@ -290,6 +248,7 @@ To build without the native compiler (smaller, interpreter only):
 | `staalc profile <file.staal> --config <run.json>` | Runs a program and shows what each function spent |
 | `staalc debug <file.staal> --config <run.json>` | Runs a program, stopping at breakpoints and steps |
 | `staalc lsp` | A language server for editors: the same errors as `check`, completion, formatting |
+| `staalc --help`, `staalc --version` | Prints the usage, or the version |
 
 Exit codes: `0` success; `1` check errors or a failed run; `2` a usage, file,
 config or journal problem (nothing was run); `3` the run stopped and can be
@@ -297,30 +256,76 @@ continued.
 
 ## Documentation
 
-| Document | Contents |
-| --- | --- |
-| [docs/TUTORIAL.md](docs/TUTORIAL.md) | Staal in one hour: from install to a program that sends messages and asks a model |
-| [docs/GUIDE.md](docs/GUIDE.md) | The language: rules, syntax, capabilities, packages, native code |
-| [docs/RUNTIME.md](docs/RUNTIME.md) | The runtime specification: semantics, the journal, failure behaviour |
-| [docs/MCP.md](docs/MCP.md) | `staalc mcp`: the manifest, the protocol, quotas, `once`, crashes and operators |
-| [docs/GUARANTEES.md](docs/GUARANTEES.md) | What Staal guarantees, what it assumes and where it stops, shown on a finance agent attacked on purpose |
-| [docs/frameworks/claude-agent-sdk.md](docs/frameworks/claude-agent-sdk.md) | A support agent on the Claude Agent SDK that can never refund more than your app allows, in Python and TypeScript |
-| [docs/frameworks/openai-agents.md](docs/frameworks/openai-agents.md) | The same agent on the OpenAI Agents SDK, in Python and TypeScript |
-| [docs/frameworks/langgraph.md](docs/frameworks/langgraph.md) | The same agent on LangGraph, in Python and TypeScript |
-| [docs/frameworks/vercel-ai.md](docs/frameworks/vercel-ai.md) | The same agent on the Vercel AI SDK, in TypeScript |
-| [docs/frameworks/google-adk.md](docs/frameworks/google-adk.md) | The same agent on Google's Agent Development Kit, in Python |
-| [docs/PACKAGES.md](docs/PACKAGES.md) | Write your first Staal package: one service, from an empty folder to passing tests |
-| [docs/RELEASING.md](docs/RELEASING.md) | How a release is made, and what it holds |
-| [editors/vscode](editors/vscode) | The VS Code extension: highlighting and the language server |
-| [docs/GRAMMAR.md](docs/GRAMMAR.md) | The complete syntax, checked against the parser by the tests |
-| [examples/README.md](examples/README.md) | Programs that call Claude and send real SMS and email, and how to run them with your keys |
-| [packages/README.md](packages/README.md) | The packages, the template, and how a package is tested |
-| [include/staal.h](include/staal.h) | The C interface |
-| [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
+[docs/README.md](docs/README.md) indexes all of it.
 
-## Status
+- Learn: [the tutorial](docs/TUTORIAL.md), the same agent on [five agent
+  frameworks](docs/frameworks/), [writing a package](docs/PACKAGES.md), and
+  [examples](examples/README.md).
+- Reference: [the language guide](docs/GUIDE.md), [the runtime
+  specification](docs/RUNTIME.md), [the grammar](docs/GRAMMAR.md) and [the C
+  interface](include/staal.h).
+- Tools and guarantees: [tools and the MCP server](docs/MCP.md) and [what is
+  guaranteed, assumed and not covered](docs/GUARANTEES.md).
+- Project: [changelog](CHANGELOG.md), [deferred work](docs/DEFERRED.md),
+  [releasing](docs/RELEASING.md), [contributing](CONTRIBUTING.md) and
+  [security](SECURITY.md). Editors: [VS Code](editors/vscode).
 
-Staal is pre-release and not yet ready for production use. Built and tested:
+## Benchmark
+
+<p align="center">
+  <a href="bench/agent"><img src="docs/img/bench-code.svg" width="400" alt="Code to write and keep: Staal 159 lines, Python alone 312 lines"></a>
+  <a href="bench/agent"><img src="docs/img/bench-changes.svg" width="400" alt="Risky later changes that shipped broken: Staal 0 of 6, Python alone 6 of 6"></a>
+</p>
+
+Measured by `bench/agent` (`python run.py`, `python mutate.py`, `python loc.py`),
+which CI does not run; the results are in `bench/agent/results/`. The same support
+agent, built twice: in Python alone and in Python with Staal, with
+the same limits, permissions, retries and crash recovery. A model reads a ticket and
+proposes at most one refund (through a simulated Stripe) and one email. Both versions
+face 47 scenarios: policy, prompt injection, malformed model output, permission
+escalation, failing services and lost answers, and crashes before and after every
+external call. A scenario passes when the effects the simulated world ends up with
+are ones the scenario allows and no rule of the specification broke.
+
+| Metric | Python alone | Python with Staal |
+| --- | --- | --- |
+| Attack and crash scenarios passed | 47 of 47 | 47 of 47 |
+| Code to write and keep | 312 lines | 159 lines |
+| Risky later changes that shipped broken | 6 of 6 | 0 of 6 (4 refused before running, 2 held at run time) |
+| Operator interventions (emails in doubt) | 4 | 4 |
+
+Code is counted as lines that are neither blank nor comments. Neither version has
+tests of its own; the 47 scenarios and the simulated world are shared and not
+counted. The Python version's 312 lines are one file that holds, among the rest, its own journal (78 lines), deciding
+whether a request was sent (20), calling and checking the model (60), and the policy
+and actions (82). The Staal version's 159 are the agent (39), the app's grants, run,
+resume and resolve (59), and the Stripe and mail libraries (61), which a team would
+take from packages, leaving 98.
+
+The six later changes, made identically to both versions:
+
+| Change | Python alone | Python with Staal |
+| --- | --- | --- |
+| Put the ticket into the model's instruction | ships; all 47 scenarios break the rule | refused before it runs (E006) |
+| Drop validation of the model's plan | ships; 4 scenarios act on malformed plans, 1 crashes the job | refused before it runs (E001) |
+| Ask the model again to polish the email | ships; 24 scenarios go over the budget | refused before it runs (E004) |
+| Log every request, headers included | ships; the API keys land in a log | refused before it runs (E101) |
+| Refactor each step into its own helper | ships; two refunds go through where one is allowed | runs; the limits still hold |
+| Resend the email if the mail service fails | ships; a customer is emailed twice when an answer is lost | runs; the limits still hold |
+
+This is one agent, one specification and six changes. Both versions were written by
+one person who knew the scenarios in advance, which favours the Python version. Careful Python can meet
+the same specification, and on the day it is written it does. What the benchmark
+measures is how much code has to stay right for those guarantees to hold as the
+system changes. Three control changes, to the policy or the order of business (for
+example raising a limit), come out the same in both versions, because neither
+language can tell what the business meant. [bench/agent](bench/agent) has the code, every scenario, the
+controls and the rest of what this does not show.
+
+## Platforms and status
+
+Staal is a preview. Before 1.0, a minor version may change the language or its file
+formats, and the changelog says when one does. Built and tested:
 the compiler and all eight safety rules, the reference runtime, Claude as a
 model provider, exact money, the capability broker, budgets, the crash-safe
 journal, modules, HTTP, file, TCP, SQLite and PostgreSQL capabilities,

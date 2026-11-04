@@ -1,9 +1,10 @@
-# Staal runtime semantics (v0.1)
+# Staal runtime specification
 
 This document defines what a Staal program does when it runs. The reference
-interpreter (`src/interp/`) implements it directly; any future backend
-(native code via Cranelift) must produce the same results, model requests,
-actions and log for every program. Where this document and an implementation
+interpreter (`src/interp/`) implements it directly. The native engine
+(`src/native.rs`, through Cranelift; section 15) must produce the same results,
+model requests, actions, log and journal for every program, and the tests check
+that it does (`tests/engines_test.rs`). Where this document and an implementation
 disagree, the implementation is wrong.
 
 A program is only run after it passes every static check (E001-E008, E1xx).

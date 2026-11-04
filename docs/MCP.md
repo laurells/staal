@@ -1,11 +1,13 @@
-# Staal as an MCP server: design
+# Programs as tools: the MCP server and tools in an app
 
-Status: version 1 is built (`staalc mcp`, `src/mcp/`) and tested
-(`tests/mcp_test.rs`, `tests/mcp_crash_test.rs`, `tests/mcp_sdk_test.rs`). The design
-was agreed before implementation (phase 0 of the ecosystem plan) and revised after two
-outside reviews; the manifest format in section 2 is frozen for version 1. Where
-building it settled a detail the design had left open, this note says what was built.
-When the implementation and this note disagree, the note is updated in the same change.
+`staalc mcp` serves Staal programs as tools to Model Context Protocol clients, and the
+same host serves them as tools inside an app, through the C interface, Python and
+Node.js (section 11). This document specifies both: the manifest (section 2, whose
+format is fixed for version 1), the protocol, calls, `once`, quotas, crashes and
+operators. It is implemented in `src/host/` and `src/mcp/`, and tested by
+`tests/mcp_test.rs`, `tests/mcp_crash_test.rs`, `tests/mcp_sdk_test.rs` (against the
+official Python and TypeScript SDKs) and `tests/capi_test.rs`. When the implementation
+and this document disagree, the document is updated in the same change.
 
 Running it: `staalc mcp <manifest.json>` serves on standard input and output, the way
 an MCP client starts a local server; `staalc mcp status <manifest.json>` lists, beside a
@@ -393,8 +395,9 @@ for `keep` (a whole number and `m`, `h` or `d`; at most `server.keep`, which the
 manifest check enforces; `server.keep` when left out), counted from the run's end;
 after that, the same arguments start a new run. A call that never started (refused
 as busy or over its quota, or released at start) holds no key.
-Over stdio, one server serves one client, so keys are scoped to the tool; with a
-remote transport they will be scoped to the authenticated client too.
+Over stdio, one server serves one client, so keys are scoped to the tool. There is no
+remote transport (DEFERRED.md). Tools in an app can scope keys per tenant or user
+(section 11, "Scope").
 
 A repeated call returns the same run, and the same run sends the same idempotency keys
 to the service, so `once` and the service's own deduplication work together:
@@ -814,18 +817,17 @@ places, both of which take the scope from trusted data rather than from the mode
 1. **Inside the program, from a trusted lookup.** The program reads the order through
    a read capability the operator granted, and narrows its refund capability to that
    order's payment before using it. The narrowing is code, reviewed with the program,
-   checked by the compiler and recorded in the journal. Today a program can narrow
-   only to limits written in the code (GUIDE.md, "Policy from your app"); narrowing to
-   a value the program computes is planned language work, and this is the use case
-   that sets its priority.
-2. **In the app, when Staal runs in-process.** With the framework adapters, the app
-   computes each call's grants from what it knows about the request (the signed-in
-   user, the order in front of them), as `lib.run` already allows.
+   checked by the compiler and recorded in the journal. A program can narrow only to
+   limits written in the code (GUIDE.md, "Policy from your app"), not to a value it
+   computes.
+2. **In the app, when Staal runs in-process.** The app computes each call's grants
+   from what it knows about the request (the signed-in user, the order in front of
+   them), and gives the call's subject as an app input, which a caller cannot set
+   (section 11). `examples/finops/` does both: each refund's grant lists only the
+   customer's own payments, and the customer is an app input.
 
-When the server gains an authenticated remote transport, a third place opens: grants
-chosen by the authenticated principal (a profile per OAuth client or scope), because
-an authenticated identity is trusted input and a tool argument is not. That is
-designed with the remote transport, not before.
+Over the MCP server, which has no remote transport and no authenticated client, a
+call's grants come from the manifest alone.
 
 **Operators are told outside MCP.** Section 7 ("When a run waits for an operator")
 says how: the caller is told the truth and given a status tool, and the operator gets

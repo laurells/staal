@@ -1,7 +1,8 @@
 # Security policy
 
-Staal's purpose is to make programs that act on the world safe, so a flaw that lets
-a program get past its guarantees is a security problem, not only a bug.
+Staal's compiler and runtime make guarantees about what a program may do
+([docs/GUARANTEES.md](docs/GUARANTEES.md)), so a flaw that lets a program get past
+one is a security problem, not only a bug.
 
 ## Supported versions
 
@@ -10,8 +11,8 @@ is fixed by upgrading.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.24.x  | Yes       |
-| < 0.24  | No        |
+| 0.26.x  | Yes       |
+| < 0.26  | No        |
 
 ## Reporting a vulnerability
 

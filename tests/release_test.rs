@@ -91,6 +91,13 @@ fn every_part_of_a_release_has_staalcs_version() {
     // What people see: the site's stamp and the bug report's example version.
     assert!(read("site/index.html").contains(&format!("Preview <b>v{VERSION}</b>")), "site/index.html");
     assert!(read(".github/ISSUE_TEMPLATE/bug_report.yml").contains(&format!("placeholder: staalc {VERSION}")), "bug_report.yml");
+    // Only the latest minor version gets security fixes, and SECURITY.md says which.
+    let minor = VERSION.rsplit_once('.').map(|(m, _)| m).unwrap();
+    let security = read("SECURITY.md");
+    assert!(
+        security.contains(&format!("| {minor}.x  | Yes       |")) && security.contains(&format!("| < {minor}  | No        |")),
+        "SECURITY.md supports {minor}.x"
+    );
     // The changelog: what is not released yet first, then the latest release, which
     // is this version, with its date.
     let log = read("CHANGELOG.md");

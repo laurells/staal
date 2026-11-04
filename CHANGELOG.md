@@ -18,6 +18,17 @@ the language or its file formats.
   overspend); CI runs on macOS too (it said Linux only). It is now laid out as
   language home pages are: install, features, examples, integrations, the safety
   rules, tooling, platforms and limits, and an index of the documentation.
+- The README, the documentation's introductions and the package READMEs state only
+  what the code does. The Python and Node.js READMEs said the runtime never repeats an
+  action after a crash; it never resends one in doubt blind. The tutorial named Linux
+  x86_64 only; the guide listed the Python package and C calls as not built; RUNTIME.md
+  called the native engine a future backend; MCP.md promised remote-transport scoping
+  and computed narrowing. The README is ordered as language repositories are (what it
+  is, installing, quick start, features, command line, documentation, then the
+  benchmark, rerun on 0.26.0, and platforms), and `docs/README.md` indexes the
+  documentation by Learn, Reference, Tools and Project.
+- SECURITY.md said 0.24.x was the supported version. It now says 0.26.x, and the release
+  check requires the supported minor version to be the one being released.
 
 ## 0.26.0 — 2026-11-04
 

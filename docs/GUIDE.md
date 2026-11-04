@@ -4,7 +4,7 @@ What Staal checks, how its programs are written, and how they run. The exact
 runtime semantics are in [RUNTIME.md](RUNTIME.md), and the complete syntax in
 [GRAMMAR.md](GRAMMAR.md).
 
-## What it enforces today
+## What the compiler enforces
 
 | Code | Meaning |
 | ---- | ------- |
@@ -493,7 +493,9 @@ the journal instead of making it again.
 The complete program and app are in `examples/policy/`; the test suite runs them
 (`python/tests/test_policy.py`). Inside one running program, limits are fixed
 numbers: a program can branch between capabilities narrowed to different limits,
-but cannot yet narrow by a value it computes. That is planned.
+but cannot narrow by a value it computes. For limits that depend on the request,
+the app computes the grants for each run, and can give the run's subject (the
+customer, the order) as an app input (MCP.md section 11).
 
 ## Budgets and loops
 
@@ -1476,10 +1478,9 @@ runs on any x86-64 Linux machine, not only this one), and links it with the runt
 program's source files, modules and packages included: it checks them again when it
 starts, refuses to run if they are not exactly the program its code was made from,
 and runs functions without native code on the interpreter. Its journals are the same
-as `staalc`'s, so a run started by one can be resumed by the other. In a release
-build an executable is about 23 MB (13 MB stripped) and needs only the system's C
-library; the recursive Int program above runs in 0.015 s, against 0.018 s for
-`staalc --engine native`, which compiles when the run starts.
+as `staalc`'s, so a run started by one can be resumed by the other. An executable
+needs only the system's C library. `staalc --engine native` compiles when the run
+starts; an executable was compiled when it was built.
 
 How this is tested: every runtime case, run by its built executable, gives the same
 exit code, output, log and journal as `staalc run`; a program with modules runs as
@@ -1490,6 +1491,4 @@ reported. Five mutations are each caught: the program check skipped, the native 
 table out of order, constants or record layouts lost, and running through the
 in-memory compiler instead of the linked code.
 
-What is not built: executables on macOS and Windows (`staalc build` refuses there
-for now); an installable Python package; and calling C libraries from Staal, which is left
-for last on purpose: the broker could not check what native code does.
+What is not built: executables on macOS and Windows (`staalc build` refuses there).

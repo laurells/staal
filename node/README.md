@@ -2,8 +2,9 @@
 
 Run [Staal](https://github.com/laurells/staal) programs from Node.js and TypeScript.
 Staal is the programming language for agents: its compiler refuses a
-program that could act without permission, use a model's answer unchecked, or
-overspend, and its runtime never repeats an action after a crash.
+program that could act without a capability, use a model's answer unchecked, or
+exceed its declared model budget, and its runtime journals every action, so a
+resumed run replays what finished and never sends an action in doubt again blind.
 
 Install it with `npm install @staal/node`. This package holds no Staal logic of its own. It calls staalc's C interface
 in-process, so a Node app gets exactly the results `staalc` and the Python package

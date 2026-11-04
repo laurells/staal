@@ -1,13 +1,15 @@
 # Staal in one hour
 
-This tutorial takes you from nothing to a program that sends messages and asks an
-AI model a question, safely. You need no Staal experience, only a terminal. Every
+This tutorial takes you from nothing to a program that sends messages within a
+granted limit and asks an AI model a question, with the model's answer checked
+before it is used. You need no Staal experience, only a terminal. Every
 program and command below is checked by the test suite (`tests/tutorial_test.rs`),
 so what you see is what you will get.
 
 ## 1. Install
 
-On Linux (x86_64) or a Mac, one command installs Staal's compiler, `staalc`:
+On Linux (x86_64 or arm64) or macOS (Apple Silicon or Intel), one command installs
+Staal's compiler, `staalc`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh

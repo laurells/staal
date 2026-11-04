@@ -1,10 +1,11 @@
 # staal
 
-[Staal](https://github.com/laurells/staal) is the programming language for agents,
-built for what they do: sending messages, moving money, changing records. Its compiler
-refuses a program that could act without permission, use a model's answer
-unchecked, let untrusted text instruct a model, or overspend its budget, and its
-runtime journals every action so a crashed run resumes without repeating one.
+[Staal](https://github.com/laurells/staal) is the programming language for agents:
+the code an agent runs to send messages, move money and change records. Its compiler
+refuses a program that could act without a capability, use a model's answer
+unchecked, let untrusted text instruct a model, or exceed its declared model budget,
+and its runtime journals every action, so a resumed run replays what finished and
+never sends an action in doubt again blind.
 
 This package installs the `staalc` compiler and runtime, and a Python interface to
 it. No Rust toolchain is needed.
