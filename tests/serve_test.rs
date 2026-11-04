@@ -13,6 +13,15 @@ const BIN: &str = env!("CARGO_BIN_EXE_staalc");
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const PROGRAM: &str = "tests/serve/serve.staal";
 
+/// The tests in this file take turns. Each finds a free port, releases it for its
+/// program, and connects to it; a test running beside another could be handed the
+/// same port and reach the other's program. A test that fails releases the lock.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// A free local address (bound, then released for the program to bind).
 fn free_address() -> String {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string()
@@ -71,6 +80,7 @@ fn engines() -> Vec<&'static str> {
 
 #[test]
 fn requests_are_answered_one_after_another() {
+    let _turn = one_at_a_time();
     for engine in engines() {
         let addr = free_address();
         let dir = scratch(&format!("serial-{engine}"));
@@ -93,6 +103,7 @@ fn requests_are_answered_one_after_another() {
 
 #[test]
 fn concurrent_tasks_answer_their_own_requests() {
+    let _turn = one_at_a_time();
     for engine in engines() {
         let addr = free_address();
         let dir = scratch(&format!("parallel-{engine}"));
@@ -108,6 +119,7 @@ fn concurrent_tasks_answer_their_own_requests() {
 
 #[test]
 fn a_program_listens_only_where_its_grant_allows() {
+    let _turn = one_at_a_time();
     let addr = free_address();
     let dir = scratch("only");
     let cfg = config(&dir, "serve", &addr, "127.0.0.2:*");
@@ -119,6 +131,12 @@ fn a_program_listens_only_where_its_grant_allows() {
             let mut reached = 0;
             while start.elapsed() < Duration::from_secs(5) && reached < 3 {
                 if let Ok(mut c) = TcpStream::connect(&addr) {
+                    // Connecting to a port nobody listens on can connect the socket to
+                    // itself (both ends the same address and port): that is no run.
+                    if c.local_addr().ok() == c.peer_addr().ok() {
+                        std::thread::sleep(Duration::from_millis(20));
+                        continue;
+                    }
                     reached += 1;
                     let _ = c.write_all(b"a\n");
                     let _ = c.read_to_string(&mut String::new());
@@ -138,6 +156,7 @@ fn a_program_listens_only_where_its_grant_allows() {
 
 #[test]
 fn a_reply_takes_no_address_limit() {
+    let _turn = one_at_a_time();
     let dir = scratch("reply-only");
     let cfg = json!({
         "entry": "serve",
@@ -154,6 +173,7 @@ fn a_reply_takes_no_address_limit() {
 
 #[test]
 fn a_request_without_a_delimiter_is_read_to_its_end() {
+    let _turn = one_at_a_time();
     let addr = free_address();
     let dir = scratch("peek");
     let cfg = config(&dir, "peek", &addr, "127.0.0.1:*");
@@ -180,6 +200,7 @@ fn a_request_without_a_delimiter_is_read_to_its_end() {
 
 #[test]
 fn a_finished_run_replays_without_listening() {
+    let _turn = one_at_a_time();
     let addr = free_address();
     let dir = scratch("journal");
     let cfg = config(&dir, "serve", &addr, "127.0.0.1:*");
@@ -201,6 +222,7 @@ fn a_finished_run_replays_without_listening() {
 
 #[test]
 fn a_connection_is_answered_once() {
+    let _turn = one_at_a_time();
     for engine in engines() {
         let addr = free_address();
         let dir = scratch(&format!("twice-{engine}"));

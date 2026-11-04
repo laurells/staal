@@ -34,6 +34,16 @@ pub struct Settings {
     pub notify_env: Vec<String>,
 }
 
+/// Who defines a tool, which decides what its definition may hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Definer {
+    /// An MCP manifest: grants written in it, and no app to give inputs.
+    Manifest,
+    /// An app, through the C interface: its grants are fixed in the definition or
+    /// given with each call, and it may give app inputs with each call.
+    App(Grants),
+}
+
 /// Where a tool's grants come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Grants {
@@ -375,10 +385,13 @@ pub fn parse_tool(
     dir: &Path,
     model: Option<&Json>,
     settings: &Settings,
-    grants: Grants,
-    app_inputs_allowed: bool,
+    definer: Definer,
     warnings: &mut Vec<String>,
 ) -> Result<Tool, String> {
+    let (grants, app_inputs_allowed) = match definer {
+        Definer::Manifest => (Grants::Fixed, false),
+        Definer::App(g) => (g, true),
+    };
     let o = v.as_object().ok_or(format!("{at}: expected an object"))?;
     const RUN_KEYS: [&str; 7] = ["grants", "secrets", "model", "net", "fs", "adapters", "limits"];
     for k in o.keys() {

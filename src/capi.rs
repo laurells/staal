@@ -376,7 +376,7 @@ mod tools {
         let h = reg()?.hosts.get(&hid).map(|o| o.host.clone()).ok_or(format!("host {hid} is not open"))?;
         let grants = if spec_json.get("grants").is_some() { Grants::Fixed } else { Grants::PerCall };
         let mut warnings = Vec::new();
-        let t = tool::parse_tool(&spec_json, "tool", &cwd()?, None, &h.settings, grants, true, &mut warnings)?;
+        let t = tool::parse_tool(&spec_json, "tool", &cwd()?, None, &h.settings, tool::Definer::App(grants), &mut warnings)?;
         let described = json!({
             "status": "ok",
             "name": t.name,

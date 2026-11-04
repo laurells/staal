@@ -3,7 +3,7 @@
 // host settings and each tool are read by `crate::host`, with the same checks a tool
 // defined through the C interface gets.
 
-use crate::host::tool::{self, Grants, Settings, Tool};
+use crate::host::tool::{self, Definer, Settings, Tool};
 use serde_json::Value as Json;
 use std::path::Path;
 
@@ -40,7 +40,7 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
     let mut tools: Vec<Tool> = Vec::new();
     let mut warnings = Vec::new();
     for (i, t) in list.iter().enumerate() {
-        let tool = tool::parse_tool(t, &format!("tools[{i}]"), dir, model, &settings, Grants::Fixed, false, &mut warnings)?;
+        let tool = tool::parse_tool(t, &format!("tools[{i}]"), dir, model, &settings, Definer::Manifest, &mut warnings)?;
         if tools.iter().any(|x| x.name == tool.name) {
             return Err(format!("tools[{i}].name: '{}' is used by an earlier tool", tool.name));
         }

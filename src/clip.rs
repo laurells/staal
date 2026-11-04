@@ -26,14 +26,12 @@ fn escaped(c: char) -> bool {
 /// `text` as a runtime message shows it.
 pub fn clip(text: &str) -> String {
     let mut out = String::new();
-    let mut count = 0usize;
-    for c in text.chars() {
+    for (count, c) in text.chars().enumerate() {
         if count == SHOWN {
             let all = text.chars().count();
             out.push_str(&format!("… ({all} characters)"));
             return out;
         }
-        count += 1;
         if c == '\\' {
             out.push_str("\\\\");
         } else if escaped(c) {
