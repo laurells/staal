@@ -18,6 +18,32 @@ pub const INVALID_REQUEST: i64 = -32600;
 pub const METHOD_NOT_FOUND: i64 = -32601;
 pub const INVALID_PARAMS: i64 = -32602;
 pub const UNSUPPORTED_VERSION: i64 = -32022;
+/// The HTTP headers do not match the body, or a required one is missing or malformed
+/// (Streamable HTTP, 2026-07-28).
+pub const HEADER_MISMATCH: i64 = -32020;
+
+/// Where a request's messages go: the stdio writer, or one HTTP request's answer.
+pub trait Sink: Send + Sync {
+    /// Sends one message.
+    fn send(&self, msg: &Json);
+
+    fn result(&self, id: &Json, result: Json) {
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+    }
+
+    fn error(&self, id: &Json, code: i64, message: &str, data: Option<Json>) {
+        self.send(&error_message(id, code, message, data));
+    }
+}
+
+/// A JSON-RPC error response.
+pub fn error_message(id: &Json, code: i64, message: &str, data: Option<Json>) -> Json {
+    let mut e = json!({ "code": code, "message": message });
+    if let Some(d) = data {
+        e["data"] = d;
+    }
+    json!({ "jsonrpc": "2.0", "id": id, "error": e })
+}
 
 /// Takes the process's standard input and output for the protocol: duplicates
 /// descriptors 0 and 1 to new ones only the protocol uses, then points 0 at /dev/null
@@ -166,9 +192,11 @@ impl Writer {
     pub fn broken(&self) -> bool {
         self.broken.load(Ordering::SeqCst)
     }
+}
 
+impl Sink for Writer {
     /// Writes one message. `write_all` retries short writes and interrupted calls.
-    pub fn send(&self, msg: &Json) {
+    fn send(&self, msg: &Json) {
         if self.broken() {
             return;
         }
@@ -182,18 +210,6 @@ impl Writer {
         if out.write_all(line.as_bytes()).and_then(|()| out.flush()).is_err() {
             self.broken.store(true, Ordering::SeqCst);
         }
-    }
-
-    pub fn result(&self, id: &Json, result: Json) {
-        self.send(&json!({ "jsonrpc": "2.0", "id": id, "result": result }));
-    }
-
-    pub fn error(&self, id: &Json, code: i64, message: &str, data: Option<Json>) {
-        let mut e = json!({ "code": code, "message": message });
-        if let Some(d) = data {
-            e["data"] = d;
-        }
-        self.send(&json!({ "jsonrpc": "2.0", "id": id, "error": e }));
     }
 }
 

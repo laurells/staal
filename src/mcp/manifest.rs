@@ -15,6 +15,17 @@ pub struct Manifest {
     pub tools: Vec<Tool>,
     /// Warnings found while checking, for the server to log.
     pub warnings: Vec<String>,
+    /// `server.http`: serve over HTTP rather than stdio (docs/MCP.md section 12).
+    pub http: Option<super::http::Settings>,
+}
+
+/// Whether the manifest at `path` asks for HTTP (`server.http`), read before the
+/// manifest is checked, so stdio can take its descriptors first. A manifest that cannot
+/// be read is reported by the full check that follows.
+pub fn wants_http(path: &Path) -> Result<bool, String> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Ok(false) };
+    let Ok(j) = serde_json::from_str::<Json>(&text) else { return Ok(false) };
+    Ok(j.get("server").and_then(|s| s.get("http")).is_some())
 }
 
 /// Reads and checks the manifest at `path`. Any problem stops the server.
@@ -31,7 +42,8 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
     tool::keys_only(top, "manifest", &["server", "model", "tools"])?;
     let server = top.get("server").and_then(Json::as_object).ok_or("manifest: \"server\" must be an object")?;
     let name = tool::text(server, "name", "server")?.ok_or("server.name: missing")?;
-    let settings = tool::parse_settings(server, "server", dir, &["name"])?;
+    let settings = tool::parse_settings(server, "server", dir, &["name", "http"])?;
+    let http = server.get("http").map(|h| super::http::parse(h, "server.http")).transpose()?;
     let model = top.get("model");
     let list = top.get("tools").and_then(Json::as_array).ok_or("manifest: \"tools\" must be a list")?;
     if list.is_empty() {
@@ -46,5 +58,5 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
         }
         tools.push(tool);
     }
-    Ok(Manifest { name, settings, tools, warnings })
+    Ok(Manifest { name, settings, tools, warnings, http })
 }

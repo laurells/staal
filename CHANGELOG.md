@@ -40,6 +40,12 @@ the language or its file formats.
   connection is answered only by the reply capability of the accept that took it.
   The crash test for listening runs over TLS too. On both engines.
 
+- The first stage of the HTTP transport for `staalc mcp` (docs/MCP.md section 12):
+  Streamable HTTP at 2026-07-28 on hyper, with TLS, every request check of section
+  12.3, time and size limits, SSE for calls that ask for progress, and a clean stop on
+  SIGINT or SIGTERM. It has no authentication yet, so a release build refuses
+  `server.http`; only a test build serves it.
+
 ### Changed
 
 - A client of `net.tcp.accept` whose request is too slow, too long or not UTF-8 is

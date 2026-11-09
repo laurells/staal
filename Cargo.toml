@@ -46,6 +46,16 @@ x509-cert = { version = "=0.2.5", default-features = false, features = ["std"] }
 # them (net.extra_root_certificates). The same 1.0.9 snapshot ureq uses by default.
 webpki-root-certs = "1.0.9"
 
+# The HTTP transport of `staalc mcp` (docs/MCP.md section 12): HTTP/1.1 framing by
+# hyper, on the tokio runtime the PostgreSQL client already brings in, with TLS through
+# tokio-rustls on the same rustls and ring. Runs stay on their own threads.
+hyper = { version = "=1.12.0", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }
+http-body = "=1.1.0"
+http-body-util = "=0.1.5"
+tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "io-util"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring"] }
+
 # Native code for pure functions (src/native.rs): Cranelift, JIT-compiled at load.
 # Exact versions; 0.136.2 rather than 0.136.3, which was under two weeks old.
 cranelift-codegen = { version = "=0.136.2", optional = true }

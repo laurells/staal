@@ -951,8 +951,10 @@ tests against each framework's latest release.
 
 ## 12. Remote transport (design, not built)
 
-**Status: a design for review.** Nothing in this section is implemented; `staalc mcp`
-serves stdio only. It is written against MCP 2026-07-28 (the Streamable HTTP
+**Status: being built, stage 1 of 4 done (12.7).** A release build serves stdio only
+and refuses `server.http`. Stage 1 (the HTTP server, its settings, TLS and the checks
+of 12.3) is built and tested in `src/mcp/http.rs` and `tests/mcp_http_test.rs`, usable
+only by a test build with `"auth": "none"`. It is written against MCP 2026-07-28 (the Streamable HTTP
 transport and the authorization specification of that revision) and the RFCs they
 name. When it is built, this section becomes the specification and moves into
 sections 2 to 9, and the tests of section 9 gain the ones listed here.
@@ -1114,10 +1116,13 @@ write to the stream sets it too. What it decides is exactly what
   progress was given the run id when the run started; one that did not has only `once`
   to find the run again: the same call is answered from the same run.
 
-**Resources a client can hold.** Reading the request line and headers must finish
-within 10 s, the body within 30 s, and an idle kept-alive connection is closed after
-60 s; headers are at most 64 KiB. These bound what a slow client holds before it has
-proven anything. A call's own time is bounded as in section 3.
+**Resources a client can hold.** The request line and headers must arrive within
+10 s of when the server is ready to read a request: when the connection opens (after
+the TLS handshake, which itself must finish within 10 s), and after each answer on a
+kept-alive connection, so an idle connection is also closed after 10 s. The body must
+arrive within 30 s of the headers (408 otherwise, and the connection is closed); the
+line and headers are at most 64 KiB. These bound what a slow client holds before it
+has proven anything. A call's own time is bounded as in section 3.
 
 ### 12.4 Authorization: the protected resource metadata
 
@@ -1339,6 +1344,10 @@ included:
 
 1. The HTTP server, the manifest's `http` object, TLS, and the checks of 12.3, tested
    with the test build's `"auth": "none"`; not usable in a release until stage 2.
+   Done: every row of the table in 12.3, the time and size limits, a request
+   smuggling attempt, a chunked body, TLS, an SSE answer, a stream closed after the
+   run began, SIGINT and SIGTERM letting calls in progress finish and be answered,
+   and a release build refusing `server.http`.
 2. OAuth: the metadata, discovery and keys, token validation, scopes, the principal
    and its limits.
 3. Calls over HTTP through the existing host: reservation, ledger, journals, recovery
