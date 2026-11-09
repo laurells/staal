@@ -951,10 +951,12 @@ tests against each framework's latest release.
 
 ## 12. Remote transport (design, not built)
 
-**Status: being built, stage 1 of 4 done (12.7).** A release build serves stdio only
-and refuses `server.http`. Stage 1 (the HTTP server, its settings, TLS and the checks
-of 12.3) is built and tested in `src/mcp/http.rs` and `tests/mcp_http_test.rs`, usable
-only by a test build with `"auth": "none"`. It is written against MCP 2026-07-28 (the Streamable HTTP
+**Status: being built (12.7).** A release build serves stdio only and refuses
+`server.http` until the release gate of 12.7 is met. Built and tested so far, in a test
+build: stage 1 (the HTTP server, its settings, TLS and the checks of 12.3, in
+`src/mcp/http.rs`), and of stage 2 the token verification (`src/mcp/jwt.rs`), the keys
+(`src/mcp/keys.rs`), the protected resource metadata, the 401 and 403 challenges and
+tool scopes. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`. It is written against MCP 2026-07-28 (the Streamable HTTP
 transport and the authorization specification of that revision) and the RFCs they
 name. When it is built, this section becomes the specification and moves into
 sections 2 to 9, and the tests of section 9 gain the ones listed here.
@@ -999,6 +1001,7 @@ protection of section 3 and an HTTP listener never share a process).
     "issuer": "https://auth.shop.example",
     "scopes_supported": ["tools"],
     "jwt_leeway_s": 60,
+    "extra_root_certificates": ["/etc/staal/corp-ca.pem"],
     "principal_key": { "env": "MCP_PRINCIPAL_KEY" }
   },
   "per_principal": { "requests_per_minute": 120, "max_concurrent_runs": 2 },
@@ -1029,7 +1032,10 @@ protection of section 3 and an HTTP listener never share a process).
 - `auth`: required. There is no way to serve HTTP without authentication in a release
   build (12.4). `issuer` is the authorization server's issuer identifier. `scopes_supported`
   is published in the metadata. `jwt_leeway_s` (0 to 300, default 60) is the clock
-  difference allowed on `exp`, `nbf` and `iat`. `principal_key` is the secret the
+  difference allowed on `exp`, `nbf` and `iat`. `extra_root_certificates` are PEM files
+  of authorities trusted, besides Mozilla's roots, when fetching the authorization
+  server's metadata and keys (an authorization server inside a company network).
+  `principal_key` is the secret the
   principal's identifier is made with (12.6): from the environment, at least 32 bytes.
 - `per_principal`: limits on each principal (12.6). `requests_per_minute` (default 120)
   bounds the HTTP requests one principal sends; `max_concurrent_runs` (default 2) the
@@ -1199,7 +1205,7 @@ and checks that its `issuer` equals `auth.issuer` exactly (RFC 8414 section 3.3)
 otherwise it refuses to start. It then fetches `jwks_uri`. Every one of these fetches:
 
 - is HTTPS, the server's certificate verified against Mozilla's roots and those
-  `net.extra_root_certificates` adds, and against the host; `auth.issuer` and
+  `auth.extra_root_certificates` adds, and against the host; `auth.issuer` and
   `jwks_uri` must be `https` URLs without a fragment, or the server refuses to start;
 - follows no redirect: a 3xx answer is a failed fetch, so an answer cannot send the
   server to fetch keys from somewhere else;

@@ -289,6 +289,21 @@ pub fn server_config(chain_path: &str, key_path: &str, now: std::time::SystemTim
     Ok(Arc::new(cfg))
 }
 
+/// Checks that the first certificate in the PEM file `chain_path` is valid for `host`
+/// (a DNS name or an IP address), as a TLS client checks it: by its subject alternative
+/// names (RFC 6125), with rustls's own check.
+pub fn check_certificate_names(chain_path: &str, host: &str) -> Result<(), String> {
+    use rustls::pki_types::{pem::PemObject, CertificateDer, ServerName};
+    let leaf = CertificateDer::pem_file_iter(chain_path)
+        .map_err(|e| format!("cannot read {chain_path}: {e}"))?
+        .next()
+        .ok_or(format!("{chain_path} contains no certificate"))?
+        .map_err(|e| format!("{chain_path}: {e}"))?;
+    let name = ServerName::try_from(host.trim_start_matches('[').trim_end_matches(']').to_string()).map_err(|e| format!("{host}: {e}"))?;
+    let parsed = rustls::server::ParsedCertificate::try_from(&leaf).map_err(|e| format!("the certificate in {chain_path}: {e}"))?;
+    rustls::client::verify_server_name(&parsed, &name).map_err(|_| format!("the certificate in {chain_path} is not for {host}"))
+}
+
 /// A private key file: a regular file (not a link) owned by this user, which no one
 /// else can read or write. Where file permissions cannot be checked, keys are refused.
 #[cfg(unix)]

@@ -17,6 +17,9 @@ pub struct Manifest {
     pub warnings: Vec<String>,
     /// `server.http`: serve over HTTP rather than stdio (docs/MCP.md section 12).
     pub http: Option<super::http::Settings>,
+    /// Each tool's `scopes`, in the order of `tools`: the OAuth scopes a token must hold
+    /// to call it (section 12.5). Empty for every tool unless `server.http.auth` is set.
+    pub tool_scopes: Vec<Vec<String>>,
 }
 
 /// Whether the manifest at `path` asks for HTTP (`server.http`), read before the
@@ -49,14 +52,35 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
     if list.is_empty() {
         return Err("manifest: \"tools\" is empty; a server needs at least one tool".into());
     }
+    let oauth = matches!(http.as_ref().map(|h| &h.auth), Some(super::http::Auth::OAuth(_)));
     let mut tools: Vec<Tool> = Vec::new();
+    let mut tool_scopes = Vec::new();
     let mut warnings = Vec::new();
     for (i, t) in list.iter().enumerate() {
-        let tool = tool::parse_tool(t, &format!("tools[{i}]"), dir, model, &settings, Definer::Manifest, &mut warnings)?;
+        let at = format!("tools[{i}]");
+        // The keys only the HTTP transport reads are taken out before the host reads the rest.
+        let mut t = t.clone();
+        let scopes = match t.as_object_mut().and_then(|o| o.remove("scopes")) {
+            None => Vec::new(),
+            Some(_) if !oauth => return Err(format!("{at}.scopes: only a server with server.http.auth checks scopes")),
+            Some(v) => {
+                let list = v.as_array().filter(|l| !l.is_empty()).ok_or(format!("{at}.scopes: expected a list of OAuth scopes"))?;
+                let mut out: Vec<String> = Vec::new();
+                for (j, s) in list.iter().enumerate() {
+                    let s = s.as_str().filter(|s| super::http::valid_scope_token(s)).ok_or(format!("{at}.scopes[{j}]: expected a scope (visible ASCII, no space, \" or \\)"))?;
+                    if !out.iter().any(|x| x == s) {
+                        out.push(s.to_string());
+                    }
+                }
+                out
+            }
+        };
+        let tool = tool::parse_tool(&t, &at, dir, model, &settings, Definer::Manifest, &mut warnings)?;
         if tools.iter().any(|x| x.name == tool.name) {
             return Err(format!("tools[{i}].name: '{}' is used by an earlier tool", tool.name));
         }
         tools.push(tool);
+        tool_scopes.push(scopes);
     }
-    Ok(Manifest { name, settings, tools, warnings, http })
+    Ok(Manifest { name, settings, tools, warnings, http, tool_scopes })
 }

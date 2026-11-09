@@ -72,14 +72,39 @@ pub struct Settings {
     /// Serialized origins (RFC 6454) a browser may call from.
     pub allowed_origins: Vec<String>,
     pub max_connections: usize,
+    pub auth: Auth,
+}
+
+/// How requests are authenticated.
+#[derive(Debug)]
+pub enum Auth {
+    /// None: a test build only, on loopback (docs/MCP.md section 12.4).
+    None,
+    OAuth(OAuth),
+}
+
+/// `server.http.auth`: the server as an OAuth 2.1 resource server (section 12.4, 12.5).
+#[derive(Debug)]
+pub struct OAuth {
+    /// The authorization server's issuer identifier, compared exactly.
+    pub issuer: String,
+    pub scopes_supported: Vec<String>,
+    pub leeway_s: u64,
+    /// DER certificates trusted, besides Mozilla's roots, for fetching its metadata and keys.
+    pub extra_roots: Vec<Vec<u8>>,
+}
+
+/// A scope token (RFC 6749 section 3.3): visible ASCII but `"` and `\`.
+pub fn valid_scope_token(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b == 0x21 || (0x23..=0x5b).contains(&b) || (0x5d..=0x7e).contains(&b))
 }
 
 /// Reads `server.http`. `at` names it in messages.
 pub fn parse(v: &Json, at: &str) -> Result<Settings, String> {
+    // Not in a release until SDK conformance and an independent security review
+    // (docs/MCP.md section 12.7, the release gate).
     if !cfg!(feature = "failpoints") {
-        return Err(format!(
-            "{at}: the HTTP transport is not finished (docs/MCP.md section 12): it has no authentication yet; serve over stdio"
-        ));
+        return Err(format!("{at}: the HTTP transport is not finished (docs/MCP.md section 12); serve over stdio"));
     }
     let o = v.as_object().ok_or(format!("{at}: expected an object"))?;
     keys_only(o, at, &["listen", "path", "resource", "tls", "allowed_hosts", "allowed_origins", "auth", "max_connections"])?;
@@ -127,7 +152,10 @@ pub fn parse(v: &Json, at: &str) -> Result<Settings, String> {
             keys_only(t, &tat, &["certificate_chain", "private_key"])?;
             let chain = text(t, "certificate_chain", &tat)?.ok_or(format!("{tat}.certificate_chain: missing"))?;
             let key = text(t, "private_key", &tat)?.ok_or(format!("{tat}.private_key: missing"))?;
-            Some(crate::interp::tcp::server_config(&chain, &key, std::time::SystemTime::now()).map_err(|e| format!("{tat}: {e}"))?)
+            let cfg = crate::interp::tcp::server_config(&chain, &key, std::time::SystemTime::now()).map_err(|e| format!("{tat}: {e}"))?;
+            // Clients reach it by the resource's host, so the certificate must name it.
+            crate::interp::tcp::check_certificate_names(&chain, url.host_str().unwrap_or_default()).map_err(|e| format!("{tat}: {e}"))?;
+            Some(cfg)
         }
     };
 
@@ -171,21 +199,50 @@ pub fn parse(v: &Json, at: &str) -> Result<Settings, String> {
         }
     }
 
-    match o.get("auth") {
+    let auth = match o.get("auth") {
         None => return Err(format!("{at}.auth: missing")),
         Some(Json::String(s)) if s == "none" => {
             if !loopback {
                 return Err(format!("{at}.auth: \"none\" is accepted only on a loopback address, and only by a test build"));
             }
+            Auth::None
         }
-        Some(Json::Object(_)) => {
-            return Err(format!("{at}.auth: OAuth is not built yet (docs/MCP.md section 12, stage 2)"));
-        }
+        Some(Json::Object(a)) => Auth::OAuth(parse_oauth(a, &format!("{at}.auth"))?),
         Some(_) => return Err(format!("{at}.auth: expected an object")),
-    }
+    };
 
     let max_connections = whole_number(o, "max_connections", at, 1, 10_000)?.unwrap_or(64) as usize;
-    Ok(Settings { listen, path, resource, tls, allowed_hosts, allowed_origins, max_connections })
+    Ok(Settings { listen, path, resource, tls, allowed_hosts, allowed_origins, max_connections, auth })
+}
+
+fn parse_oauth(a: &Map<String, Json>, at: &str) -> Result<OAuth, String> {
+    keys_only(a, at, &["issuer", "scopes_supported", "jwt_leeway_s", "extra_root_certificates"])?;
+    let issuer = text(a, "issuer", at)?.ok_or(format!("{at}.issuer: missing (the authorization server's issuer identifier)"))?;
+    let u = url::Url::parse(&issuer).map_err(|e| format!("{at}.issuer: {e}"))?;
+    if u.scheme() != "https" || u.query().is_some() || u.fragment().is_some() || !u.username().is_empty() {
+        return Err(format!("{at}.issuer: expected an https URL without a query or fragment (RFC 8414 section 2)"));
+    }
+    let mut scopes_supported = Vec::new();
+    if let Some(v) = a.get("scopes_supported") {
+        let list = v.as_array().ok_or(format!("{at}.scopes_supported: expected a list of scopes"))?;
+        for (i, x) in list.iter().enumerate() {
+            let s = x.as_str().filter(|s| valid_scope_token(s)).ok_or(format!("{at}.scopes_supported[{i}]: expected a scope (visible ASCII, no space, \" or \\)"))?;
+            if s == "offline_access" {
+                return Err(format!("{at}.scopes_supported[{i}]: offline_access is not a resource's scope; the specification says not to list it"));
+            }
+            scopes_supported.push(s.to_string());
+        }
+    }
+    let leeway_s = whole_number(a, "jwt_leeway_s", at, 0, 300)?.unwrap_or(60);
+    let mut extra_roots = Vec::new();
+    if let Some(v) = a.get("extra_root_certificates") {
+        let list = v.as_array().ok_or(format!("{at}.extra_root_certificates: expected a list of PEM file paths"))?;
+        for (i, p) in list.iter().enumerate() {
+            let p = p.as_str().ok_or(format!("{at}.extra_root_certificates[{i}]: expected a file path"))?;
+            extra_roots.extend(crate::interp::http::read_root_certificates(p).map_err(|e| format!("{at}.extra_root_certificates[{i}]: {e}"))?);
+        }
+    }
+    Ok(OAuth { issuer, scopes_supported, leeway_s, extra_roots })
 }
 
 /// A Host header value: a lowercase host name, IPv4 address or bracketed IPv6 address,
@@ -246,13 +303,28 @@ pub fn serve(path: &Path) -> u8 {
             return 2;
         }
     };
+    // OAuth: the authorization server's keys, found and fetched before serving.
+    let verifier = match &settings.auth {
+        Auth::None => {
+            log("warning: serving without authentication (\"auth\": \"none\", a test build on loopback)");
+            None
+        }
+        Auth::OAuth(o) => match Verifier::start(o, &settings) {
+            Ok(v) => Some(Arc::new(v)),
+            Err(e) => {
+                log(&e);
+                return 2;
+            }
+        },
+    };
+    let refresher = verifier.clone().map(Refresher::start);
     let tools = m.tools.len();
     let session = Session::new(m, server.clone());
     let sweeper = Sweeper::start(server.clone());
     let scheme = if settings.tls.is_some() { "https" } else { "http" };
     log(&format!("serving {tools} tool(s) from {} on {scheme}://{}{}", path.display(), settings.listen, settings.path));
 
-    let state = Arc::new(State { settings, session: session.clone(), next: AtomicU64::new(0) });
+    let state = Arc::new(State { settings, session: session.clone(), next: AtomicU64::new(0), verifier });
     let accepting = rt.spawn(accept_loop(listener, state));
     // Until SIGINT or SIGTERM.
     let got = wait_for_stop_signal(&signals);
@@ -265,6 +337,9 @@ pub fn serve(path: &Path) -> u8 {
     let finished = rt.spawn_blocking(move || finishing.finish());
     let _ = rt.block_on(finished);
     rt.shutdown_timeout(Duration::from_secs(1));
+    if let Some(r) = refresher {
+        r.stop();
+    }
     sweeper.stop();
     0
 }
@@ -274,6 +349,191 @@ struct State {
     session: Arc<Session>,
     /// Numbers the calls made over HTTP, for the session's table of calls in progress.
     next: AtomicU64,
+    verifier: Option<Arc<Verifier>>,
+}
+
+/// What OAuth needs while serving: the keys, what a token must say, and the metadata.
+struct Verifier {
+    issuer: String,
+    audience: String,
+    leeway_s: u64,
+    cache: super::keys::Cache,
+    /// The protected resource metadata document (RFC 9728) and the paths it is served at.
+    metadata: Json,
+    metadata_paths: Vec<String>,
+    /// Its path-inserted URL, which every challenge names.
+    metadata_url: String,
+    /// `scopes_supported`, space-separated, for a 401's `scope`; None when empty.
+    challenge_scope: Option<String>,
+    refusals: RateLog,
+}
+
+impl Verifier {
+    fn start(o: &OAuth, s: &Settings) -> Result<Verifier, String> {
+        use super::keys;
+        let fetcher = keys::Fetcher::new(&o.extra_roots, keys::CONNECT_TIME, keys::FETCH_TIME);
+        let jwks_uri = keys::discover(&fetcher, &o.issuer).map_err(|e| format!("server.http.auth: {e}"))?;
+        let source: keys::Source = Arc::new(move || keys::fetch_keys(&fetcher, &jwks_uri));
+        let cache = keys::Cache::start(source, std::time::Instant::now()).map_err(|e| format!("server.http.auth: {e}"))?;
+        // RFC 9728 section 3: the well-known suffix inserted before the resource's path.
+        let url = url::Url::parse(&s.resource).map_err(|e| e.to_string())?;
+        let rpath = url.path().trim_end_matches('/');
+        let base = "/.well-known/oauth-protected-resource";
+        let metadata_url = format!("{}{base}{rpath}", url.origin().ascii_serialization());
+        let mut metadata_paths = vec![format!("{base}{rpath}"), format!("{base}{}", s.path.trim_end_matches('/')), base.to_string()];
+        metadata_paths.dedup();
+        let mut metadata = json!({
+            "resource": s.resource,
+            "authorization_servers": [o.issuer],
+            "bearer_methods_supported": ["header"],
+        });
+        if !o.scopes_supported.is_empty() {
+            metadata["scopes_supported"] = json!(o.scopes_supported);
+        }
+        let challenge_scope = (!o.scopes_supported.is_empty()).then(|| o.scopes_supported.join(" "));
+        Ok(Verifier {
+            issuer: o.issuer.clone(),
+            audience: s.resource.clone(),
+            leeway_s: o.leeway_s,
+            cache,
+            metadata,
+            metadata_paths,
+            metadata_url,
+            challenge_scope,
+            refusals: RateLog::default(),
+        })
+    }
+
+    /// A `WWW-Authenticate` value: Bearer, with an error, the scopes, and the metadata URL.
+    fn challenge(&self, error: Option<&str>, scope: Option<&str>) -> HeaderValue {
+        let mut v = String::from("Bearer");
+        let mut params = Vec::new();
+        if let Some(e) = error {
+            params.push(format!("error=\"{e}\""));
+        }
+        if let Some(sc) = scope {
+            params.push(format!("scope=\"{sc}\""));
+        }
+        params.push(format!("resource_metadata=\"{}\"", self.metadata_url));
+        v.push(' ');
+        v.push_str(&params.join(", "));
+        // Built from checked scope tokens and an https URL: always a valid header value.
+        HeaderValue::from_str(&v).unwrap_or_else(|_| HeaderValue::from_static("Bearer"))
+    }
+
+    fn unauthorized(&self, error: Option<&str>) -> Response<Body> {
+        let mut r = whole(StatusCode::UNAUTHORIZED, None, None);
+        r.headers_mut().insert(hyper::header::WWW_AUTHENTICATE, self.challenge(error, self.challenge_scope.as_deref()));
+        r
+    }
+
+    /// The caller, from the request's `Authorization` header (section 12.5), or the
+    /// answer refusing it.
+    async fn authorize(self: &Arc<Self>, headers: &HeaderMap) -> Result<super::jwt::Verified, Response<Body>> {
+        let mut all = headers.get_all(hyper::header::AUTHORIZATION).iter();
+        let Some(v) = all.next() else { return Err(self.unauthorized(None)) };
+        if all.next().is_some() {
+            let mut r = whole(StatusCode::BAD_REQUEST, None, None);
+            r.headers_mut().insert(hyper::header::WWW_AUTHENTICATE, self.challenge(Some("invalid_request"), None));
+            return Err(r);
+        }
+        let Ok(v) = v.to_str() else { return Err(self.unauthorized(Some("invalid_token"))) };
+        let (scheme, rest) = v.split_once(' ').unwrap_or((v, ""));
+        if !scheme.eq_ignore_ascii_case("bearer") {
+            // Another scheme is no Bearer credentials at all (RFC 6750 section 3.1).
+            return Err(self.unauthorized(None));
+        }
+        let token = rest.trim_start_matches(' ').to_string();
+        // b64token (RFC 6750 section 2.1).
+        let b64token = !token.is_empty()
+            && token.trim_end_matches('=').bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'+' | b'/'));
+        if !b64token {
+            self.refusals.log("a malformed Authorization header");
+            return Err(self.unauthorized(Some("invalid_token")));
+        }
+        let me = self.clone();
+        let checked = tokio::task::spawn_blocking(move || {
+            let kid = super::jwt::header_kid(&token);
+            match me.cache.for_kid(kid.as_deref(), std::time::Instant::now()) {
+                super::keys::Keys::TooOld => Err("the authorization server's keys could not be fetched for 24 hours; every token is refused".to_string()),
+                super::keys::Keys::Held(keys) => {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                    let e = super::jwt::Expect { issuer: &me.issuer, audience: &me.audience, now, leeway: me.leeway_s };
+                    super::jwt::verify(&token, &keys, &e).map_err(|r| format!("a token was refused ({}): {}", r.rule, r.detail))
+                }
+            }
+        })
+        .await;
+        match checked {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(why)) => {
+                self.refusals.log(&why);
+                Err(self.unauthorized(Some("invalid_token")))
+            }
+            Err(_) => Err(self.unauthorized(Some("invalid_token"))),
+        }
+    }
+}
+
+/// Logs at most 10 lines a minute, then says how many more there were: refusals come
+/// from clients, and a flood of them must not flood the log.
+#[derive(Default)]
+struct RateLog {
+    state: std::sync::Mutex<Option<(std::time::Instant, u32, u32)>>,
+}
+
+impl RateLog {
+    fn log(&self, msg: &str) {
+        let now = std::time::Instant::now();
+        let Ok(mut st) = self.state.lock() else { return };
+        let (start, logged, dropped) = st.get_or_insert((now, 0, 0));
+        if now.duration_since(*start) >= Duration::from_secs(60) {
+            if *dropped > 0 {
+                log(&format!("{dropped} more refusal(s) in the last minute were not logged"));
+            }
+            *start = now;
+            *logged = 0;
+            *dropped = 0;
+        }
+        if *logged < 10 {
+            *logged += 1;
+            log(msg);
+        } else {
+            *dropped += 1;
+        }
+    }
+}
+
+/// Fetches the keys again every hour (section 12.5), on its own thread.
+struct Refresher {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl Refresher {
+    fn start(v: Arc<Verifier>) -> Refresher {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s2 = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut last = std::time::Instant::now();
+            while !s2.load(Ordering::SeqCst) {
+                std::thread::park_timeout(Duration::from_secs(1));
+                if last.elapsed() >= super::keys::REFRESH_EVERY {
+                    last = std::time::Instant::now();
+                    if let Err(e) = v.cache.fetch(last) {
+                        log(&format!("fetching the authorization server's keys (hourly): {e}; the keys held stay in use"));
+                    }
+                }
+            }
+        });
+        Refresher { stop, thread }
+    }
+
+    fn stop(self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.thread.thread().unpark();
+        let _ = self.thread.join();
+    }
 }
 
 #[cfg(unix)]
@@ -542,6 +802,17 @@ async fn handle(state: &Arc<State>, req: Request<Incoming>) -> Response<Body> {
         Ok(Some(o)) if s.allowed_origins.iter().any(|a| a == o) => {}
         _ => return refusal(StatusCode::FORBIDDEN, proto::INVALID_REQUEST, "requests from this origin are not allowed"),
     }
+    // The protected resource metadata (RFC 9728), without a token.
+    if let Some(v) = &state.verifier
+        && v.metadata_paths.iter().any(|p| p == req.uri().path())
+    {
+        if req.method() != Method::GET {
+            let mut r = whole(StatusCode::METHOD_NOT_ALLOWED, None, None);
+            r.headers_mut().insert(hyper::header::ALLOW, HeaderValue::from_static("GET"));
+            return r;
+        }
+        return rpc(StatusCode::OK, &v.metadata);
+    }
     if req.uri().path() != s.path {
         return refusal(StatusCode::NOT_FOUND, proto::INVALID_REQUEST, "no such endpoint");
     }
@@ -550,6 +821,14 @@ async fn handle(state: &Arc<State>, req: Request<Incoming>) -> Response<Body> {
         r.headers_mut().insert(hyper::header::ALLOW, HeaderValue::from_static("POST"));
         return r;
     }
+    // A valid access token (section 12.5).
+    let caller = match &state.verifier {
+        None => None,
+        Some(v) => match v.authorize(headers).await {
+            Ok(c) => Some(c),
+            Err(r) => return r,
+        },
+    };
     match one_header(headers, "content-type") {
         Ok(Some(ct)) => {
             let (t, params) = media_type(ct);
@@ -658,6 +937,18 @@ async fn handle(state: &Arc<State>, req: Request<Incoming>) -> Response<Body> {
     }
     if !SERVED.contains(&method) {
         return rpc(StatusCode::NOT_FOUND, &proto::error_message(id, proto::METHOD_NOT_FOUND, &format!("unknown method '{}'", crate::clip::clip(method)), None));
+    }
+    // The tool's scopes: all of them, or 403 naming every one it needs in one challenge.
+    if method == "tools/call"
+        && let (Some(v), Some(c)) = (&state.verifier, &caller)
+        && let Some(i) = params.get("name").and_then(Json::as_str).and_then(|n| state.session.m.tools.iter().position(|t| t.name == n))
+    {
+        let need = &state.session.m.tool_scopes[i];
+        if !need.iter().all(|sc| c.scopes.contains(sc)) {
+            let mut r = whole(StatusCode::FORBIDDEN, None, None);
+            r.headers_mut().insert(hyper::header::WWW_AUTHENTICATE, v.challenge(Some("insufficient_scope"), Some(&need.join(" "))));
+            return r;
+        }
     }
 
     // Served as over stdio. A call is cancelled if this handler (or, for a stream, the

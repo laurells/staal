@@ -171,6 +171,16 @@ fn bits(n: &[u8]) -> usize {
     n.first().map_or(0, |b| (n.len() - 1) * 8 + (8 - b.leading_zeros() as usize))
 }
 
+/// The `kid` a token's header names, if it can be read; nothing is verified. Used to
+/// ask the key cache for the key before verifying.
+pub fn header_kid(token: &str) -> Option<String> {
+    let h = b64u(token.split('.').next()?)?;
+    match serde_json::from_slice::<Json>(&h).ok()? {
+        Json::Object(o) => o.get("kid")?.as_str().map(str::to_string),
+        _ => None,
+    }
+}
+
 /// Verifies `token` against `keys` and what `e` expects.
 pub fn verify(token: &str, keys: &[Key], e: &Expect) -> Result<Verified, Refusal> {
     let parts: Vec<&str> = token.split('.').collect();

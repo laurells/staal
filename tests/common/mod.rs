@@ -10,6 +10,7 @@ pub mod package_case;
 pub mod postgres;
 pub mod server;
 pub mod tls;
+pub mod tokens;
 
 /// A key the test server echoes in a response header, so tests can check that the
 /// runtime removes a secret's value from headers too. tests/http_test.rs sets it as

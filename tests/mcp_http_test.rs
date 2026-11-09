@@ -90,6 +90,29 @@ impl Drop for Http {
     }
 }
 
+/// Starts the server on a manifest it must refuse, and returns its exit code and
+/// standard error. A server that does not stop within 20 s is killed and reported as
+/// having started (code None), so a check that fails to refuse fails the test instead
+/// of hanging it (an HTTP server does not stop when its standard input closes).
+fn refused_at_start(manifest: &Path) -> (Option<i32>, String) {
+    let mut child = Command::new(BIN).arg("mcp").arg(manifest).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+    let start = Instant::now();
+    let status = loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            break st.code();
+        }
+        if start.elapsed() > Duration::from_secs(20) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let mut err = String::new();
+    let _ = child.stderr.take().unwrap().read_to_string(&mut err);
+    (status, err)
+}
+
 /// One HTTP answer.
 #[derive(Debug)]
 struct Answer {
@@ -568,7 +591,16 @@ fn it_serves_over_tls_with_the_checked_certificate() {
     let ca = common::tls::Ca::new("HTTP Test CA");
     let addr = free_address();
     let dir = case_dir("http-tls-files");
-    let (chain, key) = ca.listen_files(&dir, &["localhost"], None);
+    // The certificate names the resource's host, which clients reach the server by, and
+    // localhost, which this test connects to.
+    let (chain, key) = ca.listen_files(&dir, &["mcp.shop.example", "localhost"], None);
+    // One that does not name the resource's host stops the server at start.
+    let other = case_dir("http-tls-other");
+    let (wrong_chain, wrong_key) = ca.listen_files(&other, &["localhost"], None);
+    let (_w, wm) = case("tls-wrong-name", &addr, json!({ "tls": { "certificate_chain": wrong_chain, "private_key": wrong_key } }), None);
+    let (code, err) = refused_at_start(&wm);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("is not for mcp.shop.example"), "{err}");
     let (_d, m) = case("tls", &addr, json!({ "tls": { "certificate_chain": chain, "private_key": key } }), None);
     let s = Http::start(&m, &addr, &[]);
     let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
@@ -590,7 +622,7 @@ fn it_serves_over_tls_with_the_checked_certificate() {
 fn the_http_settings_are_checked_before_anything_is_served() {
     let refused = |name: &str, http: Json, want: &str| {
         let (_d, m) = case(name, "127.0.0.1:1", http, None);
-        let (code, err) = common::mcp::start_and_stop(&m, &[]);
+        let (code, err) = refused_at_start(&m);
         assert_eq!(code, Some(2), "{name}: {err}");
         assert!(err.contains(want), "{name}: expected {want:?} in {err}");
     };
@@ -604,7 +636,11 @@ fn the_http_settings_are_checked_before_anything_is_served() {
     refused("resource-path", json!({ "resource": "https://mcp.shop.example/other" }), "must end with server.http.path");
     refused("path", json!({ "path": "/mcp/../x" }), "server.http.path");
     refused("auth-missing", json!({ "auth": null }), "server.http.auth: missing");
-    refused("auth-oauth", json!({ "auth": { "issuer": "https://auth.example" } }), "OAuth is not built yet");
+    refused("auth-issuer", json!({ "auth": { "issuer": "http://auth.example" } }), "server.http.auth.issuer: expected an https URL");
+    refused("auth-offline", json!({ "auth": { "issuer": "https://auth.example", "scopes_supported": ["offline_access"] } }), "offline_access is not a resource's scope");
+    refused("auth-scope", json!({ "auth": { "issuer": "https://auth.example", "scopes_supported": ["a b"] } }), "server.http.auth.scopes_supported[0]");
+    refused("auth-leeway", json!({ "auth": { "issuer": "https://auth.example", "jwt_leeway_s": 301 } }), "server.http.auth.jwt_leeway_s");
+    refused("auth-unknown", json!({ "auth": { "issuer": "https://auth.example", "colour": 1 } }), "unknown key 'colour'");
     refused("origin", json!({ "allowed_origins": ["https://app.example/"] }), "server.http.allowed_origins[0]");
     refused("host", json!({ "allowed_hosts": ["Mixed.Case"] }), "server.http.allowed_hosts[0]");
     refused("unknown", json!({ "colour": 1 }), "unknown key 'colour'");
@@ -615,8 +651,200 @@ fn the_http_settings_are_checked_before_anything_is_served() {
 #[cfg(not(feature = "failpoints"))]
 fn a_release_build_refuses_http_until_it_has_authentication() {
     let (_d, m) = case("release", "127.0.0.1:1", json!({}), None);
-    let (code, err) = common::mcp::start_and_stop(&m, &[]);
+    let (code, err) = refused_at_start(&m);
     assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("the HTTP transport is not finished"), "{err}");
 }
 
+
+// ---- OAuth (stage 2, docs/MCP.md sections 12.4 and 12.5) ----
+
+const RESOURCE: &str = "https://mcp.shop.example/mcp";
+
+/// An authorization server publishing `issuer`'s key, and a case whose server trusts it,
+/// requiring `refunds:write` for refund_order and nothing more for echo.
+struct OAuthCase {
+    _ca: common::tls::Ca,
+    auth: common::authserver::AuthServer,
+    issuer: common::tokens::Issuer,
+    manifest: PathBuf,
+    addr: String,
+}
+
+fn oauth_case(name: &str) -> OAuthCase {
+    use common::authserver::{AuthServer, Route};
+    let ca = common::tls::Ca::new("OAuth Test CA");
+    let auth = AuthServer::start(ca.server(&["localhost"], None));
+    let issuer = common::tokens::Issuer::new("k1");
+    auth.set("/.well-known/oauth-authorization-server", Route::json(&json!({ "issuer": auth.base, "jwks_uri": format!("{}/jwks", auth.base) })));
+    auth.set("/jwks", Route::json(&json!({ "keys": [issuer.jwk()] })));
+    let addr = free_address();
+    let dir = case_dir(&format!("http-oauth-{name}"));
+    std::fs::write(dir.join("ca.pem"), ca.pem()).unwrap();
+    std::fs::write(dir.join("refund.staal"), REFUND).unwrap();
+    std::fs::write(dir.join("echo.staal"), "fn main(x: Text) -> Text {\n    return x\n}\n").unwrap();
+    let tools = json!([
+        { "name": "refund_order", "description": "Refund part of an order.", "program": "refund.staal",
+          "grants": { "pay": { "cap": "payments.refund", "each": usd("50.00"), "uses": 1 } }, "scopes": ["refunds:write"] },
+        { "name": "echo", "description": "Echo.", "program": "echo.staal" }
+    ]);
+    let http = json!({ "listen": addr, "resource": RESOURCE,
+        "auth": { "issuer": auth.base, "scopes_supported": ["tools"], "extra_root_certificates": [dir.join("ca.pem")] } });
+    let manifest = write_manifest(&dir, json!({ "server": { "name": "shop", "http": http }, "tools": tools }));
+    OAuthCase { _ca: ca, auth, issuer, manifest, addr }
+}
+
+impl OAuthCase {
+    fn token(&self, scope: &str, over: Json, header: Json) -> String {
+        self.issuer.token(&common::tokens::claims(&self.auth.base, RESOURCE, "user-1", scope, &over), &header)
+    }
+}
+
+const METADATA_URL: &str = "https://mcp.shop.example/.well-known/oauth-protected-resource/mcp";
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn the_protected_resource_metadata_is_served_without_a_token() {
+    let c = oauth_case("metadata");
+    let s = Http::start(&c.manifest, &c.addr, &[]);
+    let want = json!({ "resource": RESOURCE, "authorization_servers": [c.auth.base], "bearer_methods_supported": ["header"], "scopes_supported": ["tools"] });
+    for path in ["/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource"] {
+        let a = send_raw(&c.addr, format!("GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", c.addr).as_bytes()).unwrap();
+        assert_eq!((a.status, a.header("content-type")), (200, Some("application/json")), "{path}");
+        assert_eq!(a.json(), want, "{path}");
+    }
+    let a = send_raw(&c.addr, format!("POST /.well-known/oauth-protected-resource HTTP/1.1\r\nHost: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", c.addr).as_bytes()).unwrap();
+    assert_eq!((a.status, a.header("allow")), (405, Some("GET")));
+    // Host checking applies to it too.
+    let a = send_raw(&c.addr, b"GET /.well-known/oauth-protected-resource HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n").unwrap();
+    assert_eq!(a.status, 421);
+    let (code, err) = s.stop();
+    assert_eq!(code, Some(0), "{err}");
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn requests_need_a_valid_token_and_tools_their_scopes() {
+    let c = oauth_case("tokens");
+    let s = Http::start(&c.manifest, &c.addr, &[]);
+    let list = rpc(1, "tools/list", json!({}));
+    let bearer = |t: &str| format!("Bearer {t}");
+
+    // No token: 401 naming the metadata and the scopes, with no error code.
+    let a = post(&c.addr, &list, &[]);
+    assert_eq!(a.status, 401);
+    assert_eq!(a.header("www-authenticate"), Some(format!("Bearer scope=\"tools\", resource_metadata=\"{METADATA_URL}\"").as_str()));
+
+    // A valid token.
+    let good = c.token("tools refunds:write", json!({}), json!({}));
+    let a = post(&c.addr, &list, &[("Authorization", &bearer(&good))]);
+    assert_eq!(a.status, 200, "{:?}", String::from_utf8_lossy(&a.body));
+    // The scheme is case-insensitive.
+    assert_eq!(post(&c.addr, &list, &[("Authorization", &format!("bearer {good}"))]).status, 200);
+    let call = rpc(2, "tools/call", json!({ "name": "refund_order", "arguments": { "order": "o-1", "amount": usd("10.00") } }));
+    let a = post(&c.addr, &call, &[("Authorization", &bearer(&good))]);
+    assert_eq!(a.json()["result"]["isError"], false, "{:?}", a.json());
+
+    // Without the tool's scope: 403 naming every scope it needs; a tool needing none is served.
+    let narrow = c.token("tools", json!({}), json!({}));
+    let a = post(&c.addr, &call, &[("Authorization", &bearer(&narrow))]);
+    assert_eq!(a.status, 403);
+    assert_eq!(a.header("www-authenticate"), Some(format!("Bearer error=\"insufficient_scope\", scope=\"refunds:write\", resource_metadata=\"{METADATA_URL}\"").as_str()));
+    let echo = rpc(3, "tools/call", json!({ "name": "echo", "arguments": { "x": "hi" } }));
+    let a = post(&c.addr, &echo, &[("Authorization", &bearer(&narrow))]);
+    assert_eq!(a.json()["result"]["structuredContent"]["result"], "hi");
+
+    // Each token refused: 401 with invalid_token.
+    let invalid = format!("Bearer error=\"invalid_token\", scope=\"tools\", resource_metadata=\"{METADATA_URL}\"");
+    let other = common::tokens::Issuer::new("k1"); // the same kid, another key
+    let refused = [
+        ("expired", c.token("tools", json!({ "exp": common::tokens::now() - 120, "iat": common::tokens::now() - 600 }), json!({}))),
+        ("another audience", c.token("tools", json!({ "aud": "https://other.example/mcp" }), json!({}))),
+        ("another issuer", c.token("tools", json!({ "iss": "https://evil.example" }), json!({}))),
+        ("typ JWT", c.token("tools", json!({}), json!({ "typ": "JWT" }))),
+        ("alg none", c.token("tools", json!({}), json!({ "alg": "none" }))),
+        ("signed by another key", other.token(&common::tokens::claims(&c.auth.base, RESOURCE, "user-1", "tools", &json!({})), &json!({}))),
+        ("no client_id", c.token("tools", json!({ "client_id": null }), json!({}))),
+        ("not a JWT", "abc.def".to_string()),
+    ];
+    for (what, t) in &refused {
+        let a = post(&c.addr, &list, &[("Authorization", &bearer(t))]);
+        assert_eq!((a.status, a.header("www-authenticate")), (401, Some(invalid.as_str())), "{what}");
+    }
+    // A token in the query string is never read; another scheme is no credentials.
+    let mut raw = request_bytes(&c.addr, &list, &[]);
+    let q = format!("/mcp?access_token={good}");
+    raw.splice(5..9, q.bytes());
+    let a = send_raw(&c.addr, &raw).unwrap();
+    assert_eq!(a.status, 401, "the path is /mcp, and no token is read from the query");
+    assert!(!a.header("www-authenticate").unwrap().contains("error="), "as with no credentials at all");
+    let a = post(&c.addr, &list, &[("Authorization", "Basic dXNlcjpwYXNz")]);
+    assert_eq!((a.status, a.header("www-authenticate").is_some_and(|h| !h.contains("error="))), (401, true));
+    // Two Authorization headers: a bad request.
+    let mut raw = String::from_utf8(request_bytes(&c.addr, &list, &[("Authorization", &bearer(&good))])).unwrap();
+    raw = raw.replacen("Authorization:", &format!("Authorization: {}\r\nAuthorization:", bearer(&good)), 1);
+    let a = send_raw(&c.addr, raw.as_bytes()).unwrap();
+    assert_eq!(a.status, 400);
+    assert!(a.header("www-authenticate").unwrap().contains("error=\"invalid_request\""));
+
+    let (code, err) = s.stop();
+    assert_eq!(code, Some(0), "{err}");
+    // The log says why tokens were refused, and never holds a token.
+    assert!(err.contains("a token was refused (exp)") && err.contains("a token was refused (aud)") && err.contains("(signature)"), "{err}");
+    for (_, t) in &refused {
+        if t.len() > 20 {
+            assert!(!err.contains(t.as_str()), "a token reached the log");
+        }
+    }
+    assert!(!err.contains(&good));
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn a_rotated_key_is_fetched_once_and_made_up_keys_fetch_at_most_once_a_minute() {
+    use common::authserver::Route;
+    let c = oauth_case("rotation");
+    let s = Http::start(&c.manifest, &c.addr, &[]);
+    let list = rpc(1, "tools/list", json!({}));
+    assert_eq!(c.auth.hits("/jwks"), 1, "fetched once at start");
+    // The authorization server rotates to a new key.
+    let next = common::tokens::Issuer::new("k2");
+    c.auth.set("/jwks", Route::json(&json!({ "keys": [next.jwk()] })));
+    let t = next.token(&common::tokens::claims(&c.auth.base, RESOURCE, "user-1", "tools", &json!({})), &json!({}));
+    assert_eq!(post(&c.addr, &list, &[("Authorization", &format!("Bearer {t}"))]).status, 200);
+    assert_eq!(c.auth.hits("/jwks"), 2);
+    // The old key is no longer accepted.
+    let old = c.token("tools", json!({}), json!({}));
+    assert_eq!(post(&c.addr, &list, &[("Authorization", &format!("Bearer {old}"))]).status, 401);
+    // Made-up kids within the minute fetch nothing more.
+    for i in 0..20 {
+        let fake = c.token("tools", json!({}), json!({ "kid": format!("made-up-{i}") }));
+        assert_eq!(post(&c.addr, &list, &[("Authorization", &format!("Bearer {fake}"))]).status, 401);
+    }
+    assert_eq!(c.auth.hits("/jwks"), 2);
+    let (code, err) = s.stop();
+    assert_eq!(code, Some(0), "{err}");
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn an_authorization_server_that_cannot_be_trusted_stops_the_server_at_start() {
+    use common::authserver::Route;
+    let c = oauth_case("bad-as");
+    c.auth.set("/.well-known/oauth-authorization-server", Route::json(&json!({ "issuer": "https://evil.example", "jwks_uri": format!("{}/jwks", c.auth.base) })));
+    let (code, err) = refused_at_start(&c.manifest);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("exactly"), "{err}");
+    c.auth.set("/.well-known/oauth-authorization-server", Route::status(500));
+    let (code, err) = refused_at_start(&c.manifest);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("answered 500"), "{err}");
+    // Scopes on a tool need a server that checks tokens.
+    let addr = free_address();
+    let tools = json!([{ "name": "refund_order", "description": "d", "program": "refund.staal",
+        "grants": { "pay": { "cap": "payments.refund", "each": usd("50.00"), "uses": 1 } }, "scopes": ["refunds:write"] }]);
+    let (_d, m) = case("scopes-without-auth", &addr, json!({}), Some(tools));
+    let (code, err) = refused_at_start(&m);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("tools[0].scopes: only a server with server.http.auth checks scopes"), "{err}");
+}
