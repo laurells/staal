@@ -45,8 +45,8 @@ journals are unchanged.
 
 Streamable HTTP with OAuth, where `once` keys and status queries are scoped to the
 authenticated client and grants may be chosen per principal (docs/MCP.md section 10).
-Done when: designed in docs/MCP.md, reviewed, then built with the same test bar as
-stdio.
+Designed in docs/MCP.md section 12, awaiting review; it needs TLS when listening
+(above) first. Done when: reviewed, then built with the same test bar as stdio.
 
 ## Packages
 

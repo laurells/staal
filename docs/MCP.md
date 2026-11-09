@@ -948,3 +948,313 @@ Claude Agent SDK's loop runs in the Claude Code CLI it ships, pointed at a local
 answering as the Messages API does. A weekly workflow, `frameworks-latest`, runs the same
 tests against each framework's latest release.
 
+
+## 12. Remote transport (design, not built)
+
+**Status: a design for review.** Nothing in this section is implemented; `staalc mcp`
+serves stdio only. It is written against MCP 2026-07-28 (the Streamable HTTP
+transport and the authorization specification of that revision) and the RFCs they
+name. When it is built, this section becomes the specification and moves into
+sections 2 to 9, and the tests of section 9 gain the ones listed here.
+
+### 12.1 What changes and what does not
+
+The invariants of section 0 hold unchanged. A remote call is the same call as a stdio
+one: the same steps (section 5), the same ledger, journals, quotas, `once`, recovery
+and operator flow. What the transport adds is who is calling, which over stdio is
+whoever started the process. Over HTTP it is a *principal*, proven by an OAuth access
+token, and the host already has the two mechanisms a principal needs (section 11):
+
+- **Scope.** Each call runs in the principal's scope, so `once` keys and
+  `staal_run_status` are held per principal exactly as they are per tenant in an app.
+  One principal can neither repeat, find nor learn of another's runs.
+- **App inputs from claims.** A tool can take an app input from a claim of the
+  validated token (`"customer": {"claim": "sub"}`), never from the arguments. This is
+  how a call is about the caller: the program reads the customer's own records and
+  narrows its grants from them (section 10).
+
+Grants stay fixed in the manifest (section 10, "Grants never come from the call").
+Grants that differ per principal are written as separate tools, each requiring its
+own OAuth scope (12.5): a `refund_small` any support agent's token reaches, a
+`refund_large` only a token with `refunds:large` reaches. No new mechanism is needed,
+and each tool's grants are still reviewable in one place.
+
+### 12.2 The manifest
+
+A new optional `http` object in `server`. Without it, the server serves stdio as
+today; with it, HTTP only (one transport per process, so the stdio descriptor
+protection of section 3 and an HTTP listener never share a process).
+
+```json
+"http": {
+  "listen": "127.0.0.1:8443",
+  "path": "/mcp",
+  "resource": "https://mcp.shop.example/mcp",
+  "tls": { "certificate_chain": "/etc/staal/mcp.crt", "private_key": { "env": "MCP_TLS_KEY" } },
+  "allowed_hosts": ["mcp.shop.example"],
+  "allowed_origins": [],
+  "auth": {
+    "issuer": "https://auth.shop.example",
+    "scopes_supported": ["tools"],
+    "jwt_leeway_s": 60
+  },
+  "max_connections": 64
+}
+```
+
+- `listen`: the address and port. `path`: the MCP endpoint's path (default `/mcp`).
+- `resource`: the server's canonical URI (RFC 8707 section 2; RFC 9728 `resource`):
+  `https`, lowercase scheme and host, no fragment, no trailing slash unless the path
+  is `/`. It is the audience every token must carry and the identifier in the
+  protected resource metadata. Its path must end with `path`.
+- `tls`: the certificate chain (PEM) and the private key, the key read like a secret
+  (from the environment or a file, never logged). Required unless `listen` is a
+  loopback address, which is for a TLS-terminating proxy on the same machine. The
+  certificate is checked at start: it must parse, match the key, be within its
+  validity period, and name the host of `resource`. Otherwise the server refuses to
+  start. This is the same code as `net.tls.accept` (DEFERRED.md), built first.
+- `allowed_hosts`: the `Host` header values accepted (default: the host and port of
+  `resource`, plus the `listen` address when it is loopback). Any other `Host` is
+  refused with 421 Misdirected Request. This is the defence against DNS rebinding that
+  does not depend on browsers sending `Origin`.
+- `allowed_origins`: exact serialized origins (RFC 6454: scheme, host, port) a
+  browser may call from. A request with an `Origin` header not in the list is refused
+  with 403, as the transport requires. A request without `Origin` (not from a browser)
+  is not refused for that.
+- `auth`: required, unless `listen` is a loopback address, in which case `"auth":
+  "none"` serves without authentication to any local process (12.4 says what that
+  gives up). `issuer` is the authorization server's issuer identifier. `scopes_supported`
+  is published in the metadata. `jwt_leeway_s` (0 to 300, default 60) is the clock
+  difference allowed on `exp`, `nbf` and `iat`.
+- `max_connections`: the most open connections; one over it is closed at once. Calls
+  are still bounded by `max_concurrent_runs` as today.
+
+Each tool may add `"scopes": ["refunds:write"]`: the OAuth scopes a token must hold
+to call it (all of them). A tool without `scopes` needs only a valid token. And a
+tool may take app inputs from claims: `"app_inputs": {"customer": {"claim": "sub"}}`,
+allowed only when `auth` is set (a claim exists only in a validated token), with the
+claim's value a string, checked against the input's type like any input.
+
+### 12.3 HTTP
+
+One endpoint, POST only, each request one JSON-RPC message. Built on an HTTP/1.1
+server library (12.8), not on hand-written parsing: request framing (chunked bodies,
+a request with both `Content-Length` and `Transfer-Encoding`, keep-alive) is where
+request smuggling comes from, and a server must get all of it right (RFC 9112
+section 6).
+
+In order, for each request; the first rule a request breaks decides its answer:
+
+| Check | Refused with |
+| --- | --- |
+| `Host` in `allowed_hosts` | 421 |
+| `Origin`, if present, in `allowed_origins` | 403, body a JSON-RPC error with no `id` |
+| path is `path` (or a metadata path, 12.4) | 404 |
+| method is POST | 405 with `Allow: POST` (GET and DELETE are what 2025-11-25 clients send; this revision has neither) |
+| a valid access token (12.5) | 401 with `WWW-Authenticate` |
+| `Content-Type` is `application/json` | 415 |
+| `Accept` lists `application/json` and `text/event-stream` | 406 |
+| body at most 4 MiB, nested at most 64 levels | 413, or 400 with `-32700`/`-32600` |
+| one JSON-RPC request or notification (a batch, or a response, is refused) | 400 with `-32600` |
+| `MCP-Protocol-Version` present and supported | 400 with `UnsupportedProtocolVersionError` (`-32022`), `data.supported` `["2026-07-28"]` |
+| `MCP-Protocol-Version` equals `_meta["io.modelcontextprotocol/protocolVersion"]`; `Mcp-Method` equals `method`; for `tools/call`, `Mcp-Name` (after decoding the `=?base64?…?=` form) equals `params.name`; no header value has characters outside RFC 9110 field-value syntax | 400 with `HeaderMismatch` (`-32020`) |
+| the method exists | 404 with `-32601` |
+
+Then the request is handled as over stdio, by the 2026-07-28 handler of section 3,
+with the principal attached. Header names are compared case-insensitively and values
+exactly, as the transport requires. The server defines no `x-mcp-header` parameters,
+so it recognises no `Mcp-Param-*` header and ignores any. An `Mcp-Session-Id` or
+`Last-Event-ID` header is ignored, and no session id is ever sent. A notification is
+answered 202 with no body; none is used.
+
+Only 2026-07-28 is served over HTTP. 2025-11-25 over HTTP needs sessions and a GET
+stream, state this transport would otherwise not have; a client that speaks only
+2025-11-25 can use stdio. A 2025-11-25 client is told so by the modern error, and the
+transport's backward-compatibility rule tells it not to fall back blindly.
+
+**Answers.** A request is answered `application/json`, unless it carries a
+`progressToken`, in which case the answer is an SSE stream (`text/event-stream`,
+`X-Accel-Buffering: no`) holding the one `notifications/progress` message of section 3
+and then the response, after which the stream ends. Nothing else is ever sent on it:
+this revision forbids server requests on it, and the server has none. A result over
+1 MiB is handled as in section 3. `subscriptions/listen` is not served (`-32601`):
+nothing the server lists changes while it runs, which `server/discover` already says.
+
+**Cancellation.** Closing the response, an SSE stream or a JSON one, is the client's
+cancellation. It is decided exactly as `notifications/cancelled` is over stdio (section
+3): checked under the reservation lock immediately before the reservation; after the
+reservation the run goes on to its end, and nothing more is sent for that request.
+
+**Resources a client can hold.** Reading the request line and headers must finish
+within 10 s, the body within 30 s, and an idle kept-alive connection is closed after
+60 s; headers are at most 64 KiB. These bound what a slow client holds before it has
+proven anything. A call's own time is bounded as in section 3.
+
+### 12.4 Authorization: the protected resource metadata
+
+The server is an OAuth 2.1 resource server. It never issues tokens, registers
+clients, or sees a user's credentials: client registration (client ID metadata
+documents, pre-registration or dynamic registration), PKCE, the `resource` parameter
+and the `iss` check of RFC 9207 are the client's and the authorization server's part,
+and none of it passes through staalc.
+
+It serves its protected resource metadata (RFC 9728) at both well-known locations
+the specification lists, the path-inserted one
+(`/.well-known/oauth-protected-resource/mcp` for a `resource` whose path is `/mcp`)
+and the root one, with GET, without a token:
+
+```json
+{ "resource": "https://mcp.shop.example/mcp",
+  "authorization_servers": ["https://auth.shop.example"],
+  "scopes_supported": ["tools"],
+  "bearer_methods_supported": ["header"] }
+```
+
+A request without a token is answered 401 with
+`WWW-Authenticate: Bearer resource_metadata="<the path-inserted URL>"` and, when the
+manifest has `scopes_supported`, `scope="<those scopes>"`, with no `error`, as RFC 6750
+section 3.1 says for a request with no authentication. `offline_access` is never
+listed, as the specification says.
+
+`"auth": "none"`, allowed only on loopback, serves no metadata and checks no token.
+Every local process, and every user of the machine, can then call every tool; `Host`
+checking still stops a web page reaching it through DNS rebinding. It is for a
+developer's own machine.
+
+### 12.5 Validating a token
+
+Access tokens are JWTs as profiled by RFC 9068, validated by the server itself
+against the authorization server's published keys. A token is accepted only when
+all of these hold, and is otherwise answered 401 with `error="invalid_token"` (and
+the `resource_metadata` and `scope` parameters as above); the reason goes to the
+server's log, never the token:
+
+1. It came in one `Authorization` header, scheme `Bearer` (compared
+   case-insensitively, RFC 9110 section 11.1). A token in the query string or the
+   body is never read. Two `Authorization` headers are refused (400,
+   `invalid_request`).
+2. It is a compact JWS of three parts, each strict base64url without padding, with a
+   header that is a JSON object.
+3. The header's `typ` is `at+jwt` or `application/at+jwt` (RFC 9068 section 4 requires
+   a resource server to check it, so an ID token cannot be replayed as an access
+   token). An authorization server that does not set it is not supported.
+4. `alg` is one of `RS256`, `PS256`, `ES256` or `EdDSA` (Ed25519); `none`, every `HS`
+   algorithm and anything else is refused. The header has no `crit`. `jku`, `x5u`,
+   `jwk` and `x5c` in the header are never used to find a key.
+5. `kid` names a key in the authorization server's JWK set whose `kty` fits `alg`
+   (RSA of at least 2048 bits for `RS256` and `PS256`, P-256 for `ES256`, Ed25519 for
+   `EdDSA`), whose `alg`, if given, equals the header's, and whose `use`, if given, is
+   `sig`. The signature verifies with it.
+6. The claims are a JSON object with `iss` equal to `auth.issuer` exactly (simple
+   string comparison), `aud` equal to `resource` or an array containing it, `exp` in
+   the future and `nbf`, if present, in the past (within the leeway), `iat` present
+   and not in the future, and `sub`, `client_id` and `jti` present as strings, as RFC
+   9068 section 2.2 requires.
+
+The keys: at start the server fetches the authorization server's metadata (RFC 8414
+section 3, then OpenID Connect Discovery, the order the specification gives clients),
+over HTTPS only, and checks that its `issuer` equals `auth.issuer` exactly (RFC 8414
+section 3.3); otherwise it refuses to start. It then fetches `jwks_uri`. A token with
+an unknown `kid` makes it fetch the set again, at most once a minute, so a rotated key
+is picked up and a flood of made-up `kid`s cannot make it fetch more; the set is also
+fetched again hourly. A key absent from a newly fetched set is no longer accepted. If
+a fetch fails, the keys already held are kept and the failure is logged; if there are
+none, every token is refused.
+
+Opaque tokens checked by introspection (RFC 7662) are not supported in this design:
+introspection needs the server to hold client credentials at the authorization server
+and to make a network call per request. An authorization server that issues only
+opaque tokens cannot be used with it.
+
+**Scopes.** A tool's `scopes` are checked from the token's `scope` claim (a
+space-separated string, RFC 9068 section 2.2.3). A token without all of them is
+answered 403 with `WWW-Authenticate: Bearer error="insufficient_scope",
+scope="<every scope this tool needs>", resource_metadata="…"`: all of them in one
+challenge, as the specification asks. Scopes are compared as exact strings; the
+server knows no hierarchy between them, so the operator writes the scopes the
+authorization server actually puts in tokens. `tools/list` lists every tool whatever
+the token's scopes, so a client learns what it would need, and `staal_run_status`
+needs only a valid token.
+
+**The token goes nowhere.** It is never passed to a run, a program, the notify
+command or an outgoing request (the specification forbids passing it through), and
+it is never written to the journal, the ledger or a log. Only claims the manifest
+names as app inputs reach a run, as inputs.
+
+### 12.6 The principal
+
+The principal is the pair (`iss`, `sub`). The call's scope (section 11) is the
+SHA-256 of the canonical JSON `[iss, sub]`, in hexadecimal: always 64 characters
+whatever the identifiers' length, and the subject identifier itself is never written
+to the ledger or the log. So:
+
+- `once` keys are per principal. Two users refunding order 123 are two runs; the same
+  user sending the call twice is one.
+- `staal_run_status` answers only for runs the same principal made, and `unknown` for
+  every other, as section 11 says for scopes.
+- Quotas and `max_concurrent_runs` stay per tool, across principals. One principal can
+  therefore use up a tool's quota or its slots for everyone. A quota per principal is
+  not in this design (12.9).
+
+The server logs each call with the principal's scope hash and the token's
+`client_id`, so an operator can tell which client made it.
+
+### 12.7 Tests (added to section 9)
+
+- Conformance: the official Python and TypeScript SDK clients, over Streamable HTTP at
+  2026-07-28, with and without a token from a test authorization server, on every CI
+  platform. (To be confirmed when building: that the SDK versions then pinned
+  implement the 2026-07-28 HTTP client.)
+- Each row of the table in 12.3, including a request smuggling attempt (both
+  `Content-Length` and `Transfer-Encoding`) and a chunked body.
+- Tokens: a test authorization server signing with each algorithm. Refused, each one:
+  expired, not yet valid, wrong `iss`, wrong `aud`, `aud` an array without the
+  resource, no `typ` and `typ: JWT`, `alg: none`, `HS256` signed with the RSA public
+  key's bytes (algorithm confusion), an RSA key under 2048 bits, an unknown `kid`, a
+  signature with one byte changed, a missing `sub`/`client_id`/`jti`, a key in the
+  header, `crit` present, a token in the query string, two `Authorization` headers.
+  Each answered 401 (or 400) with the right `WWW-Authenticate`, and the server's log
+  holds the reason and not the token.
+- Key rotation: a token signed by a new key is accepted after the set is fetched
+  again; a removed key's token is refused; many unknown `kid`s cause at most one fetch
+  a minute.
+- The metadata: both locations, the exact document, and the 401 header pointing at it;
+  an authorization server whose metadata names another issuer stops the server at
+  start.
+- Scopes: a tool needing two scopes, called with one, is 403 naming both.
+- Principals: two principals making the same `once` call get two runs; each sees only
+  its own run's status; a claim-sourced app input reaches the run and a call naming it
+  in its arguments is refused.
+- The crash and duplicate tests of section 9, run over HTTP with a token.
+- The token, the private key of the TLS certificate and the subject identifier appear
+  in no journal, ledger, log or response.
+- Mutations: removing each check in 12.5 makes a test fail.
+
+### 12.8 Decisions to make in review
+
+1. **HTTP server library.** Recommended: `hyper` 1.x (with `hyper-util`) on `tokio`,
+   which is already in the build for PostgreSQL (the synchronous `postgres` client runs
+   on it). It implements HTTP/1.1 framing completely, and is the HTTP implementation
+   under axum, warp and tonic. Runs stay on their
+   own threads as today; the async side only reads requests and writes answers. The
+   alternative, framing HTTP by hand over `httparse`, means writing and owning the
+   smuggling-sensitive parts. Pinned versions at least two weeks old, as always.
+2. **JWT verification.** Recommended: verify with `ring`, already shipped (through
+   rustls), whose `signature` module provides all four algorithms, and parse
+   the JOSE header and claims in staalc under the strict profile of 12.5, which is
+   small. Tested against the RFC 7515 and RFC 8037 example vectors and against tokens
+   made by an independent library in the tests. The alternative is a JWT crate, which
+   brings its own crypto backend; that would be a second one beside ring, and its
+   defaults would have to be checked against 12.5 rather than written to it.
+3. **`"auth": "none"` on loopback.** Recommended: allowed, for development, with a
+   warning at start. The alternative is to require a token always.
+4. **2025-11-25 over HTTP.** Recommended: not served (12.3).
+5. **Introspection.** Recommended: not in the first version (12.5).
+
+### 12.9 Not in this design
+
+A quota or concurrency limit per principal (one principal can use up a tool for all);
+grants computed per principal beyond separate tools and claim-sourced app inputs;
+`subscriptions/listen`; serving 2025-11-25 over HTTP; opaque tokens; mutual TLS;
+HTTP/2. Each would be a later change to this section, not something the first
+version half-does.
