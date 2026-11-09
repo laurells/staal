@@ -1024,9 +1024,8 @@ protection of section 3 and an HTTP listener never share a process).
   browser may call from. A request with an `Origin` header not in the list is refused
   with 403, as the transport requires. A request without `Origin` (not from a browser)
   is not refused for that.
-- `auth`: required, unless `listen` is a loopback address, in which case `"auth":
-  "none"` serves without authentication to any local process (12.4 says what that
-  gives up). `issuer` is the authorization server's issuer identifier. `scopes_supported`
+- `auth`: required. There is no way to serve HTTP without authentication in a release
+  build (12.4). `issuer` is the authorization server's issuer identifier. `scopes_supported`
   is published in the metadata. `jwt_leeway_s` (0 to 300, default 60) is the clock
   difference allowed on `exp`, `nbf` and `iat`. `principal_key` is the secret the
   principal's identifier is made with (12.6): from the environment, at least 32 bytes.
@@ -1146,10 +1145,13 @@ manifest has `scopes_supported`, `scope="<those scopes>"`, with no `error`, as R
 section 3.1 says for a request with no authentication. `offline_access` is never
 listed, as the specification says.
 
-`"auth": "none"`, allowed only on loopback, serves no metadata and checks no token.
-Every local process, and every user of the machine, can then call every tool; `Host`
-checking still stops a web page reaching it through DNS rebinding. It is for a
-developer's own machine.
+Every HTTP request needs a valid token, on any address. A local server without
+authentication is what DNS rebinding and other local processes reach, and a local
+client already has stdio, which the specification says should take credentials from
+the environment rather than use OAuth. For building the transport before OAuth exists
+(12.7, stage 1), `"auth": "none"` is accepted only by a test build (`--features
+failpoints`, as crash injection is), on a loopback address; a release build refuses it
+as an unknown value, and a test in the build without that feature checks so.
 
 ### 12.5 Validating a token
 
@@ -1167,7 +1169,12 @@ server's log, never the token:
    header that is a JSON object.
 3. The header's `typ` is `at+jwt` or `application/at+jwt` (RFC 9068 section 4 requires
    a resource server to check it, so an ID token cannot be replayed as an access
-   token). An authorization server that does not set it is not supported.
+   token). An authorization server that does not set it is not supported, and there is
+   no setting to relax this. Several common ones do not set it by default and must be
+   configured to: Auth0's default token profile sets `typ: JWT` and its RFC 9068
+   profile must be chosen. The documentation gives the setting for each authorization
+   server the conformance tests run against, checked against that server, not taken
+   from third parties.
 4. `alg` is one of `RS256`, `PS256`, `ES256` or `EdDSA` (Ed25519); `none`, every `HS`
    algorithm and anything else is refused. The header has no `crit`. `jku`, `x5u`,
    `jwk` and `x5c` in the header are never used to find a key.
@@ -1330,34 +1337,43 @@ implementation has been reviewed by a security engineer who did not write it.
 **Building it in stages,** each merged only with every existing test passing, stdio
 included:
 
-1. The HTTP server, the manifest's `http` object, TLS, and the checks of 12.3, with
-   `"auth": "none"` only.
+1. The HTTP server, the manifest's `http` object, TLS, and the checks of 12.3, tested
+   with the test build's `"auth": "none"`; not usable in a release until stage 2.
 2. OAuth: the metadata, discovery and keys, token validation, scopes, the principal
    and its limits.
 3. Calls over HTTP through the existing host: reservation, ledger, journals, recovery
    and cancellation, and the crash and duplicate tests over HTTP.
 4. SDK conformance, the adversarial tests above, and the independent review.
 
-### 12.8 Decisions to make in review
+### 12.8 Decisions
 
-1. **HTTP server library.** Recommended: `hyper` 1.x (with `hyper-util`) on `tokio`,
+Decided in review on 2026-11-09:
+
+1. **HTTP server library.** Decided: `hyper` 1.x (with `hyper-util`) on `tokio`,
    which is already in the build for PostgreSQL (the synchronous `postgres` client runs
    on it). It implements HTTP/1.1 framing completely, and is the HTTP implementation
    under axum, warp and tonic. Runs stay on their
    own threads as today; the async side only reads requests and writes answers. The
    alternative, framing HTTP by hand over `httparse`, means writing and owning the
    smuggling-sensitive parts. Pinned versions at least two weeks old, as always.
-2. **JWT verification.** Recommended: verify with `ring`, already shipped (through
+2. **JWT verification.** Decided: verify with `ring`, already shipped (through
    rustls), whose `signature` module provides all four algorithms, and parse
    the JOSE header and claims in staalc under the strict profile of 12.5, which is
    small. Tested against the RFC 7515 and RFC 8037 example vectors and against tokens
-   made by an independent library in the tests. The alternative is a JWT crate, which
+   made by an independent library in the tests, and fuzzed (`fuzz/`); the independent
+   review of the release gate covers it. The alternative was a JWT crate, which
    brings its own crypto backend; that would be a second one beside ring, and its
    defaults would have to be checked against 12.5 rather than written to it.
-3. **`"auth": "none"` on loopback.** Recommended: allowed, for development, with a
-   warning at start. The alternative is to require a token always.
-4. **2025-11-25 over HTTP.** Recommended: not served (12.3).
-5. **Introspection.** Recommended: not in the first version (12.5).
+3. **No authentication on loopback.** Decided: not in a release build; every HTTP
+   request needs a token (12.4). The first draft allowed it for development; stdio
+   already serves that, and a setting meant for development reaches production.
+4. **2025-11-25 over HTTP.** Decided: not served (12.3), revisited only on demand from
+   users.
+5. **Introspection.** Decided: not in the first version (12.5). Token validation sits
+   behind one interface, so it can be added without changing the call path.
+6. **Strict `typ`.** Decided: kept strict (12.5, step 3), with no setting to relax it,
+   and documented per authorization server. This costs operators a configuration step
+   with some providers; relaxing it would weaken every deployment that did.
 
 Changed after the first review (2026-11-09): the principal's scope is an HMAC with a
 server key and a specified byte encoding, not a plain hash of JSON; limits per
