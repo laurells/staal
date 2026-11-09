@@ -10,6 +10,7 @@
 // its ledger and recovers; `manifest` reads the manifest.
 
 pub mod http;
+pub mod jwt;
 pub mod manifest;
 pub mod proto;
 

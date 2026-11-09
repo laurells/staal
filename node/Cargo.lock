@@ -1479,6 +1479,7 @@ dependencies = [
  "hyper-util",
  "libc",
  "postgres",
+ "ring",
  "rusqlite",
  "rustls",
  "serde_json",

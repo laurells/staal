@@ -51,6 +51,9 @@ webpki-root-certs = "1.0.9"
 # tokio-rustls on the same rustls and ring. Runs stay on their own threads.
 hyper = { version = "=1.12.0", default-features = false, features = ["server", "http1"] }
 hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }
+# Signature checks for the HTTP transport's access tokens (src/mcp/jwt.rs): the ring
+# rustls already uses, at the same version.
+ring = "=0.17.14"
 http-body = "=1.1.0"
 http-body-util = "=0.1.5"
 tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "io-util"] }

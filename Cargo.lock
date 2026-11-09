@@ -1525,6 +1525,7 @@ dependencies = [
  "libc",
  "postgres",
  "rcgen",
+ "ring",
  "rusqlite",
  "rustls",
  "serde_json",
