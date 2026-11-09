@@ -136,8 +136,8 @@ would reach the protocol stream or wait without end:
   standard input is the MCP stream, so a read would consume the client's messages.
   `staalc schema` reports it as `reads_console`, following calls and the library
   capabilities the function is given.
-- **Listening without a time limit.** A grant of `net.tcp.accept` without
-  `"wait_ms"` is refused: such an accept waits until a client connects, so a call
+- **Listening without a time limit.** A grant of `net.tcp.accept` or
+  `net.tls.accept` without `"wait_ms"` is refused: such an accept waits until a client connects, so a call
   could hold its quota reservation for ever. With `"wait_ms"` an accept lasts at most
   that plus `net.timeout_ms` (RUNTIME.md section 12, Listening).
 
@@ -261,7 +261,7 @@ program does.
 | PostgreSQL | `net.connect_timeout_ms` and `net.timeout_ms`, per connection and per statement |
 | SQLite | at most 5 s waiting for a locked database, and `net.timeout_ms` per statement (a statement past it is stopped and changes nothing) |
 | Computation | `max_steps` |
-| Listening | refused in a tool (section 2) |
+| Listening (`net.tcp.accept`, `net.tls.accept`) | the grant's `wait_ms`, plus `net.timeout_ms` for the request; refused in a tool without `wait_ms` (section 2) |
 | A C function (`cap ffi`) | nothing: C code cannot be interrupted |
 
 A tool granted a C function is therefore the one kind of tool whose call can hold its
@@ -786,8 +786,8 @@ environment that holds the secrets. What it does not: everything that arrives on
 - Secrets: as in section 8.
 - The stream: a tool that prints, and one whose C library writes to standard output,
   never put anything but MCP messages on the client's stream; a program that can reach
-  `read_line()`, and a grant of `net.tcp.accept` without `"wait_ms"`, are refused at
-  start, and one with it is accepted.
+  `read_line()`, and a grant of `net.tcp.accept` or `net.tls.accept` without
+  `"wait_ms"`, are refused at start, and one with it is accepted.
 - Deadlines: a run past its deadline fails before its next action and never during
   one, on both engines, and a resumed run decides the same way.
 - Keeping files: finished journals older than `server.keep` are deleted, and a running,
@@ -873,7 +873,7 @@ the host opens. The one difference is where grants come from:
   knows (the signed-in user, the customer's tier), never from the call's arguments,
   which are inputs only, as in section 5. Because the grants are not known when the
   tool is defined, each call's grants are checked as a manifest's are when it loads:
-  `net.tcp.accept` without `"wait_ms"` is refused, a tool that reaches the network must set both `net`
+  an accept without `"wait_ms"` is refused, a tool that reaches the network must set both `net`
   timeouts, with a money quota every grant that can spend must be bounded (`max`, or
   `each` and `uses`) in the quota's currency, and no grant may name a variable that
   `notify_env` passes to the notify command. A call that fails a check is refused
@@ -1012,7 +1012,8 @@ protection of section 3 and an HTTP listener never share a process).
   loopback address, which is for a TLS-terminating proxy on the same machine. The
   certificate is checked at start: it must parse, match the key, be within its
   validity period, and name the host of `resource`. Otherwise the server refuses to
-  start. This is the same code as `net.tls.accept` (DEFERRED.md), built first.
+  start. The checks are those `net.tls.accept` makes (RUNTIME.md section 12), plus
+  the host name.
 - `allowed_hosts`: the `Host` header values accepted (default: the host and port of
   `resource`, plus the `listen` address when it is loopback). Any other `Host` is
   refused with 421 Misdirected Request. This is the defence against DNS rebinding that

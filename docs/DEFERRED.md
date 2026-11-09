@@ -7,18 +7,6 @@ when it is done (and goes to CHANGELOG.md), not when it is started.
 
 Deferred on 2026-10-26, after listening shipped (commit e771d09), to start phase 12.
 
-### TLS when listening
-
-`net.tcp.accept` is plain TCP: nothing is encrypted. Needed: a `net.tls.accept`
-whose certificate chain and private key come from the operator's run config, the key
-held as a `Secret` (never in the journal, the log, a model's input or an error
-message), with an expired or mismatched certificate and key refused when the run
-starts, not at the first client. Settle how a certificate is replaced in a long run
-(at the next run, or on a signal). Done when: tests against a TLS client verifying
-the certificate, a fixture or config error for every bad key and certificate case,
-the crash test for listening run over TLS too, mutations caught, RUNTIME.md and
-GUIDE.md updated.
-
 ### Not fixable: a request lost to a crash
 
 A connection does not outlive the process that accepted it; no runtime can resume
@@ -45,8 +33,7 @@ journals are unchanged.
 
 Streamable HTTP with OAuth, where `once` keys and status queries are scoped to the
 authenticated client and grants may be chosen per principal (docs/MCP.md section 10).
-Designed in docs/MCP.md section 12, awaiting review; it needs TLS when listening
-(above) first. Done when: reviewed, then built with the same test bar as stdio.
+Designed in docs/MCP.md section 12, awaiting review. Done when: reviewed, then built with the same test bar as stdio.
 
 ## Packages
 

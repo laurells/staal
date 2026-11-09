@@ -31,6 +31,14 @@ the language or its file formats.
 - A tool (`staalc mcp`, and tools defined through the C API, Python and Node.js) may
   now hold a `net.tcp.accept` grant if it sets `"wait_ms"`, since every wait in a
   tool must have a limit. Without it the grant is still refused.
+- `net.tls.accept` and `net.tls.reply`: listening over TLS (1.2 or 1.3). The grant
+  names `certificate_chain` and `private_key` files, read when the run starts; the
+  run does not start if a certificate does not parse or is not valid at that moment,
+  or the key is not the certificate's, cannot be read, or can be read or written by
+  other users (Linux and macOS). A failed handshake makes a bad client. A request
+  read to its end must end with the client ending TLS, and a reply ends TLS. A
+  connection is answered only by the reply capability of the accept that took it.
+  The crash test for listening runs over TLS too. On both engines.
 
 ### Changed
 

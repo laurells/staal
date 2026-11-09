@@ -876,7 +876,8 @@ doubt**: it may or may not have happened.
     the action is in doubt again and must be resolved again.
 
   An action that is always safe to make again (`fs.read`, `fs.write`,
-  `db.sqlite.query`, `net.tcp.accept`, `net.tcp.reply`) is never resolved: resume
+  `db.sqlite.query`, `db.postgres.query`, `net.tcp.accept`, `net.tcp.reply`,
+  `net.tls.accept`, `net.tls.reply`) is never resolved: resume
   makes it again, and `staalc resolve` refuses it.
 
 The run id is 128 bits from the operating system's random source, so keys
@@ -939,8 +940,8 @@ the journal like any other action. Capability paths starting with `net.`, `fs.` 
 | `net.http.get`, `net.http.delete` | `c.get(url)`, `c.get(url, headers)` | `Response` |
 | `net.http.post`, `net.http.put`, `net.http.patch` | `c.post(url, body)`, `c.post(url, body, headers)` | `Response` |
 | `net.tcp.exchange`, `net.tls.exchange` | `c.exchange(address, data)`, `c.exchange(address, data, until)` | `Text` |
-| `net.tcp.accept` | `c.accept(address)`, `c.accept(address, until)` | `Incoming` |
-| `net.tcp.reply` | `c.reply(connection, data)` | `Receipt` |
+| `net.tcp.accept`, `net.tls.accept` | `c.accept(address)`, `c.accept(address, until)` | `Incoming` |
+| `net.tcp.reply`, `net.tls.reply` | `c.reply(connection, data)` | `Receipt` |
 | `fs.read` | `c.read(path)` | `Text` |
 | `fs.write` | `c.write(path, content)` | `Receipt` |
 | `db.sqlite.query` | `c.query(database, sql)`, `c.query(database, sql, params)` | `Text` (JSON rows) |
@@ -975,7 +976,7 @@ refused (E101, or a config error on a grant).
     same ones. A response recorded by staalc 0.26.0 or earlier has no headers recorded and
     replays with none: its run can be resumed only with the same program, which could
     not read them.
-- `Incoming { connection: Text, data: Text }`, a request `net.tcp.accept` read
+- `Incoming { connection: Text, data: Text }`, a request an accept read
   (Listening, below), made only by the runtime as a `Response` is.
 - `Secret`: a value from the environment (below). It cannot become `Text`, be
   compared, be stored in a record, be sent to a model, be encoded by `json`, or be
@@ -1094,7 +1095,8 @@ Without `until` the request ends when the client closes its sending side; with
 `net.timeout_ms` and `net.max_response_bytes`, and it must be UTF-8 text; a client
 whose request does not is a bad client. Writing the reply has the same time limit.
 
-Two keys of a `net.tcp.accept` grant, and no other grant, say how an `accept` waits:
+Two keys of an accept grant (`net.tcp.accept` or `net.tls.accept`), and no other
+grant, say how an `accept` waits:
 
 - `"wait_ms"`: a whole number of milliseconds from 1 to 2147483647. Without it an
   `accept` waits for a client with no time limit. With it, no client is taken once
@@ -1112,7 +1114,37 @@ Any other value is a config error before the run starts. These are grant keys an
 not arguments, so the program's code is the same under either setting, and they
 are not `accept` methods because a capability's method is the last part of its
 path. The request is untrusted (E006). An `Incoming` cannot be
-built in code, proposed by a model or parsed from text (E101). Nothing is encrypted.
+built in code, proposed by a model or parsed from text (E101). `net.tcp.accept` is
+plain TCP: nothing is encrypted.
+
+`net.tls.accept` and `net.tls.reply` are the same over TLS (1.2 or 1.3, through
+rustls). The `net.tls.accept` grant names the server's certificate and key:
+
+- `"certificate_chain"`: a PEM file of the server's certificate followed by any
+  intermediate certificates. It must hold no private key.
+- `"private_key"`: a PEM file of its private key, a regular file (a link is not followed) belonging to the user running staalc, which no
+  other user can read or write (mode 600 or 400). Linux and macOS only, where those
+  permissions can be checked.
+
+Both are read when the run starts, and the run does not start (a config error) when a
+certificate does not parse, any certificate in the chain is not valid at that moment
+(expired, or not yet valid), the key cannot be read, or the key is not the first
+certificate's. The key stays in the TLS library: it is never in the journal, the log,
+a message or anything a program can reach. A run keeps the certificate it started
+with; a replaced certificate is used from the next run or resume. The certificate's
+names are not checked against `address` (an address such as `0.0.0.0:8443` names no
+host); the client checks them. Client certificates are not asked for.
+
+The handshake is part of reading the request, within the same `net.timeout_ms`; a
+client whose handshake fails or does not finish is a bad client (`on_bad_client`).
+Without `until` a request ends when the client ends TLS (close_notify); a client that
+closes its connection without ending TLS is a bad client, since its request could
+have been cut short by someone between. `net.tls.reply` sends the reply, ends TLS and
+closes the connection. A connection is answered only by the reply capability of the
+accept that took it: `net.tcp.reply` on a connection accepted over TLS fails
+(`action`) without sending anything, and the reverse. All accepts on one address in a
+run serve clients the same way, plain TCP or TLS with one grant's certificate, since
+they share one queue; an accept that would differ fails (`action`).
 
 The journal records each request and a hash of each reply, never the reply. Both
 are made again after a crash, and neither is ever made twice. A connection does not

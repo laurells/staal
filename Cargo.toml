@@ -39,6 +39,9 @@ postgres = "=0.19.14"
 tokio-postgres-rustls = { version = "=0.14.0", default-features = false, features = ["ring"] }
 # The buffer type postgres's parameter encoding writes into; the version postgres uses.
 bytes = "1.12.1"
+# X.509 parsing, to check a `net.tls.accept` certificate's validity period at start;
+# the version tokio-postgres-rustls already brings in.
+x509-cert = { version = "=0.2.5", default-features = false, features = ["std"] }
 # Mozilla root certificates as certificates, so an operator can add a root on top of
 # them (net.extra_root_certificates). The same 1.0.9 snapshot ureq uses by default.
 webpki-root-certs = "1.0.9"

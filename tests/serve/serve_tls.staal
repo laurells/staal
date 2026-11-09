@@ -1,0 +1,41 @@
+// The program the net.tls.accept tests run: serve.staal over TLS. Requests are read
+// one line at a time, each answered with `+` and the line.
+fn handle(listen: cap net.tls.accept, answer: cap net.tls.reply, address: Text) -> Receipt {
+    let request = listen.accept(address, "\n")
+    return answer.reply(request.connection, "+" + trim(request.data) + "\n")
+}
+
+// Three requests, one after another.
+fn serve(listen: cap net.tls.accept, answer: cap net.tls.reply, address: Text) -> Int {
+    let n = 0
+    repeat 3 {
+        let r = handle(listen, answer, address)
+        set n = n + 1
+    }
+    return n
+}
+
+fn handle_one(i: Int, listen: cap net.tls.accept, answer: cap net.tls.reply, address: Text) -> Receipt {
+    return handle(listen, answer, address)
+}
+
+// Three requests at once, each in its own task.
+fn serve_parallel(listen: cap net.tls.accept, answer: cap net.tls.reply, address: Text) -> Int {
+    return len(parallel([1, 2, 3], handle_one, listen, answer, address))
+}
+
+// One request; if the accept fails, its message.
+fn waited(listen: cap net.tls.accept, answer: cap net.tls.reply, address: Text) -> Text {
+    let r = try handle(listen, answer, address)
+    if r.ok {
+        return "served"
+    }
+    return r.error
+}
+
+// A connection accepted over TLS answered with net.tcp.reply: refused.
+fn wrong_reply(listen: cap net.tls.accept, answer: cap net.tcp.reply, address: Text) -> Text {
+    let request = listen.accept(address, "\n")
+    let r = try answer.reply(request.connection, "no\n")
+    return r.error
+}

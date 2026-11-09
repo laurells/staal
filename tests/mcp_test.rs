@@ -520,7 +520,7 @@ fn a_manifest_that_could_go_wrong_stops_the_server_before_it_answers() {
     let tool = |extra: Json| refund_tool(extra);
     refuse("console", json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "ask.staal" }] }), "read_line");
     refuse("accept", json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "listen.staal",
-        "grants": { "l": { "cap": "net.tcp.accept" } }, "net": net() }] }), "net.tcp.accept in a tool needs \"wait_ms\"");
+        "grants": { "l": { "cap": "net.tcp.accept" } }, "net": net() }] }), "(net.tcp.accept, net.tls.accept) in a tool needs \"wait_ms\"");
     // With a limit on the wait, every wait in the tool is bounded, and it is served.
     {
         let d = dir.join("accept-bounded");
@@ -530,6 +530,29 @@ fn a_manifest_that_could_go_wrong_stops_the_server_before_it_answers() {
             "grants": { "l": { "cap": "net.tcp.accept", "only": ["127.0.0.1:*"], "wait_ms": 100 } }, "net": net() }] }));
         let (code, err) = start_and_stop(&m, &[]);
         assert_eq!(code, Some(0), "a tool whose accept has wait_ms: {err}");
+    }
+    // Over TLS the same: refused without wait_ms, served with it.
+    {
+        let ca = common::tls::Ca::new("MCP Test CA");
+        for (wait, ok) in [(None, false), (Some(100), true)] {
+            let d = dir.join(format!("accept-tls-{ok}"));
+            std::fs::create_dir_all(&d).unwrap();
+            write(&d, "listen.staal", "fn main(l: cap net.tls.accept) -> Text {\n    let i = l.accept(\"127.0.0.1:9\")\n    return i.data\n}\n");
+            let (chain, key) = ca.listen_files(&d, &["localhost"], None);
+            let mut grant = json!({ "cap": "net.tls.accept", "only": ["127.0.0.1:*"], "certificate_chain": chain, "private_key": key });
+            if let Some(ms) = wait {
+                grant["wait_ms"] = json!(ms);
+            }
+            let m = write_manifest(&d, json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "listen.staal",
+                "grants": { "l": grant }, "net": net() }] }));
+            let (code, err) = start_and_stop(&m, &[]);
+            if ok {
+                assert_eq!(code, Some(0), "a tool whose TLS accept has wait_ms: {err}");
+            } else {
+                assert_eq!(code, Some(2), "{err}");
+                assert!(err.contains("(net.tcp.accept, net.tls.accept) in a tool needs \"wait_ms\""), "{err}");
+            }
+        }
     }
     refuse("timeouts", json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "get.staal",
         "grants": { "get": { "cap": "net.http.get" } } }] }), "net.connect_timeout_ms: required");

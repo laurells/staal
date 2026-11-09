@@ -417,7 +417,7 @@ pub fn plan(prog: &Program, config: &Json) -> Result<Plan, String> {
                         NeedArg::Data(_) => None,
                     })
                     .collect();
-                let unbounded = |l: &Option<tcp::Listen>| l.is_some_and(|l| l.wait.is_none());
+                let unbounded = |l: &Option<tcp::Listen>| l.as_ref().is_some_and(|l| l.wait.is_none());
                 let waits_unbounded = unbounded(listen)
                     || needs.iter().any(|n| matches!(n, NeedArg::Cap { listen, .. } if unbounded(listen)));
                 let spends = match lib {
@@ -667,8 +667,11 @@ fn load_secret(spec: &Json, at: &str) -> Result<Secret, String> {
     Ok(Secret { name: var.to_string(), value, shown: "{secret}".to_string() })
 }
 
-/// `wait_ms` and `on_bad_client` of a `net.tcp.accept` grant (RUNTIME.md section 12).
-fn listen_settings(g: &Map<String, Json>, at: &str) -> Result<tcp::Listen, String> {
+/// `wait_ms` and `on_bad_client` of a `net.tcp.accept` or `net.tls.accept` grant, and
+/// for `net.tls.accept` its `certificate_chain` and `private_key`, checked now, so a
+/// certificate that is expired or not the key's is refused before the run starts
+/// (RUNTIME.md section 12).
+fn listen_settings(g: &Map<String, Json>, at: &str, tls: bool) -> Result<tcp::Listen, String> {
     let wait = match g.get("wait_ms") {
         None => None,
         Some(v) => {
@@ -683,7 +686,16 @@ fn listen_settings(g: &Map<String, Json>, at: &str) -> Result<tcp::Listen, Strin
         Some(Some("fail")) => tcp::OnBadClient::Fail,
         Some(_) => return Err(format!("{at}.on_bad_client: expected \"skip\" or \"fail\"")),
     };
-    Ok(tcp::Listen { wait, on_bad_client })
+    let tls = if tls {
+        let file = |k: &str| {
+            g.get(k).and_then(Json::as_str).filter(|p| !p.is_empty()).ok_or(format!("{at}.{k}: expected a file path (net.tls.accept needs certificate_chain and private_key)"))
+        };
+        let (chain, key) = (file("certificate_chain")?, file("private_key")?);
+        Some(tcp::server_config(chain, key, std::time::SystemTime::now()).map_err(|e| format!("{at}: {e}"))?)
+    } else {
+        None
+    };
+    Ok(tcp::Listen { wait, on_bad_client, tls })
 }
 
 /// Reads one grant: `{"cap": path, limits..., "idempotency_key"?, "needs"?}`, for a
@@ -706,7 +718,8 @@ fn parse_grant(
         let known = ["cap", "max", "each", "uses", "only", "idempotency_key", "needs"].contains(&k.as_str())
             || (c_function && ["library", "sha256", "repeatable"].contains(&k.as_str()))
             || (postgres && k == "databases")
-            || (want == "net.tcp.accept" && ["wait_ms", "on_bad_client"].contains(&k.as_str()));
+            || (want == "net.tcp.accept" && ["wait_ms", "on_bad_client"].contains(&k.as_str()))
+            || (want == "net.tls.accept" && ["wait_ms", "on_bad_client", "certificate_chain", "private_key"].contains(&k.as_str()));
         if !known {
             return Err(format!("{at}: unknown key '{k}'"));
         }
@@ -716,7 +729,11 @@ fn parse_grant(
         return Err(format!("{at}.cap: is '{gpath}', but the slot needs '{want}'"));
     }
     let limits = grant_limits(g, at, types)?;
-    let listen = if want == "net.tcp.accept" { Some(listen_settings(g, at)?) } else { None };
+    let listen = match want {
+        "net.tcp.accept" => Some(listen_settings(g, at, false)?),
+        "net.tls.accept" => Some(listen_settings(g, at, true)?),
+        _ => None,
+    };
     let idempotency_key = match g.get("idempotency_key") {
         None => false,
         Some(Json::Bool(b)) => *b,
@@ -734,10 +751,10 @@ fn parse_grant(
                 Err("the databases a db.postgres grant lists are the only ones it reaches; `only` does not apply".to_string())
             } else if http {
                 crate::targets::check_url_pattern(pat)
-            } else if want == "net.tcp.exchange" || want == "net.tls.exchange" || want == "net.tcp.accept" {
+            } else if ["net.tcp.exchange", "net.tls.exchange", "net.tcp.accept", "net.tls.accept"].contains(&want) {
                 crate::targets::check_address_pattern(pat)
-            } else if want == "net.tcp.reply" {
-                Err("`only` limits which addresses net.tcp.accept listens on; a reply goes to a connection accepted there".into())
+            } else if want == "net.tcp.reply" || want == "net.tls.reply" {
+                Err("`only` limits which addresses an accept listens on; a reply goes to a connection accepted there".into())
             } else {
                 crate::targets::check_path_pattern(pat)
             };
@@ -1528,7 +1545,7 @@ impl<'p> Interp<'p> {
                     let h = self.broker().grant(path, limits.clone());
                     self.granted.push((name.clone(), h));
                     if let Some(l) = listen {
-                        self.listen.insert(h, *l);
+                        self.listen.insert(h, l.clone());
                     }
                     if let Some(p) = postgres {
                         self.postgres.insert(h, p.clone());
@@ -1555,7 +1572,7 @@ impl<'p> Interp<'p> {
                                     self.postgres.insert(ih, p.clone());
                                 }
                                 if let Some(l) = listen {
-                                    self.listen.insert(ih, *l);
+                                    self.listen.insert(ih, l.clone());
                                 }
                                 if *ik {
                                     self.broker().set_idempotency_key(ih).unwrap_or_default();
@@ -2563,7 +2580,7 @@ impl<'p> Interp<'p> {
         if path == "net.tcp.exchange" || path == "net.tls.exchange" {
             return self.tcp_action(h, &path, method, args);
         }
-        if path == "net.tcp.accept" || path == "net.tcp.reply" {
+        if ["net.tcp.accept", "net.tcp.reply", "net.tls.accept", "net.tls.reply"].contains(&path.as_str()) {
             return self.serve_action(h, &path, method, args);
         }
         if path.starts_with("ffi.") {
@@ -3079,13 +3096,14 @@ impl<'p> Interp<'p> {
     /// on resume instead of answering twice.
     fn serve_action(&mut self, h: usize, path: &str, method: &str, args: Vec<Value>) -> Result<Value, Failure> {
         let what;
-        let (answer, replayed, target) = if path == "net.tcp.accept" {
-            let Some(Value::Text(raw)) = args.first() else { return internal("net.tcp.accept without an address") };
+        let accept = path.ends_with(".accept");
+        let (answer, replayed, target) = if accept {
+            let Some(Value::Text(raw)) = args.first() else { return internal("an accept without an address") };
             let until = match args.get(1) {
                 None => None,
                 Some(Value::Text(u)) if u.is_empty() => return self.refuse(path, method, FailKind::Value, "an empty delimiter would end every request at once".into()),
                 Some(Value::Text(u)) => Some(u.clone()),
-                Some(_) => return internal("net.tcp.accept delimiter that is not text"),
+                Some(_) => return internal("an accept delimiter that is not text"),
             };
             let address = match crate::targets::canonical_address(raw) {
                 Ok(a) => a,
@@ -3100,7 +3118,7 @@ impl<'p> Interp<'p> {
             let jbody = json!({ "capability": path, "method": method, "target": address, "until": until });
             what = format!("action {path} {address}");
             let root = self.broker().root(h).or_else(internal)?;
-            let listen = self.listen.get(&root).copied().unwrap_or_default();
+            let Some(listen) = self.listen.get(&root).cloned() else { return internal("an accept grant without its listening settings") };
             let (a, r) = self.external("action", jbody, true, &what, |it, key| {
                 let got = tcp::accept(&it.server, &address, until.as_deref(), &listen, &it.tcp, key);
                 // Each client dropped as unusable, with why: never what it sent.
@@ -3112,7 +3130,7 @@ impl<'p> Interp<'p> {
             (a, r, address)
         } else {
             let (Some(Value::Text(id)), Some(Value::Text(data))) = (args.first(), args.get(1)) else {
-                return internal("net.tcp.reply without a connection or data");
+                return internal("a reply without a connection or data");
             };
             self.emit("action_requested", json!({ "capability": path, "method": method, "target": id }));
             let authorized = self.broker().authorize(h, None, None);
@@ -3124,14 +3142,16 @@ impl<'p> Interp<'p> {
                                 "data_sha256": journal::sha256_hex(data.as_bytes()) });
             what = format!("action {path} {id}");
             let (a, r) = self.external("action", jbody, true, &what, |it, _key| {
-                Answer::Done(tcp::reply(&it.server, id, data.as_bytes(), &it.tcp).map(|()| json!({ "receipt": format!("reply:{id}") })))
+                Answer::Done(
+                    tcp::reply(&it.server, id, data.as_bytes(), &it.tcp, path == "net.tls.reply").map(|()| json!({ "receipt": format!("reply:{id}") })),
+                )
             })?;
             self.effects += 1;
             (a, r, id.clone())
         };
         match answer {
             Ok(v) => {
-                let value = if path == "net.tcp.accept" {
+                let value = if accept {
                     let (Some(c), Some(d)) = (v["connection"].as_str(), v["data"].as_str()) else {
                         return fail(FailKind::Journal, format!("malformed accept result in the journal: {v}"));
                     };

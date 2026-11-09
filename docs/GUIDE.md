@@ -1155,8 +1155,17 @@ on the grant makes such a client fail the `accept` instead. `accept` waits for a
 client with no time limit unless the grant sets `"wait_ms"`, after which it fails. Each request is answered at
 most once, even across a crash, but a connection does not survive one: a request
 accepted and not yet answered when the run stopped is lost, and the resumed run's
-`reply` fails saying so. Nothing is encrypted. RUNTIME.md section 12 has the
-details.
+`reply` fails saying so. Nothing is encrypted.
+
+`net.tls.accept` and `net.tls.reply` serve the same over TLS. The grant names the
+certificate chain and the private key files:
+
+    "listen": { "cap": "net.tls.accept", "only": ["0.0.0.0:8443"],
+                "certificate_chain": "/etc/staal/server.crt", "private_key": "/etc/staal/server.key" }
+
+The run does not start if a certificate is expired or not yet valid, or the key is not
+the certificate's or can be read by other users. A client that fails the handshake is
+a bad client like any other. RUNTIME.md section 12 has the details.
 
 ## Databases: `db.sqlite` and `db.postgres`
 

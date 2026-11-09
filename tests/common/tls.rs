@@ -62,3 +62,38 @@ fn config(chain: Vec<CertificateDer<'static>>, key: KeyPair) -> Arc<rustls::Serv
         .unwrap();
     Arc::new(cfg)
 }
+
+impl Ca {
+    /// A certificate for `names` (valid in the years given, or rcgen's wide default) and
+    /// its key, written as `chain.pem` and `key.pem` (mode 600) in `dir`, for a run that
+    /// listens with `net.tls.accept`; returns their paths.
+    pub fn listen_files(&self, dir: &std::path::Path, names: &[&str], years: Option<(i32, i32)>) -> (String, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut p = CertificateParams::new(names.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        if let Some((from, to)) = years {
+            p.not_before = rcgen::date_time_ymd(from, 1, 1);
+            p.not_after = rcgen::date_time_ymd(to, 1, 1);
+        }
+        let key = KeyPair::generate().unwrap();
+        let cert = p.signed_by(&key, &self.issuer).unwrap();
+        let (c, k) = (dir.join("chain.pem"), dir.join("key.pem"));
+        let _ = std::fs::remove_file(&k);
+        std::fs::write(&c, cert.pem()).unwrap();
+        std::fs::write(&k, key.serialize_pem()).unwrap();
+        std::fs::set_permissions(&k, std::fs::Permissions::from_mode(0o600)).unwrap();
+        (c.to_string_lossy().into_owned(), k.to_string_lossy().into_owned())
+    }
+
+    /// A client configuration trusting only this authority.
+    pub fn client(&self) -> Arc<rustls::ClientConfig> {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(self.issuer.der().clone()).unwrap();
+        Arc::new(
+            rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        )
+    }
+}

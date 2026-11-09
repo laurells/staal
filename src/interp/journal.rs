@@ -232,7 +232,8 @@ impl Journal {
         let n = intent["n"].as_u64().unwrap_or_default(); // checked by check_body
         // Actions always safe to make again: resume makes them again, and a result
         // recorded here could not take the form the program reads.
-        if let Some(c @ ("fs.read" | "fs.write" | "db.sqlite.query" | "db.postgres.query" | "net.tcp.accept" | "net.tcp.reply")) =
+        if let Some(c @ ("fs.read" | "fs.write" | "db.sqlite.query" | "db.postgres.query" | "net.tcp.accept" | "net.tcp.reply" | "net.tls.accept"
+            | "net.tls.reply")) =
             intent["body"]["capability"].as_str()
         {
             return Err(format!("operation {} in doubt is {c}, which resume makes again by itself; nothing to resolve", op_id(&task, n)));
@@ -986,7 +987,7 @@ mod tests {
 
     #[test]
     fn an_action_resume_makes_again_is_never_resolved() {
-        for cap in ["fs.read", "fs.write", "db.sqlite.query", "net.tcp.accept", "net.tcp.reply"] {
+        for cap in ["fs.read", "fs.write", "db.sqlite.query", "net.tcp.accept", "net.tcp.reply", "net.tls.accept", "net.tls.reply"] {
             let p = tmp(&format!("again-{cap}"));
             let mut j = Journal::create(&p, "P", "C").unwrap();
             j.begin("", "action", json!({ "capability": cap, "method": "m" })).unwrap();

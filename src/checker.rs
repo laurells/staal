@@ -1151,7 +1151,8 @@ enum RuntimeCap {
     DbExecute,
     /// `net.tcp.exchange` and `net.tls.exchange`: data sent to an address, its reply read.
     Tcp,
-    /// `net.tcp.accept`: one client's request; `net.tcp.reply`: its answer.
+    /// `net.tcp.accept` and `net.tls.accept`: one client's request; `net.tcp.reply` and
+    /// `net.tls.reply`: its answer.
     Accept,
     Reply,
 }
@@ -1164,8 +1165,8 @@ fn runtime_cap(path: &[String]) -> Option<RuntimeCap> {
         ["fs", "read"] => Some(RuntimeCap::FsRead),
         ["fs", "write"] => Some(RuntimeCap::FsWrite),
         ["net", "tcp" | "tls", "exchange"] => Some(RuntimeCap::Tcp),
-        ["net", "tcp", "accept"] => Some(RuntimeCap::Accept),
-        ["net", "tcp", "reply"] => Some(RuntimeCap::Reply),
+        ["net", "tcp" | "tls", "accept"] => Some(RuntimeCap::Accept),
+        ["net", "tcp" | "tls", "reply"] => Some(RuntimeCap::Reply),
         ["db", "sqlite", "query"] => Some(RuntimeCap::DbQuery),
         ["db", "sqlite", "execute"] => Some(RuntimeCap::DbExecute),
         ["db", "postgres", "query"] => Some(RuntimeCap::PgQuery),
@@ -1456,7 +1457,7 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                         format!(
                             "`cap {p}` is not a runtime capability; there are net.http.get, net.http.post, \
                              net.http.put, net.http.patch, net.http.delete, net.tcp.exchange, net.tls.exchange, \
-                             net.tcp.accept, net.tcp.reply, fs.read, \
+                             net.tcp.accept, net.tcp.reply, net.tls.accept, net.tls.reply, fs.read, \
                              fs.write, db.sqlite.query, db.sqlite.execute, db.postgres.query and db.postgres.execute"
                         ),
                     ),
@@ -1472,7 +1473,7 @@ fn check_ty_known(ctx: &mut Ctx, ty: &Ty, pos: Pos) {
                             let checked = match kind {
                                 RuntimeCap::Http { .. } => crate::targets::check_url_pattern(pat),
                                 RuntimeCap::Tcp | RuntimeCap::Accept => crate::targets::check_address_pattern(pat),
-                                RuntimeCap::Reply => Err("`only` limits which addresses net.tcp.accept listens on; a reply goes to a connection accepted there".into()),
+                                RuntimeCap::Reply => Err("`only` limits which addresses an accept listens on; a reply goes to a connection accepted there".into()),
                                 RuntimeCap::PgQuery | RuntimeCap::PgExecute => {
                                     Err("the databases a db.postgres grant lists are the only ones it reaches; `only` does not apply".into())
                                 }

@@ -172,7 +172,7 @@ fn check_grants(plan: &interp::Plan, base: &Map<String, Json>, at: &str) -> Resu
         plan.grants.iter().flat_map(|g| std::iter::once(g.path.as_str()).chain(g.needs.iter().map(String::as_str))).collect();
     if let Some(g) = plan.grants.iter().find(|g| g.waits_unbounded) {
         return Err(format!(
-            "{at}.{}: net.tcp.accept in a tool needs \"wait_ms\": without it an accept waits for a connection with no time limit",
+            "{at}.{}: an accept (net.tcp.accept, net.tls.accept) in a tool needs \"wait_ms\": without it an accept waits for a connection with no time limit",
             g.name
         ));
     }

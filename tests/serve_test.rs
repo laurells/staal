@@ -2,6 +2,8 @@
 // with clients in this test: a program listens only where its grant allows, answers
 // each request once, and a resumed run neither answers again nor pretends to.
 
+mod common;
+
 use serde_json::json;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -415,4 +417,191 @@ fn the_listening_settings_are_checked_before_anything_runs() {
     let (code, _, err) = staalc(&["run", PROGRAM, "--config", &p]);
     assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("grants.answer: unknown key 'wait_ms'"), "{err}");
+}
+
+// ---- net.tls.accept and net.tls.reply ----
+
+const TLS_PROGRAM: &str = "tests/serve/serve_tls.staal";
+
+/// A run config for serve_tls.staal: `listen` a net.tls.accept grant with the
+/// certificate files, `answer` a reply grant of `reply` (net.tls.reply, or net.tcp.reply
+/// to show it is refused).
+fn tls_config(dir: &Path, entry: &str, address: &str, files: &(String, String), reply: &str, extra: serde_json::Value) -> String {
+    let mut listen = json!({ "cap": "net.tls.accept", "only": ["127.0.0.1:*"],
+                             "certificate_chain": files.0, "private_key": files.1 });
+    for (k, v) in extra.as_object().unwrap() {
+        listen[k] = v.clone();
+    }
+    let cfg = json!({
+        "entry": entry,
+        "inputs": { "address": address },
+        "grants": { "listen": listen, "answer": { "cap": reply } },
+        "model": { "provider": "script", "responses": [] },
+    });
+    let p = dir.join("cfg.json");
+    std::fs::write(&p, cfg.to_string()).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+/// A TLS client verifying the certificate for localhost against `cfg`'s authority:
+/// sends `line` once the program listens, and reads the answer to a proper end of TLS.
+fn tls_client(address: String, cfg: std::sync::Arc<rustls::ClientConfig>, line: &'static str) -> std::thread::JoinHandle<Result<String, String>> {
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        let st = loop {
+            match TcpStream::connect(&address) {
+                Ok(c) => break c,
+                Err(_) if start.elapsed() < Duration::from_secs(20) => std::thread::sleep(Duration::from_millis(20)),
+                Err(e) => panic!("never listening on {address}: {e}"),
+            }
+        };
+        st.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let mut t = rustls::StreamOwned::new(rustls::ClientConnection::new(cfg, name).unwrap(), st);
+        t.write_all(line.as_bytes()).and_then(|_| t.flush()).map_err(|e| e.to_string())?;
+        let mut got = String::new();
+        t.read_to_string(&mut got).map_err(|e| e.to_string())?;
+        Ok(got)
+    })
+}
+
+#[test]
+fn requests_over_tls_are_answered_over_tls() {
+    let _turn = one_at_a_time();
+    let ca = common::tls::Ca::new("Serve Test CA");
+    for engine in engines() {
+        let dir = scratch(&format!("tls-{engine}"));
+        let files = ca.listen_files(&dir, &["localhost"], None);
+        // One after another, and in parallel tasks.
+        for (entry, lines) in [("serve", ["a\n", "b\n", "c\n"]), ("serve_parallel", ["x\n", "y\n", "z\n"])] {
+            let addr = free_address();
+            let cfg = tls_config(&dir, entry, &addr, &files, "net.tls.reply", json!({}));
+            let j = dir.join(format!("{entry}.journal"));
+            let clients: Vec<_> = if entry == "serve" {
+                // Each starts once the one before it is answered.
+                let (addr, client_cfg) = (addr.clone(), ca.client());
+                vec![std::thread::spawn(move || {
+                    lines.iter().map(|l| tls_client(addr.clone(), client_cfg.clone(), l).join().unwrap()).collect::<Vec<_>>()
+                })]
+            } else {
+                lines
+                    .iter()
+                    .map(|l| {
+                        let h = tls_client(addr.clone(), ca.client(), l);
+                        std::thread::spawn(move || vec![h.join().unwrap()])
+                    })
+                    .collect()
+            };
+            let (code, out, err) = staalc(&["run", TLS_PROGRAM, "--config", &cfg, "--journal", j.to_str().unwrap(), "--engine", engine]);
+            assert_eq!((code, out.as_str()), (Some(0), "3"), "{engine} {entry}: {err}");
+            let mut got: Vec<String> = clients.into_iter().flat_map(|c| c.join().unwrap()).map(|r| r.unwrap()).collect();
+            got.sort();
+            let mut want: Vec<String> = lines.iter().map(|l| format!("+{l}")).collect();
+            want.sort();
+            assert_eq!(got, want, "{engine} {entry}");
+            // The journal holds each request, a hash of each reply, and no key.
+            let journal = std::fs::read_to_string(&j).unwrap();
+            assert!(journal.contains("net.tls.accept") && journal.contains("data_sha256"), "{engine}");
+            assert!(!journal.contains("PRIVATE KEY") && !journal.contains(&format!("+{}", lines[0].trim())), "{engine}: {journal}");
+            // A finished run replays without listening.
+            let (code, out, err) = staalc(&["resume", TLS_PROGRAM, "--config", &cfg, "--journal", j.to_str().unwrap(), "--engine", engine]);
+            assert_eq!((code, out.as_str()), (Some(0), "3"), "{engine} {entry} replay: {err}");
+        }
+    }
+}
+
+#[test]
+fn a_connection_accepted_over_tls_is_answered_only_over_tls() {
+    let _turn = one_at_a_time();
+    let ca = common::tls::Ca::new("Serve Test CA");
+    for engine in engines() {
+        let dir = scratch(&format!("tls-wrong-reply-{engine}"));
+        let files = ca.listen_files(&dir, &["localhost"], None);
+        let addr = free_address();
+        let cfg = tls_config(&dir, "wrong_reply", &addr, &files, "net.tcp.reply", json!({}));
+        let c = tls_client(addr.clone(), ca.client(), "q\n");
+        let (code, out, err) = staalc(&["run", TLS_PROGRAM, "--config", &cfg, "--engine", engine]);
+        assert_eq!(code, Some(0), "{engine}: {err}");
+        assert!(out.contains("was accepted over TLS (net.tls.accept); answer it with net.tls.reply"), "{engine}: {out}");
+        // Nothing was sent in plain text: the client saw its connection end, not "no".
+        assert_ne!(c.join().unwrap(), Ok("no\n".to_string()), "{engine}");
+    }
+}
+
+#[test]
+fn a_bad_tls_client_is_dropped_and_logged_and_a_good_one_served() {
+    let _turn = one_at_a_time();
+    let ca = common::tls::Ca::new("Serve Test CA");
+    for engine in engines() {
+        let dir = scratch(&format!("tls-bad-{engine}"));
+        let files = ca.listen_files(&dir, &["localhost"], None);
+        let addr = free_address();
+        let cfg = tls_config(&dir, "waited", &addr, &files, "net.tls.reply", json!({ "wait_ms": 20000 }));
+        let log = dir.join("run.jsonl");
+        // A plain-text client first, then one that verifies the certificate.
+        let feeder = std::thread::spawn({
+            let (addr, client_cfg) = (addr.clone(), ca.client());
+            move || {
+                let plain = raw_client(addr.clone(), b"hello\n".to_vec(), true).join().unwrap();
+                (plain, tls_client(addr, client_cfg, "fine\n").join().unwrap())
+            }
+        });
+        let (code, out, err) = staalc(&["run", TLS_PROGRAM, "--config", &cfg, "--log", log.to_str().unwrap(), "--engine", engine]);
+        assert_eq!((code, out.as_str()), (Some(0), "\"served\""), "{engine}: {err}");
+        let (plain, good) = feeder.join().unwrap();
+        assert!(!String::from_utf8_lossy(&plain).contains("+hello"), "{engine}: answered in plain text");
+        assert_eq!(good, Ok("+fine\n".to_string()), "{engine}");
+        let text = std::fs::read_to_string(&log).unwrap();
+        let dropped: Vec<serde_json::Value> =
+            text.lines().map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()).filter(|e| e["event"] == "client_dropped").collect();
+        assert_eq!(dropped.len(), 1, "{engine}: {dropped:?}");
+        assert!(dropped[0]["reason"].as_str().unwrap().contains("the TLS handshake with"), "{engine}: {dropped:?}");
+        assert_eq!(dropped[0]["capability"], "net.tls.accept", "{engine}");
+    }
+}
+
+#[test]
+fn a_certificate_or_key_that_cannot_be_used_stops_the_run_before_it_starts() {
+    use std::os::unix::fs::PermissionsExt;
+    let _turn = one_at_a_time();
+    let ca = common::tls::Ca::new("Serve Test CA");
+    let dir = scratch("tls-config");
+    let refused = |cfg: &str, want: &str| {
+        let (code, out, err) = staalc(&["run", TLS_PROGRAM, "--config", cfg]);
+        assert_eq!(code, Some(2), "{want}: {out} {err}");
+        assert!(err.contains(want), "{want}: {err}");
+    };
+    // Expired, and not yet valid.
+    let files = ca.listen_files(&dir, &["localhost"], Some((2000, 2001)));
+    refused(&tls_config(&dir, "serve", "127.0.0.1:1", &files, "net.tls.reply", json!({})), "expired on 2001-01-01");
+    let files = ca.listen_files(&dir, &["localhost"], Some((2999, 3000)));
+    refused(&tls_config(&dir, "serve", "127.0.0.1:1", &files, "net.tls.reply", json!({})), "is not valid until 2999-01-01");
+    // Another certificate's key.
+    let good = ca.listen_files(&dir, &["localhost"], None);
+    let other = scratch("tls-config-other");
+    let theirs = ca.listen_files(&other, &["localhost"], None);
+    refused(&tls_config(&dir, "serve", "127.0.0.1:1", &(good.0.clone(), theirs.1.clone()), "net.tls.reply", json!({})), "is not the key of the certificate");
+    // A key others can read.
+    std::fs::set_permissions(&good.1, std::fs::Permissions::from_mode(0o644)).unwrap();
+    refused(&tls_config(&dir, "serve", "127.0.0.1:1", &good, "net.tls.reply", json!({})), "can be read or written by other users");
+    std::fs::set_permissions(&good.1, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // Missing files in the grant, and the keys only net.tls.accept takes.
+    let p = tls_config(&dir, "serve", "127.0.0.1:1", &good, "net.tls.reply", json!({}));
+    let mut cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    cfg["grants"]["listen"].as_object_mut().unwrap().remove("private_key");
+    std::fs::write(&p, cfg.to_string()).unwrap();
+    refused(&p, "grants.listen.private_key: expected a file path");
+    let plain = config(&dir, "serve", "127.0.0.1:1", "127.0.0.1:*");
+    let mut cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&plain).unwrap()).unwrap();
+    cfg["grants"]["listen"]["certificate_chain"] = json!(good.0);
+    std::fs::write(&plain, cfg.to_string()).unwrap();
+    let (code, _, err) = staalc(&["run", PROGRAM, "--config", &plain]);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("grants.listen: unknown key 'certificate_chain'"), "{err}");
+    // A reply grant takes no `only`.
+    let p = tls_config(&dir, "serve", "127.0.0.1:1", &good, "net.tls.reply", json!({}));
+    let mut cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    cfg["grants"]["answer"]["only"] = json!(["127.0.0.1:*"]);
+    std::fs::write(&p, cfg.to_string()).unwrap();
+    refused(&p, "a reply goes to a connection accepted there");
 }

@@ -670,22 +670,54 @@ fn a_tcp_exchange_is_never_made_twice_whatever_the_crash() {
 /// left unanswered, fails saying so rather than answering again.
 #[test]
 fn a_served_request_is_never_answered_twice_whatever_the_crash() {
+    served_whatever_the_crash(false);
+}
+
+/// The same over TLS (`net.tls.accept`, `net.tls.reply`), with clients that verify the
+/// server's certificate.
+#[test]
+fn a_request_served_over_tls_is_never_answered_twice_whatever_the_crash() {
+    served_whatever_the_crash(true);
+}
+
+fn served_whatever_the_crash(tls: bool) {
     use std::io::{Read, Write};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    let kind = if tls { "tls" } else { "tcp" };
     let addr = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
     let answered = std::sync::Arc::new(AtomicUsize::new(0));
+    // Over TLS: a test authority, the server's certificate and key in files, and a
+    // client configuration trusting only that authority.
+    let pki_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("crash-serve-{kind}-pki"));
+    let _ = std::fs::remove_dir_all(&pki_dir);
+    std::fs::create_dir_all(&pki_dir).unwrap();
+    let client_tls = tls.then(|| test_pki(&pki_dir));
     // Clients keep coming, one at a time, whether or not a run is listening.
     for _ in 0..2 {
-        let (addr, answered) = (addr.clone(), answered.clone());
+        let (addr, answered, client_tls) = (addr.clone(), answered.clone(), client_tls.clone());
         std::thread::spawn(move || loop {
-            let Ok(mut c) = std::net::TcpStream::connect(&addr) else {
+            let Ok(c) = std::net::TcpStream::connect(&addr) else {
                 std::thread::sleep(std::time::Duration::from_millis(5));
                 continue;
             };
-            let _ = c.write_all(b"hi\n");
             let _ = c.set_read_timeout(Some(std::time::Duration::from_secs(30)));
             let mut got = String::new();
-            let _ = c.read_to_string(&mut got);
+            match &client_tls {
+                None => {
+                    let mut c = c;
+                    let _ = c.write_all(b"hi\n");
+                    let _ = c.read_to_string(&mut got);
+                }
+                Some(cfg) => {
+                    let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+                    let mut t = rustls::StreamOwned::new(rustls::ClientConnection::new(cfg.clone(), name).unwrap(), c);
+                    let _ = t.write_all(b"hi\n").and_then(|_| t.flush());
+                    // Only an answer ended properly (close_notify) is read whole.
+                    if t.read_to_string(&mut got).is_err() {
+                        got.clear();
+                    }
+                }
+            }
             if !got.is_empty() {
                 assert_eq!(got, "+hi\n");
                 answered.fetch_add(1, Ordering::SeqCst);
@@ -693,16 +725,21 @@ fn a_served_request_is_never_answered_twice_whatever_the_crash() {
         });
     }
     let case = |name: &str| -> (PathBuf, Vec<String>, Vec<String>) {
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("crash-serve").join(name);
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("crash-serve-{kind}")).join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        let mut listen = serde_json::json!({ "cap": format!("net.{kind}.accept"), "only": ["127.0.0.1:*"] });
+        if tls {
+            listen["certificate_chain"] = serde_json::json!(pki_dir.join("chain.pem"));
+            listen["private_key"] = serde_json::json!(pki_dir.join("key.pem"));
+        }
         let cfg = serde_json::json!({
             "entry": "serve", "inputs": { "address": addr },
-            "grants": { "listen": { "cap": "net.tcp.accept", "only": ["127.0.0.1:*"] }, "answer": { "cap": "net.tcp.reply" } },
+            "grants": { "listen": listen, "answer": { "cap": format!("net.{kind}.reply") } },
             "model": { "provider": "script", "responses": [] },
         });
         std::fs::write(dir.join("cfg.json"), cfg.to_string()).unwrap();
-        let p = format!("{ROOT}/tests/serve/serve.staal");
+        let p = format!("{ROOT}/tests/serve/{}.staal", if tls { "serve_tls" } else { "serve" });
         let (c, j) = (dir.join("cfg.json").to_string_lossy().to_string(), dir.join("journal").to_string_lossy().to_string());
         (dir, vec!["run".into(), p.clone(), "--config".into(), c.clone(), "--journal".into(), j.clone()], vec!["resume".into(), p, "--config".into(), c, "--journal".into(), j])
     };
@@ -735,7 +772,7 @@ fn a_served_request_is_never_answered_twice_whatever_the_crash() {
         let out = staalc(&resume.iter().map(String::as_str).collect::<Vec<_>>(), None);
         let delivered = settled() - before;
         let lines: Vec<Json> = std::fs::read_to_string(dir.join("journal")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-        let reply_intents: Vec<u64> = lines.iter().filter(|r| r["j"] == "intent" && r["body"]["capability"] == "net.tcp.reply").map(|r| r["n"].as_u64().unwrap()).collect();
+        let reply_intents: Vec<u64> = lines.iter().filter(|r| r["j"] == "intent" && r["body"]["capability"] == format!("net.{kind}.reply").as_str()).map(|r| r["n"].as_u64().unwrap()).collect();
         let reply_ok = lines.iter().filter(|r| r["j"] == "result" && r.get("ok").is_some() && reply_intents.contains(&r["n"].as_u64().unwrap())).count();
         // Every answer a client got is one the journal records an attempt at, and no
         // reply was ever attempted twice.
@@ -753,6 +790,30 @@ fn a_served_request_is_never_answered_twice_whatever_the_crash() {
     // Both endings are reached: a crash before or after a request's whole exchange
     // costs nothing; one between its accept and its reply loses that request.
     assert!(whole > 0 && lost > 0, "{whole} whole, {lost} lost");
+}
+
+/// Writes a test authority's server certificate for localhost and its key (mode 600)
+/// as `chain.pem` and `key.pem` in `dir`, and returns a client configuration that
+/// trusts only that authority.
+fn test_pki(dir: &Path) -> std::sync::Arc<rustls::ClientConfig> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut ca = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca = rcgen::CertifiedIssuer::self_signed(ca, rcgen::KeyPair::generate().unwrap()).unwrap();
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap().signed_by(&key, &ca).unwrap();
+    std::fs::write(dir.join("chain.pem"), cert.pem()).unwrap();
+    std::fs::write(dir.join("key.pem"), key.serialize_pem()).unwrap();
+    std::fs::set_permissions(dir.join("key.pem"), std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ca.der().clone()).unwrap();
+    std::sync::Arc::new(
+        rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    )
 }
 
 /// Concurrency: three actions and three model calls in concurrent tasks, then one more
