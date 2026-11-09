@@ -185,12 +185,17 @@ jobs:
           mkdir "$RUNNER_TEMP/npm-app"
           (cd "$RUNNER_TEMP/npm-app" && npm init -y >/dev/null && npm install "$GITHUB_WORKSPACE"/dist/staal-node-*.tgz)
           STAAL_PACKAGE="$RUNNER_TEMP/npm-app/node_modules/@staal/node" STAAL_HAS_NATIVE=1 node --test node/test/staal.test.mjs
+  # The draft release, and a build provenance attestation for each file in it: signed
+  # by GitHub (Sigstore) for this workflow, this run and the tag, and checked by
+  # install.sh with `gh attestation verify` (docs/security-review/SUPPLY_CHAIN.md).
   release:
     needs: [build, npm, npm-installed]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -198,6 +203,19 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
+      - name: Every file to attest is there
+        run: |
+          ls dist
+          for p in 'staalc-*.tar.gz' '*.whl' 'staal-node-*.tgz'; do
+            ls dist/$p >/dev/null 2>&1 || { echo "no $p in dist"; exit 1; }
+          done
+      - name: Build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/staalc-*.tar.gz
+            dist/*.whl
+            dist/staal-node-*.tgz
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}

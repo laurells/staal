@@ -22,6 +22,16 @@ GitHub release holding them all, with the changelog's notes for the version.
    version in `Cargo.toml`.
 4. Check the draft release's files, then publish it. `install.sh` installs from the
    latest published release, so a release is what users get once it is published.
+   Before publishing, check one archive's attestation as `install.sh` will:
+   `gh attestation verify staalc-X.Y.Z-<target>.tar.gz --repo laurells/staal
+   --signer-workflow laurells/staal/.github/workflows/release.yml --source-ref
+   refs/tags/vX.Y.Z --deny-self-hosted-runners`.
+
+The workflow's last job attests every archive, wheel and npm package before making the
+draft (`actions/attest`): a build provenance statement, signed through Sigstore for
+this repository's release workflow, its run and its tag, stored by GitHub with the
+repository. `install.sh` checks it when the GitHub CLI is there, and refuses an
+archive of a release after 0.26.0 that fails the check.
 
 Each archive is `staalc-X.Y.Z-<target>.tar.gz` with a `.sha256` beside it: `staalc`,
 `libstaalc` to load from other languages, its static form (which `staalc build`

@@ -73,13 +73,15 @@ python3 scripts/unsafe_inventory.py     # the table in UNSAFE.md section 4
 ## 6. Fuzzing
 
 ```sh
-cargo install cargo-fuzz
-cargo fuzz run -s none jwt -- -max_total_time=900
+cargo install --locked cargo-fuzz --version 0.13.1
+scripts/fuzz_seed.sh
+RUSTC_BOOTSTRAP=1 cargo fuzz run --sanitizer address config -- -max_total_time=900 -timeout=10
+cargo fuzz run -s none parse -- -max_total_time=900 -timeout=10
 ```
 
 Targets: `parse`, `format`, `journal`, `config`, `manifest`, `jwt`
-([fuzz/README.md](../../fuzz/README.md) says what each checks and how to seed it).
-`-s none` builds on stable Rust, without AddressSanitizer.
+([fuzz/README.md](../../fuzz/README.md) says what each checks, and why
+`RUSTC_BOOTSTRAP=1` is used for AddressSanitizer).
 
 ## 7. The JWT test corpus
 

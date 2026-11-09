@@ -109,13 +109,24 @@ automatically ([SELF_ASSESSMENT.md](SELF_ASSESSMENT.md) F1).
   so no publishing token is stored; npm packages carry provenance. The first npm
   version was published by hand, as npm requires before a trusted publisher can be
   set (RELEASING.md).
+- **Build provenance**: the release job attests every archive, wheel and npm package
+  with `actions/attest` (v4.2.2, pinned): an in-toto SLSA provenance statement naming
+  the file's SHA-256, signed with a short-lived Sigstore certificate issued for this
+  repository's release workflow, its run and its tag, and stored by GitHub. Releases
+  up to 0.26.0 predate it; the first release to carry it is the next one, where it is
+  first exercised (docs/RELEASING.md).
 - **Installing**: `install.sh` downloads an archive and its `.sha256` from the GitHub
-  release over HTTPS, checks the hash before unpacking, and installs under the user's
-  home.
+  release over HTTPS and checks the hash before unpacking. Then, when the GitHub CLI
+  is installed and signed in, it runs `gh attestation verify` requiring the
+  repository, the release workflow, the tag `v<version>` and a GitHub-hosted runner,
+  and refuses an archive of a release after 0.26.0 that fails. Without `gh` it says
+  the provenance was not checked and installs on the hash alone;
+  `STAAL_REQUIRE_PROVENANCE=1` refuses instead. It installs under the user's home.
+  Tested against a stand-in `gh` (`install_test.rs`).
 
-What is missing: release archives carry no signature or build provenance. The
-`.sha256` comes from the same release as the archive, so it detects corruption but
-not a compromised release ([SELF_ASSESSMENT.md](SELF_ASSESSMENT.md) F6).
+What remains: a user without the GitHub CLI gets the hash check only, which detects
+corruption but not a release replaced by someone with write access to the
+repository ([SELF_ASSESSMENT.md](SELF_ASSESSMENT.md) F6).
 
 ## 7. SBOM
 

@@ -12,11 +12,11 @@ substitute for the review. No exploit of any of them was attempted; rating the o
 | F3 | `unsafe` blocks and functions without written justification were not refused by the build | Hardening | Fixed in this commit |
 | F4 | GitHub Actions referenced by moving tags | Hardening | Fixed in `d5caa94` |
 | F5 | SECURITY.md out of date | Documentation | Fixed in this commit |
-| F6 | Release archives have no signature or build provenance | Hardening | Open |
+| F6 | Release archives have no signature or build provenance | Hardening | Fixed in this commit, from the next release |
 | F7 | Release archive and wheel built without `--locked` | Hardening | Fixed in this commit |
 | F8 | `deny.toml` checked a platform that is not built (Windows) and called it a release target | Documentation | Fixed in this commit |
 | F9 | Fuzzing was short and not repeated; no fuzz target for token verification | Assurance | Partly fixed: `jwt` target added; every target run for 15 minutes ([ASSURANCE.md](ASSURANCE.md) section 5) |
-| F10 | Fuzzing runs without AddressSanitizer, and two targets reach native code | Assurance | Open |
+| F10 | Fuzzing runs without AddressSanitizer, and two targets reach native code | Assurance | Fixed in this commit: an AddressSanitizer run, and weekly in CI |
 | F11 | Documentation of the HTTP transport stale in places | Documentation | Fixed in this commit |
 
 ## F1. Advisories in the TLS trust chain
@@ -61,10 +61,15 @@ declared in scope for reports and CVSS v4.0 as the severity method.
 `install.sh` checks the archive's SHA-256 against a `.sha256` file from the same
 release, which catches corruption, not a release replaced by someone with write access
 to the repository. PyPI uploads use trusted publishing and npm packages carry
-provenance, but the archives have neither. **Recommended:** GitHub artifact
-attestations (`actions/attest-build-provenance`) in `release.yml`, and checking them
-in `install.sh` when the `gh` CLI is present. Not done here because it changes the
-release process, which is the owner's decision.
+provenance, but the archives had neither. Now the release job attests every
+archive, wheel and npm package (`actions/attest`), and `install.sh` checks the
+attestation with `gh attestation verify` when the GitHub CLI is installed and signed
+in, requiring this repository's release workflow, the version's tag and a
+GitHub-hosted runner; an archive of a release after 0.26.0 that fails is refused
+([SUPPLY_CHAIN.md](SUPPLY_CHAIN.md) section 6). What remains: users without the
+GitHub CLI get the hash check only, unless they set `STAAL_REQUIRE_PROVENANCE=1`; and
+the attestation step runs for the first time at the next release, so it has not yet
+run in a real release.
 
 ## F7. Unlocked release builds
 
@@ -86,8 +91,12 @@ test keys. All six were run for 15 minutes each (results in
 [ASSURANCE.md](ASSURANCE.md) section 5). They build without AddressSanitizer (`-s
 none`, so they build on stable Rust); `config` and `journal` run a program whose
 functions may run as native code, where a memory error would show only if it
-crashed. **Recommended:** a nightly-toolchain AddressSanitizer run of `config` and
-`journal`, and fuzzing in CI on a schedule.
+crashed. Now `config` and `journal` have been run with AddressSanitizer
+([ASSURANCE.md](ASSURANCE.md) section 5), and every target runs with it weekly in CI
+(`.github/workflows/fuzz.yml`), seeded from the repository by `scripts/fuzz_seed.sh`.
+AddressSanitizer is an unstable compiler option; it is used with the release
+toolchain (Rust 1.97.0) through `RUSTC_BOOTSTRAP=1` rather than a nightly
+toolchain, so the code fuzzed is compiled by the compiler that builds releases.
 
 ## F11. HTTP transport documentation
 

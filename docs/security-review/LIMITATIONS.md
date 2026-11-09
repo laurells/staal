@@ -89,6 +89,7 @@ From [MCP.md](../MCP.md) sections 12.5 and 12.9:
   stand-ins built from their documentation, not with real keys.
 - **No long-running or load tests** (hours of running, many connections, large
   journals).
-- **Release archives are not signed** and carry no build provenance (SUPPLY_CHAIN.md
-  section 6).
+- **Build provenance is checked only with the GitHub CLI.** `install.sh` without it
+  checks the SHA-256 alone; releases up to 0.26.0 carry no attestation
+  (SUPPLY_CHAIN.md section 6).
 - **One maintainer.** SECURITY.md states the response times this allows.

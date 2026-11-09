@@ -8,15 +8,26 @@
 # it into ~/.staal/<version>, and links staalc into ~/.local/bin. Nothing runs as root
 # and nothing outside those two folders is touched.
 #
+# The SHA-256 comes from the same release as the archive, so it shows the download is
+# whole, not who built it. Releases after 0.26.0 also carry a build provenance
+# attestation, signed by GitHub for the release workflow that built the archive from
+# its tag. When the GitHub CLI (gh) is installed and signed in, it is checked, and an
+# archive that fails the check is refused. Without gh the archive is checked by its
+# SHA-256 only, and the script says so.
+#
 # Settings, all optional:
 #   STAAL_VERSION=0.23.0       a version (the latest release otherwise)
 #   STAAL_BIN_DIR=~/bin        where to link staalc (~/.local/bin otherwise)
 #   STAAL_HOME=~/.staal        where releases are unpacked
 #   STAAL_DOWNLOAD_BASE=...    another place holding the releases' files, laid out as
 #                              <base>/v<version>/<archive> (for mirrors and tests)
+#   STAAL_REQUIRE_PROVENANCE=1 refuse to install unless the provenance is checked
+#   STAAL_GH=gh                the GitHub CLI to check it with
 set -eu
 
 repo="laurells/staal"
+# The last release made before releases carried a provenance attestation.
+last_unattested="0.26.0"
 home="${STAAL_HOME:-$HOME/.staal}"
 bin_dir="${STAAL_BIN_DIR:-$HOME/.local/bin}"
 
@@ -68,6 +79,37 @@ curl -fsSL -o "$tmp/$name.tar.gz.sha256" "$base/v$version/$name.tar.gz.sha256" |
 want=$(cut -d' ' -f1 "$tmp/$name.tar.gz.sha256")
 have=$(sha "$tmp/$name.tar.gz")
 [ "$want" = "$have" ] || fail "the download's SHA-256 is $have, not the release's $want; nothing was installed"
+
+# Whether version $1 comes after version $2 (both digits and dots, up to three parts).
+newer() {
+    a1=$(echo "$1" | cut -d. -f1); a2=$(echo "$1." | cut -d. -f2); a3=$(echo "$1.." | cut -d. -f3)
+    b1=$(echo "$2" | cut -d. -f1); b2=$(echo "$2." | cut -d. -f2); b3=$(echo "$2.." | cut -d. -f3)
+    [ "${a1:-0}" -ne "${b1:-0}" ] && { [ "${a1:-0}" -gt "${b1:-0}" ]; return; }
+    [ "${a2:-0}" -ne "${b2:-0}" ] && { [ "${a2:-0}" -gt "${b2:-0}" ]; return; }
+    [ "${a3:-0}" -gt "${b3:-0}" ]
+}
+
+# The build provenance: made by this repository's release workflow, from the tag
+# v<version>, on a GitHub-hosted runner.
+gh="${STAAL_GH:-gh}"
+if command -v "$gh" >/dev/null 2>&1 && "$gh" auth status >/dev/null 2>&1; then
+    if "$gh" attestation verify "$tmp/$name.tar.gz" --repo "$repo" \
+        --signer-workflow "$repo/.github/workflows/release.yml" \
+        --source-ref "refs/tags/v$version" --deny-self-hosted-runners >"$tmp/verify.log" 2>&1; then
+        echo "build provenance verified: built by $repo's release workflow from tag v$version"
+    elif newer "$version" "$last_unattested"; then
+        cat "$tmp/verify.log" >&2
+        fail "the archive's build provenance does not verify (gh attestation verify, above); nothing was installed"
+    elif [ "${STAAL_REQUIRE_PROVENANCE:-}" = 1 ]; then
+        fail "v$version was released before releases carried a build provenance attestation, and STAAL_REQUIRE_PROVENANCE=1; nothing was installed"
+    else
+        echo "note: v$version was released before releases carried a build provenance attestation; checked by its SHA-256 only"
+    fi
+elif [ "${STAAL_REQUIRE_PROVENANCE:-}" = 1 ]; then
+    fail "STAAL_REQUIRE_PROVENANCE=1, but the build provenance cannot be checked: it needs the GitHub CLI ($gh), installed and signed in (gh auth login); nothing was installed"
+else
+    echo "note: build provenance not checked (it needs the GitHub CLI, installed and signed in); checked by its SHA-256 only"
+fi
 
 # Unpacked beside, then moved into place, so a failure leaves no half install.
 mkdir -p "$home" "$bin_dir"

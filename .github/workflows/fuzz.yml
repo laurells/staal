@@ -1,0 +1,38 @@
+# Every fuzz target (fuzz/README.md), weekly, with AddressSanitizer: a memory error in
+# code a fuzzer reaches (the native engine runs under config and journal) stops the
+# run at once instead of passing unnoticed. Built with the release toolchain, Rust
+# 1.97.0; AddressSanitizer is an unstable compiler option, so RUSTC_BOOTSTRAP=1 lets
+# that toolchain accept it (stable Rust ships the sanitizer's runtime for this
+# platform). A finding is uploaded as an artifact; a failed run is a bug to fix.
+name: fuzz
+on:
+  schedule:
+    - cron: "17 2 * * 6" # Saturdays, 02:17 UTC
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fuzz:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse, format, journal, config, manifest, jwt]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      RUSTC_BOOTSTRAP: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Rust
+        run: rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
+      - name: cargo-fuzz (pinned)
+        run: cargo install --locked cargo-fuzz --version 0.13.1
+      - name: Seeds from the repository
+        run: scripts/fuzz_seed.sh
+      - name: Fuzz for 20 minutes with AddressSanitizer
+        run: cargo fuzz run --sanitizer address ${{ matrix.target }} -- -max_total_time=1200 -timeout=10 -print_final_stats=1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: fuzz-findings-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/

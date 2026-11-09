@@ -56,6 +56,17 @@ the language or its file formats.
   refuses `server.http` until the release
   gate (SDK conformance and an independent security review); only a test build
   serves it.
+- Releases carry a build provenance attestation for each archive, wheel and npm
+  package (`actions/attest`, signed through Sigstore for the release workflow, its
+  run and its tag). `install.sh` checks it with `gh attestation verify` when the
+  GitHub CLI is installed and signed in, and refuses an archive that fails; without
+  `gh` it installs on the SHA-256 as before and says the provenance was not checked.
+  `STAAL_REQUIRE_PROVENANCE=1` refuses to install without the check. Releases up to
+  0.26.0 have no attestation.
+- The fuzz targets run weekly in CI with AddressSanitizer (`.github/workflows/fuzz.yml`),
+  seeded from the repository by `scripts/fuzz_seed.sh`. A sixth target, `jwt`, fuzzes
+  access token and key set parsing.
+- `docs/security-review/`: the package for an independent security review.
 
 ### Changed
 
@@ -91,6 +102,10 @@ the language or its file formats.
   is, installing, quick start, features, command line, documentation, then the
   benchmark, rerun on 0.26.0, and platforms), and `docs/README.md` indexes the
   documentation by Learn, Reference, Tools and Project.
+- SECURITY.md said a tool may not listen for connections; with `"wait_ms"` it may. It
+  now also covers the HTTP transport and rates severity with CVSS v4.0.
+- The release archive and the wheel are built with `cargo build --locked`, so a
+  `Cargo.lock` out of step with `Cargo.toml` fails the build instead of being updated.
 - SECURITY.md said 0.24.x was the supported version. It now says 0.26.x, and the release
   check requires the supported minor version to be the one being released.
 

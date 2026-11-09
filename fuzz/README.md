@@ -16,22 +16,31 @@ on top.
 
 ## Running
 
-Install once: `cargo install cargo-fuzz`. A nightly Rust is not needed: with
-`-s none` (no AddressSanitizer) the fuzzers build on stable. Most of what the
-fuzzers reach is safe Rust (and ring's own C and assembly, for `jwt`). `config` and
-`journal` run the crash-test workflow, whose functions may run as native code
-(docs/security-review/UNSAFE.md); without AddressSanitizer a memory error there shows
-only if it crashes or fails an assertion.
+Install once: `cargo install --locked cargo-fuzz --version 0.13.1`. Seed the corpora
+from the repository (programs, run configs, manifests and lock files, the JWT test
+tokens) with `scripts/fuzz_seed.sh`; seeding again adds nothing already there.
+Corpora and findings (`fuzz/artifacts`) are not committed.
+
+With AddressSanitizer, so a memory error stops the run where it happens. It is an
+unstable compiler option; `RUSTC_BOOTSTRAP=1` lets the release toolchain (Rust
+1.97.0, which ships the sanitizer's runtime for x86_64 Linux) accept it, so the code
+fuzzed is compiled by the compiler that builds releases. CI runs every target this
+way weekly (`.github/workflows/fuzz.yml`):
 
 ```sh
-cargo fuzz run -s none parse fuzz/corpus/parse -- -max_total_time=600 -timeout=10 -max_len=8192
+RUSTC_BOOTSTRAP=1 cargo fuzz run --sanitizer address config -- -max_total_time=900 -timeout=10
 ```
 
-Seed corpora: copy the repository's programs into `fuzz/corpus/parse` and
-`fuzz/corpus/format` (`find tests examples packages docs -name '*.staal'`), run
-configs into `fuzz/corpus/config`, journals from a test run (without their first
-line) into `fuzz/corpus/journal`, and `staal.json` and `staal.lock` files into
-`fuzz/corpus/manifest`. Corpora and findings (`fuzz/artifacts`) are not committed.
+Without a sanitizer, faster, on any stable Rust:
+
+```sh
+cargo fuzz run -s none parse -- -max_total_time=900 -timeout=10
+```
+
+Most of what the fuzzers reach is safe Rust (and ring's own C and assembly, for
+`jwt`). `config` and `journal` run the crash-test workflow, whose functions may run
+as native code (docs/security-review/UNSAFE.md): fuzz those two with
+AddressSanitizer.
 
 A finding is a bug: reduce it with `cargo fuzz tmin`, add the reduced input as a
 test where the code lives, fix it, and run the fuzzer again.
