@@ -61,7 +61,9 @@ cargo install --locked cargo-deny --version 0.20.2
 cargo install --locked cargo-audit --version 0.22.2
 cargo deny check && cargo audit
 cargo install --locked cargo-cyclonedx --version 0.5.9
-cargo cyclonedx --format json --all-features --spec-version 1.5 --target all
+for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+  cargo cyclonedx --format json --spec-version 1.5 --target $t --target-in-filename
+done
 ```
 
 ## 5. The `unsafe` inventory

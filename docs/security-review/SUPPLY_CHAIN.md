@@ -130,10 +130,19 @@ repository ([SELF_ASSESSMENT.md](SELF_ASSESSMENT.md) F6).
 
 ## 7. SBOM
 
-[sbom/staalc.cdx.json](sbom/staalc.cdx.json): CycloneDX 1.5, generated at the
-reviewed commit with cargo-cyclonedx 0.5.9:
+[sbom/](sbom/): CycloneDX 1.5, one SBOM per release platform, generated at the
+reviewed commit with cargo-cyclonedx 0.5.9 for the release build (default features,
+no development dependencies):
 
-    cargo cyclonedx --format json --all-features --spec-version 1.5 --target all
+    for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+      cargo cyclonedx --format json --spec-version 1.5 --target $t --target-in-filename
+    done
 
-It lists every crate in the build with its version, licence and crates.io
-identifier (purl).
+| Platform | Components |
+| --- | ---: |
+| `x86_64-unknown-linux-gnu` | 177 |
+| `aarch64-unknown-linux-gnu` | 177 |
+| `x86_64-apple-darwin` | 180 |
+| `aarch64-apple-darwin` | 180 |
+
+Each component has its version, licence and crates.io package URL (purl).

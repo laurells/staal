@@ -15,7 +15,7 @@ native engine.
 | Compiler fixtures: programs that must be refused, each with its error code and message | 628 | `tests/fixtures/fail` |
 | Compiler fixtures: programs that must be accepted | 54 | `tests/fixtures/pass` |
 | Runtime cases (program, run config, expected result), each run on both engines and compared | 424 | `tests/run` |
-| Integration tests | 296, in 45 files | `tests/*_test.rs` |
+| Integration tests | 297, in 45 files | `tests/*_test.rs` |
 | Unit tests | 155 | `src/` |
 | Python package tests (run by `capi_test.rs`) | 5 files | `python/tests/` |
 | Node.js package tests | 12 | `node/test/staal.test.mjs` |

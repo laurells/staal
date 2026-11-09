@@ -45,7 +45,7 @@ targets link.
 Outside Rust: the Python package (540 lines, `python/staal/`, loading `libstaalc`
 with `ctypes`), the Node.js package's JavaScript (`node/*.js`, `node/*.mjs`), the
 Staal packages in `packages/` (809 lines of Staal: the library capabilities for
-payments, email, SMS, chat and others), `install.sh` (84 lines), and the release
+payments, email, SMS, chat and others), `install.sh` (126 lines), and the release
 workflows in `.github/workflows/`.
 
 ## 3. How a run works

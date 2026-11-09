@@ -34,7 +34,7 @@ Read in this order:
 | [LIMITATIONS.md](LIMITATIONS.md) | known limits and accepted risks |
 | [SELF_ASSESSMENT.md](SELF_ASSESSMENT.md) | what the author found preparing this, and what was done |
 | [BUILD.md](BUILD.md) | building, testing and reproducing every result here |
-| [sbom/staalc.cdx.json](sbom/staalc.cdx.json) | CycloneDX 1.5 SBOM |
+| [sbom/](sbom/) | CycloneDX 1.5 SBOMs, one per release platform |
 
 The specifications the package refers to: [GUARANTEES.md](../GUARANTEES.md) (the
 claims), [RUNTIME.md](../RUNTIME.md), [GUIDE.md](../GUIDE.md), [MCP.md](../MCP.md),
