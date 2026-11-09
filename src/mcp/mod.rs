@@ -11,6 +11,7 @@
 
 pub mod http;
 pub mod jwt;
+pub mod keys;
 pub mod manifest;
 pub mod proto;
 

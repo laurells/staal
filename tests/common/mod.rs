@@ -2,6 +2,7 @@
 // See tests/run_test.rs for the expectation format.
 #![allow(dead_code)]
 
+pub mod authserver;
 pub mod fake;
 pub mod http;
 pub mod mcp;
