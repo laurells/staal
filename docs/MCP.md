@@ -996,8 +996,10 @@ protection of section 3 and an HTTP listener never share a process).
   "auth": {
     "issuer": "https://auth.shop.example",
     "scopes_supported": ["tools"],
-    "jwt_leeway_s": 60
+    "jwt_leeway_s": 60,
+    "principal_key": { "env": "MCP_PRINCIPAL_KEY" }
   },
+  "per_principal": { "requests_per_minute": 120, "max_concurrent_runs": 2 },
   "max_connections": 64
 }
 ```
@@ -1026,12 +1028,20 @@ protection of section 3 and an HTTP listener never share a process).
   "none"` serves without authentication to any local process (12.4 says what that
   gives up). `issuer` is the authorization server's issuer identifier. `scopes_supported`
   is published in the metadata. `jwt_leeway_s` (0 to 300, default 60) is the clock
-  difference allowed on `exp`, `nbf` and `iat`.
+  difference allowed on `exp`, `nbf` and `iat`. `principal_key` is the secret the
+  principal's identifier is made with (12.6): from the environment, at least 32 bytes.
+- `per_principal`: limits on each principal (12.6). `requests_per_minute` (default 120)
+  bounds the HTTP requests one principal sends; `max_concurrent_runs` (default 2) the
+  runs one principal has in progress across all tools. Both are required to be at least
+  1 and are in memory: they bound load, not exposure, which the durable quotas do.
 - `max_connections`: the most open connections; one over it is closed at once. Calls
   are still bounded by `max_concurrent_runs` as today.
 
 Each tool may add `"scopes": ["refunds:write"]`: the OAuth scopes a token must hold
 to call it (all of them). A tool without `scopes` needs only a valid token. And a
+tool may add `"per_principal": {"max_concurrent_runs": 1}`, a tighter limit for that
+tool, and its `quota` may add `"per_principal": {"calls": 10, "money": {...}}`, the most
+one principal may use of the tool's quota in the same window (12.6). And a
 tool may take app inputs from claims: `"app_inputs": {"customer": {"claim": "sub"}}`,
 allowed only when `auth` is set (a claim exists only in a validated token), with the
 claim's value a string, checked against the input's type like any input.
@@ -1053,6 +1063,7 @@ In order, for each request; the first rule a request breaks decides its answer:
 | path is `path` (or a metadata path, 12.4) | 404 |
 | method is POST | 405 with `Allow: POST` (GET and DELETE are what 2025-11-25 clients send; this revision has neither) |
 | a valid access token (12.5) | 401 with `WWW-Authenticate` |
+| the principal under its request rate (12.6) | 429 with `Retry-After` |
 | `Content-Type` is `application/json` | 415 |
 | `Accept` lists `application/json` and `text/event-stream` | 406 |
 | body at most 4 MiB, nested at most 64 levels | 413, or 400 with `-32700`/`-32600` |
@@ -1066,7 +1077,11 @@ with the principal attached. Header names are compared case-insensitively and va
 exactly, as the transport requires. The server defines no `x-mcp-header` parameters,
 so it recognises no `Mcp-Param-*` header and ignores any. An `Mcp-Session-Id` or
 `Last-Event-ID` header is ignored, and no session id is ever sent. A notification is
-answered 202 with no body; none is used.
+answered 202 with no body; none is used. Of the methods the transport gives an
+`Mcp-Name` (`tools/call`, `resources/read`, `prompts/get`), the server serves only
+`tools/call`; the other two are answered `-32601`. If it ever serves them, `Mcp-Name`
+is checked against `params.uri` and `params.name` as the specification says, in the
+same change.
 
 Only 2026-07-28 is served over HTTP. 2025-11-25 over HTTP needs sessions and a GET
 stream, state this transport would otherwise not have; a client that speaks only
@@ -1082,9 +1097,23 @@ this revision forbids server requests on it, and the server has none. A result o
 nothing the server lists changes while it runs, which `server/discover` already says.
 
 **Cancellation.** Closing the response, an SSE stream or a JSON one, is the client's
-cancellation. It is decided exactly as `notifications/cancelled` is over stdio (section
-3): checked under the reservation lock immediately before the reservation; after the
-reservation the run goes on to its end, and nothing more is sent for that request.
+cancellation. How it is seen: the HTTP library drops the request's handler when its
+connection closes, and dropping it sets the call's cancelled flag (a guard object
+whose destructor sets it, so no path out of the handler misses it); over SSE, a failed
+write to the stream sets it too. What it decides is exactly what
+`notifications/cancelled` decides over stdio (section 3), and nothing more:
+
+- Before the reservation, the flag is checked under the reservation lock immediately
+  before reserving. A call cancelled by then reserves nothing and runs nothing.
+- After the reservation, the run goes on to its end, and its outcome is recorded as any
+  run's is: done, failed, or stopped in doubt for an operator. A cancellation never
+  stops an action half-way, never marks one as undone, and never turns an unknown
+  outcome into a known one. A refund the service made before the client left is a
+  refund made.
+- Nothing more is sent for that request. The run is in the journal, the log and
+  `staal_run_status` (for its principal) under its run id. A client that asked for
+  progress was given the run id when the run started; one that did not has only `once`
+  to find the run again: the same call is answered from the same run.
 
 **Resources a client can hold.** Reading the request line and headers must finish
 within 10 s, the body within 30 s, and an idle kept-alive connection is closed after
@@ -1154,13 +1183,30 @@ server's log, never the token:
 
 The keys: at start the server fetches the authorization server's metadata (RFC 8414
 section 3, then OpenID Connect Discovery, the order the specification gives clients),
-over HTTPS only, and checks that its `issuer` equals `auth.issuer` exactly (RFC 8414
-section 3.3); otherwise it refuses to start. It then fetches `jwks_uri`. A token with
-an unknown `kid` makes it fetch the set again, at most once a minute, so a rotated key
-is picked up and a flood of made-up `kid`s cannot make it fetch more; the set is also
-fetched again hourly. A key absent from a newly fetched set is no longer accepted. If
-a fetch fails, the keys already held are kept and the failure is logged; if there are
-none, every token is refused.
+and checks that its `issuer` equals `auth.issuer` exactly (RFC 8414 section 3.3);
+otherwise it refuses to start. It then fetches `jwks_uri`. Every one of these fetches:
+
+- is HTTPS, the server's certificate verified against Mozilla's roots and those
+  `net.extra_root_certificates` adds, and against the host; `auth.issuer` and
+  `jwks_uri` must be `https` URLs without a fragment, or the server refuses to start;
+- follows no redirect: a 3xx answer is a failed fetch, so an answer cannot send the
+  server to fetch keys from somewhere else;
+- must connect within 5 s and finish within 10 s, and its body be at most 256 KiB,
+  JSON nested at most 16 levels;
+- is checked field by field: the metadata must be an object whose `issuer` and
+  `jwks_uri` are strings (other fields are ignored, never used); the key set must be an
+  object whose `keys` is an array of at most 64 objects. A key whose `kty`, `alg` or
+  `use` the server does not use is ignored; a set with two keys of one `kid`, or with
+  no key the server can use, is a failed fetch, since a `kid` must name one key.
+
+A token with an unknown `kid` makes the server fetch the set again, at most once a
+minute, so a rotated key is picked up and a flood of made-up `kid`s cannot make it
+fetch more; the set is also fetched again hourly. A key absent from a newly fetched set
+is no longer accepted. A failed fetch keeps the set already held and is logged, but a
+set is used for at most 24 hours after the fetch that got it: past that, with every
+fetch since failing, every token is refused (401) until a fetch succeeds. So an
+authorization server that is down for a while does not stop the server at once, and
+one whose keys were revoked while it was unreachable cannot keep them alive for ever.
 
 Opaque tokens checked by introspection (RFC 7662) are not supported in this design:
 introspection needs the server to hold client credentials at the authorization server
@@ -1184,18 +1230,52 @@ names as app inputs reach a run, as inputs.
 
 ### 12.6 The principal
 
-The principal is the pair (`iss`, `sub`). The call's scope (section 11) is the
-SHA-256 of the canonical JSON `[iss, sub]`, in hexadecimal: always 64 characters
-whatever the identifiers' length, and the subject identifier itself is never written
-to the ledger or the log. So:
+The principal is the pair (`iss`, `sub`). The call's scope (section 11) is
+HMAC-SHA-256 (RFC 2104) keyed with `auth.principal_key`, over these bytes, in
+lowercase hexadecimal (64 characters):
+
+    "staal-principal-v1" 0x00  len(iss) iss  len(sub) sub
+
+where each length is the identifier's UTF-8 byte count as a 4-byte big-endian
+unsigned integer. Length prefixes make the encoding unambiguous without a JSON
+canonicalization to specify, and the label ties it to this use. A plain hash would let
+anyone who can guess subject identifiers (an email address, a sequential id) compute
+the scope of each and recognise it in the ledger; the key prevents that for anyone
+without it. The subject identifier itself is never written to the ledger or the log.
+
+The key must stay the same: a different key gives every principal a different scope,
+so their `once` keys and runs could no longer be found. The ledger records a
+fingerprint of the key (the HMAC of the key over `"staal-principal-key-fingerprint"`,
+which reveals nothing of it), and at start a server whose key does not match refuses
+to start while any run in a principal's scope is unsettled or holds a `once` key not
+yet expired, naming how many. With none, it records the new fingerprint and starts:
+that is how the key is changed.
+
+So:
 
 - `once` keys are per principal. Two users refunding order 123 are two runs; the same
   user sending the call twice is one.
 - `staal_run_status` answers only for runs the same principal made, and `unknown` for
   every other, as section 11 says for scopes.
-- Quotas and `max_concurrent_runs` stay per tool, across principals. One principal can
-  therefore use up a tool's quota or its slots for everyone. A quota per principal is
-  not in this design (12.9).
+- Each principal is limited, in addition to the per-tool limits, which stay:
+  - **Requests.** At most `per_principal.requests_per_minute` HTTP requests a minute,
+    counted per principal in fixed one-minute windows. One over is answered 429 with
+    `Retry-After` (the seconds left in the window), straight after the token check of
+    12.3 and before anything else. A request without a valid token has no principal to
+    count against; what it can hold is bounded by `max_connections` and the read time
+    limits, and checking a token costs one signature check.
+  - **Runs in progress.** At most `per_principal.max_concurrent_runs` across all
+    tools, and a tool's own `per_principal.max_concurrent_runs` for that tool. A call
+    over either is answered busy, as at the server's limit (section 5, step 4).
+  - **Quota.** A tool's `quota.per_principal` bounds what one principal may reserve of
+    the tool's quota in the same window, calls and money, computed from the ledger
+    like the tool's quota (section 6), since every reservation records its scope. It
+    is durable: a restart does not reset it.
+
+  This is fairness without a queue (section 10, "No queue"): no principal can hold more
+  than its share of runs or quota, and a call over a limit is refused at once rather
+  than waiting. Principals together can still reach the tool's own limits, which is
+  what those limits are for.
 
 The server logs each call with the principal's scope hash and the token's
 `client_id`, so an operator can tell which client made it.
@@ -1225,11 +1305,38 @@ The server logs each call with the principal's scope hash and the token's
 - Scopes: a tool needing two scopes, called with one, is 403 naming both.
 - Principals: two principals making the same `once` call get two runs; each sees only
   its own run's status; a claim-sourced app input reaches the run and a call naming it
-  in its arguments is refused.
+  in its arguments is refused. The scope matches an HMAC-SHA-256 test vector computed
+  independently (Python's `hmac`); a server started with another key and an unsettled
+  principal run refuses to start.
+- Per-principal limits: one principal over its request rate gets 429 while another is
+  served; a principal at its run limit is busy while another runs; a principal's
+  quota is spent while the tool's is not, and stays spent across a restart.
+- Cancellation: a connection closed before the reservation leaves no reservation and
+  no run; one closed after it leaves a run that ends and is recorded, with its action
+  performed once (a fake service counts it).
+- Discovery: a redirect, an oversized document, a slow server, a `jwks_uri` over
+  `http`, a duplicate `kid` and a set with no usable key are each a failed fetch; a set
+  older than 24 hours with every fetch failing refuses every token.
 - The crash and duplicate tests of section 9, run over HTTP with a token.
 - The token, the private key of the TLS certificate and the subject identifier appear
   in no journal, ledger, log or response.
 - Mutations: removing each check in 12.5 makes a test fail.
+
+**The release gate.** The remote transport is not released until the official Python
+and TypeScript SDK clients pass over it on every CI platform (our own HTTP tests show
+the server does what this section says, not that clients agree), and until the
+implementation has been reviewed by a security engineer who did not write it.
+
+**Building it in stages,** each merged only with every existing test passing, stdio
+included:
+
+1. The HTTP server, the manifest's `http` object, TLS, and the checks of 12.3, with
+   `"auth": "none"` only.
+2. OAuth: the metadata, discovery and keys, token validation, scopes, the principal
+   and its limits.
+3. Calls over HTTP through the existing host: reservation, ledger, journals, recovery
+   and cancellation, and the crash and duplicate tests over HTTP.
+4. SDK conformance, the adversarial tests above, and the independent review.
 
 ### 12.8 Decisions to make in review
 
@@ -1252,10 +1359,18 @@ The server logs each call with the principal's scope hash and the token's
 4. **2025-11-25 over HTTP.** Recommended: not served (12.3).
 5. **Introspection.** Recommended: not in the first version (12.5).
 
+Changed after the first review (2026-11-09): the principal's scope is an HMAC with a
+server key and a specified byte encoding, not a plain hash of JSON; limits per
+principal (requests, runs in progress, quota) are in the design rather than deferred;
+cancellation says how a closed connection is seen and what it never means; key
+discovery is hardened (HTTPS, no redirects, size and time limits, field checks, a
+24-hour limit on a set that cannot be refreshed); `Mcp-Name` for the methods the server
+does not serve is stated; SDK conformance and an independent security review are a
+release gate; and the building is staged.
+
 ### 12.9 Not in this design
 
-A quota or concurrency limit per principal (one principal can use up a tool for all);
-grants computed per principal beyond separate tools and claim-sourced app inputs;
+Grants computed per principal beyond separate tools and claim-sourced app inputs;
 `subscriptions/listen`; serving 2025-11-25 over HTTP; opaque tokens; mutual TLS;
 HTTP/2. Each would be a later change to this section, not something the first
 version half-does.
