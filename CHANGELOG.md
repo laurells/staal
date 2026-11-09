@@ -4,7 +4,15 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
-## Unreleased
+## 0.27.0 — 2026-11-09
+
+The version reviewed in Staal's first independent security review
+(docs/security-review/, tag `security-review-1`), and the first release with a build
+provenance attestation for every archive, wheel and npm package. It changes what
+programs see: a `net.tcp.accept` client that misbehaves is now dropped instead of
+failing the accept, and `Response` gains `headers` (see Changed below). The MCP
+server over HTTP is in this release's source but refused by its builds until the
+review is done.
 
 ### Added
 

@@ -113,7 +113,7 @@ automatically ([SELF_ASSESSMENT.md](SELF_ASSESSMENT.md) F1).
   with `actions/attest` (v4.2.2, pinned): an in-toto SLSA provenance statement naming
   the file's SHA-256, signed with a short-lived Sigstore certificate issued for this
   repository's release workflow, its run and its tag, and stored by GitHub. Releases
-  up to 0.26.0 predate it; the first release to carry it is the next one, where it is
+  up to 0.26.0 predate it; the first release to carry it is 0.27.0, where it is
   first exercised (docs/RELEASING.md).
 - **Installing**: `install.sh` downloads an archive and its `.sha256` from the GitHub
   release over HTTPS and checks the hash before unpacking. Then, when the GitHub CLI

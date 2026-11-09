@@ -9,12 +9,13 @@ known not to hold, and how to rebuild every piece of evidence.
 | | |
 | --- | --- |
 | Repository | https://github.com/laurells/staal |
-| Commit | the commit tagged `security-review-1`: the one that added this package |
-| Latest release before it | 0.26.0 |
+| Version | 0.27.0 |
+| Commit | the commit tagged both `v0.27.0` and `security-review-1` |
 | CI | the `ci` and `supply-chain` workflow runs for that commit passed before it was tagged |
 
 Every count, line number and test name in this package is of that commit. A later
-commit may change them; review at the tag. The package is written by the
+commit may change them; review at the tag. The release's archives, wheels and npm
+package are built from it, each with a build provenance attestation. The package is written by the
 implementation's author; it is the starting point for an independent review, not
 its result.
 

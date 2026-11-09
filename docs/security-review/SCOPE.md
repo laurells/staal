@@ -5,8 +5,8 @@
 The `staalc` repository at the commit named in [README.md](README.md): the language,
 its compiler, both execution engines, the runtime, the tool host and MCP server
 (stdio and HTTP), the C interface and its Python and Node.js bindings, packages,
-and the release process. Version 0.26.0 is the latest release; the reviewed commit
-is after it and includes the HTTP transport, which no release contains yet.
+and the release process. The reviewed commit is release 0.27.0. It contains the HTTP
+transport, which its release builds refuse to serve until this review is done.
 
 ## 2. In scope
 
