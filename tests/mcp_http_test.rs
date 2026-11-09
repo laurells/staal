@@ -641,6 +641,14 @@ fn it_serves_over_tls_with_the_checked_certificate() {
     assert!(send_raw(&addr, &request_bytes(&addr, &rpc(2, "tools/list", json!({})), &[])).is_none_or(|a| a.status != 200));
     let (code, err) = s.stop();
     assert_eq!(code, Some(0), "{err}");
+    // The private key is in no output and no file the server wrote.
+    let pem = std::fs::read_to_string(&key).unwrap();
+    let body: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+    assert!(!err.contains("PRIVATE KEY") && !err.contains(&body[..40]), "the key reached the log");
+    for f in common::mcp::files_under(&_d.join("journals")) {
+        let text = std::fs::read_to_string(&f).unwrap_or_default();
+        assert!(!text.contains(&body[..40]), "{} holds the key", f.display());
+    }
 }
 
 #[test]

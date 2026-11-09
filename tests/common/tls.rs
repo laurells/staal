@@ -13,6 +13,9 @@ impl Ca {
     pub fn new(name: &str) -> Ca {
         let mut p = CertificateParams::new(Vec::<String>::new()).unwrap();
         p.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        // A CA certificate says what its key is for (RFC 5280 section 4.2.1.3); strict
+        // verifiers (Python 3.13's default) refuse one that does not.
+        p.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign, rcgen::KeyUsagePurpose::CrlSign];
         p.distinguished_name.push(DnType::CommonName, name);
         Ca { issuer: CertifiedIssuer::self_signed(p, KeyPair::generate().unwrap()).unwrap() }
     }
@@ -25,6 +28,8 @@ impl Ca {
     /// given (or rcgen's very wide default when None).
     pub fn server(&self, names: &[&str], years: Option<(i32, i32)>) -> Arc<rustls::ServerConfig> {
         let mut p = CertificateParams::new(names.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        // Strict verifiers (Python 3.13's default) require it (RFC 5280 section 4.2.1.1).
+        p.use_authority_key_identifier_extension = true;
         if let Some((from, to)) = years {
             p.not_before = rcgen::date_time_ymd(from, 1, 1);
             p.not_after = rcgen::date_time_ymd(to, 1, 1);
@@ -70,6 +75,7 @@ impl Ca {
     pub fn listen_files(&self, dir: &std::path::Path, names: &[&str], years: Option<(i32, i32)>) -> (String, String) {
         use std::os::unix::fs::PermissionsExt;
         let mut p = CertificateParams::new(names.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        p.use_authority_key_identifier_extension = true;
         if let Some((from, to)) = years {
             p.not_before = rcgen::date_time_ymd(from, 1, 1);
             p.not_after = rcgen::date_time_ymd(to, 1, 1);

@@ -51,12 +51,14 @@ jobs:
         env:
           STAAL_REQUIRE_EVERY_LICENCE_TARGET: "1"
         run: cargo test --features failpoints --no-fail-fast
+      # Over stdio, and over Streamable HTTP with OAuth (docs/MCP.md section 12.7, the
+      # release gate), which only a build with crash injection serves until it is released.
       - name: MCP server against the official Python and TypeScript SDK clients
         run: |
           python3 -m venv "$RUNNER_TEMP/mcpenv"
           "$RUNNER_TEMP/mcpenv/bin/pip" install --quiet pip==26.2.1 && "$RUNNER_TEMP/mcpenv/bin/pip" install --quiet --uploaded-prior-to=P14D -r tests/mcp_sdk/requirements.txt
           (cd tests/mcp_sdk && npm ci)
-          STAAL_MCP_SDK=1 STAAL_MCP_PYTHON="$RUNNER_TEMP/mcpenv/bin/python" cargo test --test mcp_sdk_test
+          STAAL_MCP_SDK=1 STAAL_MCP_PYTHON="$RUNNER_TEMP/mcpenv/bin/python" cargo test --features failpoints --test mcp_sdk_test
       - name: Framework adapters (OpenAI Agents SDK, LangGraph, Claude Agent SDK, Google ADK), Python
         run: |
           python3 -m venv "$RUNNER_TEMP/fwenv"

@@ -58,7 +58,19 @@ impl AuthServer {
                             _ => return,
                         }
                     }
-                    let line = String::from_utf8_lossy(&head).lines().next().unwrap_or_default().to_string();
+                    // The body, by its Content-Length: a server that closes with a request
+                    // left unread resets the connection, and the client may lose the answer.
+                    let head_text = String::from_utf8_lossy(&head).to_string();
+                    let length = head_text
+                        .lines()
+                        .find_map(|l| l.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("content-length")).map(|(_, v)| v.trim().to_string()))
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let mut body = vec![0u8; length.min(1 << 20)];
+                    if s.read_exact(&mut body).is_err() {
+                        return;
+                    }
+                    let line = head_text.lines().next().unwrap_or_default().to_string();
                     let path = line.split(' ').nth(1).unwrap_or_default().to_string();
                     *hits.lock().unwrap().entry(path.clone()).or_default() += 1;
                     let route = routes.lock().unwrap().get(&path).cloned().unwrap_or_else(|| Route::status(404));

@@ -50,7 +50,10 @@ the language or its file formats.
   token claims, and limits per caller (request rate, runs in progress, a durable
   share of a quota). Then the crash, duplicate and cancellation tests over HTTP
   (stage 3), which found that stopping on SIGTERM could drop an answer already made;
-  the server now shuts down gracefully. A release build still refuses `server.http` until the release
+  the server now shuts down gracefully. The official Python and TypeScript SDK
+  clients sign in (client_credentials, discovered through the protected resource
+  metadata) and call tools over it, in CI on every platform. A release build still
+  refuses `server.http` until the release
   gate (SDK conformance and an independent security review); only a test build
   serves it.
 

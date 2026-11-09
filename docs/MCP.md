@@ -958,8 +958,10 @@ build: stage 1 (the HTTP server, its settings, TLS and the checks of 12.3, in
 (`src/mcp/keys.rs`), the protected resource metadata, the 401 and 403 challenges, tool
 scopes, the principal's scope and key fingerprint (`src/mcp/principal.rs`), app
 inputs from claims and the limits per principal; and stage 3, the crash, duplicate
-and cancellation tests over HTTP. Stage 4 (SDK conformance and the independent
-review) is next. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`.
+and cancellation tests over HTTP; and of stage 4, SDK conformance. What remains of the
+release gate is the independent security review, after which a release build may
+serve `server.http`. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`,
+`tests/mcp_sdk_test.rs`.
 
 It is written against MCP 2026-07-28 (the Streamable HTTP
 transport and the authorization specification of that revision) and the RFCs they
@@ -1382,7 +1384,15 @@ included:
    reserves and refunds nothing, and one closed after it refunds once and is found
    by its principal. Building these found that stopping on SIGTERM could drop an
    answer already made: the server now shuts down gracefully (12.3).
-4. SDK conformance, the adversarial tests above, and the independent review.
+4. SDK conformance, the adversarial tests above, and the independent review. Done:
+   the official Python (`mcp` 2.3.0) and TypeScript (`@modelcontextprotocol/client`
+   2.3.1) SDK clients, each probing and each pinned to 2026-07-28, connect over TLS,
+   are refused with 401, find the authorization server through the protected
+   resource metadata, get a token from its token endpoint with the
+   `client_credentials` grant, and list and call tools as that principal
+   (`tests/mcp_sdk_test.rs`, run in CI on every platform). Every adversarial test
+   listed above has been written. Not done, and not something its author can do:
+   the review by a security engineer who did not write the implementation.
 
 ### 12.8 Decisions
 
