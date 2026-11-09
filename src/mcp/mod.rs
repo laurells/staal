@@ -13,6 +13,7 @@ pub mod http;
 pub mod jwt;
 pub mod keys;
 pub mod manifest;
+pub mod principal;
 pub mod proto;
 
 use crate::host::tool::{Tool, STATUS_TOOL};
@@ -162,7 +163,16 @@ pub(crate) struct Session {
 /// over HTTP by its connection closing, which sets the given `Ctl`.
 pub(crate) enum Cancel {
     ById,
-    Given { ctl: Arc<Ctl>, key: String },
+    Given { ctl: Arc<Ctl>, key: String, caller: Option<Caller> },
+}
+
+/// Who an HTTP call is from, by its validated token (docs/MCP.md section 12.6).
+pub(crate) struct Caller {
+    /// The call's scope: its `once` keys and its runs' status are held within it.
+    pub scope: String,
+    pub client_id: String,
+    /// The token's claims, for app inputs a tool takes from them.
+    pub claims: Map<String, Json>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -344,10 +354,31 @@ impl Session {
             .and_then(|m| m.get("progressToken"))
             .filter(|t| t.is_string() || t.is_i64() || t.is_u64())
             .cloned();
-        let (ctl, key) = match cancel {
-            Cancel::ById => (Arc::new(Ctl::default()), id.to_string()),
-            Cancel::Given { ctl, key } => (ctl, key),
+        let (ctl, key, caller) = match cancel {
+            Cancel::ById => (Arc::new(Ctl::default()), id.to_string(), None),
+            Cancel::Given { ctl, key, caller } => (ctl, key, caller),
         };
+        // App inputs taken from the caller's token, never from the arguments.
+        let mut app_inputs: Option<Map<String, Json>> = None;
+        if let (Some(i), Some(c)) = (tool, &caller)
+            && !self.m.tool_claims[i].is_empty()
+        {
+            let mut given = Map::new();
+            for (input, claim) in &self.m.tool_claims[i] {
+                match c.claims.get(claim) {
+                    Some(Json::String(v)) => {
+                        given.insert(input.clone(), Json::String(v.clone()));
+                    }
+                    _ => {
+                        let a = Answer::error(format!(
+                            "the access token has no text claim '{claim}', from which this tool's input '{input}' comes; nothing was done"
+                        ));
+                        return out.result(id, self.wrap(era, &a));
+                    }
+                }
+            }
+            app_inputs = Some(given);
+        }
         {
             let Ok(mut calls) = self.calls.lock() else { return };
             // Threads are bounded too: far more calls than runs are answered at once.
@@ -360,8 +391,9 @@ impl Session {
         }
         let (me, id, out) = (self.clone(), id.clone(), out.clone());
         let h = std::thread::spawn(move || {
+            let scope = caller.as_ref().map(|c| c.scope.as_str());
             let answer = match tool {
-                None => Some(me.status(&args)),
+                None => Some(me.status(&args, scope)),
                 Some(i) => {
                     let t: &Tool = &me.m.tools[i];
                     let started = |run: &str| {
@@ -373,7 +405,17 @@ impl Session {
                             }));
                         }
                     };
-                    me.server.call(t, &args, None, None, None, &ctl, &started)
+                    let a = me.server.call(t, &args, app_inputs.as_ref(), None, scope, &ctl, &started);
+                    if let (Some(c), Some(a)) = (&caller, &a) {
+                        log(&format!(
+                            "tool {} run {}: called by principal {} (client {})",
+                            t.name,
+                            a.run.as_deref().unwrap_or("none"),
+                            c.scope,
+                            crate::clip::clip(&c.client_id)
+                        ));
+                    }
+                    a
                 }
             };
             if let Ok(mut calls) = me.calls.lock() {
@@ -394,13 +436,13 @@ impl Session {
         if era == Era::Modern { self.modern(r) } else { r }
     }
 
-    fn status(&self, args: &Map<String, Json>) -> Answer {
+    fn status(&self, args: &Map<String, Json>, scope: Option<&str>) -> Answer {
         let run = args.get("run").and_then(Json::as_str);
         let ok = args.len() == 1 && run.is_some_and(|r| r.len() == 32 && r.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
         let Some(run) = run.filter(|_| ok) else {
             return Answer::error(format!("{STATUS_TOOL} takes {{\"run\": \"<the run id a tool's result gave: 32 hexadecimal characters>\"}}"));
         };
-        let s = self.server.status(run, None);
+        let s = self.server.status(run, scope);
         Answer { status: "done", run: None, text: s.to_string(), structured: Some(s), is_error: false }
     }
 }

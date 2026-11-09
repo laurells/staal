@@ -31,6 +31,10 @@ fn usd(a: &str) -> Json {
     json!({ "amount": a, "currency": "USD" })
 }
 
+/// The principal key every test server is started with (docs/MCP.md section 12.6).
+const PRINCIPAL_KEY_VAR: &str = "MCP_TEST_PRINCIPAL_KEY";
+const PRINCIPAL_KEY: &str = "test-principal-key-of-at-least-32-bytes";
+
 fn free_address() -> String {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string()
 }
@@ -46,6 +50,7 @@ impl Http {
     fn start(manifest: &Path, _addr: &str, env: &[(&str, &str)]) -> Http {
         let mut cmd = Command::new(BIN);
         cmd.arg("mcp").arg(manifest).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        cmd.env(PRINCIPAL_KEY_VAR, PRINCIPAL_KEY);
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -95,7 +100,19 @@ impl Drop for Http {
 /// having started (code None), so a check that fails to refuse fails the test instead
 /// of hanging it (an HTTP server does not stop when its standard input closes).
 fn refused_at_start(manifest: &Path) -> (Option<i32>, String) {
-    let mut child = Command::new(BIN).arg("mcp").arg(manifest).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+    refused_at_start_with(manifest, PRINCIPAL_KEY)
+}
+
+fn refused_at_start_with(manifest: &Path, principal_key: &str) -> (Option<i32>, String) {
+    let mut child = Command::new(BIN)
+        .arg("mcp")
+        .arg(manifest)
+        .env(PRINCIPAL_KEY_VAR, principal_key)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     let start = Instant::now();
     let status = loop {
         if let Some(st) = child.try_wait().unwrap() {
@@ -546,7 +563,9 @@ fn sigterm_lets_the_call_in_progress_finish_and_be_answered() {
     let fake = Server::start();
     let addr = free_address();
     let dir = case_dir("http-sigterm");
-    std::fs::write(dir.join("slow.staal"), format!("fn main(n: Int, get: cap net.http.get) -> Int {{\n    let a = get.get(\"{}/slow\")\n    return n\n}}\n", fake.url(""))).unwrap();
+    // Two slow requests (each answered after 400 ms): SIGTERM goes during the second.
+    let base = fake.url("");
+    std::fs::write(dir.join("slow.staal"), format!("fn main(n: Int, get: cap net.http.get) -> Int {{\n    let a = get.get(\"{base}/slow\")\n    let b = get.get(\"{base}/slow\")\n    return n\n}}\n")).unwrap();
     let tools = json!([{ "name": "slow", "description": "d", "program": "slow.staal",
         "grants": { "get": { "cap": "net.http.get" } }, "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 } }]);
     let m = write_manifest(&dir, json!({ "server": { "name": "s", "http": { "listen": addr, "resource": "https://mcp.shop.example/mcp", "auth": "none" } }, "tools": tools }));
@@ -556,7 +575,14 @@ fn sigterm_lets_the_call_in_progress_finish_and_be_answered() {
         let addr = addr.clone();
         std::thread::spawn(move || post(&addr, &call, &[]))
     };
-    std::thread::sleep(Duration::from_millis(150)); // inside the 400 ms GET
+    // SIGTERM once the run is surely in progress: the service has answered its first
+    // request (it records one when it answers), so the second is under way. (A fixed
+    // sleep raced a loaded machine.)
+    let start = Instant::now();
+    while fake.requests().iter().all(|r| r.path != "/slow") {
+        assert!(start.elapsed() < Duration::from_secs(20), "the run never reached the service");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let (code, err) = s.stop();
     assert_eq!(code, Some(0), "{err}");
     let a = client.join().unwrap();
@@ -683,13 +709,20 @@ fn oauth_case(name: &str) -> OAuthCase {
     std::fs::write(dir.join("ca.pem"), ca.pem()).unwrap();
     std::fs::write(dir.join("refund.staal"), REFUND).unwrap();
     std::fs::write(dir.join("echo.staal"), "fn main(x: Text) -> Text {\n    return x\n}\n").unwrap();
+    std::fs::write(dir.join("whoami.staal"), "fn main(customer: Text, note: Text) -> Text {\n    return customer + \": \" + note\n}\n").unwrap();
     let tools = json!([
         { "name": "refund_order", "description": "Refund part of an order.", "program": "refund.staal",
-          "grants": { "pay": { "cap": "payments.refund", "each": usd("50.00"), "uses": 1 } }, "scopes": ["refunds:write"] },
-        { "name": "echo", "description": "Echo.", "program": "echo.staal" }
+          "grants": { "pay": { "cap": "payments.refund", "each": usd("50.00"), "uses": 1 } }, "scopes": ["refunds:write"],
+          "once": { "by": ["order"], "keep": "30d" } },
+        { "name": "echo", "description": "Echo.", "program": "echo.staal" },
+        { "name": "whoami", "description": "Who the caller is.", "program": "whoami.staal",
+          "app_inputs": { "customer": { "claim": "sub" } } },
+        { "name": "tenant", "description": "The caller's tenant.", "program": "whoami.staal",
+          "app_inputs": { "customer": { "claim": "tenant" } } }
     ]);
     let http = json!({ "listen": addr, "resource": RESOURCE,
-        "auth": { "issuer": auth.base, "scopes_supported": ["tools"], "extra_root_certificates": [dir.join("ca.pem")] } });
+        "auth": { "issuer": auth.base, "scopes_supported": ["tools"], "extra_root_certificates": [dir.join("ca.pem")],
+                  "principal_key": { "env": PRINCIPAL_KEY_VAR } } });
     let manifest = write_manifest(&dir, json!({ "server": { "name": "shop", "http": http }, "tools": tools }));
     OAuthCase { _ca: ca, auth, issuer, manifest, addr }
 }
@@ -698,6 +731,122 @@ impl OAuthCase {
     fn token(&self, scope: &str, over: Json, header: Json) -> String {
         self.issuer.token(&common::tokens::claims(&self.auth.base, RESOURCE, "user-1", scope, &over), &header)
     }
+
+    /// A token for subject `sub` with every scope the tools need.
+    fn token_for(&self, sub: &str) -> String {
+        self.issuer.token(&common::tokens::claims(&self.auth.base, RESOURCE, sub, "tools refunds:write", &json!({})), &json!({}))
+    }
+
+    fn dir(&self) -> PathBuf {
+        self.manifest.parent().unwrap().to_path_buf()
+    }
+}
+
+fn authed(addr: &str, body: &Json, token: &str) -> Json {
+    let a = post(addr, body, &[("Authorization", &format!("Bearer {token}"))]);
+    assert_eq!(a.status, 200, "{:?}", String::from_utf8_lossy(&a.body));
+    a.json()
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn each_principal_has_its_own_once_keys_and_runs() {
+    let c = oauth_case("principals");
+    let s = Http::start(&c.manifest, &c.addr, &[]);
+    let (alice, bob) = (c.token_for("alice"), c.token_for("bob"));
+    let refund = |id: i64| rpc(id, "tools/call", json!({ "name": "refund_order", "arguments": { "order": "o-123", "amount": usd("10.00") } }));
+    let a1 = authed(&c.addr, &refund(1), &alice);
+    let a2 = authed(&c.addr, &refund(2), &alice);
+    let b1 = authed(&c.addr, &refund(3), &bob);
+    assert_eq!(a1["result"]["isError"], false, "{a1}");
+    // The same principal sending the same operation again: answered from the same run.
+    assert_eq!(a1["result"]["structuredContent"], a2["result"]["structuredContent"]);
+    // Another principal, the same arguments: an operation of its own.
+    assert_eq!(b1["result"]["isError"], false, "{b1}");
+    let (_, first_log) = s.stop();
+    let err = first_log.clone();
+    let runs: Vec<&str> = err.lines().filter(|l| l.contains("tool refund_order run") && l.contains(": done;")).collect();
+    assert_eq!(runs.len(), 2, "two runs, one per principal: {err}");
+
+    // Each principal sees only its own run's status.
+    let ids: Vec<String> = err
+        .lines()
+        .filter(|l| l.contains("called by principal"))
+        .map(|l| l.split("run ").nth(1).unwrap().split(':').next().unwrap().to_string())
+        .collect();
+    let s = Http::start(&c.manifest, &c.addr, &[]);
+    let status = |run: &str, token: &str| {
+        let r = authed(&c.addr, &rpc(9, "tools/call", json!({ "name": "staal_run_status", "arguments": { "run": run } })), token);
+        r["result"]["structuredContent"]["status"].as_str().unwrap().to_string()
+    };
+    let alices = ids[0].clone();
+    assert_eq!(status(&alices, &alice), "done");
+    assert_eq!(status(&alices, &bob), "unknown", "a run id is not an authorization");
+    let (code, second_log) = s.stop();
+    assert_eq!(code, Some(0), "{second_log}");
+
+    // The subject identifiers reach neither the log nor the ledger.
+    let ledger = std::fs::read_to_string(c.dir().join("journals/server.ledger")).unwrap();
+    for who in ["alice", "bob"] {
+        assert!(!first_log.contains(who) && !second_log.contains(who) && !ledger.contains(who), "{who} was written");
+    }
+    assert!(first_log.contains("called by principal ") && first_log.contains("(client test-client)"), "{first_log}");
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn app_inputs_come_from_the_token_and_never_from_the_caller() {
+    let c = oauth_case("claims");
+    let _s = Http::start(&c.manifest, &c.addr, &[]);
+    let t = c.token_for("carol");
+    let who = authed(&c.addr, &rpc(1, "tools/call", json!({ "name": "whoami", "arguments": { "note": "hi" } })), &t);
+    assert_eq!(who["result"]["structuredContent"]["result"], "carol: hi", "{who}");
+    // Not offered to the model, and refused when a caller names it.
+    let list = authed(&c.addr, &rpc(2, "tools/list", json!({})), &t);
+    let whoami = list["result"]["tools"].as_array().unwrap().iter().find(|x| x["name"] == "whoami").unwrap().clone();
+    assert!(whoami["inputSchema"]["properties"].get("customer").is_none(), "{whoami}");
+    let forged = authed(&c.addr, &rpc(3, "tools/call", json!({ "name": "whoami", "arguments": { "note": "hi", "customer": "admin" } })), &t);
+    assert_eq!(forged["result"]["isError"], true, "{forged}");
+    assert!(forged["result"]["content"][0]["text"].as_str().unwrap().contains("never by the caller"), "{forged}");
+    // A claim the token does not have: nothing runs.
+    let none = authed(&c.addr, &rpc(4, "tools/call", json!({ "name": "tenant", "arguments": { "note": "x" } })), &t);
+    assert_eq!(none["result"]["isError"], true);
+    assert!(none["result"]["content"][0]["text"].as_str().unwrap().contains("no text claim 'tenant'"), "{none}");
+    let with = c.issuer.token(&common::tokens::claims(&c.auth.base, RESOURCE, "carol", "tools", &json!({ "tenant": "shop-9" })), &json!({}));
+    let r = authed(&c.addr, &rpc(5, "tools/call", json!({ "name": "tenant", "arguments": { "note": "x" } })), &with);
+    assert_eq!(r["result"]["structuredContent"]["result"], "shop-9: x");
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn a_changed_principal_key_cannot_hide_callers_runs() {
+    let c = oauth_case("key-change");
+    let s = Http::start(&c.manifest, &c.addr, &[]);
+    // A `once` key held for 30 days, under the first key.
+    let r = authed(&c.addr, &rpc(1, "tools/call", json!({ "name": "refund_order", "arguments": { "order": "o-1", "amount": usd("1.00") } })), &c.token_for("dave"));
+    assert_eq!(r["result"]["isError"], false);
+    let (code, _) = s.stop();
+    assert_eq!(code, Some(0));
+    let recorded = std::fs::read_to_string(c.dir().join("journals/principal-key")).unwrap();
+    assert_eq!(recorded.trim().len(), 64);
+    assert!(!recorded.contains(PRINCIPAL_KEY));
+    // Another key: refused, naming the run that would be lost.
+    let (code, err) = refused_at_start_with(&c.manifest, "another-principal-key-of-32-bytes-or-more");
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("is not the key recorded") && err.contains("1 run(s)"), "{err}");
+    // Too short a key is refused before anything else.
+    let (code, err) = refused_at_start_with(&c.manifest, "short");
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("at least 32 bytes"), "{err}");
+    // The key it was made with still works.
+    let s = Http::start(&c.manifest, &c.addr, &[]);
+    let (code, err) = s.stop();
+    assert_eq!(code, Some(0), "{err}");
+    // With nothing pending (a fresh journal directory), a new key is recorded.
+    let fresh = oauth_case("key-fresh");
+    let s = Http::start(&fresh.manifest, &fresh.addr, &[]);
+    s.stop();
+    assert_eq!(std::fs::read_to_string(fresh.dir().join("journals/principal-key")).unwrap(), recorded);
 }
 
 const METADATA_URL: &str = "https://mcp.shop.example/.well-known/oauth-protected-resource/mcp";

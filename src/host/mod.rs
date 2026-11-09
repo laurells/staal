@@ -991,6 +991,37 @@ impl Host {
 
 }
 
+impl Host {
+    /// Records the fingerprint of the key the call scopes are made with (docs/MCP.md
+    /// section 12.6), in `principal-key` beside the ledger. A different key gives every
+    /// caller a different scope, so the runs made under the old one could no longer be
+    /// found: while any run with a scope is unsettled or holds a `once` key not yet
+    /// expired, a different fingerprint (or none recorded) is refused, naming how many.
+    pub fn check_principal_key(&self, fingerprint: &str) -> Result<(), String> {
+        let path = self.settings.journals.join("principal-key");
+        let recorded = match std::fs::read_to_string(&path) {
+            Ok(t) => Some(t.trim().to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+        };
+        if recorded.as_deref() == Some(fingerprint) {
+            return Ok(());
+        }
+        let st = self.state()?;
+        let now = st.ledger.now();
+        let pending = st.ledger.runs().filter(|(_, r)| r.scope.is_some() && ((r.end.is_none()) || (r.once.is_some() && !once_expired(r, now)))).count();
+        drop(st);
+        if pending > 0 {
+            let what = if recorded.is_some() { "is not the key recorded" } else { "is not recorded" };
+            return Err(format!(
+                "server.http.auth.principal_key {what} in {}, and {pending} run(s) made for a caller are unfinished or                  hold a `once` key not yet expired; with another key their callers could not find them. Use the key                  they were made with, or change it once they have settled and their keys expired",
+                path.display()
+            ));
+        }
+        write_durably(&path, format!("{fingerprint}\n").as_bytes())
+    }
+}
+
 /// Whether a run's `once` key is no longer held: it never started, or ended longer ago
 /// than the key's `keep`.
 fn once_expired(r: &Run, now: u64) -> bool {

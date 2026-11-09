@@ -955,8 +955,9 @@ tests against each framework's latest release.
 `server.http` until the release gate of 12.7 is met. Built and tested so far, in a test
 build: stage 1 (the HTTP server, its settings, TLS and the checks of 12.3, in
 `src/mcp/http.rs`), and of stage 2 the token verification (`src/mcp/jwt.rs`), the keys
-(`src/mcp/keys.rs`), the protected resource metadata, the 401 and 403 challenges and
-tool scopes. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`. It is written against MCP 2026-07-28 (the Streamable HTTP
+(`src/mcp/keys.rs`), the protected resource metadata, the 401 and 403 challenges, tool
+scopes, the principal's scope and key fingerprint (`src/mcp/principal.rs`) and app
+inputs from claims. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`. It is written against MCP 2026-07-28 (the Streamable HTTP
 transport and the authorization specification of that revision) and the RFCs they
 name. When it is built, this section becomes the specification and moves into
 sections 2 to 9, and the tests of section 9 gain the ones listed here.
@@ -1267,7 +1268,8 @@ fingerprint of the key (the HMAC of the key over `"staal-principal-key-fingerpri
 which reveals nothing of it), and at start a server whose key does not match refuses
 to start while any run in a principal's scope is unsettled or holds a `once` key not
 yet expired, naming how many. With none, it records the new fingerprint and starts:
-that is how the key is changed.
+that is how the key is changed. The fingerprint is kept in `principal-key` beside the
+ledger rather than in it, so a ledger stays readable by a staalc that predates it.
 
 So:
 

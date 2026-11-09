@@ -20,6 +20,9 @@ pub struct Manifest {
     /// Each tool's `scopes`, in the order of `tools`: the OAuth scopes a token must hold
     /// to call it (section 12.5). Empty for every tool unless `server.http.auth` is set.
     pub tool_scopes: Vec<Vec<String>>,
+    /// Each tool's app inputs taken from token claims, as (input, claim), in the order of
+    /// `tools` (section 12.1). Empty unless `server.http.auth` is set.
+    pub tool_claims: Vec<Vec<(String, String)>>,
 }
 
 /// Whether the manifest at `path` asks for HTTP (`server.http`), read before the
@@ -55,6 +58,7 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
     let oauth = matches!(http.as_ref().map(|h| &h.auth), Some(super::http::Auth::OAuth(_)));
     let mut tools: Vec<Tool> = Vec::new();
     let mut tool_scopes = Vec::new();
+    let mut tool_claims = Vec::new();
     let mut warnings = Vec::new();
     for (i, t) in list.iter().enumerate() {
         let at = format!("tools[{i}]");
@@ -75,12 +79,34 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
                 out
             }
         };
-        let tool = tool::parse_tool(&t, &at, dir, model, &settings, Definer::Manifest, &mut warnings)?;
+        // App inputs from claims: {"input": {"claim": "name"}}, only where tokens are checked.
+        let mut claims: Vec<(String, String)> = Vec::new();
+        if oauth && let Some(v) = t.get("app_inputs").cloned() {
+            let o = v.as_object().filter(|o| !o.is_empty()).ok_or(format!(
+                "{at}.app_inputs: expected an object naming, for each input, the token claim it comes from: {{\"customer\": {{\"claim\": \"sub\"}}}}"
+            ))?;
+            for (input, spec) in o {
+                let claim = spec
+                    .as_object()
+                    .filter(|s| s.len() == 1)
+                    .and_then(|s| s.get("claim"))
+                    .and_then(Json::as_str)
+                    .filter(|c| !c.is_empty())
+                    .ok_or(format!("{at}.app_inputs.{input}: expected {{\"claim\": \"<a claim of the access token>\"}}"))?;
+                claims.push((input.clone(), claim.to_string()));
+            }
+            t["app_inputs"] = Json::Array(claims.iter().map(|(i, _)| Json::String(i.clone())).collect());
+        }
+        // A tool whose inputs come from claims is defined as an app's is: the inputs are
+        // the definer's, never the caller's.
+        let definer = if claims.is_empty() { Definer::Manifest } else { Definer::App(tool::Grants::Fixed) };
+        let tool = tool::parse_tool(&t, &at, dir, model, &settings, definer, &mut warnings)?;
         if tools.iter().any(|x| x.name == tool.name) {
             return Err(format!("tools[{i}].name: '{}' is used by an earlier tool", tool.name));
         }
         tools.push(tool);
         tool_scopes.push(scopes);
+        tool_claims.push(claims);
     }
-    Ok(Manifest { name, settings, tools, warnings, http, tool_scopes })
+    Ok(Manifest { name, settings, tools, warnings, http, tool_scopes, tool_claims })
 }

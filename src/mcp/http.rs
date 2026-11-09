@@ -80,7 +80,7 @@ pub struct Settings {
 pub enum Auth {
     /// None: a test build only, on loopback (docs/MCP.md section 12.4).
     None,
-    OAuth(OAuth),
+    OAuth(Box<OAuth>),
 }
 
 /// `server.http.auth`: the server as an OAuth 2.1 resource server (section 12.4, 12.5).
@@ -92,6 +92,8 @@ pub struct OAuth {
     pub leeway_s: u64,
     /// DER certificates trusted, besides Mozilla's roots, for fetching its metadata and keys.
     pub extra_roots: Vec<Vec<u8>>,
+    /// What callers' scopes are made with (section 12.6).
+    pub principal_key: super::principal::PrincipalKey,
 }
 
 /// A scope token (RFC 6749 section 3.3): visible ASCII but `"` and `\`.
@@ -207,7 +209,7 @@ pub fn parse(v: &Json, at: &str) -> Result<Settings, String> {
             }
             Auth::None
         }
-        Some(Json::Object(a)) => Auth::OAuth(parse_oauth(a, &format!("{at}.auth"))?),
+        Some(Json::Object(a)) => Auth::OAuth(Box::new(parse_oauth(a, &format!("{at}.auth"))?)),
         Some(_) => return Err(format!("{at}.auth: expected an object")),
     };
 
@@ -216,7 +218,7 @@ pub fn parse(v: &Json, at: &str) -> Result<Settings, String> {
 }
 
 fn parse_oauth(a: &Map<String, Json>, at: &str) -> Result<OAuth, String> {
-    keys_only(a, at, &["issuer", "scopes_supported", "jwt_leeway_s", "extra_root_certificates"])?;
+    keys_only(a, at, &["issuer", "scopes_supported", "jwt_leeway_s", "extra_root_certificates", "principal_key"])?;
     let issuer = text(a, "issuer", at)?.ok_or(format!("{at}.issuer: missing (the authorization server's issuer identifier)"))?;
     let u = url::Url::parse(&issuer).map_err(|e| format!("{at}.issuer: {e}"))?;
     if u.scheme() != "https" || u.query().is_some() || u.fragment().is_some() || !u.username().is_empty() {
@@ -242,7 +244,13 @@ fn parse_oauth(a: &Map<String, Json>, at: &str) -> Result<OAuth, String> {
             extra_roots.extend(crate::interp::http::read_root_certificates(p).map_err(|e| format!("{at}.extra_root_certificates[{i}]: {e}"))?);
         }
     }
-    Ok(OAuth { issuer, scopes_supported, leeway_s, extra_roots })
+    // {"env": VARIABLE}: read from the environment, never written anywhere.
+    let pk = a.get("principal_key").and_then(Json::as_object).ok_or(format!("{at}.principal_key: missing; expected {{\"env\": \"VARIABLE\"}}"))?;
+    keys_only(pk, &format!("{at}.principal_key"), &["env"])?;
+    let var = pk.get("env").and_then(Json::as_str).filter(|v| !v.is_empty()).ok_or(format!("{at}.principal_key.env: expected a variable name"))?;
+    let secret = std::env::var(var).map_err(|_| format!("{at}.principal_key: environment variable {var} is not set"))?;
+    let principal_key = super::principal::PrincipalKey::new(secret.as_bytes()).map_err(|e| format!("{at}.principal_key: {var}: {e}"))?;
+    Ok(OAuth { issuer, scopes_supported, leeway_s, extra_roots, principal_key })
 }
 
 /// A Host header value: a lowercase host name, IPv4 address or bracketed IPv6 address,
@@ -303,6 +311,13 @@ pub fn serve(path: &Path) -> u8 {
             return 2;
         }
     };
+    // A changed principal key must not hide callers' runs from them (section 12.6).
+    if let Auth::OAuth(o) = &settings.auth
+        && let Err(e) = server.check_principal_key(&o.principal_key.fingerprint())
+    {
+        log(&e);
+        return 2;
+    }
     // OAuth: the authorization server's keys, found and fetched before serving.
     let verifier = match &settings.auth {
         Auth::None => {
@@ -354,6 +369,7 @@ struct State {
 
 /// What OAuth needs while serving: the keys, what a token must say, and the metadata.
 struct Verifier {
+    principal_key: super::principal::PrincipalKey,
     issuer: String,
     audience: String,
     leeway_s: u64,
@@ -392,6 +408,7 @@ impl Verifier {
         }
         let challenge_scope = (!o.scopes_supported.is_empty()).then(|| o.scopes_supported.join(" "));
         Ok(Verifier {
+            principal_key: o.principal_key.clone(),
             issuer: o.issuer.clone(),
             audience: s.resource.clone(),
             leeway_s: o.leeway_s,
@@ -959,7 +976,11 @@ async fn handle(state: &Arc<State>, req: Request<Incoming>) -> Response<Body> {
     let key = format!("http:{}", state.next.fetch_add(1, Ordering::SeqCst));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let out: Arc<dyn Sink> = Arc::new(ChannelSink(tx));
-    state.session.request(id, method, params, &out, Cancel::Given { ctl, key });
+    let caller = match (&state.verifier, caller) {
+        (Some(v), Some(c)) => Some(super::Caller { scope: v.principal_key.scope(&c.iss, &c.sub), client_id: c.client_id, claims: c.claims }),
+        _ => None,
+    };
+    state.session.request(id, method, params, &out, Cancel::Given { ctl, key, caller });
     drop(out);
 
     if progress {
