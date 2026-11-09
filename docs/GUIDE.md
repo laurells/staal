@@ -1149,8 +1149,10 @@ fn serve(listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -
 `accept` waits for the next client on an address its grant allows and reads its
 request, to a delimiter or to the end; `reply` answers that connection and closes
 it. The request is untrusted. Tasks made by `parallel` serve clients at once, each
-answering its own. A bad request (too slow, too long, not text) fails that `accept`,
-so a program meant to outlive one wraps it in `try`. Each request is answered at
+answering its own. A client whose request is too slow, too long or not text is
+dropped and logged, and `accept` waits for the next one; `"on_bad_client": "fail"`
+on the grant makes such a client fail the `accept` instead. `accept` waits for a
+client with no time limit unless the grant sets `"wait_ms"`, after which it fails. Each request is answered at
 most once, even across a crash, but a connection does not survive one: a request
 accepted and not yet answered when the run stopped is lost, and the resumed run's
 `reply` fails saying so. Nothing is encrypted. RUNTIME.md section 12 has the

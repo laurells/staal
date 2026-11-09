@@ -19,24 +19,6 @@ the certificate, a fixture or config error for every bad key and certificate cas
 the crash test for listening run over TLS too, mutations caught, RUNTIME.md and
 GUIDE.md updated.
 
-### An optional time limit on waiting for a client
-
-Waiting for a client has no time limit, deliberately: a server waits. Some programs
-want "at most N seconds". Needed: an optional limit (on the grant or as an argument;
-decide which), failing as `action` when it passes with no client, and replayed from
-the journal like any accept. Done when: tested on both engines, with a crash test
-point inside the wait, and documented.
-
-### Skipping bad clients by default
-
-Today a client that is too slow, sends more than `net.max_response_bytes`, or sends
-something that is not UTF-8 fails the whole `accept`, so a server must wrap each one
-in `try`. For a server that is routine, not a program error. Needed: by default the
-runtime drops that client, logs it (an event, with the reason, never the request),
-and keeps waiting; a program can still ask for the strict behaviour. Done when: a
-test with bad clients between good ones shows every good one answered and every bad
-one logged, on both engines, and documented.
-
 ### Not fixable: a request lost to a crash
 
 A connection does not outlive the process that accepted it; no runtime can resume

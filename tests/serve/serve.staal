@@ -37,3 +37,13 @@ fn twice(listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -
     let second = try answer.reply(request.connection, "two\n")
     return second.error
 }
+
+// One request; if the accept fails (no client within the grant's wait_ms, or a bad
+// client with on_bad_client "fail"), its message.
+fn waited(listen: cap net.tcp.accept, answer: cap net.tcp.reply, address: Text) -> Text {
+    let r = try handle(listen, answer, address)
+    if r.ok {
+        return "served"
+    }
+    return r.error
+}

@@ -379,6 +379,9 @@ pub struct GrantPlan {
     /// times `uses` (each the tighter of the grant's and the slot's). None when
     /// nothing bounds it.
     pub worst: Option<Money>,
+    /// Whether it (or, for a library capability, any of its needs) is a
+    /// `net.tcp.accept` with no `wait_ms`, whose accept can wait for ever.
+    pub waits_unbounded: bool,
 }
 
 /// Checks `config` for `prog` as a run would, without running anything, and says what
@@ -401,7 +404,7 @@ pub fn plan(prog: &Program, config: &Json) -> Result<Plan, String> {
             Arg::Data(v) => {
                 inputs.insert(p.name.clone(), to_json(v, false)?);
             }
-            Arg::Grant { name, path, limits, idempotency_key, needs, .. } => {
+            Arg::Grant { name, path, limits, idempotency_key, needs, listen, .. } => {
                 let Ty::Cap { limits: declared, .. } = &p.ty else {
                     return Err(format!("grants.{name}: is not a capability parameter; this is a bug in staalc"));
                 };
@@ -414,6 +417,9 @@ pub fn plan(prog: &Program, config: &Json) -> Result<Plan, String> {
                         NeedArg::Data(_) => None,
                     })
                     .collect();
+                let unbounded = |l: &Option<tcp::Listen>| l.is_some_and(|l| l.wait.is_none());
+                let waits_unbounded = unbounded(listen)
+                    || needs.iter().any(|n| matches!(n, NeedArg::Cap { listen, .. } if unbounded(listen)));
                 let spends = match lib {
                     Some(a) => a.amount.is_some(),
                     None => !is_runtime_cap(path),
@@ -453,6 +459,7 @@ pub fn plan(prog: &Program, config: &Json) -> Result<Plan, String> {
                     idempotency_key: *idempotency_key || need_caps.iter().any(|(_, k)| *k),
                     spends,
                     worst,
+                    waits_unbounded,
                 });
             }
         }
@@ -602,6 +609,7 @@ enum Arg {
         needs: Vec<NeedArg>,
         foreign: Option<std::sync::Arc<ffi::Function>>,
         postgres: Option<std::sync::Arc<pg::Grant>>,
+        listen: Option<tcp::Listen>,
     },
 }
 
@@ -609,7 +617,14 @@ enum Arg {
 enum NeedArg {
     /// A runtime capability, granted by the operator and then narrowed to the limits
     /// the library declared for it.
-    Cap { path: String, limits: broker::Limits, idempotency_key: bool, declared: CapLimits, postgres: Option<std::sync::Arc<pg::Grant>> },
+    Cap {
+        path: String,
+        limits: broker::Limits,
+        idempotency_key: bool,
+        declared: CapLimits,
+        postgres: Option<std::sync::Arc<pg::Grant>>,
+        listen: Option<tcp::Listen>,
+    },
     /// A secret or a text setting.
     Data(Value),
 }
@@ -622,6 +637,8 @@ struct ParsedGrant {
     foreign: Option<std::sync::Arc<ffi::Function>>,
     /// For `db.postgres.*`: the databases the grant reaches.
     postgres: Option<std::sync::Arc<pg::Grant>>,
+    /// For `net.tcp.accept`: how long to wait for a client, and what a bad one does.
+    listen: Option<tcp::Listen>,
 }
 
 /// How a net.http failure that certainly sent nothing begins, in results and journals.
@@ -650,6 +667,25 @@ fn load_secret(spec: &Json, at: &str) -> Result<Secret, String> {
     Ok(Secret { name: var.to_string(), value, shown: "{secret}".to_string() })
 }
 
+/// `wait_ms` and `on_bad_client` of a `net.tcp.accept` grant (RUNTIME.md section 12).
+fn listen_settings(g: &Map<String, Json>, at: &str) -> Result<tcp::Listen, String> {
+    let wait = match g.get("wait_ms") {
+        None => None,
+        Some(v) => {
+            // At least a millisecond; at most the longest wait poll(2) takes at once.
+            let ms = v.as_u64().filter(|ms| (1..=i32::MAX as u64).contains(ms));
+            let ms = ms.ok_or(format!("{at}.wait_ms: expected a whole number of milliseconds from 1 to {}", i32::MAX))?;
+            Some(std::time::Duration::from_millis(ms))
+        }
+    };
+    let on_bad_client = match g.get("on_bad_client").map(|v| v.as_str()) {
+        None | Some(Some("skip")) => tcp::OnBadClient::Skip,
+        Some(Some("fail")) => tcp::OnBadClient::Fail,
+        Some(_) => return Err(format!("{at}.on_bad_client: expected \"skip\" or \"fail\"")),
+    };
+    Ok(tcp::Listen { wait, on_bad_client })
+}
+
 /// Reads one grant: `{"cap": path, limits..., "idempotency_key"?, "needs"?}`, for a
 /// capability slot of type `cap <want>(declared)`. A library capability's grant must
 /// supply each of its `needs` (RUNTIME.md section 13); secret values are added to
@@ -669,7 +705,8 @@ fn parse_grant(
     for k in g.keys() {
         let known = ["cap", "max", "each", "uses", "only", "idempotency_key", "needs"].contains(&k.as_str())
             || (c_function && ["library", "sha256", "repeatable"].contains(&k.as_str()))
-            || (postgres && k == "databases");
+            || (postgres && k == "databases")
+            || (want == "net.tcp.accept" && ["wait_ms", "on_bad_client"].contains(&k.as_str()));
         if !known {
             return Err(format!("{at}: unknown key '{k}'"));
         }
@@ -679,6 +716,7 @@ fn parse_grant(
         return Err(format!("{at}.cap: is '{gpath}', but the slot needs '{want}'"));
     }
     let limits = grant_limits(g, at, types)?;
+    let listen = if want == "net.tcp.accept" { Some(listen_settings(g, at)?) } else { None };
     let idempotency_key = match g.get("idempotency_key") {
         None => false,
         Some(Json::Bool(b)) => *b,
@@ -751,6 +789,7 @@ fn parse_grant(
                             idempotency_key: inner.idempotency_key,
                             declared: nd.clone(),
                             postgres: inner.postgres,
+                            listen: inner.listen,
                         });
                     }
                     Ty::Named(x) if x == "Secret" => {
@@ -769,7 +808,7 @@ fn parse_grant(
     }
     let foreign = if c_function { Some(load_c_function(g, at, want, prog, &mut runtime.libraries)?) } else { None };
     let postgres = if postgres { Some(std::sync::Arc::new(postgres_grant(g, at, runtime)?)) } else { None };
-    Ok(ParsedGrant { limits, idempotency_key, needs, foreign, postgres })
+    Ok(ParsedGrant { limits, idempotency_key, needs, foreign, postgres, listen })
 }
 
 /// `"databases"` of a `db.postgres.*` grant: each database it reaches, by the name
@@ -1111,6 +1150,7 @@ impl Setup {
                         needs: pg.needs,
                         foreign: pg.foreign,
                         postgres: pg.postgres,
+                        listen: pg.listen,
                     });
                 }
                 Ty::Proposed(_) => {
@@ -1286,6 +1326,8 @@ struct Interp<'p> {
     foreign: HashMap<usize, std::sync::Arc<ffi::Function>>,
     /// The databases each `db.postgres.*` grant reaches, by the grant's broker handle.
     postgres: HashMap<usize, std::sync::Arc<pg::Grant>>,
+    /// How each `net.tcp.accept` grant waits, by the grant's broker handle.
+    listen: HashMap<usize, tcp::Listen>,
     fs_max_read_bytes: usize,
     secrets: Vec<String>,
     /// Library capabilities' actions, by the path programs use (`termii.sms.send`).
@@ -1418,6 +1460,7 @@ impl<'p> Interp<'p> {
             server: Default::default(),
             foreign: HashMap::new(),
             postgres: HashMap::new(),
+            listen: HashMap::new(),
             fs_max_read_bytes: runtime.fs_max_read_bytes,
             secrets: runtime.secrets.clone(),
             lib: prog
@@ -1481,9 +1524,12 @@ impl<'p> Interp<'p> {
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
-                Arg::Grant { name, path, limits, idempotency_key, needs, foreign, postgres } => {
+                Arg::Grant { name, path, limits, idempotency_key, needs, foreign, postgres, listen } => {
                     let h = self.broker().grant(path, limits.clone());
                     self.granted.push((name.clone(), h));
+                    if let Some(l) = listen {
+                        self.listen.insert(h, *l);
+                    }
                     if let Some(p) = postgres {
                         self.postgres.insert(h, p.clone());
                     }
@@ -1503,10 +1549,13 @@ impl<'p> Interp<'p> {
                     for n in needs {
                         match n {
                             NeedArg::Data(v) => given.push(v.clone()),
-                            NeedArg::Cap { path: ip, limits: il, idempotency_key: ik, declared, postgres } => {
+                            NeedArg::Cap { path: ip, limits: il, idempotency_key: ik, declared, postgres, listen } => {
                                 let ih = self.broker().grant(ip, il.clone());
                                 if let Some(p) = postgres {
                                     self.postgres.insert(ih, p.clone());
+                                }
+                                if let Some(l) = listen {
+                                    self.listen.insert(ih, *l);
                                 }
                                 if *ik {
                                     self.broker().set_idempotency_key(ih).unwrap_or_default();
@@ -2105,6 +2154,7 @@ impl<'p> Interp<'p> {
             server: self.server.clone(),
             foreign: self.foreign.clone(),
             postgres: self.postgres.clone(),
+            listen: self.listen.clone(),
             fs_max_read_bytes: self.fs_max_read_bytes,
             secrets: self.secrets.clone(),
             lib: self.lib.clone(),
@@ -3049,9 +3099,15 @@ impl<'p> Interp<'p> {
             self.broker().count_use(h).or_else(internal)?;
             let jbody = json!({ "capability": path, "method": method, "target": address, "until": until });
             what = format!("action {path} {address}");
+            let root = self.broker().root(h).or_else(internal)?;
+            let listen = self.listen.get(&root).copied().unwrap_or_default();
             let (a, r) = self.external("action", jbody, true, &what, |it, key| {
-                let got = tcp::accept(&it.server, &address, until.as_deref(), &it.tcp, key);
-                Answer::Done(got.map(|t| json!({ "connection": key, "data": scrub_text(&it.secrets, &t) })))
+                let got = tcp::accept(&it.server, &address, until.as_deref(), &listen, &it.tcp, key);
+                // Each client dropped as unusable, with why: never what it sent.
+                for why in &got.dropped {
+                    it.emit("client_dropped", json!({ "capability": path, "target": address, "reason": why }));
+                }
+                Answer::Done(got.request.map(|t| json!({ "connection": key, "data": scrub_text(&it.secrets, &t) })))
             })?;
             (a, r, address)
         } else {

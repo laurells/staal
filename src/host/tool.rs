@@ -165,13 +165,16 @@ impl Tool {
     }
 }
 
-/// What grants may not do in a tool: listen for connections, or reach the network
-/// without timeouts given.
+/// What grants may not do in a tool: wait for a connection with no time limit, or
+/// reach the network without timeouts given. Every wait in a tool has a bound.
 fn check_grants(plan: &interp::Plan, base: &Map<String, Json>, at: &str) -> Result<(), String> {
     let all_paths: Vec<&str> =
         plan.grants.iter().flat_map(|g| std::iter::once(g.path.as_str()).chain(g.needs.iter().map(String::as_str))).collect();
-    if all_paths.contains(&"net.tcp.accept") {
-        return Err(format!("{at}: a tool may not be granted net.tcp.accept, which waits for a connection with no time limit"));
+    if let Some(g) = plan.grants.iter().find(|g| g.waits_unbounded) {
+        return Err(format!(
+            "{at}.{}: net.tcp.accept in a tool needs \"wait_ms\": without it an accept waits for a connection with no time limit",
+            g.name
+        ));
     }
     // Every wait has a bound: in a tool the timeouts are given, not defaulted.
     if all_paths.iter().any(|p| reaches_network(p)) {

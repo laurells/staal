@@ -1089,12 +1089,29 @@ connections only from the same machine, `0.0.0.0:8080` from any). `only` limits
 `net.tcp.accept`; `net.tcp.reply` takes no `only` (E101, or a config error on a
 grant), since it answers only a connection the run accepted, and a connection that
 is not open (answered already, or never accepted by this process) fails (`action`).
-Waiting for a client has no time limit. Without `until` the request ends when the
-client closes its sending side; with `until` it ends when the request ends with it.
-Reading it must finish within `net.timeout_ms` and `net.max_response_bytes`, and it
-must be UTF-8 text, or the accept fails (`action`) and that client is dropped, so a
-program that must outlive one bad client catches it with `try`. Writing the reply
-has the same time limit. The request is untrusted (E006). An `Incoming` cannot be
+Without `until` the request ends when the client closes its sending side; with
+`until` it ends when the request ends with it. Reading it must finish within
+`net.timeout_ms` and `net.max_response_bytes`, and it must be UTF-8 text; a client
+whose request does not is a bad client. Writing the reply has the same time limit.
+
+Two keys of a `net.tcp.accept` grant, and no other grant, say how an `accept` waits:
+
+- `"wait_ms"`: a whole number of milliseconds from 1 to 2147483647. Without it an
+  `accept` waits for a client with no time limit. With it, no client is taken once
+  that long has passed since the `accept` began, even one already waiting to be
+  taken, and the `accept` fails (`action`: "no client connected to <address> within
+  <n> ms"). A client taken before then has its request read as above, so an `accept`
+  lasts at most `wait_ms` plus `net.timeout_ms`. The wait is made with `poll(2)`.
+- `"on_bad_client"`: `"skip"` (the default) or `"fail"`. With `"skip"` a bad client
+  is dropped, its connection closed unanswered, and the `accept` takes the next
+  client, within the same `wait_ms`; each one dropped is logged as a
+  `client_dropped` event with the capability, the address and the reason, never
+  what the client sent. With `"fail"` a bad client fails the `accept` (`action`).
+
+Any other value is a config error before the run starts. These are grant keys and
+not arguments, so the program's code is the same under either setting, and they
+are not `accept` methods because a capability's method is the last part of its
+path. The request is untrusted (E006). An `Incoming` cannot be
 built in code, proposed by a model or parsed from text (E101). Nothing is encrypted.
 
 The journal records each request and a hash of each reply, never the reply. Both

@@ -23,8 +23,23 @@ the language or its file formats.
   the answer could not be held. The `email` package is now 0.2.0: its receipts
   changed, and it needs a staalc whose `Response` has `headers`, so a project on
   `^0.1` keeps the version it has.
+- A `net.tcp.accept` grant can set `"wait_ms"`: once that many milliseconds have
+  passed since an `accept` began, it takes no client, even one already waiting, and
+  fails (`action`), so it lasts at most `wait_ms` plus `net.timeout_ms`. The wait
+  uses `poll(2)`, and a failed accept is recorded and replayed like any other. A run
+  killed while waiting takes the next client on resume. On both engines.
+- A tool (`staalc mcp`, and tools defined through the C API, Python and Node.js) may
+  now hold a `net.tcp.accept` grant if it sets `"wait_ms"`, since every wait in a
+  tool must have a limit. Without it the grant is still refused.
 
 ### Changed
+
+- A client of `net.tcp.accept` whose request is too slow, too long or not UTF-8 is
+  now dropped by default, logged as a `client_dropped` event (the capability, the
+  address and the reason, never what it sent), and the `accept` takes the next
+  client. Before, it failed the `accept` (`action`). A grant with
+  `"on_bad_client": "fail"` keeps the old behaviour. A program that caught that
+  failure with `try` no longer sees it.
 
 - A program that returns a `Response` gives `headers` in its JSON too, and
   `HeaderField` is a built-in type name: a module that declared its own `HeaderField`

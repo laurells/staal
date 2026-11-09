@@ -136,9 +136,10 @@ would reach the protocol stream or wait without end:
   standard input is the MCP stream, so a read would consume the client's messages.
   `staalc schema` reports it as `reads_console`, following calls and the library
   capabilities the function is given.
-- **Listening for connections.** A grant of `net.tcp.accept` is refused: an accept
-  waits until a client connects, with no time limit today (DEFERRED.md), so a call
-  could hold its quota reservation for ever.
+- **Listening without a time limit.** A grant of `net.tcp.accept` without
+  `"wait_ms"` is refused: such an accept waits until a client connects, so a call
+  could hold its quota reservation for ever. With `"wait_ms"` an accept lasts at most
+  that plus `net.timeout_ms` (RUNTIME.md section 12, Listening).
 
 A third, C code (`cap ffi`), is allowed with a warning at start: it cannot be
 interrupted either (section 3, "How long a call can take").
@@ -785,7 +786,8 @@ environment that holds the secrets. What it does not: everything that arrives on
 - Secrets: as in section 8.
 - The stream: a tool that prints, and one whose C library writes to standard output,
   never put anything but MCP messages on the client's stream; a program that can reach
-  `read_line()`, and a grant of `net.tcp.accept`, are refused at start.
+  `read_line()`, and a grant of `net.tcp.accept` without `"wait_ms"`, are refused at
+  start, and one with it is accepted.
 - Deadlines: a run past its deadline fails before its next action and never during
   one, on both engines, and a resumed run decides the same way.
 - Keeping files: finished journals older than `server.keep` are deleted, and a running,
@@ -871,7 +873,7 @@ the host opens. The one difference is where grants come from:
   knows (the signed-in user, the customer's tier), never from the call's arguments,
   which are inputs only, as in section 5. Because the grants are not known when the
   tool is defined, each call's grants are checked as a manifest's are when it loads:
-  `net.tcp.accept` is refused, a tool that reaches the network must set both `net`
+  `net.tcp.accept` without `"wait_ms"` is refused, a tool that reaches the network must set both `net`
   timeouts, with a money quota every grant that can spend must be bounded (`max`, or
   `each` and `uses`) in the quota's currency, and no grant may name a variable that
   `notify_env` passes to the notify command. A call that fails a check is refused

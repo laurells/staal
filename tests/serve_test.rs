@@ -69,6 +69,40 @@ fn config(dir: &Path, entry: &str, address: &str, only: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// `config` with more keys on the `listen` grant.
+fn config_with(dir: &Path, entry: &str, address: &str, listen: serde_json::Value) -> String {
+    let p = config(dir, entry, address, "127.0.0.1:*");
+    let mut cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    for (k, v) in listen.as_object().unwrap() {
+        cfg["grants"]["listen"][k] = v.clone();
+    }
+    std::fs::write(&p, cfg.to_string()).unwrap();
+    p
+}
+
+/// A client that sends raw bytes and reads whatever comes back; for clients the run
+/// must drop. Connects once the program listens.
+fn raw_client(address: String, bytes: Vec<u8>, close: bool) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        let mut c = loop {
+            match TcpStream::connect(&address) {
+                Ok(c) => break c,
+                Err(_) if start.elapsed() < Duration::from_secs(20) => std::thread::sleep(Duration::from_millis(20)),
+                Err(e) => panic!("never listening on {address}: {e}"),
+            }
+        };
+        let _ = c.write_all(&bytes);
+        if close {
+            let _ = c.shutdown(std::net::Shutdown::Write);
+        }
+        c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        let mut got = Vec::new();
+        let _ = c.read_to_end(&mut got);
+        got
+    })
+}
+
 fn staalc(args: &[&str]) -> (Option<i32>, String, String) {
     let o = Command::new(BIN).args(args).current_dir(ROOT).output().unwrap();
     (o.status.code(), String::from_utf8_lossy(&o.stdout).trim().to_string(), String::from_utf8_lossy(&o.stderr).trim().to_string())
@@ -233,4 +267,152 @@ fn a_connection_is_answered_once() {
         assert!(out.contains("is not open"), "{engine}: {out}");
         assert_eq!(c.join().unwrap(), "one\n", "{engine}");
     }
+}
+
+#[test]
+fn a_wait_limit_ends_an_accept_with_no_client_and_is_replayed() {
+    let _turn = one_at_a_time();
+    for engine in engines() {
+        let addr = free_address();
+        let dir = scratch(&format!("wait-{engine}"));
+        let cfg = config_with(&dir, "waited", &addr, json!({ "wait_ms": 300 }));
+        let j = dir.join("run.journal").to_string_lossy().into_owned();
+        let start = Instant::now();
+        let (code, out, err) = staalc(&["run", PROGRAM, "--config", &cfg, "--journal", &j, "--engine", engine]);
+        let took = start.elapsed();
+        let want = format!("\"action: no client connected to {addr} within 300 ms\"");
+        assert_eq!((code, out.as_str()), (Some(0), want.as_str()), "{engine}: {err}");
+        assert!(took >= Duration::from_millis(300), "{engine}: ended after {took:?}, before the limit");
+        // Replayed from the journal: the same failure, without waiting again.
+        let start = Instant::now();
+        let (code, out, err) = staalc(&["resume", PROGRAM, "--config", &cfg, "--journal", &j, "--engine", engine]);
+        assert_eq!((code, out.as_str()), (Some(0), want.as_str()), "{engine}: {err}");
+        assert!(start.elapsed() < Duration::from_millis(300), "{engine}: the replay waited");
+        // A client in time is served as without a limit.
+        let addr = free_address();
+        let cfg = config_with(&dir, "waited", &addr, json!({ "wait_ms": 20000 }));
+        let c = client(addr.clone(), "x\n");
+        let (code, out, err) = staalc(&["run", PROGRAM, "--config", &cfg, "--engine", engine]);
+        assert_eq!((code, out.as_str()), (Some(0), "\"served\""), "{engine}: {err}");
+        assert_eq!(c.join().unwrap(), "+x\n", "{engine}");
+    }
+}
+
+#[test]
+fn a_run_killed_while_waiting_takes_the_next_client_on_resume() {
+    let _turn = one_at_a_time();
+    for engine in engines() {
+        let addr = free_address();
+        let dir = scratch(&format!("killed-waiting-{engine}"));
+        let cfg = config_with(&dir, "waited", &addr, json!({ "wait_ms": 60000 }));
+        let j = dir.join("run.journal");
+        let mut run = Command::new(BIN)
+            .args(["run", PROGRAM, "--config", &cfg, "--journal", j.to_str().unwrap(), "--engine", engine])
+            .current_dir(ROOT)
+            .spawn()
+            .unwrap();
+        // Waiting: the accept's intent is in the journal, and no client has come.
+        let start = Instant::now();
+        while !std::fs::read_to_string(&j).unwrap_or_default().contains("net.tcp.accept") {
+            assert!(start.elapsed() < Duration::from_secs(20), "{engine}: the run never began to wait");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        run.kill().unwrap(); // SIGKILL
+        run.wait().unwrap();
+        // Resumed, the accept is in doubt and safe to make again: it takes the next client.
+        let c = client(addr.clone(), "after\n");
+        let (code, out, err) = staalc(&["resume", PROGRAM, "--config", &cfg, "--journal", j.to_str().unwrap(), "--engine", engine]);
+        assert_eq!((code, out.as_str()), (Some(0), "\"served\""), "{engine}: {err}");
+        assert_eq!(c.join().unwrap(), "+after\n", "{engine}");
+    }
+}
+
+#[test]
+fn bad_clients_are_dropped_and_logged_and_good_ones_served() {
+    let _turn = one_at_a_time();
+    for engine in engines() {
+        let addr = free_address();
+        let dir = scratch(&format!("bad-clients-{engine}"));
+        // net.max_response_bytes bounds a request: 64 bytes here.
+        let p = config(&dir, "serve", &addr, "127.0.0.1:*");
+        let mut cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        cfg["net"] = json!({ "max_response_bytes": 64, "timeout_ms": 2000 });
+        std::fs::write(&p, cfg.to_string()).unwrap();
+        let log = dir.join("run.jsonl");
+        // Clients one at a time, in this order: each is accepted before the next comes.
+        let order: Vec<(&str, Vec<u8>)> = vec![
+            ("good", b"one\n".to_vec()),
+            ("too long", vec![b'x'; 100]),
+            ("good", b"two\n".to_vec()),
+            ("not UTF-8", vec![0xff, 0xfe, b'\n']),
+            ("good", b"three\n".to_vec()),
+        ];
+        let feeder = std::thread::spawn({
+            let addr = addr.clone();
+            move || {
+                let mut got = Vec::new();
+                for (what, bytes) in order {
+                    let close = what != "good";
+                    got.push((what, raw_client(addr.clone(), bytes, close).join().unwrap()));
+                }
+                got
+            }
+        });
+        let (code, out, err) = staalc(&["run", PROGRAM, "--config", &p, "--log", log.to_str().unwrap(), "--engine", engine]);
+        assert_eq!((code, out.as_str()), (Some(0), "3"), "{engine}: {err}");
+        let got = feeder.join().unwrap();
+        let answers: Vec<String> = got.iter().map(|(_, b)| String::from_utf8_lossy(b).into_owned()).collect();
+        assert_eq!(answers, ["+one\n", "", "+two\n", "", "+three\n"], "{engine}: every good client answered, no bad one");
+        let events: Vec<serde_json::Value> =
+            std::fs::read_to_string(&log).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let dropped: Vec<&str> = events.iter().filter(|e| e["event"] == "client_dropped").map(|e| e["reason"].as_str().unwrap()).collect();
+        assert_eq!(dropped.len(), 2, "{engine}: {dropped:?}");
+        assert!(dropped[0].contains("longer than 64 bytes") && dropped[1].contains("not UTF-8"), "{engine}: {dropped:?}");
+        // The reason never holds what the client sent.
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(!text.contains("xxxxxxxxxx"), "{engine}: a dropped request reached the log");
+    }
+}
+
+#[test]
+fn a_bad_client_fails_the_accept_when_the_grant_says_fail() {
+    let _turn = one_at_a_time();
+    for engine in engines() {
+        let addr = free_address();
+        let dir = scratch(&format!("fail-bad-{engine}"));
+        let cfg = config_with(&dir, "waited", &addr, json!({ "on_bad_client": "fail" }));
+        let bad = raw_client(addr.clone(), vec![0xff, b'\n'], true);
+        let (code, out, err) = staalc(&["run", PROGRAM, "--config", &cfg, "--engine", engine]);
+        assert_eq!(code, Some(0), "{engine}: {err}");
+        assert!(out.contains("is not UTF-8 text"), "{engine}: {out}");
+        assert_eq!(bad.join().unwrap(), b"", "{engine}");
+    }
+}
+
+#[test]
+fn the_listening_settings_are_checked_before_anything_runs() {
+    let _turn = one_at_a_time();
+    let dir = scratch("listen-settings");
+    for (extra, want) in [
+        (json!({ "wait_ms": 0 }), "wait_ms: expected a whole number of milliseconds from 1 to 2147483647"),
+        (json!({ "wait_ms": 2147483648u64 }), "wait_ms: expected a whole number"),
+        (json!({ "wait_ms": 1.5 }), "wait_ms: expected a whole number"),
+        (json!({ "wait_ms": "100" }), "wait_ms: expected a whole number"),
+        (json!({ "on_bad_client": "maybe" }), "on_bad_client: expected \"skip\" or \"fail\""),
+        (json!({ "on_bad_client": true }), "on_bad_client: expected \"skip\" or \"fail\""),
+    ] {
+        let cfg = config_with(&dir, "waited", "127.0.0.1:1", extra.clone());
+        let (code, _, err) = staalc(&["run", PROGRAM, "--config", &cfg]);
+        assert_eq!(code, Some(2), "{extra}: {err}");
+        assert!(err.contains(want), "{extra}: {err}");
+    }
+    // Only a net.tcp.accept grant takes them.
+    let p = config(&dir, "serve", "127.0.0.1:1", "127.0.0.1:*");
+    let mut cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    cfg["grants"]["answer"]["wait_ms"] = json!(100);
+    std::fs::write(&p, cfg.to_string()).unwrap();
+    let (code, _, err) = staalc(&["run", PROGRAM, "--config", &p]);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("grants.answer: unknown key 'wait_ms'"), "{err}");
 }

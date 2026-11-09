@@ -520,7 +520,17 @@ fn a_manifest_that_could_go_wrong_stops_the_server_before_it_answers() {
     let tool = |extra: Json| refund_tool(extra);
     refuse("console", json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "ask.staal" }] }), "read_line");
     refuse("accept", json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "listen.staal",
-        "grants": { "l": { "cap": "net.tcp.accept" } }, "net": net() }] }), "net.tcp.accept");
+        "grants": { "l": { "cap": "net.tcp.accept" } }, "net": net() }] }), "net.tcp.accept in a tool needs \"wait_ms\"");
+    // With a limit on the wait, every wait in the tool is bounded, and it is served.
+    {
+        let d = dir.join("accept-bounded");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::copy(dir.join("listen.staal"), d.join("listen.staal")).unwrap();
+        let m = write_manifest(&d, json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "listen.staal",
+            "grants": { "l": { "cap": "net.tcp.accept", "only": ["127.0.0.1:*"], "wait_ms": 100 } }, "net": net() }] }));
+        let (code, err) = start_and_stop(&m, &[]);
+        assert_eq!(code, Some(0), "a tool whose accept has wait_ms: {err}");
+    }
     refuse("timeouts", json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "get.staal",
         "grants": { "get": { "cap": "net.http.get" } } }] }), "net.connect_timeout_ms: required");
     refuse("checks", json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "bad.staal" }] }), "check errors");
