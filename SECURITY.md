@@ -79,8 +79,8 @@ and a way around any of them is in scope:
   ledger, a run file, a journal, a waiting record, or the notify command, which runs
   with a cleared environment and none of the host's descriptors beyond its standard
   ones. (C code given a secret can print it; that is the operator's grant.)
-- **No call holds the host without bound**, except through C code. A tool may not
-  listen for connections, every network wait and every SQLite statement has a
+- **No call holds the host without bound**, except through C code. A tool may
+  listen for connections only with a `wait_ms` limit on each accept, every network wait and every SQLite statement has a
   timeout, a tool's `deadline` stops a run starting new actions, and the concurrency
   limit refuses calls beyond it rather than queueing them. A C function (`cap ffi`)
   cannot be interrupted; a tool granted one is warned about at start.
@@ -96,6 +96,21 @@ cover: a model choosing a harmful action that the grants allow (the
 grants are the operator's statement of what is allowed), a client showing a tool's
 result to a model as instructions (results are data; treat them as untrusted), and
 anyone who can write to the journal directory, which must belong to the host's user.
+
+## The MCP server over HTTP
+
+`staalc mcp` can also serve tools over Streamable HTTP with OAuth access tokens
+(docs/MCP.md section 12). A release build refuses it until it has had an independent
+security review; it runs only in builds made with `--features failpoints`. Reports
+against it are welcome and in scope now: anything in docs/MCP.md section 12 that does
+not hold (a token accepted that should not be, a request served before its checks, one
+principal reaching another's runs, quota or answers, a token, key or subject reaching a
+log or file).
+
+## Severity
+
+Accepted reports are rated with CVSS v4.0 (https://www.first.org/cvss/v4-0/),, and the
+vector is published in the advisory.
 
 ## Out of scope
 

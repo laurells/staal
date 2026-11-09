@@ -29,11 +29,12 @@ written, on both engines. Done when: a test sees one progress message per extern
 operation in order, on both engines and with tasks, and the engines' logs and
 journals are unchanged.
 
-### Remote transport
+### Remote transport: the release gate
 
-Streamable HTTP with OAuth, where `once` keys and status queries are scoped to the
-authenticated client and grants may be chosen per principal (docs/MCP.md section 10).
-Designed in docs/MCP.md section 12, awaiting review. Done when: reviewed, then built with the same test bar as stdio.
+Streamable HTTP with OAuth is built and tested (docs/MCP.md section 12), and served
+only by a test build. Done when: an independent security review
+(docs/security-review/) has been made and its findings fixed; then a release build
+may serve `server.http`.
 
 ## Packages
 
@@ -77,11 +78,11 @@ failing runs. CI now passes on all four platforms; put it back if wanted:
 
 ## Reliability, to do before more features
 
-Everything has been tested on one Linux machine only. Not yet done: fuzzing (first
-the parser and the journal reader, which take input from outside; then the checker,
-the network code and the config reader), a security review by someone other than
-the author, and load and long-running tests (many connections, hours of running,
-large journals). Planned for phase 13; proposed to come earlier.
+CI tests on four platforms, and six fuzz targets exist (fuzz/README.md). Not yet
+done: a security review by someone other than the author (the package for it is
+docs/security-review/), fuzzing with AddressSanitizer and in CI, fuzzing the network
+code, and load and long-running tests (many connections, hours of running, large
+journals).
 
 `packages_test` failed once under load (`run_config_durable` Resume unwrap at
 tests/packages_test.rs:452) and has not failed in 18+ runs since. Cause unknown:

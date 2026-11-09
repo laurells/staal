@@ -207,6 +207,10 @@ fn tables<'a>(c: &Ctx) -> Result<&'a Tables, Failure> {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_step_limit")]
 unsafe extern "C" fn rt_step_limit(c: *mut Ctx) {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -216,6 +220,10 @@ unsafe extern "C" fn rt_step_limit(c: *mut Ctx) {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_depth_limit")]
 unsafe extern "C" fn rt_depth_limit(c: *mut Ctx) {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -225,6 +233,10 @@ unsafe extern "C" fn rt_depth_limit(c: *mut Ctx) {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_arith")]
 unsafe extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
     let f = match arith_op(op) {
@@ -236,6 +248,10 @@ unsafe extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_neg")]
 unsafe extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
     let f = match neg(a) {
@@ -247,6 +263,10 @@ unsafe extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_no_return")]
 unsafe extern "C" fn rt_no_return(c: *mut Ctx) {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -254,6 +274,10 @@ unsafe extern "C" fn rt_no_return(c: *mut Ctx) {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_const")]
 unsafe extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -265,6 +289,10 @@ unsafe extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_clone")]
 unsafe extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -275,6 +303,10 @@ unsafe extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_drop")]
 unsafe extern "C" fn rt_drop(c: *mut Ctx, h: i64) {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -282,6 +314,10 @@ unsafe extern "C" fn rt_drop(c: *mut Ctx, h: i64) {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_box")]
 unsafe extern "C" fn rt_box(c: *mut Ctx, kind: i64, v: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -289,6 +325,10 @@ unsafe extern "C" fn rt_box(c: *mut Ctx, kind: i64, v: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_unbox")]
 unsafe extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -300,6 +340,10 @@ unsafe extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_arith_val")]
 unsafe extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -312,6 +356,10 @@ unsafe extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_cmp")]
 unsafe extern "C" fn rt_cmp(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -324,6 +372,10 @@ unsafe extern "C" fn rt_cmp(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `argv` must point to `n` readable i64 values.
 #[unsafe(export_name = "staal_rt_closure")]
 unsafe extern "C" fn rt_closure(c: *mut Ctx, name: i64, argv: *const i64, n: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -341,6 +393,10 @@ unsafe extern "C" fn rt_closure(c: *mut Ctx, name: i64, argv: *const i64, n: i64
 /// A call of the function value `fh` with the `n` arguments in `argv`: the arguments
 /// its function takes first are what it captured.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `argv` must point to `n` readable i64 values.
 #[unsafe(export_name = "staal_rt_call_value")]
 unsafe extern "C" fn rt_call_value(c: *mut Ctx, fh: i64, argv: *const i64, n: i64) -> i64 {
     let prepared = (|| -> Result<(usize, Vec<i64>), Failure> {
@@ -448,6 +504,10 @@ unsafe fn call_function(c: *mut Ctx, func: &Value, args: Vec<Value>) -> Result<V
 /// `map`, `filter`, `any`, `all`, `count` and `fold` (built-in `code`), with the list,
 /// the start for `fold`, and the function value in `argv`: as the interpreter does.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `argv` must point to `n` readable i64 values.
 #[unsafe(export_name = "staal_rt_with_function")]
 unsafe extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
     let run = || -> Result<Value, Option<Failure>> {
@@ -544,6 +604,10 @@ unsafe fn take_args(c: &mut Ctx, argv: *const i64, n: i64) -> Result<Vec<Value>,
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `argv` must point to `n` readable i64 values.
 #[unsafe(export_name = "staal_rt_builtin")]
 unsafe extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -558,6 +622,10 @@ unsafe extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `argv` must point to `n` readable i64 values.
 #[unsafe(export_name = "staal_rt_record")]
 unsafe extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -576,6 +644,10 @@ unsafe extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) 
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_field")]
 unsafe extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -600,6 +672,10 @@ unsafe extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 /// A copy of field `idx` of the record in `h`, which stays owned by the caller: a
 /// field read from a variable copies the field, not the whole record.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_field_ref")]
 unsafe extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -621,6 +697,10 @@ unsafe extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `argv` must point to `n` readable i64 values.
 #[unsafe(export_name = "staal_rt_variant")]
 unsafe extern "C" fn rt_variant(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -641,6 +721,10 @@ unsafe extern "C" fn rt_variant(c: *mut Ctx, idx: i64, argv: *const i64, n: i64)
 /// The position, among the variants of enum `idx`, of the variant of the enum value
 /// in `h`, which stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_variant_index")]
 unsafe extern "C" fn rt_variant_index(c: *mut Ctx, h: i64, idx: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -658,6 +742,10 @@ unsafe extern "C" fn rt_variant_index(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 
 /// No arm matched the enum value in `h`: the interpreter's failure, word for word.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_no_arm")]
 unsafe extern "C" fn rt_no_arm(c: *mut Ctx, h: i64) {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -671,6 +759,10 @@ unsafe extern "C" fn rt_no_arm(c: *mut Ctx, h: i64) {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_none")]
 unsafe extern "C" fn rt_none(c: *mut Ctx) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -678,6 +770,10 @@ unsafe extern "C" fn rt_none(c: *mut Ctx) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_some")]
 unsafe extern "C" fn rt_some(c: *mut Ctx, h: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -689,6 +785,10 @@ unsafe extern "C" fn rt_some(c: *mut Ctx, h: i64) -> i64 {
 
 /// Whether the optional value in `h`, which stays owned by the caller, holds one.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_opt_has")]
 unsafe extern "C" fn rt_opt_has(c: *mut Ctx, h: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -700,6 +800,10 @@ unsafe extern "C" fn rt_opt_has(c: *mut Ctx, h: i64) -> i64 {
 
 /// A copy of what the optional value in `h` holds; `h` stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_opt_get_ref")]
 unsafe extern "C" fn rt_opt_get_ref(c: *mut Ctx, h: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -714,6 +818,10 @@ unsafe extern "C" fn rt_opt_get_ref(c: *mut Ctx, h: i64) -> i64 {
 
 /// No arm matched an optional value: the interpreter's failure, word for word.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_opt_no_arm")]
 unsafe extern "C" fn rt_opt_no_arm(c: *mut Ctx) {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -722,6 +830,10 @@ unsafe extern "C" fn rt_opt_no_arm(c: *mut Ctx) {
 
 /// Item `i` of the list in `h`, which stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_index_ref")]
 unsafe extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -735,6 +847,10 @@ unsafe extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `argv` must point to `n` readable i64 values.
 #[unsafe(export_name = "staal_rt_list")]
 unsafe extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -746,6 +862,10 @@ unsafe extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `argv` must point to `n` readable i64 values.
 #[unsafe(export_name = "staal_rt_tuple")]
 unsafe extern "C" fn rt_tuple(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -758,6 +878,10 @@ unsafe extern "C" fn rt_tuple(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
 
 /// An empty list (0), set (1) or map (2).
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_empty")]
 unsafe extern "C" fn rt_empty(c: *mut Ctx, kind: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -773,6 +897,10 @@ unsafe extern "C" fn rt_empty(c: *mut Ctx, kind: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `argv` must point to `n` readable i64 values.
 #[unsafe(export_name = "staal_rt_map")]
 unsafe extern "C" fn rt_map(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -785,6 +913,10 @@ unsafe extern "C" fn rt_map(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_index")]
 unsafe extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -799,6 +931,10 @@ unsafe extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
 
 /// The length of a list, which stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_list_len")]
 unsafe extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -810,6 +946,10 @@ unsafe extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
 
 /// A copy of item `i` of a list, which stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_list_get")]
 unsafe extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
@@ -824,6 +964,10 @@ unsafe extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
 }
 
 // Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
 #[unsafe(export_name = "staal_rt_fail")]
 unsafe extern "C" fn rt_fail(c: *mut Ctx, h: i64) {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).

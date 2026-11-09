@@ -234,7 +234,8 @@ model and the world can promise.
 - **Assumptions about services and the machine** (section 2): deduplication that is
   claimed but not real, a disk that lies about `fsync`, and C code.
 - **Scope of quotas.** Quotas are per tool, across customers. A per-customer limit
-  belongs in the grants the app computes.
+  belongs in the grants the app computes. (The MCP server over HTTP, not yet in a
+  release build, adds a per-principal share of a tool's quota: MCP.md section 12.)
 - **Platforms.** Tools (the host behind `staal.Tool`, `Tool.open` and `staalc mcp`) run
   on Linux and macOS. SQLite actions are Linux only so far.
 - **Tested, not proven.** These guarantees are checked by tests, including crash

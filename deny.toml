@@ -8,13 +8,12 @@
 # their own lock files: `cargo deny --manifest-path node/Cargo.toml check`.
 
 [graph]
-# The targets releases are built for (RELEASING.md).
+# The four platforms releases are built for (docs/RELEASING.md).
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
-    "x86_64-pc-windows-msvc",
 ]
 all-features = true
 

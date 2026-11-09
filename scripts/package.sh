@@ -15,7 +15,7 @@ out=${1:-"$root/target/dist"}
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)
 target=$(rustc -vV | sed -n 's/^host: //p')
 [ -n "$version" ] && [ -n "$target" ] || { echo "package.sh: no version or target" >&2; exit 2; }
-cargo build --release --manifest-path "$root/Cargo.toml"
+cargo build --release --locked --manifest-path "$root/Cargo.toml"
 rel="$root/target/release"
 name="staalc-$version-$target"
 stage=$(mktemp -d)

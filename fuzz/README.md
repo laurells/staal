@@ -12,12 +12,16 @@ on top.
 | `journal` | a genuine start record, then any bytes | resuming the crash-test workflow on it, and recording `--retry`, fail with a message or succeed |
 | `config` | any JSON as the workflow's run config (scripted model only, so nothing reaches the network) | refused with a message or run |
 | `manifest` | any text | manifests, lockfiles (which must read back as themselves), registry entries, versions (likewise) and ranges |
+| `jwt` | any text as an access token, and as a JWK set | refused with a rule or verified, never a panic; no input verifies against the test keys, whose private halves it does not have |
 
 ## Running
 
 Install once: `cargo install cargo-fuzz`. A nightly Rust is not needed: with
-`-s none` (no AddressSanitizer) the fuzzers build on stable. staalc is safe Rust
-apart from its C library calls, files and sockets, which the fuzzers do not reach.
+`-s none` (no AddressSanitizer) the fuzzers build on stable. Most of what the
+fuzzers reach is safe Rust (and ring's own C and assembly, for `jwt`). `config` and
+`journal` run the crash-test workflow, whose functions may run as native code
+(docs/security-review/UNSAFE.md); without AddressSanitizer a memory error there shows
+only if it crashes or fails an assertion.
 
 ```sh
 cargo fuzz run -s none parse fuzz/corpus/parse -- -max_total_time=600 -timeout=10 -max_len=8192

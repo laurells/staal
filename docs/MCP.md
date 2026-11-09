@@ -949,7 +949,7 @@ answering as the Messages API does. A weekly workflow, `frameworks-latest`, runs
 tests against each framework's latest release.
 
 
-## 12. Remote transport (design, not built)
+## 12. Remote transport (built; served only by a test build until reviewed)
 
 **Status: being built (12.7).** A release build serves stdio only and refuses
 `server.http` until the release gate of 12.7 is met. Built and tested so far, in a test
@@ -965,7 +965,7 @@ serve `server.http`. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`,
 
 It is written against MCP 2026-07-28 (the Streamable HTTP
 transport and the authorization specification of that revision) and the RFCs they
-name. When it is built, this section becomes the specification and moves into
+name. When it is released, this section becomes the specification and moves into
 sections 2 to 9, and the tests of section 9 gain the ones listed here.
 
 ### 12.1 What changes and what does not
@@ -1080,9 +1080,10 @@ In order, for each request; the first rule a request breaks decides its answer:
 | the principal under its request rate (12.6) | 429 with `Retry-After` |
 | `Content-Type` is `application/json` | 415 |
 | `Accept` lists `application/json` and `text/event-stream` | 406 |
+| `MCP-Protocol-Version` present | 400 with `HeaderMismatch` (`-32020`) |
 | body at most 4 MiB, nested at most 64 levels | 413, or 400 with `-32700`/`-32600` |
 | one JSON-RPC request or notification (a batch, or a response, is refused) | 400 with `-32600` |
-| `MCP-Protocol-Version` present and supported | 400 with `UnsupportedProtocolVersionError` (`-32022`), `data.supported` `["2026-07-28"]` |
+| `MCP-Protocol-Version` supported | 400 with `UnsupportedProtocolVersionError` (`-32022`), `data.supported` `["2026-07-28"]` |
 | `MCP-Protocol-Version` equals `_meta["io.modelcontextprotocol/protocolVersion"]`; `Mcp-Method` equals `method`; for `tools/call`, `Mcp-Name` (after decoding the `=?base64?…?=` form) equals `params.name`; no header value has characters outside RFC 9110 field-value syntax | 400 with `HeaderMismatch` (`-32020`) |
 | the method exists | 404 with `-32601` |
 

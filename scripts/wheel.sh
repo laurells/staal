@@ -17,7 +17,7 @@ python=${PYTHON:-python3}
 if [ -n "${STAAL_RELEASE_DIR:-}" ]; then
     rel=$STAAL_RELEASE_DIR
 else
-    cargo build --release --manifest-path "$root/Cargo.toml"
+    cargo build --release --locked --manifest-path "$root/Cargo.toml"
     rel="$root/target/release"
 fi
 bin="$root/python/staal/_bin"
