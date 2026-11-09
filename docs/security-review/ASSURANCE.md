@@ -108,8 +108,9 @@ FUZZ_RESULT
 
 - **Soundness of the checker.** The fixtures are the attempts made to get past each
   rule; they do not prove there is no other way (SCOPE.md Q1).
-- **Memory safety under fuzzing** of code that runs native code: no sanitizer
-  ([SELF_ASSESSMENT.md](SELF_ASSESSMENT.md) F10).
+- **Memory safety of native code beyond what `engines` reaches**: it fuzzes the
+  configs of the 424 runtime cases, not new programs, so code generation is fuzzed
+  only for the programs in `tests/run`.
 - **Behaviour against the real services**: Claude, Stripe, Termii, Resend and Slack
   are tested against stand-ins written from their documentation.
 - **Load and time**: no test runs for hours, with many connections, or with large

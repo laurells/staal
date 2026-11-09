@@ -15,8 +15,8 @@ substitute for the review. No exploit of any of them was attempted; rating the o
 | F6 | Release archives have no signature or build provenance | Hardening | Fixed in this commit, from the next release |
 | F7 | Release archive and wheel built without `--locked` | Hardening | Fixed in this commit |
 | F8 | `deny.toml` checked a platform that is not built (Windows) and called it a release target | Documentation | Fixed in this commit |
-| F9 | Fuzzing was short and not repeated; no fuzz target for token verification | Assurance | Partly fixed: `jwt` target added; every target run for 15 minutes ([ASSURANCE.md](ASSURANCE.md) section 5) |
-| F10 | Fuzzing runs without AddressSanitizer, and two targets reach native code | Assurance | Fixed in this commit: an AddressSanitizer run, and weekly in CI |
+| F9 | Fuzzing was short and not repeated; no fuzz target for token verification or for native code | Assurance | Fixed in this commit: `jwt` and `engines` targets; every target run for 15 minutes; weekly in CI |
+| F10 | Fuzzing ran without AddressSanitizer | Assurance | Fixed in this commit: AddressSanitizer runs, and weekly in CI |
 | F11 | Documentation of the HTTP transport stale in places | Documentation | Fixed in this commit |
 
 ## F1. Advisories in the TLS trust chain
@@ -85,15 +85,22 @@ supported. Removed, so the checks cover exactly the four release platforms.
 
 ## F9 and F10. Fuzzing
 
-Before this preparation the five fuzz targets had been run briefly. A sixth, `jwt`,
-was written for the token verifier and asserts that no input verifies against the
-test keys. All six were run for 15 minutes each (results in
-[ASSURANCE.md](ASSURANCE.md) section 5). They build without AddressSanitizer (`-s
-none`, so they build on stable Rust); `config` and `journal` run a program whose
-functions may run as native code, where a memory error would show only if it
-crashed. Now `config` and `journal` have been run with AddressSanitizer
-([ASSURANCE.md](ASSURANCE.md) section 5), and every target runs with it weekly in CI
-(`.github/workflows/fuzz.yml`), seeded from the repository by `scripts/fuzz_seed.sh`.
+Before this preparation the five fuzz targets had been run briefly, without
+AddressSanitizer, and none ran native code: `config` and `journal` run the
+interpreter only (an earlier draft of this file said otherwise; checking the code
+corrected it). Two targets were added. `jwt` fuzzes the token verifier and asserts
+that only the test issuer's own valid tokens verify. `engines` runs a runtime case,
+its config changed by the fuzzer, on both engines and asserts the same result and
+log: it is the target that reaches the native engine's `unsafe` code, and it runs
+with AddressSanitizer. Every target was run for 15 minutes, `config`, `journal` and
+`engines` also with AddressSanitizer ([ASSURANCE.md](ASSURANCE.md) section 5), and
+every target runs with it weekly in CI (`.github/workflows/fuzz.yml`), seeded from the
+repository by `scripts/fuzz_seed.sh`.
+
+Fuzzing found one fault, in a fuzz target rather than in Staal: seeded with the test
+tokens, `jwt` stopped at its first input, a genuinely signed token that must verify,
+because the target asserted that nothing verifies. The target now asserts the
+stronger property above.
 AddressSanitizer is an unstable compiler option; it is used with the release
 toolchain (Rust 1.97.0) through `RUSTC_BOOTSTRAP=1` rather than a nightly
 toolchain, so the code fuzzed is compiled by the compiler that builds releases.

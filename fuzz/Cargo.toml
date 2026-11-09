@@ -56,3 +56,10 @@ path = "fuzz_targets/jwt.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "engines"
+path = "fuzz_targets/engines.rs"
+test = false
+doc = false
+bench = false

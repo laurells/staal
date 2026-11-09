@@ -1,15 +1,16 @@
 #!/bin/sh
 # Seeds fuzz/corpus/<target> from the repository, as fuzz/README.md describes: programs
 # for parse and format, run configs for config, staal.json and staal.lock files for
-# manifest, and the JWT test tokens and key set for jwt. journal needs no seed (its
-# target writes the start record itself). Files already in a corpus are kept.
+# manifest, the JWT test tokens and key set for jwt, and every runtime case for engines.
+# journal needs no seed (its target writes the start record itself). Files already in a
+# corpus are kept.
 #
 #   scripts/fuzz_seed.sh
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 c=fuzz/corpus
-mkdir -p "$c/parse" "$c/format" "$c/config" "$c/manifest" "$c/jwt" "$c/journal"
+mkdir -p "$c/parse" "$c/format" "$c/config" "$c/manifest" "$c/jwt" "$c/journal" "$c/engines"
 
 # Each seed is named by its SHA-256, as libFuzzer names corpus files, so seeding twice
 # adds nothing.
@@ -32,6 +33,16 @@ for case in json.load(open("tests/fixtures/jwt/cases.json"))["cases"]:
     b = case["token"].encode()
     open(os.path.join(sys.argv[1], hashlib.sha256(b).hexdigest()), "wb").write(b)
 EOF
-for t in parse format config manifest jwt journal; do
+# engines: each runtime case by its index (two bytes, little-endian, in the sorted
+# order the target reads them), with its own inputs.
+python3 - "$c/engines" <<'EOF'
+import hashlib, json, os, sys
+cases = sorted(f for f in os.listdir("tests/run") if f.endswith(".json"))
+for i, f in enumerate(cases):
+    inputs = json.load(open(os.path.join("tests/run", f))).get("inputs", {})
+    b = i.to_bytes(2, "little") + json.dumps({"inputs": inputs}).encode()
+    open(os.path.join(sys.argv[1], hashlib.sha256(b).hexdigest()), "wb").write(b)
+EOF
+for t in parse format config manifest jwt journal engines; do
     echo "$t: $(ls "$c/$t" | wc -l) files"
 done

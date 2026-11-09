@@ -64,8 +64,10 @@ the language or its file formats.
   `STAAL_REQUIRE_PROVENANCE=1` refuses to install without the check. Releases up to
   0.26.0 have no attestation.
 - The fuzz targets run weekly in CI with AddressSanitizer (`.github/workflows/fuzz.yml`),
-  seeded from the repository by `scripts/fuzz_seed.sh`. A sixth target, `jwt`, fuzzes
-  access token and key set parsing.
+  seeded from the repository by `scripts/fuzz_seed.sh`. Two targets are new: `jwt`
+  (access tokens and key sets: only the test issuer's own valid tokens verify) and
+  `engines` (a runtime case with a changed config gives the same result and log on
+  both engines; the target that runs native code).
 - `docs/security-review/`: the package for an independent security review.
 
 ### Changed

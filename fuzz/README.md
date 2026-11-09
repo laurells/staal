@@ -12,7 +12,8 @@ on top.
 | `journal` | a genuine start record, then any bytes | resuming the crash-test workflow on it, and recording `--retry`, fail with a message or succeed |
 | `config` | any JSON as the workflow's run config (scripted model only, so nothing reaches the network) | refused with a message or run |
 | `manifest` | any text | manifests, lockfiles (which must read back as themselves), registry entries, versions (likewise) and ranges |
-| `jwt` | any text as an access token, and as a JWK set | refused with a rule or verified, never a panic; no input verifies against the test keys, whose private halves it does not have |
+| `jwt` | any text as an access token, and as a JWK set | refused with a rule or verified, never a panic; only the test issuer's own tokens marked valid verify, so any change to a signed token makes it fail |
+| `engines` | a runtime case from `tests/run`, its run config changed | the interpreter and native code give the same result, or the same config error, and the same log; the target that runs native code |
 
 ## Running
 
@@ -28,7 +29,7 @@ fuzzed is compiled by the compiler that builds releases. CI runs every target th
 way weekly (`.github/workflows/fuzz.yml`):
 
 ```sh
-RUSTC_BOOTSTRAP=1 cargo fuzz run --sanitizer address config -- -max_total_time=900 -timeout=10
+RUSTC_BOOTSTRAP=1 cargo fuzz run --sanitizer address engines -- -max_total_time=900 -timeout=10
 ```
 
 Without a sanitizer, faster, on any stable Rust:
@@ -38,9 +39,8 @@ cargo fuzz run -s none parse -- -max_total_time=900 -timeout=10
 ```
 
 Most of what the fuzzers reach is safe Rust (and ring's own C and assembly, for
-`jwt`). `config` and `journal` run the crash-test workflow, whose functions may run
-as native code (docs/security-review/UNSAFE.md): fuzz those two with
-AddressSanitizer.
+`jwt`). `engines` is the one that runs native code (docs/security-review/UNSAFE.md);
+`config` and `journal` run the interpreter only. Fuzz `engines` with AddressSanitizer.
 
 A finding is a bug: reduce it with `cargo fuzz tmin`, add the reduced input as a
 test where the code lives, fix it, and run the fuzzer again.
