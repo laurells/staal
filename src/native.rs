@@ -166,10 +166,18 @@ fn internal(message: impl Into<String>) -> Failure {
 // Runtime helpers called from native code. They never panic (a panic cannot cross
 // into generated code): every failure, even an internal one, is recorded in Ctx.
 
-/// The Ctx native code passed. `Native::call` keeps it alive and exclusively borrowed
-/// for the whole call, and native code makes no other reference to it.
-fn ctx<'a>(c: *mut Ctx) -> &'a mut Ctx {
-    // SAFETY: see above.
+/// The Ctx native code passed.
+///
+/// # Safety
+///
+/// `c` must be the `Ctx` that `Native::call` (or a `staalc build` executable's
+/// `staal_aot_main`) passed to the native code now running: it keeps that Ctx alive
+/// and exclusively borrowed for the whole call, and native code holds no other
+/// reference to it. Every `rt_*` helper below is an `unsafe extern "C" fn` for this
+/// reason: its only callers are generated code, which passes that pointer, and each
+/// turns it into a reference here, once.
+unsafe fn ctx<'a>(c: *mut Ctx) -> &'a mut Ctx {
+    // SAFETY: the caller's contract, above.
     unsafe { &mut *c }
 }
 
@@ -179,8 +187,7 @@ fn record(c: &mut Ctx, f: Failure) {
 }
 
 /// Runs a helper body; a failure is recorded and 0 returned.
-fn guard(c: *mut Ctx, f: impl FnOnce(&mut Ctx) -> Result<i64, Failure>) -> i64 {
-    let c = ctx(c);
+fn guard(c: &mut Ctx, f: impl FnOnce(&mut Ctx) -> Result<i64, Failure>) -> i64 {
     match f(c) {
         Ok(v) => v,
         Err(e) => {
@@ -201,50 +208,56 @@ fn tables<'a>(c: &Ctx) -> Result<&'a Tables, Failure> {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_step_limit")]
-extern "C" fn rt_step_limit(c: *mut Ctx) {
-    let c = ctx(c);
+unsafe extern "C" fn rt_step_limit(c: *mut Ctx) {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    let c = unsafe { ctx(c) };
     let f = step_limit(c.max_steps);
     record(c, f);
 }
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_depth_limit")]
-extern "C" fn rt_depth_limit(c: *mut Ctx) {
-    let c = ctx(c);
+unsafe extern "C" fn rt_depth_limit(c: *mut Ctx) {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    let c = unsafe { ctx(c) };
     let f = depth_limit(c.max_depth);
     record(c, f);
 }
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_arith")]
-extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
+unsafe extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
     let f = match arith_op(op) {
         Some(op) => arith_failure(op, a, b),
         None => internal(format!("native code: unknown operator {op}")),
     };
-    record(ctx(c), f);
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    record(unsafe { ctx(c) }, f);
 }
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_neg")]
-extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
+unsafe extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
     let f = match neg(a) {
         Err(f) => f,
         Ok(_) => internal(format!("native code: -({a}) reported as an overflow")),
     };
-    record(ctx(c), f);
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    record(unsafe { ctx(c) }, f);
 }
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_no_return")]
-extern "C" fn rt_no_return(c: *mut Ctx) {
-    record(ctx(c), internal("a native function finished without returning a value"));
+unsafe extern "C" fn rt_no_return(c: *mut Ctx) {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    record(unsafe { ctx(c) }, internal("a native function finished without returning a value"));
 }
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_const")]
-extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let v = usize::try_from(idx).ok().and_then(|i| tables(c).ok()?.consts.get(i)).cloned();
         let v = v.ok_or_else(|| internal(format!("native code: no constant {idx}")))?;
         Ok(c.put(v))
@@ -253,8 +266,9 @@ extern "C" fn rt_const(c: *mut Ctx, idx: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_clone")]
-extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let v = c.get(h)?.clone();
         Ok(c.put(v))
     })
@@ -262,20 +276,23 @@ extern "C" fn rt_clone(c: *mut Ctx, h: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_drop")]
-extern "C" fn rt_drop(c: *mut Ctx, h: i64) {
-    guard(c, |c| c.take(h).map(|_| 0));
+unsafe extern "C" fn rt_drop(c: *mut Ctx, h: i64) {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| c.take(h).map(|_| 0));
 }
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_box")]
-extern "C" fn rt_box(c: *mut Ctx, kind: i64, v: i64) -> i64 {
-    guard(c, |c| Ok(c.put(if kind == 0 { Value::Int(v) } else { Value::Bool(v != 0) })))
+unsafe extern "C" fn rt_box(c: *mut Ctx, kind: i64, v: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| Ok(c.put(if kind == 0 { Value::Int(v) } else { Value::Bool(v != 0) })))
 }
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_unbox")]
-extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
-    guard(c, |c| match c.take(h)? {
+unsafe extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| match c.take(h)? {
         Value::Int(n) => Ok(n),
         Value::Bool(b) => Ok(b as i64),
         _ => Err(internal("native code: expected an Int or Bool")),
@@ -284,8 +301,9 @@ extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_arith_val")]
-extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let op = arith_op(op).ok_or_else(|| internal("native code: unknown operator"))?;
         let (l, r) = (c.take(a)?, c.take(b)?);
         let v = arith(op, l, r)?;
@@ -295,8 +313,9 @@ extern "C" fn rt_arith_val(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_cmp")]
-extern "C" fn rt_cmp(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_cmp(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let op = usize::try_from(op).ok().and_then(|i| CMPS.get(i)).copied();
         let op = op.ok_or_else(|| internal("native code: unknown comparison"))?;
         let (l, r) = (c.take(a)?, c.take(b)?);
@@ -306,13 +325,15 @@ extern "C" fn rt_cmp(c: *mut Ctx, op: i64, a: i64, b: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_closure")]
-extern "C" fn rt_closure(c: *mut Ctx, name: i64, argv: *const i64, n: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_closure(c: *mut Ctx, name: i64, argv: *const i64, n: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let name = match usize::try_from(name).ok().and_then(|i| tables(c).ok()?.consts.get(i)) {
             Some(Value::Text(t)) => t.clone(),
             _ => return Err(internal(format!("native code: no function name {name}"))),
         };
-        let captured = take_args(c, argv, n)?;
+        // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
+        let captured = unsafe { take_args(c, argv, n) }?;
         Ok(c.put(Value::Func { name, captured }))
     })
 }
@@ -321,9 +342,10 @@ extern "C" fn rt_closure(c: *mut Ctx, name: i64, argv: *const i64, n: i64) -> i6
 /// its function takes first are what it captured.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_call_value")]
-extern "C" fn rt_call_value(c: *mut Ctx, fh: i64, argv: *const i64, n: i64) -> i64 {
+unsafe extern "C" fn rt_call_value(c: *mut Ctx, fh: i64, argv: *const i64, n: i64) -> i64 {
     let prepared = (|| -> Result<(usize, Vec<i64>), Failure> {
-        let cx = ctx(c);
+        // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+        let cx = unsafe { ctx(c) };
         let Value::Func { name, captured } = cx.take(fh)? else {
             return Err(internal("native code: calling a value that is not a function"));
         };
@@ -353,7 +375,8 @@ extern "C" fn rt_call_value(c: *mut Ctx, fh: i64, argv: *const i64, n: i64) -> i
     })();
     match prepared {
         Err(e) => {
-            record(ctx(c), e);
+            // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+            record(unsafe { ctx(c) }, e);
             0
         }
         Ok((ptr, all)) => {
@@ -369,12 +392,17 @@ extern "C" fn rt_call_value(c: *mut Ctx, fh: i64, argv: *const i64, n: i64) -> i
 /// Calls function value `func` with `args` after what it captured, as a call in
 /// generated code does: the depth check, then depth + 1 around the call. Err(None)
 /// when the function failed, which it has recorded in the Ctx itself.
-fn call_function(c: *mut Ctx, func: &Value, args: Vec<Value>) -> Result<Value, Option<Failure>> {
+///
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running, as for `ctx`.
+unsafe fn call_function(c: *mut Ctx, func: &Value, args: Vec<Value>) -> Result<Value, Option<Failure>> {
     let Value::Func { name, captured } = func else {
         return Err(Some(internal("native code: calling a value that is not a function")));
     };
     let (ptr, params, ret) = {
-        let cx = ctx(c);
+        // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+        let cx = unsafe { ctx(c) };
         let found = tables(cx).map_err(Some)?.funcs.get(name).cloned();
         let found = found.ok_or_else(|| Some(internal(format!("native code: the function value '{name}' is not compiled"))))?;
         if cx.depth >= cx.max_depth {
@@ -387,7 +415,8 @@ fn call_function(c: *mut Ctx, func: &Value, args: Vec<Value>) -> Result<Value, O
     }
     let mut all = Vec::with_capacity(params.len());
     {
-        let cx = ctx(c);
+        // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+        let cx = unsafe { ctx(c) };
         for (v, t) in captured.iter().cloned().chain(args).zip(&params) {
             match (v, rep(t)) {
                 (Value::Int(i), Rep::Raw) if is(t, "Int") => all.push(i),
@@ -403,7 +432,8 @@ fn call_function(c: *mut Ctx, func: &Value, args: Vec<Value>) -> Result<Value, O
     // as many i64 as it takes. No reference to the Ctx is held across the call.
     let f = unsafe { std::mem::transmute::<usize, extern "C" fn(*mut Ctx, *const i64) -> i64>(ptr) };
     let r = f(c, all.as_ptr());
-    let cx = ctx(c);
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    let cx = unsafe { ctx(c) };
     cx.depth -= 1;
     if cx.failed != 0 {
         return Err(None);
@@ -419,11 +449,12 @@ fn call_function(c: *mut Ctx, func: &Value, args: Vec<Value>) -> Result<Value, O
 /// the start for `fold`, and the function value in `argv`: as the interpreter does.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_with_function")]
-extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
+unsafe extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
     let run = || -> Result<Value, Option<Failure>> {
         let f = usize::try_from(code).ok().and_then(|i| BUILTINS.get(i)).copied();
         let f = f.ok_or_else(|| Some(internal("native code: unknown built-in")))?;
-        let mut it = take_args(ctx(c), argv, n).map_err(Some)?.into_iter();
+        // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
+        let mut it = unsafe { take_args(ctx(c), argv, n) }.map_err(Some)?.into_iter();
         let (Some(Value::List(xs)), start) = (it.next(), if f == Builtin::Fold { it.next() } else { None }) else {
             return Err(Some(internal(format!("native code: `{}` of a value that is not a list", f.name()))));
         };
@@ -436,14 +467,16 @@ extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64)
             Builtin::Map => {
                 let mut out = Vec::with_capacity(xs.len());
                 for x in xs {
-                    out.push(call_function(c, &func, vec![x])?);
+                    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+                    out.push(unsafe { call_function(c, &func, vec![x]) }?);
                 }
                 Ok(Value::List(out))
             }
             Builtin::Filter => {
                 let mut out = Vec::new();
                 for x in xs {
-                    if test(call_function(c, &func, vec![x.clone()])?)? {
+                    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+                    if test(unsafe { call_function(c, &func, vec![x.clone()]) }?)? {
                         out.push(x);
                     }
                 }
@@ -452,7 +485,8 @@ extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64)
             Builtin::Any | Builtin::All => {
                 let want = f == Builtin::Any;
                 for x in xs {
-                    if test(call_function(c, &func, vec![x])?)? == want {
+                    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+                    if test(unsafe { call_function(c, &func, vec![x]) }?)? == want {
                         return Ok(Value::Bool(want));
                     }
                 }
@@ -461,7 +495,8 @@ extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64)
             Builtin::Count => {
                 let mut k: i64 = 0;
                 for x in xs {
-                    if test(call_function(c, &func, vec![x])?)? {
+                    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+                    if test(unsafe { call_function(c, &func, vec![x]) }?)? {
                         k += 1;
                     }
                 }
@@ -470,7 +505,8 @@ extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64)
             Builtin::Fold => {
                 let Some(mut acc) = start else { return Err(Some(internal("native code: `fold` without a start"))) };
                 for x in xs {
-                    acc = call_function(c, &func, vec![acc, x])?;
+                    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+                    acc = unsafe { call_function(c, &func, vec![acc, x]) }?;
                 }
                 Ok(acc)
             }
@@ -478,9 +514,11 @@ extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64)
         }
     };
     match run() {
-        Ok(v) => ctx(c).put(v),
+        // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+        Ok(v) => unsafe { ctx(c) }.put(v),
         Err(Some(e)) => {
-            record(ctx(c), e);
+            // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+            record(unsafe { ctx(c) }, e);
             0
         }
         // The function failed and recorded why.
@@ -489,11 +527,16 @@ extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, n: i64)
 }
 
 /// Reads `n` handles from `argv` and takes their values.
-fn take_args(c: &mut Ctx, argv: *const i64, n: i64) -> Result<Vec<Value>, Failure> {
+///
+/// # Safety
+///
+/// `argv` must point to `n` readable i64 values: generated code passes a stack array of
+/// exactly the count it gives.
+unsafe fn take_args(c: &mut Ctx, argv: *const i64, n: i64) -> Result<Vec<Value>, Failure> {
     let n = usize::try_from(n).map_err(|_| bad_handle(n))?;
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
-        // SAFETY: generated code passes a stack array of exactly `n` i64 handles.
+        // SAFETY: the caller's contract: `argv` holds `n` values.
         let h = unsafe { *argv.add(i) };
         out.push(c.take(h)?);
     }
@@ -502,11 +545,13 @@ fn take_args(c: &mut Ctx, argv: *const i64, n: i64) -> Result<Vec<Value>, Failur
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_builtin")]
-extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let f = usize::try_from(code).ok().and_then(|i| BUILTINS.get(i)).copied();
         let f = f.ok_or_else(|| internal("native code: unknown built-in"))?;
-        let args = take_args(c, argv, n)?;
+        // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
+        let args = unsafe { take_args(c, argv, n) }?;
         let v = builtin(f, &args)?;
         Ok(c.put(v))
     })
@@ -514,12 +559,14 @@ extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64) -> i6
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_record")]
-extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let t = tables(c)?;
         let rec = usize::try_from(idx).ok().and_then(|i| t.records.get(i));
         let (ty, names) = rec.ok_or_else(|| internal("native code: unknown record"))?;
-        let vals = take_args(c, argv, n)?;
+        // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
+        let vals = unsafe { take_args(c, argv, n) }?;
         if vals.len() != names.len() {
             return Err(internal(format!("native code: {ty} with {} fields", vals.len())));
         }
@@ -530,8 +577,9 @@ extern "C" fn rt_record(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_field")]
-extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let t = tables(c)?;
         let name = usize::try_from(idx).ok().and_then(|i| t.fields.get(i));
         let name = name.ok_or_else(|| internal("native code: unknown field"))?;
@@ -553,8 +601,9 @@ extern "C" fn rt_field(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 /// field read from a variable copies the field, not the whole record.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_field_ref")]
-extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let t = tables(c)?;
         let name = usize::try_from(idx).ok().and_then(|i| t.fields.get(i));
         let name = name.ok_or_else(|| internal("native code: unknown field"))?;
@@ -573,12 +622,14 @@ extern "C" fn rt_field_ref(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_variant")]
-extern "C" fn rt_variant(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_variant(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let t = tables(c)?;
         let var = usize::try_from(idx).ok().and_then(|i| t.variants.get(i));
         let (ty, variant, names) = var.ok_or_else(|| internal("native code: unknown variant"))?;
-        let vals = take_args(c, argv, n)?;
+        // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
+        let vals = unsafe { take_args(c, argv, n) }?;
         if vals.len() != names.len() {
             return Err(internal(format!("native code: {ty}.{variant} with {} fields", vals.len())));
         }
@@ -591,8 +642,9 @@ extern "C" fn rt_variant(c: *mut Ctx, idx: i64, argv: *const i64, n: i64) -> i64
 /// in `h`, which stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_variant_index")]
-extern "C" fn rt_variant_index(c: *mut Ctx, h: i64, idx: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_variant_index(c: *mut Ctx, h: i64, idx: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let t = tables(c)?;
         let e = usize::try_from(idx).ok().and_then(|i| t.enums.get(i));
         let (ty, names) = e.ok_or_else(|| internal("native code: unknown enum"))?;
@@ -607,8 +659,9 @@ extern "C" fn rt_variant_index(c: *mut Ctx, h: i64, idx: i64) -> i64 {
 /// No arm matched the enum value in `h`: the interpreter's failure, word for word.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_no_arm")]
-extern "C" fn rt_no_arm(c: *mut Ctx, h: i64) {
-    guard(c, |c| {
+unsafe extern "C" fn rt_no_arm(c: *mut Ctx, h: i64) {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let variant = match c.get(h)? {
             Value::Enum { variant, .. } => variant.clone(),
             _ => return Err(internal("`match` on a value that is not an enum")),
@@ -619,14 +672,16 @@ extern "C" fn rt_no_arm(c: *mut Ctx, h: i64) {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_none")]
-extern "C" fn rt_none(c: *mut Ctx) -> i64 {
-    guard(c, |c| Ok(c.put(Value::Opt(None))))
+unsafe extern "C" fn rt_none(c: *mut Ctx) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| Ok(c.put(Value::Opt(None))))
 }
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_some")]
-extern "C" fn rt_some(c: *mut Ctx, h: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_some(c: *mut Ctx, h: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let v = c.take(h)?;
         Ok(c.put(Value::Opt(Some(Box::new(v)))))
     })
@@ -635,8 +690,9 @@ extern "C" fn rt_some(c: *mut Ctx, h: i64) -> i64 {
 /// Whether the optional value in `h`, which stays owned by the caller, holds one.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_opt_has")]
-extern "C" fn rt_opt_has(c: *mut Ctx, h: i64) -> i64 {
-    guard(c, |c| match c.get(h)? {
+unsafe extern "C" fn rt_opt_has(c: *mut Ctx, h: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| match c.get(h)? {
         Value::Opt(v) => Ok(v.is_some() as i64),
         _ => Err(internal("`match` on a value that is neither an enum nor optional")),
     })
@@ -645,8 +701,9 @@ extern "C" fn rt_opt_has(c: *mut Ctx, h: i64) -> i64 {
 /// A copy of what the optional value in `h` holds; `h` stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_opt_get_ref")]
-extern "C" fn rt_opt_get_ref(c: *mut Ctx, h: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_opt_get_ref(c: *mut Ctx, h: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let v = match c.get(h)? {
             Value::Opt(Some(v)) => (**v).clone(),
             _ => return Err(internal("native code: `some` arm on a value that holds nothing")),
@@ -658,15 +715,17 @@ extern "C" fn rt_opt_get_ref(c: *mut Ctx, h: i64) -> i64 {
 /// No arm matched an optional value: the interpreter's failure, word for word.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_opt_no_arm")]
-extern "C" fn rt_opt_no_arm(c: *mut Ctx) {
-    record(ctx(c), internal("no `match` arm for this optional value"));
+unsafe extern "C" fn rt_opt_no_arm(c: *mut Ctx) {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    record(unsafe { ctx(c) }, internal("no `match` arm for this optional value"));
 }
 
 /// Item `i` of the list in `h`, which stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_index_ref")]
-extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let v = match c.get(list)? {
             Value::List(items) => list_index(items, i)?,
             _ => return Err(internal("indexing a non-list")),
@@ -677,18 +736,22 @@ extern "C" fn rt_index_ref(c: *mut Ctx, list: i64, i: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_list")]
-extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
-    guard(c, |c| {
-        let vals = take_args(c, argv, n)?;
+unsafe extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
+        // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
+        let vals = unsafe { take_args(c, argv, n) }?;
         Ok(c.put(Value::List(vals)))
     })
 }
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_tuple")]
-extern "C" fn rt_tuple(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
-    guard(c, |c| {
-        let vals = take_args(c, argv, n)?;
+unsafe extern "C" fn rt_tuple(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
+        // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
+        let vals = unsafe { take_args(c, argv, n) }?;
         Ok(c.put(Value::Tuple(vals)))
     })
 }
@@ -696,8 +759,9 @@ extern "C" fn rt_tuple(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
 /// An empty list (0), set (1) or map (2).
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_empty")]
-extern "C" fn rt_empty(c: *mut Ctx, kind: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_empty(c: *mut Ctx, kind: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let v = match kind {
             0 => Value::List(Vec::new()),
             1 => Value::Set(Vec::new()),
@@ -710,9 +774,11 @@ extern "C" fn rt_empty(c: *mut Ctx, kind: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_map")]
-extern "C" fn rt_map(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
-    guard(c, |c| {
-        let vals = take_args(c, argv, n)?;
+unsafe extern "C" fn rt_map(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
+        // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
+        let vals = unsafe { take_args(c, argv, n) }?;
         let m = crate::interp::map_literal(vals)?;
         Ok(c.put(m))
     })
@@ -720,8 +786,9 @@ extern "C" fn rt_map(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_index")]
-extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
-    guard(c, |c| match c.take(list)? {
+unsafe extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| match c.take(list)? {
         Value::List(items) => {
             let v = list_index(&items, i)?;
             Ok(c.put(v))
@@ -733,8 +800,9 @@ extern "C" fn rt_index(c: *mut Ctx, list: i64, i: i64) -> i64 {
 /// The length of a list, which stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_list_len")]
-extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
-    guard(c, |c| match c.get(list)? {
+unsafe extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| match c.get(list)? {
         Value::List(items) => Ok(items.len() as i64),
         _ => Err(internal("`for` over a value that is not a list")),
     })
@@ -743,8 +811,9 @@ extern "C" fn rt_list_len(c: *mut Ctx, list: i64) -> i64 {
 /// A copy of item `i` of a list, which stays owned by the caller.
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_list_get")]
-extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
-    guard(c, |c| {
+unsafe extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         let v = match c.get(list)? {
             Value::List(items) => usize::try_from(i).ok().and_then(|u| items.get(u)).cloned(),
             _ => None,
@@ -756,8 +825,9 @@ extern "C" fn rt_list_get(c: *mut Ctx, list: i64, i: i64) -> i64 {
 
 // Exported so `staalc build` executables link to it by name.
 #[unsafe(export_name = "staal_rt_fail")]
-extern "C" fn rt_fail(c: *mut Ctx, h: i64) {
-    guard(c, |c| {
+unsafe extern "C" fn rt_fail(c: *mut Ctx, h: i64) {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
         Err(match c.take(h)? {
             v @ (Value::Text(_) | Value::Enum { .. } | Value::Record { .. }) => crate::interp::raise(v),
             _ => internal("`fail` with a message that is not Text"),

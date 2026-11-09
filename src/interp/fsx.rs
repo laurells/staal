@@ -65,7 +65,12 @@ mod imp {
         // SAFETY: `name` is a valid NUL-terminated string; on success the returned
         // descriptor is new and owned by nobody else.
         let fd = unsafe { libc::openat(dir, name.as_ptr(), flags | libc::O_CLOEXEC, mode) };
-        if fd < 0 { Err(errno()) } else { Ok(unsafe { OwnedFd::from_raw_fd(fd) }) }
+        if fd < 0 {
+        Err(errno())
+    } else {
+        // SAFETY: `fd` is the new descriptor openat just returned, owned by nobody else.
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
     }
 
     /// Opens the directory that holds the file at canonical `path`, without following

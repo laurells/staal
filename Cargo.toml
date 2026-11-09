@@ -43,8 +43,9 @@ bytes = "1.12.1"
 # the version tokio-postgres-rustls already brings in.
 x509-cert = { version = "=0.2.5", default-features = false, features = ["std"] }
 # Mozilla root certificates as certificates, so an operator can add a root on top of
-# them (net.extra_root_certificates). The same 1.0.9 snapshot ureq uses by default.
-webpki-root-certs = "1.0.9"
+# them (net.extra_root_certificates). The same 1.0.11 snapshot ureq uses by default;
+# 1.0.10 removed the distrusted emSign ECC Root CA - G3 (RUSTSEC-2026-0383).
+webpki-root-certs = "1.0.11"
 
 # The HTTP transport of `staalc mcp` (docs/MCP.md section 12): HTTP/1.1 framing by
 # hyper, on the tokio runtime the PostgreSQL client already brings in, with TLS through

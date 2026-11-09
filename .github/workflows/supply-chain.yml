@@ -1,0 +1,37 @@
+# The dependencies of staalc, the Node.js addon and the fuzz targets, checked against
+# the policy in deny.toml (RustSec advisories, licences, sources, version
+# requirements) and with cargo-audit (docs/security-review/SUPPLY_CHAIN.md). Runs on
+# every push and pull request, and weekly, since a new advisory can name a crate
+# already in the build.
+name: supply-chain
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "41 5 * * 3" # Wednesdays, 05:41 UTC
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
+      - name: Tools (pinned)
+        run: |
+          cargo install --locked cargo-deny --version 0.20.2
+          cargo install --locked cargo-audit --version 0.22.2
+      - name: cargo deny
+        run: |
+          for m in Cargo.toml node/Cargo.toml fuzz/Cargo.toml; do
+            echo "== $m"
+            cargo deny --manifest-path "$m" check
+          done
+      - name: cargo audit
+        run: |
+          cargo audit
+          (cd node && cargo audit)
+          (cd fuzz && cargo audit)
+      - name: npm audit (the Node.js package ships no dependencies; this checks its lock)
+        run: cd node && npm audit --omit=dev

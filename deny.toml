@@ -1,0 +1,72 @@
+# cargo-deny policy for staalc (docs/security-review/SUPPLY_CHAIN.md): checked in CI
+# for every platform the release builds for. A failure here is a supply-chain change
+# to review before it is accepted, not a check to silence.
+#
+#   cargo deny check
+#
+# The same policy applies to node/ (the Node.js addon) and fuzz/, which check against
+# their own lock files: `cargo deny --manifest-path node/Cargo.toml check`.
+
+[graph]
+# The targets releases are built for (RELEASING.md).
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+all-features = true
+
+[advisories]
+# Any RustSec advisory against a crate in the build (a vulnerability, an unsound
+# crate, a yanked version) fails the check; an exception needs an entry in `ignore`
+# with the advisory id and the reason it does not apply.
+version = 2
+yanked = "deny"
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+# Every licence in the tree, read with `cargo deny list -l license`. A crate under a
+# licence not listed here fails the check. All are permissive; none is copyleft.
+# (r-efi offers MIT OR Apache-2.0 OR LGPL-2.1-or-later; the permissive terms apply.)
+version = 2
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.93
+# libFuzzer is under the NCSA licence (permissive, OSI-approved); it is used only by
+# fuzz/ and never shipped in a release.
+exceptions = [
+    { allow = ["NCSA"], crate = "libfuzzer-sys" },
+]
+
+[bans]
+# A wildcard version requirement is refused: every dependency is pinned (at least two
+# weeks old when chosen, CONTRIBUTING.md).
+wildcards = "deny"
+# Except a local path dependency of a crate that is never published (node/ and fuzz/
+# depend on this crate by path).
+allow-wildcard-paths = true
+# Two versions of one crate are reported, not refused: several come from the
+# dependencies' own choices (windows-sys, base64, getrandom).
+multiple-versions = "warn"
+highlight = "all"
+
+[sources]
+# Crates come only from crates.io; no git dependency and no other registry.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

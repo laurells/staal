@@ -277,6 +277,8 @@ mod imp {
     pub fn symbol(_: usize, _: &str) -> Option<usize> {
         None
     }
+    /// # Safety
+    /// Never reached: no library can be opened here, so there is no address to call.
     pub unsafe fn call(_: usize, _: &[u64]) -> u64 {
         unreachable!("no library can be loaded")
     }
