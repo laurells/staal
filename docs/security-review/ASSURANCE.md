@@ -80,22 +80,66 @@ results:
 | Native engine | 27 | GUIDE.md "Native code and the C interface" |
 | Executables | 5 | GUIDE.md "Executables" |
 | JWT verification (first version) | 5 | commit `ae41ef0` |
-| MCP HTTP transport, tokens, keys, principals, limits | see below | `scripts/mutants_http.py` |
+| MCP HTTP transport, tokens, keys, principals, limits | 39 | `scripts/mutants_http.py` (below) |
 
 These were made by hand for each change; apart from the last row there is no script
 to rerun them, so they are a record, not a suite. For the HTTP transport, which this
 review is the gate for, the faults are in a script anyone can rerun
 (`python3 scripts/mutants_http.py`). Its result at the reviewed commit:
 
-MUTANTS_RESULT
+39 of 39 faults caught, none failing to build. The tests run for each: the token
+verifier's unit tests for J (token and key set checks), the key fetcher's unit tests
+and `mcp_keys_test.rs` for K (discovery and key caching), and `mcp_http_test.rs` for
+H (the request checks, tokens on the endpoint, scopes, principals, cancellation and
+per-principal limits). The script first checks the tests pass with no fault.
+
+| Id | Fault | | Id | Fault |
+| --- | --- | --- | --- | --- |
+| J1 | `typ` not checked | | H1 | `Host` not checked |
+| J2 | `crit` allowed | | H2 | `Origin` not checked |
+| J3 | a key's own `alg` not checked | | H3 | a request served without a valid token |
+| J4 | RSA keys under 2048 bits allowed | | H4 | two `Authorization` headers allowed |
+| J5 | signature not checked | | H5 | request rate not limited |
+| J6 | `iss` not checked | | H6 | tool scopes not checked |
+| J7 | `aud` not checked | | H7 | every subject one principal |
+| J8 | `exp` not checked | | H8 | `Content-Type` not checked |
+| J9 | `nbf` not checked | | H9 | `Accept` not checked |
+| J10 | `iat` in the future allowed | | H10 | the body's protocol version not compared |
+| J11 | `jti` not required | | H11 | `Mcp-Method` not compared |
+| J12 | `client_id` not required | | H12 | `Mcp-Name` not compared |
+| J13 | `sub` not required | | H13 | bodies of any size read |
+| J14 | a key set with two keys of one `kid` allowed | | H14 | a closed connection never cancels |
+| J15 | a key set of any size read | | H15 | a cancelled call still reserves and runs |
+| K1 | redirects followed | | H16 | `offline_access` allowed in `scopes_supported` |
+| K2 | metadata `issuer` not compared | | H17 | a principal's calls in progress not limited |
+| K3 | documents of any size read | | H18 | a principal's share of a quota not checked |
+| K4 | documents of any depth read | | | |
+| K5 | an unknown `kid` fetches every time | | | |
+| K6 | keys used however old | | | |
 
 ## 5. Fuzzing
 
-Six libFuzzer targets ([fuzz/README.md](../../fuzz/README.md)), built with `cargo
-fuzz -s none` (no sanitizer). Each was run for 15 minutes at the reviewed commit,
-from the corpus kept from earlier runs:
+Seven libFuzzer targets ([fuzz/README.md](../../fuzz/README.md)), with corpora
+kept from earlier runs and seeded from the repository (`scripts/fuzz_seed.sh`). Each
+was run for 15 minutes on one x86_64 Linux machine during the preparation of this
+package; the target code is that of the reviewed commit. No run found a fault in
+Staal.
 
-FUZZ_RESULT
+| Target | Sanitizer | Inputs run | Time | Found |
+| --- | --- | ---: | --- | --- |
+| `parse` | none | 304,077 | about 14.5 min (stopped by the run's overall limit) | nothing |
+| `format` | none | 123,640 | 15 min | nothing |
+| `journal` | none | 404,451 | 15 min | nothing |
+| `manifest` | none | 4,096,861 | 15 min | nothing |
+| `config` | none | 22,712,975 | 15 min | nothing |
+| `jwt` | none | 166,537,359 | 15 min | nothing (after the target's own fault was fixed, SELF_ASSESSMENT.md F9) |
+| `config` | AddressSanitizer | 6,975,902 | 15 min | nothing |
+| `journal` | AddressSanitizer | 223,220 | 15 min | nothing |
+| `engines` | AddressSanitizer | 203,933 | 15 min | nothing: the engines agreed on every input |
+
+Fifteen minutes per target is a smoke test, not a campaign. The weekly CI job runs
+every target for 20 minutes with AddressSanitizer (`.github/workflows/fuzz.yml`),
+from repository seeds only, since CI keeps no corpus.
 
 ## 6. Static checks
 
