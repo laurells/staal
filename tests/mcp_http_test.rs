@@ -997,3 +997,117 @@ fn an_authorization_server_that_cannot_be_trusted_stops_the_server_at_start() {
     assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("tools[0].scopes: only a server with server.http.auth checks scopes"), "{err}");
 }
+
+// ---- Limits per principal (stage 2e, docs/MCP.md section 12.6) ----
+
+/// Changes the OAuth case's manifest with `f` and writes it back.
+fn edit_manifest(c: &OAuthCase, f: impl FnOnce(&mut Json)) {
+    let mut m: Json = serde_json::from_str(&std::fs::read_to_string(&c.manifest).unwrap()).unwrap();
+    f(&mut m);
+    std::fs::write(&c.manifest, serde_json::to_string_pretty(&m).unwrap()).unwrap();
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn a_principal_over_its_request_rate_waits_while_another_is_served() {
+    let c = oauth_case("rate");
+    edit_manifest(&c, |m| m["server"]["http"]["per_principal"] = json!({ "requests_per_minute": 3 }));
+    let _s = Http::start(&c.manifest, &c.addr, &[]);
+    let (erin, frank) = (c.token_for("erin"), c.token_for("frank"));
+    let list = rpc(1, "tools/list", json!({}));
+    for _ in 0..3 {
+        assert_eq!(post(&c.addr, &list, &[("Authorization", &format!("Bearer {erin}"))]).status, 200);
+    }
+    let a = post(&c.addr, &list, &[("Authorization", &format!("Bearer {erin}"))]);
+    assert_eq!(a.status, 429);
+    let wait: u64 = a.header("retry-after").unwrap().parse().unwrap();
+    assert!((1..=60).contains(&wait), "{wait}");
+    // Another principal is not affected.
+    assert_eq!(post(&c.addr, &list, &[("Authorization", &format!("Bearer {frank}"))]).status, 200);
+    // A request without a valid token is not counted against anyone, and gets 401.
+    assert_eq!(post(&c.addr, &list, &[]).status, 401);
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn a_principal_at_its_run_limit_is_busy_while_another_runs() {
+    let fake = Server::start();
+    let c = oauth_case("runs");
+    // Two slow requests per run; the service records each when it answers it (400 ms).
+    let base = fake.url("");
+    std::fs::write(c.dir().join("slow.staal"), format!("fn main(n: Int, get: cap net.http.get) -> Int {{\n    let a = get.get(\"{base}/slow\")\n    let b = get.get(\"{base}/slow\")\n    return n\n}}\n")).unwrap();
+    edit_manifest(&c, |m| {
+        m["server"]["http"]["per_principal"] = json!({ "max_concurrent_runs": 1 });
+        m["tools"].as_array_mut().unwrap().push(json!({ "name": "slow", "description": "d", "program": "slow.staal",
+            "grants": { "get": { "cap": "net.http.get" } }, "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 } }));
+    });
+    let _s = Http::start(&c.manifest, &c.addr, &[]);
+    let (gina, hal) = (c.token_for("gina"), c.token_for("hal"));
+    let slow = |id: i64| rpc(id, "tools/call", json!({ "name": "slow", "arguments": { "n": id } }));
+    let first = {
+        let (addr, t, b) = (c.addr.clone(), gina.clone(), slow(1));
+        std::thread::spawn(move || authed(&addr, &b, &t))
+    };
+    // Once gina's run is surely under way (its first request answered, its second sent)...
+    let start = Instant::now();
+    while fake.requests().is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(20), "the first run never began");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // ...her second call is refused at once, and nothing runs; hal is served.
+    let busy = authed(&c.addr, &slow(2), &gina);
+    assert_eq!(busy["result"]["isError"], true, "{busy}");
+    assert!(busy["result"]["content"][0]["text"].as_str().unwrap().contains("as many calls in progress as one caller may"), "{busy}");
+    let other = authed(&c.addr, &slow(3), &hal);
+    assert_eq!(other["result"]["structuredContent"]["result"], 3, "{other}");
+    assert_eq!(first.join().unwrap()["result"]["structuredContent"]["result"], 1);
+    // Her slot is free again once her call is answered.
+    assert_eq!(authed(&c.addr, &slow(4), &gina)["result"]["structuredContent"]["result"], 4);
+    assert_eq!(fake.requests().len(), 6, "the refused call reached nothing");
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn a_principal_spends_its_share_of_a_quota_and_it_stays_spent_across_a_restart() {
+    let c = oauth_case("share");
+    edit_manifest(&c, |m| {
+        m["tools"][1]["quota"] = json!({ "window": "24h", "calls": 10, "per_principal": { "calls": 2 } });
+    });
+    let echo = |id: i64| rpc(id, "tools/call", json!({ "name": "echo", "arguments": { "x": "hi" } }));
+    let (ivy, jack) = (c.token_for("ivy"), c.token_for("jack"));
+    let s = Http::start(&c.manifest, &c.addr, &[]);
+    for id in 1..=2 {
+        assert_eq!(authed(&c.addr, &echo(id), &ivy)["result"]["isError"], false);
+    }
+    let over = authed(&c.addr, &echo(3), &ivy);
+    assert_eq!(over["result"]["isError"], true);
+    assert!(over["result"]["content"][0]["text"].as_str().unwrap().contains("this caller's quota of 2 calls per 1d is used up"), "{over}");
+    assert_eq!(authed(&c.addr, &echo(4), &jack)["result"]["isError"], false, "the tool's quota is not spent");
+    s.stop();
+    // Durable: it is read from the ledger.
+    let _s = Http::start(&c.manifest, &c.addr, &[]);
+    assert_eq!(authed(&c.addr, &echo(5), &ivy)["result"]["isError"], true);
+    assert_eq!(authed(&c.addr, &echo(6), &jack)["result"]["isError"], false);
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn limits_per_principal_are_checked_before_anything_is_served() {
+    let refused = |name: &str, f: &dyn Fn(&mut Json), want: &str| {
+        let c = oauth_case(name);
+        edit_manifest(&c, f);
+        let (code, err) = refused_at_start(&c.manifest);
+        assert_eq!(code, Some(2), "{name}: {err}");
+        assert!(err.contains(want), "{name}: expected {want:?} in {err}");
+    };
+    refused("pp-zero", &|m| m["server"]["http"]["per_principal"] = json!({ "requests_per_minute": 0 }), "requests_per_minute");
+    refused("pp-key", &|m| m["server"]["http"]["per_principal"] = json!({ "colour": 1 }), "unknown key 'colour'");
+    refused("share-no-quota", &|m| m["tools"][1]["quota"] = json!({ "window": "1h", "money": usd("5.00"), "per_principal": { "calls": 1 } }), "the tool's quota counts no calls");
+    refused("share-more", &|m| m["tools"][1]["quota"] = json!({ "window": "1h", "calls": 2, "per_principal": { "calls": 3 } }), "more than the tool's quota of 2");
+    refused("tool-pp", &|m| m["tools"][1]["per_principal"] = json!({}), "per_principal.max_concurrent_runs: missing");
+    // Without auth there are no principals to limit.
+    let (_d, m) = case("pp-without-auth", "127.0.0.1:1", json!({ "per_principal": { "requests_per_minute": 5 } }), None);
+    let (code, err) = refused_at_start(&m);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("only a server with server.http.auth knows its principals"), "{err}");
+}

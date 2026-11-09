@@ -96,6 +96,16 @@ pub struct Quota {
     pub window_ms: u64,
     pub calls: Option<u64>,
     pub money: Option<Money>,
+    /// The most one scope (a principal over HTTP) may use of it in the same window
+    /// (docs/MCP.md section 12.6). Set by the HTTP transport's manifest.
+    pub per_scope: Option<Share>,
+}
+
+/// One scope's share of a quota.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Share {
+    pub calls: Option<u64>,
+    pub money: Option<Money>,
 }
 
 impl Tool {
@@ -262,7 +272,7 @@ fn example(units: &[&str]) -> &'static str {
     if units.contains(&"s") { "120s" } else { "24h" }
 }
 
-fn money(v: &Json, at: &str) -> Result<Money, String> {
+pub(crate) fn money(v: &Json, at: &str) -> Result<Money, String> {
     let o = v.as_object().ok_or(format!("{at}: expected {{\"amount\": \"...\", \"currency\": \"...\"}}"))?;
     keys_only(o, at, &["amount", "currency"])?;
     let code = o.get("currency").and_then(Json::as_str).ok_or(format!("{at}.currency: expected a currency code"))?;
@@ -600,7 +610,7 @@ pub fn parse_tool(
             if calls.is_none() && money.is_none() {
                 return Err(format!("{qa}: give \"calls\", \"money\" or both"));
             }
-            Some(Quota { window_ms, calls, money })
+            Some(Quota { window_ms, calls, money, per_scope: None })
         }
     };
 

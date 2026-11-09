@@ -43,8 +43,14 @@ the language or its file formats.
 - The first stage of the HTTP transport for `staalc mcp` (docs/MCP.md section 12):
   Streamable HTTP at 2026-07-28 on hyper, with TLS, every request check of section
   12.3, time and size limits, SSE for calls that ask for progress, and a clean stop on
-  SIGINT or SIGTERM. It has no authentication yet, so a release build refuses
-  `server.http`; only a test build serves it.
+  SIGINT or SIGTERM. Then OAuth (stage 2): access tokens verified under RFC 9068 with
+  ring, the authorization server's keys found and refreshed over hardened HTTPS
+  fetches, the protected resource metadata, 401 and 403 challenges, tool scopes, each
+  caller's runs and `once` keys held apart by an HMAC of its identity, app inputs from
+  token claims, and limits per caller (request rate, runs in progress, a durable
+  share of a quota). A release build still refuses `server.http` until the release
+  gate (SDK conformance and an independent security review); only a test build
+  serves it.
 
 ### Changed
 

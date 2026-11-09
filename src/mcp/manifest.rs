@@ -23,6 +23,12 @@ pub struct Manifest {
     /// Each tool's app inputs taken from token claims, as (input, claim), in the order of
     /// `tools` (section 12.1). Empty unless `server.http.auth` is set.
     pub tool_claims: Vec<Vec<(String, String)>>,
+    /// Each tool's `per_principal.max_concurrent_runs`, in the order of `tools`
+    /// (section 12.6). None unless `server.http.auth` is set and the tool gives one.
+    pub tool_principal_runs: Vec<Option<usize>>,
+    /// `server.http.per_principal.max_concurrent_runs` when tokens are checked: kept here
+    /// because the HTTP transport takes `http` out of the manifest to serve it.
+    pub principal_max_runs: Option<usize>,
 }
 
 /// Whether the manifest at `path` asks for HTTP (`server.http`), read before the
@@ -59,6 +65,7 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
     let mut tools: Vec<Tool> = Vec::new();
     let mut tool_scopes = Vec::new();
     let mut tool_claims = Vec::new();
+    let mut tool_principal_runs = Vec::new();
     let mut warnings = Vec::new();
     for (i, t) in list.iter().enumerate() {
         let at = format!("tools[{i}]");
@@ -77,6 +84,33 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
                     }
                 }
                 out
+            }
+        };
+        // Limits per principal: the tool's own, and its share of the quota.
+        let only_oauth = |k: &str| format!("{at}.{k}: only a server with server.http.auth knows its principals");
+        let principal_runs = match t.as_object_mut().and_then(|o| o.remove("per_principal")) {
+            None => None,
+            Some(_) if !oauth => return Err(only_oauth("per_principal")),
+            Some(v) => {
+                let pat = format!("{at}.per_principal");
+                let p = v.as_object().ok_or(format!("{pat}: expected an object"))?;
+                tool::keys_only(p, &pat, &["max_concurrent_runs"])?;
+                Some(tool::whole(p, "max_concurrent_runs", &pat, 1, 256)?.ok_or(format!("{pat}.max_concurrent_runs: missing"))? as usize)
+            }
+        };
+        let share = match t.get_mut("quota").and_then(Json::as_object_mut).and_then(|q| q.remove("per_principal")) {
+            None => None,
+            Some(_) if !oauth => return Err(only_oauth("quota.per_principal")),
+            Some(v) => {
+                let sat = format!("{at}.quota.per_principal");
+                let p = v.as_object().ok_or(format!("{sat}: expected an object"))?;
+                tool::keys_only(p, &sat, &["calls", "money"])?;
+                let calls = tool::whole(p, "calls", &sat, 1, u32::MAX as u64)?;
+                let money = p.get("money").map(|m| tool::money(m, &format!("{sat}.money"))).transpose()?;
+                if calls.is_none() && money.is_none() {
+                    return Err(format!("{sat}: give \"calls\", \"money\" or both"));
+                }
+                Some(tool::Share { calls, money })
             }
         };
         // App inputs from claims: {"input": {"claim": "name"}}, only where tokens are checked.
@@ -100,13 +134,33 @@ fn parse(j: &Json, dir: &Path) -> Result<Manifest, String> {
         // A tool whose inputs come from claims is defined as an app's is: the inputs are
         // the definer's, never the caller's.
         let definer = if claims.is_empty() { Definer::Manifest } else { Definer::App(tool::Grants::Fixed) };
-        let tool = tool::parse_tool(&t, &at, dir, model, &settings, definer, &mut warnings)?;
+        let mut tool = tool::parse_tool(&t, &at, dir, model, &settings, definer, &mut warnings)?;
+        if let Some(share) = share {
+            let sat = format!("{at}.quota.per_principal");
+            let q = tool.quota.as_mut().ok_or(format!("{sat}: the tool has no quota"))?;
+            match (share.calls, q.calls) {
+                (Some(_), None) => return Err(format!("{sat}.calls: the tool's quota counts no calls")),
+                (Some(s), Some(all)) if s > all => return Err(format!("{sat}.calls: more than the tool's quota of {all}")),
+                _ => {}
+            }
+            match (share.money, q.money) {
+                (Some(_), None) => return Err(format!("{sat}.money: the tool's quota counts no money")),
+                (Some(s), Some(all)) if s.currency != all.currency => {
+                    return Err(format!("{sat}.money: in {}, but the tool's quota is in {}", s.currency.code, all.currency.code))
+                }
+                (Some(s), Some(all)) if s.minor > all.minor => return Err(format!("{sat}.money: more than the tool's quota of {all}")),
+                _ => {}
+            }
+            q.per_scope = Some(share);
+        }
         if tools.iter().any(|x| x.name == tool.name) {
             return Err(format!("tools[{i}].name: '{}' is used by an earlier tool", tool.name));
         }
         tools.push(tool);
         tool_scopes.push(scopes);
         tool_claims.push(claims);
+        tool_principal_runs.push(principal_runs);
     }
-    Ok(Manifest { name, settings, tools, warnings, http, tool_scopes, tool_claims })
+    let principal_max_runs = http.as_ref().filter(|_| oauth).map(|h| h.per_principal.max_concurrent_runs);
+    Ok(Manifest { name, settings, tools, warnings, http, tool_scopes, tool_claims, tool_principal_runs, principal_max_runs })
 }

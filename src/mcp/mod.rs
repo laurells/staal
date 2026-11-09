@@ -157,6 +157,8 @@ pub(crate) struct Session {
     /// `notifications/cancelled`), over HTTP by a key of the server's own.
     calls: Mutex<HashMap<String, Arc<Ctl>>>,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    /// Over HTTP: the tools each principal has calls in progress of, by scope.
+    principal_calls: Mutex<HashMap<String, Vec<usize>>>,
 }
 
 /// How a call can be cancelled: over stdio by `notifications/cancelled` naming its id;
@@ -187,7 +189,14 @@ pub(crate) fn valid_id(id: &Json) -> bool {
 
 impl Session {
     pub(crate) fn new(m: Manifest, server: Arc<Host>) -> Arc<Session> {
-        Arc::new(Session { m, server, legacy: AtomicBool::new(false), calls: Mutex::new(HashMap::new()), threads: Mutex::new(Vec::new()) })
+        Arc::new(Session {
+            m,
+            server,
+            legacy: AtomicBool::new(false),
+            calls: Mutex::new(HashMap::new()),
+            threads: Mutex::new(Vec::new()),
+            principal_calls: Mutex::new(HashMap::new()),
+        })
     }
 
     /// Lets the calls in progress finish (or stop) as they would have, and the notify
@@ -379,11 +388,49 @@ impl Session {
             }
             app_inputs = Some(given);
         }
+        // A principal's calls in progress (docs/MCP.md section 12.6): across all tools, and
+        // of this tool. Counted from here until the call is answered.
+        let held = match (tool, &caller) {
+            (Some(i), Some(c)) => {
+                let Ok(mut pc) = self.principal_calls.lock() else { return };
+                let mine = pc.entry(c.scope.clone()).or_default();
+                let all_limit = self.m.principal_max_runs.unwrap_or(usize::MAX);
+                let tool_limit = self.m.tool_principal_runs[i].unwrap_or(usize::MAX);
+                if mine.len() >= all_limit || mine.iter().filter(|t| **t == i).count() >= tool_limit {
+                    drop(pc);
+                    let a = Answer::error("you already have as many calls in progress as one caller may; nothing was done; try again when one ends");
+                    return out.result(id, self.wrap(era, &a));
+                }
+                mine.push(i);
+                Some((c.scope.clone(), i))
+            }
+            _ => None,
+        };
+        let release = {
+            let me = self.clone();
+            move |held: Option<(String, usize)>| {
+                if let Some((scope, i)) = held
+                    && let Ok(mut pc) = me.principal_calls.lock()
+                    && let Some(v) = pc.get_mut(&scope)
+                {
+                    if let Some(at) = v.iter().position(|t| *t == i) {
+                        v.remove(at);
+                    }
+                    if v.is_empty() {
+                        pc.remove(&scope);
+                    }
+                }
+            }
+        };
         {
-            let Ok(mut calls) = self.calls.lock() else { return };
+            let Ok(mut calls) = self.calls.lock() else {
+                release(held);
+                return;
+            };
             // Threads are bounded too: far more calls than runs are answered at once.
             if calls.len() >= 4 * self.m.settings.max_concurrent_runs + 16 {
                 drop(calls);
+                release(held);
                 let a = Answer::error("the server is busy with other calls; nothing was done; try again later");
                 return out.result(id, self.wrap(era, &a));
             }
@@ -421,6 +468,7 @@ impl Session {
             if let Ok(mut calls) = me.calls.lock() {
                 calls.remove(&key);
             }
+            release(held);
             if let Some(a) = answer {
                 out.result(&id, me.wrap(era, &a));
             }

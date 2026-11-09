@@ -956,8 +956,9 @@ tests against each framework's latest release.
 build: stage 1 (the HTTP server, its settings, TLS and the checks of 12.3, in
 `src/mcp/http.rs`), and of stage 2 the token verification (`src/mcp/jwt.rs`), the keys
 (`src/mcp/keys.rs`), the protected resource metadata, the 401 and 403 challenges, tool
-scopes, the principal's scope and key fingerprint (`src/mcp/principal.rs`) and app
-inputs from claims. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`. It is written against MCP 2026-07-28 (the Streamable HTTP
+scopes, the principal's scope and key fingerprint (`src/mcp/principal.rs`), app
+inputs from claims and the limits per principal. Stage 2 is complete; stage 3 (the
+crash and duplicate tests over HTTP) is next. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`. It is written against MCP 2026-07-28 (the Streamable HTTP
 transport and the authorization specification of that revision) and the RFCs they
 name. When it is built, this section becomes the specification and moves into
 sections 2 to 9, and the tests of section 9 gain the ones listed here.
@@ -1263,7 +1264,7 @@ the scope of each and recognise it in the ledger; the key prevents that for anyo
 without it. The subject identifier itself is never written to the ledger or the log.
 
 The key must stay the same: a different key gives every principal a different scope,
-so their `once` keys and runs could no longer be found. The ledger records a
+so their `once` keys and runs could no longer be found. The server records a
 fingerprint of the key (the HMAC of the key over `"staal-principal-key-fingerprint"`,
 which reveals nothing of it), and at start a server whose key does not match refuses
 to start while any run in a principal's scope is unsettled or holds a `once` key not
@@ -1279,15 +1280,19 @@ So:
   every other, as section 11 says for scopes.
 - Each principal is limited, in addition to the per-tool limits, which stay:
   - **Requests.** At most `per_principal.requests_per_minute` HTTP requests a minute,
-    counted per principal in fixed one-minute windows. One over is answered 429 with
+    counted per principal in fixed one-minute windows (in memory: a restart starts
+    every window again). One over is answered 429 with
     `Retry-After` (the seconds left in the window), straight after the token check of
     12.3 and before anything else. A request without a valid token has no principal to
     count against; what it can hold is bounded by `max_connections` and the read time
     limits, and checking a token costs one signature check.
   - **Runs in progress.** At most `per_principal.max_concurrent_runs` across all
     tools, and a tool's own `per_principal.max_concurrent_runs` for that tool. A call
-    over either is answered busy, as at the server's limit (section 5, step 4).
-  - **Quota.** A tool's `quota.per_principal` bounds what one principal may reserve of
+    over either is answered busy, as at the server's limit (section 5, step 4). A call
+    holds its place from when it is accepted until it is answered, so a call answered
+    from an earlier run (`once`) holds one briefly too.
+  - **Quota.** A tool's `quota.per_principal` (`calls`, `money` or both, each no more
+    than the tool's own and the money in its currency) bounds what one principal may reserve of
     the tool's quota in the same window, calls and money, computed from the ledger
     like the tool's quota (section 6), since every reservation records its scope. It
     is durable: a restart does not reset it.

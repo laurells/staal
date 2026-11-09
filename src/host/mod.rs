@@ -450,7 +450,7 @@ impl Host {
                 return Some(Answer::error("the server is busy with other calls; nothing was done; try again later"));
             }
             // 4. The quota.
-            if let Err(e) = quota_check(&st.ledger, tool, reserve, now) {
+            if let Err(e) = quota_check(&st.ledger, tool, reserve, now, scope) {
                 return Some(Answer::error(e));
             }
             // 5. Reserve.
@@ -1041,11 +1041,13 @@ struct Use {
     held: i128,
 }
 
-fn usage_of(l: &Ledger, tool: &Tool, now: u64) -> Option<Use> {
+/// What `tool`'s runs use of its quota at `now`; with `scope`, only that scope's runs.
+fn usage_of(l: &Ledger, tool: &Tool, now: u64, scope: Option<&str>) -> Option<Use> {
     let q = tool.quota.as_ref()?;
     let from = now.saturating_sub(q.window_ms);
     let mut u = Use { calls: Vec::new(), settled: Vec::new(), held: 0 };
-    for (_, r) in l.runs().filter(|(_, r)| r.tool == tool.name && !r.released()) {
+    let ours = |r: &Run| scope.is_none_or(|s| r.scope.as_deref() == Some(s));
+    for (_, r) in l.runs().filter(|(_, r)| r.tool == tool.name && !r.released() && ours(r)) {
         if r.t > from {
             u.calls.push(r.t);
         }
@@ -1065,19 +1067,33 @@ fn usage_of(l: &Ledger, tool: &Tool, now: u64) -> Option<Use> {
     Some(u)
 }
 
-/// Whether one more call of `tool` fits its quota at `now`, or why not and when it frees up.
-fn quota_check(l: &Ledger, tool: &Tool, reserve: Option<Money>, now: u64) -> Result<(), String> {
-    let (Some(q), Some(u)) = (tool.quota.as_ref(), usage_of(l, tool, now)) else { return Ok(()) };
-    let window = window_text(q.window_ms);
-    if let Some(limit) = q.calls
+/// Whether one more call of `tool` fits its quota at `now`, and, for a call in `scope`,
+/// that scope's share of it; or why not and when it frees up.
+fn quota_check(l: &Ledger, tool: &Tool, reserve: Option<Money>, now: u64, scope: Option<&str>) -> Result<(), String> {
+    let Some(q) = tool.quota.as_ref() else { return Ok(()) };
+    if let Some(u) = usage_of(l, tool, now, None) {
+        fits(&u, q.window_ms, q.calls, q.money, reserve, "the quota")?;
+    }
+    if let (Some(share), Some(s)) = (&q.per_scope, scope)
+        && let Some(u) = usage_of(l, tool, now, Some(s))
+    {
+        fits(&u, q.window_ms, share.calls, share.money, reserve, "this caller's quota")?;
+    }
+    Ok(())
+}
+
+/// Whether one more call fits `calls` and `money` per `window_ms` given use `u`.
+fn fits(u: &Use, window_ms: u64, calls: Option<u64>, money: Option<Money>, reserve: Option<Money>, what: &str) -> Result<(), String> {
+    let window = window_text(window_ms);
+    if let Some(limit) = calls
         && u.calls.len() as u64 >= limit
     {
         // The call frees up when enough of the calls in the window leave it.
         let over = u.calls.len() - (limit as usize - 1) - 1;
-        let at = u.calls[over] + q.window_ms;
-        return Err(format!("the quota of {limit} calls per {window} is used up; nothing was done; the next call can start at {}", rfc3339(at)));
+        let at = u.calls[over] + window_ms;
+        return Err(format!("{what} of {limit} calls per {window} is used up; nothing was done; the next call can start at {}", rfc3339(at)));
     }
-    if let (Some(limit), Some(reserve)) = (q.money, reserve) {
+    if let (Some(limit), Some(reserve)) = (money, reserve) {
         let need = i128::from(reserve.minor);
         if u.held + need > i128::from(limit.minor) {
             let mut held = u.held;
@@ -1085,7 +1101,7 @@ fn quota_check(l: &Ledger, tool: &Tool, reserve: Option<Money>, now: u64) -> Res
             for (t, m) in &u.settled {
                 held -= m;
                 if held + need <= i128::from(limit.minor) {
-                    at = Some(t + q.window_ms);
+                    at = Some(t + window_ms);
                     break;
                 }
             }
@@ -1094,7 +1110,7 @@ fn quota_check(l: &Ledger, tool: &Tool, reserve: Option<Money>, now: u64) -> Res
                 None => "it frees up only when runs waiting for an operator are resolved".into(),
             };
             return Err(format!(
-                "the quota of {limit} per {window} cannot hold this call, which can spend up to {reserve}; nothing was done; {when}"
+                "{what} of {limit} per {window} cannot hold this call, which can spend up to {reserve}; nothing was done; {when}"
             ));
         }
     }
@@ -1102,7 +1118,7 @@ fn quota_check(l: &Ledger, tool: &Tool, reserve: Option<Money>, now: u64) -> Res
 }
 
 pub fn describe_quota(l: &Ledger, tool: &Tool, now: u64) -> String {
-    let (Some(q), Some(u)) = (tool.quota.as_ref(), usage_of(l, tool, now)) else { return "no quota".into() };
+    let (Some(q), Some(u)) = (tool.quota.as_ref(), usage_of(l, tool, now, None)) else { return "no quota".into() };
     let mut parts = Vec::new();
     if let Some(c) = q.calls {
         parts.push(format!("{} of {c} calls", u.calls.len()));

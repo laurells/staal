@@ -73,6 +73,15 @@ pub struct Settings {
     pub allowed_origins: Vec<String>,
     pub max_connections: usize,
     pub auth: Auth,
+    /// `per_principal`: limits on each principal (section 12.6).
+    pub per_principal: PerPrincipal,
+}
+
+/// What one principal may use at once (section 12.6).
+#[derive(Debug, Clone, Copy)]
+pub struct PerPrincipal {
+    pub requests_per_minute: u64,
+    pub max_concurrent_runs: usize,
 }
 
 /// How requests are authenticated.
@@ -109,7 +118,7 @@ pub fn parse(v: &Json, at: &str) -> Result<Settings, String> {
         return Err(format!("{at}: the HTTP transport is not finished (docs/MCP.md section 12); serve over stdio"));
     }
     let o = v.as_object().ok_or(format!("{at}: expected an object"))?;
-    keys_only(o, at, &["listen", "path", "resource", "tls", "allowed_hosts", "allowed_origins", "auth", "max_connections"])?;
+    keys_only(o, at, &["listen", "path", "resource", "tls", "allowed_hosts", "allowed_origins", "auth", "max_connections", "per_principal"])?;
     let listen = text(o, "listen", at)?.ok_or(format!("{at}.listen: missing"))?;
     let listen: SocketAddr = listen
         .parse()
@@ -214,7 +223,22 @@ pub fn parse(v: &Json, at: &str) -> Result<Settings, String> {
     };
 
     let max_connections = whole_number(o, "max_connections", at, 1, 10_000)?.unwrap_or(64) as usize;
-    Ok(Settings { listen, path, resource, tls, allowed_hosts, allowed_origins, max_connections, auth })
+    let mut per_principal = PerPrincipal { requests_per_minute: 120, max_concurrent_runs: 2 };
+    if let Some(v) = o.get("per_principal") {
+        let pat = format!("{at}.per_principal");
+        if !matches!(auth, Auth::OAuth(_)) {
+            return Err(format!("{pat}: only a server with {at}.auth knows its principals"));
+        }
+        let p = v.as_object().ok_or(format!("{pat}: expected an object"))?;
+        keys_only(p, &pat, &["requests_per_minute", "max_concurrent_runs"])?;
+        if let Some(n) = whole_number(p, "requests_per_minute", &pat, 1, 1_000_000)? {
+            per_principal.requests_per_minute = n;
+        }
+        if let Some(n) = whole_number(p, "max_concurrent_runs", &pat, 1, 256)? {
+            per_principal.max_concurrent_runs = n as usize;
+        }
+    }
+    Ok(Settings { listen, path, resource, tls, allowed_hosts, allowed_origins, max_connections, auth, per_principal })
 }
 
 fn parse_oauth(a: &Map<String, Json>, at: &str) -> Result<OAuth, String> {
@@ -339,7 +363,7 @@ pub fn serve(path: &Path) -> u8 {
     let scheme = if settings.tls.is_some() { "https" } else { "http" };
     log(&format!("serving {tools} tool(s) from {} on {scheme}://{}{}", path.display(), settings.listen, settings.path));
 
-    let state = Arc::new(State { settings, session: session.clone(), next: AtomicU64::new(0), verifier });
+    let state = Arc::new(State { settings, session: session.clone(), next: AtomicU64::new(0), verifier, rates: Default::default() });
     let accepting = rt.spawn(accept_loop(listener, state));
     // Until SIGINT or SIGTERM.
     let got = wait_for_stop_signal(&signals);
@@ -365,6 +389,34 @@ struct State {
     /// Numbers the calls made over HTTP, for the session's table of calls in progress.
     next: AtomicU64,
     verifier: Option<Arc<Verifier>>,
+    /// Each principal's requests in its current one-minute window: (start, count).
+    rates: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u64)>>,
+}
+
+impl State {
+    /// Counts a request of `scope` against `per_principal.requests_per_minute`: None when
+    /// it fits, or the seconds until its window ends (for Retry-After).
+    fn over_rate(&self, scope: &str) -> Option<u64> {
+        let now = std::time::Instant::now();
+        let limit = self.settings.per_principal.requests_per_minute;
+        let Ok(mut rates) = self.rates.lock() else { return None };
+        // Windows that have ended are dropped, so the table holds only the last minute's
+        // principals.
+        if rates.len() > 10_000 {
+            rates.retain(|_, (start, _)| now.duration_since(*start) < Duration::from_secs(60));
+        }
+        let (start, count) = rates.entry(scope.to_string()).or_insert((now, 0));
+        if now.duration_since(*start) >= Duration::from_secs(60) {
+            *start = now;
+            *count = 0;
+        }
+        if *count >= limit {
+            let left = Duration::from_secs(60).saturating_sub(now.duration_since(*start));
+            return Some(left.as_secs() + u64::from(left.subsec_nanos() > 0));
+        }
+        *count += 1;
+        None
+    }
 }
 
 /// What OAuth needs while serving: the keys, what a token must say, and the metadata.
@@ -842,7 +894,15 @@ async fn handle(state: &Arc<State>, req: Request<Incoming>) -> Response<Body> {
     let caller = match &state.verifier {
         None => None,
         Some(v) => match v.authorize(headers).await {
-            Ok(c) => Some(c),
+            Ok(c) => {
+                // The principal's request rate, before anything else is done.
+                if let Some(wait) = state.over_rate(&v.principal_key.scope(&c.iss, &c.sub)) {
+                    let mut r = whole(StatusCode::TOO_MANY_REQUESTS, None, None);
+                    r.headers_mut().insert(hyper::header::RETRY_AFTER, HeaderValue::from(wait));
+                    return r;
+                }
+                Some(c)
+            }
             Err(r) => return r,
         },
     };
