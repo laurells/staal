@@ -174,8 +174,9 @@ impl Cache {
                 false
             }
         };
-        if refetch {
-            self.fetch(now);
+        if refetch && let Err(e) = self.fetch(now) {
+            // The keys held stay in use (within MAX_KEY_AGE); the operator is told.
+            crate::host::log(&format!("fetching the authorization server's keys for an unknown kid: {e}"));
         }
         self.current(now)
     }
