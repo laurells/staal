@@ -4,9 +4,11 @@
 // Programs ask for `cap email.sendgrid.send(only: ["*@clinic.org"], uses: N)` and call
 // `mail.send(to, subject, text)`. The operator grants the HTTP capability, the API key
 // and the sender address under `needs`. SendGrid answers 202 Accepted with no body; the
-// message's id comes back only in the `X-Message-Id` response header, which a Staal
-// `Response` does not carry, so the receipt names the address the email was accepted
-// for. SendGrid documents no idempotency key, so grant `http` without
+// message's id comes back only in the `X-Message-Id` response header
+// (https://www.twilio.com/docs/sendgrid/glossary/x-message-id), which becomes the
+// receipt. SendGrid's documentation does not promise the header on every answer, so
+// one without it, whose email was still accepted, has a receipt naming the address
+// instead of failing. SendGrid documents no idempotency key, so grant `http` without
 // `idempotency_key`: an email whose answer a crash loses stops the run in doubt, for
 // an operator to check in SendGrid's activity feed, instead of being sent twice.
 //
@@ -54,8 +56,15 @@ capability email.sendgrid {
         let r = http.post("https://api.sendgrid.com/v3/mail/send", json(email),
             [header("Authorization", fill_secret("Bearer {secret}", key)),
                 header("Content-Type", "application/json")])
-        if r.status != 202 or not r.complete {
+        if r.status != 202 {
             fail("SendGrid answered " + json(r.status) + ": " + r.body)
+        }
+        // 202 is SendGrid's acceptance, whatever else the answer holds: the email is
+        // sent, so the action succeeds. Header names are lowercase in a Response.
+        for h in r.headers {
+            if h.name == "x-message-id" and h.value != "" {
+                return h.value
+            }
         }
         return "accepted for " + address
     }

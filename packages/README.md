@@ -105,8 +105,9 @@ Email through Twilio SendGrid's v3 Mail Send, plain text, to one address. Grant:
                          "sender": "results@clinic.org" } }
 
 SendGrid answers 202 with no body, and gives the message's id only in its
-`X-Message-Id` response header, which a Staal `Response` does not carry: the receipt is
-`accepted for <address>`. It documents no idempotency key, so `http` is granted
+`X-Message-Id` response header, which is the receipt; a 202 without it (which
+SendGrid's documentation does not rule out) still means the email was accepted, and its
+receipt is `accepted for <address>`. It documents no idempotency key, so `http` is granted
 without `idempotency_key`. Only the global endpoint is reached; EU regional subusers
 (`api.eu.sendgrid.com`) are not supported. An empty text is refused before any request.
 Status: tested against a local server only.

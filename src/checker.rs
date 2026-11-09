@@ -798,14 +798,20 @@ fn check_pass(prog: &Program, money_orders: HashSet<Pos>) -> ((Found, Resolution
     ctx.known.insert("Done".into()); // built-in; made only by `done(evidence: [...])`
     ctx.fields.insert("Outcome".into(), vec![("ok".into(), named("Bool")), ("error".into(), named("Text"))]);
     // Built-in for net.http: a secret from the run config, a header, and a response.
-    for t in ["Secret", "Header", "Response", "Incoming"] {
+    for t in ["Secret", "Header", "Response", "HeaderField", "Incoming"] {
         ctx.known.insert(t.into());
     }
     // Built-in for net.tcp.accept: one client's request, and the connection to answer.
     ctx.fields.insert("Incoming".into(), vec![("connection".into(), named("Text")), ("data".into(), named("Text"))]);
+    ctx.fields.insert("HeaderField".into(), vec![("name".into(), named("Text")), ("value".into(), named("Text"))]);
     ctx.fields.insert(
         "Response".into(),
-        vec![("status".into(), named("Int")), ("body".into(), named("Text")), ("complete".into(), named("Bool"))],
+        vec![
+            ("status".into(), named("Int")),
+            ("headers".into(), Ty::List(Box::new(named("HeaderField")), crate::interp::http::MAX_HEADER_FIELDS as u64)),
+            ("body".into(), named("Text")),
+            ("complete".into(), named("Bool")),
+        ],
     );
     for t in &prog.types {
         if ctx.known.contains(&t.name) {
@@ -2090,7 +2096,7 @@ fn check_fn_as(ctx: &mut Ctx, f: &FnDecl, action: Option<(&CapDecl, &ActionDecl)
     // `fails E`: E is data a caller reads back, so a declared record or enum.
     if let Some(t) = &f.fails {
         check_ty_known(ctx, t, f.pos);
-        let declared = matches!(t, Ty::Named(n) if n != "Outcome" && n != "Response" && n != "Incoming" && (ctx.fields.contains_key(n) || ctx.enums.contains_key(n)));
+        let declared = matches!(t, Ty::Named(n) if n != "Outcome" && n != "Response" && n != "HeaderField" && n != "Incoming" && (ctx.fields.contains_key(n) || ctx.enums.contains_key(n)));
         let unknown = matches!(t, Ty::Named(n) if !ctx.known.contains(n));
         if !declared && !unknown {
             ctx.err("E101", f.pos, format!("'{}' declares `fails {t}`; a function fails with a declared record or enum type", f.name));
@@ -3172,7 +3178,7 @@ fn runtime_only_inside(ctx: &Ctx, ty: &Ty, seen: &mut HashSet<String>) -> Option
         Ty::Map(k, v, _) => runtime_only_inside(ctx, k, seen).or_else(|| runtime_only_inside(ctx, v, seen)),
         Ty::Set(t, _) => runtime_only_inside(ctx, t, seen),
         Ty::Func(..) => Some("function value".into()),
-        Ty::Named(n) if matches!(n.as_str(), "Receipt" | "Outcome" | "Done" | "Response" | "Incoming") => Some(n.clone()),
+        Ty::Named(n) if matches!(n.as_str(), "Receipt" | "Outcome" | "Done" | "Response" | "HeaderField" | "Incoming") => Some(n.clone()),
         Ty::Named(n) => {
             if !seen.insert(n.clone()) {
                 return None;
@@ -3805,7 +3811,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
                 }
                 Builtin::Form => {
                     let fields = match &tys[0].0 {
-                        Ty::Named(n) if n != "Outcome" && n != "Response" && n != "Incoming" => ctx.fields.get(n).cloned(),
+                        Ty::Named(n) if n != "Outcome" && n != "Response" && n != "HeaderField" && n != "Incoming" => ctx.fields.get(n).cloned(),
                         _ => None,
                     };
                     let simple = |t: &Ty| *t == text || *t == named("Int") || *t == named("Bool");
@@ -4007,7 +4013,7 @@ fn type_of(ctx: &mut Ctx, e: &Expr, env: &Env) -> Option<(Ty, bool)> {
         Expr::Record { ty, fields, pos } => {
             // Outcome is a built-in record made only by `try`; other built-ins have no fields.
             let decl = match ctx.fields.get(ty) {
-                Some(d) if ty != "Outcome" && ty != "Response" && ty != "Incoming" => d.clone(),
+                Some(d) if ty != "Outcome" && ty != "Response" && ty != "HeaderField" && ty != "Incoming" => d.clone(),
                 _ => {
                     if ctx.enums.contains_key(ty) {
                         ctx.err("E101", *pos, format!("{ty} is an enum; build one of its variants, as {ty}.Variant {{ ... }}"));

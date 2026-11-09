@@ -29,7 +29,8 @@ use std::collections::{HashMap, HashSet};
 /// The types every module can name without importing them. A module may not declare
 /// a type with one of these names.
 pub const BUILTIN_TYPES: &[&str] =
-    &["Text", "Int", "Bool", "Money", "Unit", "Receipt", "Outcome", "Done", "Secret", "Header", "Response", "Incoming"];
+    &["Text", "Int", "Bool", "Money", "Unit", "Receipt", "Outcome", "Done", "Secret", "Header", "Response", "HeaderField",
+      "Incoming"];
 
 /// One source file of a program. `name` is how it is shown in messages.
 #[derive(Debug, Clone)]

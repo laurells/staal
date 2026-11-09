@@ -6,6 +6,30 @@ the language or its file formats.
 
 ## Unreleased
 
+### Added
+
+- `Response` holds the response's header fields: `headers`, a list of `HeaderField {
+  name, value }`, each name lowercase (field names are case-insensitive), sorted by
+  name, a repeated name's values in the order received, secrets removed. They are
+  recorded in the journal and replayed exactly; a response recorded before this
+  version replays with none (its program could not read them). At most 128 fields,
+  the most the HTTP client reads: a response with more is no answer, as before. A
+  header value that is not UTF-8 empties `headers` and makes `complete` false, as a
+  body that is not text empties `body`; the two are now independent, so headers are
+  kept when only the body could not be held. On both engines.
+- `email.sendgrid` returns SendGrid's `X-Message-Id` as its receipt (before:
+  `accepted for <address>`, still used for a 202 without the header). A 202 is
+  acceptance whatever else the answer holds, so it no longer fails when the rest of
+  the answer could not be held. The `email` package is now 0.2.0: its receipts
+  changed, and it needs a staalc whose `Response` has `headers`, so a project on
+  `^0.1` keeps the version it has.
+
+### Changed
+
+- A program that returns a `Response` gives `headers` in its JSON too, and
+  `HeaderField` is a built-in type name: a module that declared its own `HeaderField`
+  must rename it.
+
 ### Fixed
 
 - `staalc --help` (and `-h`, `help`) prints the usage on standard output and succeeds.

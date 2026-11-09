@@ -49,11 +49,21 @@ pub struct Request<'a> {
     pub body: Option<&'a str>,
 }
 
+/// The most header fields a `Response` holds (RUNTIME.md section 12): the most the HTTP
+/// client parses (ureq-proto's MAX_RESPONSE_HEADERS). A response with more cannot be
+/// read at all, so it is no answer. tests/http_test.rs checks both sides of the limit,
+/// so a client that changes it fails the tests.
+pub const MAX_HEADER_FIELDS: usize = 128;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
-    /// `complete` is false when the body was larger than the limit, was cut off, or was
-    /// not UTF-8 text; `body` is then empty. The request still happened.
-    Response { status: u16, body: String, complete: bool },
+    /// `headers` are the response's header fields, each name lowercased (field names are
+    /// case-insensitive, RFC 9110 section 5.1), sorted by name, each name's values in the
+    /// order received. `complete` is false when part of the response could not be held:
+    /// `body` is empty when the body was larger than the limit, was cut off, or was not
+    /// UTF-8 text, and `headers` is empty when a header value was not UTF-8 text. The
+    /// request still happened.
+    Response { status: u16, headers: Vec<(String, String)>, body: String, complete: bool },
     NotSent(String),
     Unknown(String),
 }
@@ -105,12 +115,37 @@ impl Client {
             Err(e) => return classify(e),
         };
         let status = resp.status().as_u16();
-        let body = resp.body_mut().with_config().limit(self.max).read_to_vec();
-        match body.map(String::from_utf8) {
-            Ok(Ok(text)) => Outcome::Response { status, body: text, complete: true },
-            _ => Outcome::Response { status, body: String::new(), complete: false },
+        let headers = header_fields(resp.headers());
+        let body = match resp.body_mut().with_config().limit(self.max).read_to_vec().map(String::from_utf8) {
+            Ok(Ok(text)) => Some(text),
+            _ => None,
+        };
+        let complete = headers.is_some() && body.is_some();
+        Outcome::Response { status, headers: headers.unwrap_or_default(), body: body.unwrap_or_default(), complete }
+    }
+}
+
+/// A response's header fields as `Outcome::Response` holds them, or None when they
+/// cannot all be held: a value that is not UTF-8, or more than MAX_HEADER_FIELDS (which
+/// the client does not parse, so this only guards the limit's agreement).
+/// `HeaderMap` iterates names in no guaranteed order, so they are sorted; `get_all`
+/// gives one name's values in the order received.
+fn header_fields(map: &ureq::http::HeaderMap) -> Option<Vec<(String, String)>> {
+    if map.len() > MAX_HEADER_FIELDS {
+        return None;
+    }
+    let mut names: Vec<&ureq::http::HeaderName> = map.keys().collect();
+    names.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    let mut out = Vec::with_capacity(map.len());
+    for name in names {
+        for value in map.get_all(name) {
+            // `HeaderName` is already lowercase; `to_str` refuses bytes outside visible
+            // ASCII, so take the bytes and require UTF-8.
+            let text = std::str::from_utf8(value.as_bytes()).ok()?;
+            out.push((name.as_str().to_string(), text.to_string()));
         }
     }
+    Some(out)
 }
 
 /// Mozilla's root certificates, then the operator's extra ones: added, never instead.

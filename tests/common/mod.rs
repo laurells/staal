@@ -10,6 +10,11 @@ pub mod postgres;
 pub mod server;
 pub mod tls;
 
+/// A key the test server echoes in a response header, so tests can check that the
+/// runtime removes a secret's value from headers too. tests/http_test.rs sets it as
+/// STAAL_TEST_KEY.
+pub const KEY_ECHO: &str = "sk_test_4f9a8b7c6d5e3f21";
+
 use serde_json::Value as Json;
 use std::fs;
 use std::path::Path;

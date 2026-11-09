@@ -1162,10 +1162,12 @@ fn types_of(prog: &Program) -> Types {
     let mut t = Types::new();
     t.insert("Outcome".into(), vec![("ok".into(), Ty::Named("Bool".into())), ("error".into(), Ty::Named("Text".into()))]);
     t.insert("Incoming".into(), vec![("connection".into(), Ty::Named("Text".into())), ("data".into(), Ty::Named("Text".into()))]);
+    t.insert("HeaderField".into(), vec![("name".into(), Ty::Named("Text".into())), ("value".into(), Ty::Named("Text".into()))]);
     t.insert(
         "Response".into(),
         vec![
             ("status".into(), Ty::Named("Int".into())),
+            ("headers".into(), Ty::List(Box::new(Ty::Named("HeaderField".into())), http::MAX_HEADER_FIELDS as u64)),
             ("body".into(), Ty::Named("Text".into())),
             ("complete".into(), Ty::Named("Bool".into())),
         ],
@@ -2755,9 +2757,14 @@ impl<'p> Interp<'p> {
             }
             let req = http::Request { method, url: &url, headers: &send, body: body.as_deref() };
             match it.http.send(&req) {
-                http::Outcome::Response { status, body, complete } => Answer::Done(Ok(
-                    json!({ "status": status, "body": scrub_text(&it.secrets, &body), "complete": complete }),
-                )),
+                http::Outcome::Response { status, headers, body, complete } => {
+                    let headers: Vec<Json> = headers
+                        .iter()
+                        .map(|(n, v)| json!([scrub_text(&it.secrets, n), scrub_text(&it.secrets, v)]))
+                        .collect();
+                    Answer::Done(Ok(json!({ "status": status, "headers": headers,
+                                            "body": scrub_text(&it.secrets, &body), "complete": complete })))
+                }
                 http::Outcome::NotSent(e) => Answer::Done(Err(format!("{NOT_SENT}{e}"))),
                 // A GET is safe to report as a failure: repeating it cannot do anything.
                 // A keyed request is not: the program could only repeat it as a new
@@ -2774,6 +2781,29 @@ impl<'p> Interp<'p> {
                 else {
                     return fail(FailKind::Journal, format!("malformed HTTP result in the journal: {v}"));
                 };
+                // A result recorded before responses held headers has none. Its run can
+                // only be resumed with the same program, which could not read them.
+                let headers = match v.get("headers") {
+                    None => Vec::new(),
+                    Some(Json::Array(items)) => {
+                        let mut out = Vec::with_capacity(items.len());
+                        for item in items {
+                            let pair = item.as_array().filter(|a| a.len() == 2).map(|a| (a[0].as_str(), a[1].as_str()));
+                            let Some((Some(n), Some(val))) = pair else {
+                                return fail(FailKind::Journal, format!("malformed HTTP header in the journal: {item}"));
+                            };
+                            out.push(Value::Record {
+                                ty: "HeaderField".into(),
+                                fields: vec![("name".into(), Value::Text(n.to_string())), ("value".into(), Value::Text(val.to_string()))],
+                            });
+                        }
+                        if out.len() > http::MAX_HEADER_FIELDS {
+                            return fail(FailKind::Journal, format!("an HTTP result in the journal holds more than {} headers", http::MAX_HEADER_FIELDS));
+                        }
+                        out
+                    }
+                    Some(other) => return fail(FailKind::Journal, format!("malformed HTTP headers in the journal: {other}")),
+                };
                 self.performed += 1;
                 if method != "get" {
                     self.effects += 1;
@@ -2786,6 +2816,7 @@ impl<'p> Interp<'p> {
                     ty: "Response".into(),
                     fields: vec![
                         ("status".into(), Value::Int(status)),
+                        ("headers".into(), Value::List(headers)),
                         ("body".into(), Value::Text(text.to_string())),
                         ("complete".into(), Value::Bool(complete)),
                     ],

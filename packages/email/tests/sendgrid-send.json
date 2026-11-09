@@ -1,12 +1,15 @@
 {
-  "about": "An email within the grant is sent once, as SendGrid's v3 Mail Send documents it, with the key as a Bearer token.",
+  "about": "An email within the grant is sent once, as SendGrid's v3 Mail Send documents it, with the key as a Bearer token; the receipt is SendGrid's X-Message-Id.",
   "service": "https://api.sendgrid.com",
   "routes": [
     {
       "method": "POST",
       "path": "/v3/mail/send",
       "status": 202,
-      "body": ""
+      "body": "",
+      "headers": {
+        "X-Message-Id": "W86EgYT6SQKk0lRflfLRsA"
+      }
     }
   ],
   "program": "import email.sendgrid\n\nfn main(mail: cap email.sendgrid.send(uses: 1)) -> Receipt {\n    return mail.send(\" ada@clinic.org \", \"Results\", \"Your results are ready.\")\n}\n",
@@ -32,7 +35,7 @@
   },
   "expect": {
     "result": {
-      "receipt": "accepted for ada@clinic.org",
+      "receipt": "W86EgYT6SQKk0lRflfLRsA",
       "capability": "email.sendgrid.send",
       "method": "send"
     },

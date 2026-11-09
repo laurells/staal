@@ -1017,7 +1017,8 @@ containing `/` or `..` before building one.
     }
 
 Two capability families belong to the runtime: `net.http.get/post/put/patch/delete`
-returning a `Response { status, body, complete }`, and `fs.read` / `fs.write`.
+returning a `Response { status, headers, body, complete }` (`headers` a list of
+`HeaderField { name, value }`, names lowercase), and `fs.read` / `fs.write`.
 Every existing limit applies to them, and every request and write goes through
 the journal. Libraries for real services are written on top of these (see
 [Capabilities from libraries](#capabilities-from-libraries)). The full rules are in [RUNTIME.md](RUNTIME.md) section 12. In short:

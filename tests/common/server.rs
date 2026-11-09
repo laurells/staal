@@ -193,6 +193,7 @@ fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mu
         }
         "/api/chat.postMessage" => (200, format!("{{\"ok\": true, \"ts\": \"170000000{n}.0001\"}}").into_bytes()),
         "/fixed" => (200, b"fixed".to_vec()),
+        "/headers" | "/headers-128" | "/headers-129" | "/latin1-header" => (200, b"ok".to_vec()),
         "/slow" => {
             std::thread::sleep(std::time::Duration::from_millis(400));
             (200, b"slow".to_vec())
@@ -219,7 +220,25 @@ fn handle<S: Read + Write>(conn: &mut S, log: Arc<Mutex<Vec<Req>>>, seen: Arc<Mu
         _ => (404, Vec::new()),
     };
     log.lock().unwrap().push(Req { method, path: path.clone(), headers, body, effect });
-    let extra = if path == "/redirect" { vec![("Location".to_string(), "/ok".to_string())] } else { Vec::new() };
+    let extra: Vec<(String, String)> = match path.as_str() {
+        "/redirect" => vec![("Location".to_string(), "/ok".to_string())],
+        // Names in mixed case, one name twice, out of order, and a value that echoes
+        // the test key, which the runtime must remove.
+        "/headers" => [("Zeta", "z"), ("X-Message-Id", "m-1"), ("Set-Cookie", "a=1"), ("X-Echo", super::KEY_ECHO), ("Set-Cookie", "b=2")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        // With Content-Length and Connection, 128 and 129 header fields in all.
+        "/headers-128" => (0..126).map(|i| (format!("X-H{i:03}"), "v".to_string())).collect(),
+        "/headers-129" => (0..127).map(|i| (format!("X-H{i:03}"), "v".to_string())).collect(),
+        "/latin1-header" => {
+            // A value byte that is not UTF-8 (ISO-8859-1 e-acute), as obs-text allows.
+            let _ = conn.write_all(b"HTTP/1.1 200 X\r\nContent-Length: 2\r\nConnection: close\r\nX-Name: caf\xe9\r\n\r\nok");
+            let _ = conn.flush();
+            return Some(path);
+        }
+        _ => Vec::new(),
+    };
     super::http::write_response(conn, status, &extra, &reply);
     Some(path)
 }

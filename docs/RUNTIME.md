@@ -956,11 +956,25 @@ refused (E101, or a config error on a grant).
 
 ### Built-in types and functions
 
-- `Response { status: Int, body: Text, complete: Bool }`, made only by the runtime:
-  it cannot be built in code, proposed by a model or parsed from text (E101).
-  Any status is a response, not a failure: a 500 or a 404 is data for the program.
-  `complete` is false when the body was larger than `net.max_response_bytes`, was
-  cut off, or was not UTF-8; `body` is then empty. The request still happened.
+- `Response { status: Int, headers: List<HeaderField, 128>, body: Text, complete: Bool }`,
+  made only by the runtime: it cannot be built in code, proposed by a model or parsed
+  from text (E101). Any status is a response, not a failure: a 500 or a 404 is data
+  for the program.
+  - `headers` holds the response's header fields as `HeaderField { name: Text, value:
+    Text }`, also made only by the runtime. Each name is lowercase (field names are
+    case-insensitive, RFC 9110 section 5.1); the fields are sorted by name, and a name
+    that came more than once has one field per value, in the order received. A secret's
+    value is removed from names and values as from bodies. The HTTP client reads at most
+    128 header fields: a response with more cannot be read, and is treated as one with
+    no answer (below).
+  - `complete` is false when part of the response could not be held: `body` is empty
+    when the body was larger than `net.max_response_bytes`, was cut off, or was not
+    UTF-8, and `headers` is empty when a header value was not UTF-8. The request still
+    happened.
+  - In the journal a response is recorded with its headers, so a resumed run gets the
+    same ones. A response recorded by staalc 0.26.0 or earlier has no headers recorded and
+    replays with none: its run can be resumed only with the same program, which could
+    not read them.
 - `Incoming { connection: Text, data: Text }`, a request `net.tcp.accept` read
   (Listening, below), made only by the runtime as a `Response` is.
 - `Secret`: a value from the environment (below). It cannot become `Text`, be

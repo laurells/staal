@@ -9,7 +9,7 @@ use staalc::interp::{run_config, run_config_durable, Durability, FailKind, RunRe
 use serde_json::{json, Value as Json};
 use std::sync::Once;
 
-const KEY: &str = "sk_test_4f9a8b7c6d5e3f21";
+const KEY: &str = common::KEY_ECHO;
 
 fn init() {
     static ONCE: Once = Once::new();
@@ -151,11 +151,13 @@ fn responses_are_data_whatever_their_status() {
             .result
             .unwrap()
     };
-    assert_eq!(get("/error"), json!({ "status": 500, "body": "boom", "complete": true }));
+    let fields = |n: usize| json!([{ "name": "connection", "value": "close" }, { "name": "content-length", "value": n.to_string() }]);
+    assert_eq!(get("/error"), json!({ "status": 500, "headers": fields(4), "body": "boom", "complete": true }));
     // A redirect is returned, never followed: one request only.
     assert_eq!(get("/redirect")["status"], 302);
     assert_eq!(s.requests().iter().filter(|r| r.path == "/ok").count(), 0);
-    assert_eq!(get("/binary"), json!({ "status": 200, "body": "", "complete": false }));
+    // A body that is not text is not held; the headers still are.
+    assert_eq!(get("/binary"), json!({ "status": 200, "headers": fields(3), "body": "", "complete": false }));
 }
 
 #[test]
@@ -168,7 +170,8 @@ fn a_body_over_the_limit_is_marked_incomplete() {
         s.url("/big")
     );
     let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.get" } })), "net", json!({ "max_response_bytes": 1000 }));
-    assert_eq!(run(&src, cfg).result.unwrap(), json!({ "status": 200, "body": "", "complete": false }));
+    let fields = json!([{ "name": "connection", "value": "close" }, { "name": "content-length", "value": "4096" }]);
+    assert_eq!(run(&src, cfg).result.unwrap(), json!({ "status": 200, "headers": fields, "body": "", "complete": false }));
     let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.get" } })), "net", json!({ "max_response_bytes": 5000 }));
     assert_eq!(run(&src, cfg).result.unwrap()["body"].as_str().unwrap().len(), 4096);
 }
@@ -444,4 +447,146 @@ fn f(to: Text, text: Text, key: Secret, http: cap net.http.post(only: ["{0}"])) 
     assert_eq!(run(&src, cfg("Your code is 4821")).result.unwrap(), json!(200));
     let sent: Json = serde_json::from_str(&s.requests()[0].body).unwrap();
     assert_eq!(sent, json!({ "to": "+2348000000000", "sms": "Your code is 4821", "api_key": KEY }));
+}
+
+// Response headers (RUNTIME.md section 12): names lowercased and sorted, one name's
+// values in the order received, secrets removed; more than the limit, or a value
+// that is not UTF-8, makes the response incomplete. On both engines, and replayed
+// from the journal exactly.
+const HEADERS_SRC: &str = r#"fn f(key: Secret, http: cap net.http.get(only: ["URL"])) -> Text {
+    let r = http.get("URL")
+    let shown = ""
+    for h in r.headers {
+        set shown = shown + h.name + "=" + h.value + ";"
+    }
+    return shown + " complete=" + json(r.complete) + " body=" + r.body + " count=" + json(len(r.headers))
+}"#;
+
+fn headers_cfg() -> Json {
+    json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get" } },
+            "secrets": { "key": { "env": "STAAL_TEST_KEY" } },
+            "model": { "provider": "script", "responses": [] } })
+}
+
+#[test]
+fn a_response_holds_its_headers() {
+    init();
+    let s = Server::start();
+    let src = HEADERS_SRC.replace("URL", &s.url("/headers"));
+    let want = "connection=close;content-length=2;set-cookie=a=1;set-cookie=b=2;x-echo=[secret removed];x-message-id=m-1;zeta=z; complete=true body=ok count=7";
+    for engine in engines() {
+        let out = staalc::interp::run_config_engine(&prog(&src), &src, &headers_cfg(), Durability::None, engine)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(out.result, Ok(json!(want)), "{engine:?}");
+        assert!(!all_text(&out).contains(KEY), "{engine:?}: the key reached the log");
+    }
+}
+
+#[test]
+fn headers_are_replayed_from_the_journal() {
+    init();
+    let s = Server::start();
+    let src = HEADERS_SRC.replace("URL", &s.url("/headers"));
+    let dir = std::env::temp_dir().join(format!("staal-headers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let journal = dir.join("run.journal");
+    let first = run_config_durable(&prog(&src), &src, &headers_cfg(), Durability::Create(&journal)).unwrap();
+    let text = std::fs::read_to_string(&journal).unwrap();
+    assert!(!text.contains(KEY) && text.contains("x-message-id"), "the journal holds the headers, never the key: {text}");
+    // Resuming the finished run replays the response: the server is not asked again.
+    let before = s.requests().len();
+    let again = run_config_durable(&prog(&src), &src, &headers_cfg(), Durability::Resume(&journal)).unwrap();
+    assert_eq!(again.result, first.result);
+    assert_eq!(s.requests().len(), before, "replayed, not sent again");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_journal_from_before_headers_replays_none() {
+    // A run whose journal was written before responses held headers can only be
+    // resumed with the same program, which could not read `headers`; its recorded
+    // results have no "headers", and replay as none. A malformed one is refused.
+    init();
+    let s = Server::start();
+    let src = r#"fn f(http: cap net.http.get(only: ["URL"])) -> Int {
+    let r = http.get("URL")
+    return r.status
+}"#
+    .replace("URL", &s.url("/fixed"));
+    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get" } }, "model": { "provider": "script", "responses": [] } });
+    let dir = std::env::temp_dir().join(format!("staal-oldjournal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let journal = dir.join("run.journal");
+    let first = run_config_durable(&prog(&src), &src, &cfg, Durability::Create(&journal)).unwrap();
+    assert_eq!(first.result, Ok(json!(200)));
+    let text = std::fs::read_to_string(&journal).unwrap();
+    let rewrite = |headers: Option<Json>| -> String {
+        let mut out = String::new();
+        let mut rewrote = 0;
+        for line in text.lines() {
+            let mut l: Json = serde_json::from_str(line).unwrap();
+            if let Some(ok) = l.get_mut("ok").and_then(Json::as_object_mut)
+                && ok.contains_key("headers")
+            {
+                match &headers {
+                    None => ok.remove("headers"),
+                    Some(h) => ok.insert("headers".into(), h.clone()),
+                };
+                rewrote += 1;
+            }
+            out.push_str(&l.to_string());
+            out.push('\n');
+        }
+        assert_eq!(rewrote, 1, "{text}");
+        out
+    };
+    std::fs::write(&journal, rewrite(None)).unwrap();
+    let before = s.requests().len();
+    let again = run_config_durable(&prog(&src), &src, &cfg, Durability::Resume(&journal)).unwrap();
+    assert_eq!(again.result, Ok(json!(200)), "replayed as recorded");
+    assert_eq!(s.requests().len(), before, "replayed, not sent again");
+    for bad in [json!("x"), json!([["only-a-name"]]), json!([[1, 2]]), json!([["a", "b", "c"]])] {
+        std::fs::write(&journal, rewrite(Some(bad.clone()))).unwrap();
+        let out = run_config_durable(&prog(&src), &src, &cfg, Durability::Resume(&journal)).unwrap();
+        let Err(f) = &out.result else { panic!("{bad}: accepted") };
+        assert_eq!(f.kind, FailKind::Journal, "{bad}: {}", f.message);
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_response_holds_up_to_128_header_fields_and_a_value_must_be_text() {
+    init();
+    let s = Server::start();
+    for engine in engines() {
+        let run = |path: &str| {
+            let src = HEADERS_SRC.replace("URL", &s.url(path));
+            staalc::interp::run_config_engine(&prog(&src), &src, &headers_cfg(), Durability::None, engine)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .result
+        };
+        let at_limit = run("/headers-128");
+        let Ok(Json::String(text)) = &at_limit else { panic!("{at_limit:?}") };
+        assert!(text.ends_with(" complete=true body=ok count=128"), "{engine:?}: {text}");
+        // One more is a response the client cannot read: for a GET, a failure the
+        // program sees; it happened, as the server's log shows.
+        let over = run("/headers-129");
+        let Err(f) = &over else { panic!("{engine:?}: {over:?}") };
+        assert!(f.kind == FailKind::Action && f.message.contains("too many headers"), "{engine:?}: {}", f.message);
+        // A value that is not UTF-8 is not held: no headers, the body still is.
+        assert_eq!(run("/latin1-header"), Ok(json!(" complete=false body=ok count=0")), "{engine:?}");
+    }
+    for path in ["/headers-128", "/headers-129", "/latin1-header"] {
+        assert_eq!(s.requests().iter().filter(|r| r.path == path).count(), engines().len(), "{path} reached the server");
+    }
+}
+
+fn engines() -> Vec<staalc::interp::Engine> {
+    let mut e = vec![staalc::interp::Engine::Interpreter];
+    if cfg!(feature = "native") {
+        e.push(staalc::interp::Engine::Native);
+    }
+    e
 }
