@@ -1111,3 +1111,245 @@ fn limits_per_principal_are_checked_before_anything_is_served() {
     assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("only a server with server.http.auth knows its principals"), "{err}");
 }
+
+// ---- Calls over HTTP survive crashes as over stdio (stage 3, docs/MCP.md 12.7) ----
+//
+// The scenarios of tests/mcp_crash_test.rs, over HTTP with a token: the server is
+// killed at every point a call makes something durable, started again, and the client
+// sends the same call again with the same token, as a client that saw its connection
+// close may.
+
+const STRIPE_KEY: &str = "sk_test_mcp_http_crash_7f6e5d4c";
+
+/// An OAuth case serving refunds through the Stripe library against a fake service:
+/// `refund` with `once`, `refund_any` without.
+struct RefundCase {
+    c: OAuthCase,
+    service: Server,
+}
+
+fn refund_case(name: &str) -> RefundCase {
+    let c = oauth_case(name);
+    let service = Server::start();
+    let dir = c.dir();
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/capabilities");
+    std::fs::copy(examples.join("stripe.staal"), dir.join("stripe.staal")).unwrap();
+    std::fs::write(
+        dir.join("stripe_refund.staal"),
+        "import stripe\n\nfn main(payment: Text, amount: Money, refunds: cap stripe.refunds.create(max: 100 USD)) -> Receipt {\n    return refunds.create(payment, amount)\n}\n",
+    )
+    .unwrap();
+    let s = |p: &str| service.url(p);
+    let tool = |name: &str, once: bool| {
+        let mut t = json!({
+            "name": name, "description": "Refund a payment.", "program": "stripe_refund.staal",
+            "grants": { "refunds": { "cap": "stripe.refunds.create", "each": usd("30.00"), "uses": 1, "only": ["pi_usd"], "needs": {
+                "get": { "cap": "net.http.get", "only": [s("/v1/payment_intents/*")] },
+                "post": { "cap": "net.http.post", "only": [s("/v1/refunds")], "idempotency_key": true },
+                "key": { "env": "STAAL_MCP_HTTP_CRASH_KEY" },
+                "base": s("")
+            } } },
+            "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 },
+            "quota": { "window": "1h", "calls": 50, "money": usd("1000.00") }
+        });
+        if once {
+            t["once"] = json!({ "by": ["payment", "amount"] });
+        }
+        t
+    };
+    edit_manifest(&c, |m| m["tools"] = json!([tool("refund", true), tool("refund_any", false)]));
+    RefundCase { c, service }
+}
+
+impl RefundCase {
+    fn start(&self, extra: &[(&str, &str)]) -> Http {
+        let mut env = vec![("STAAL_MCP_HTTP_CRASH_KEY", STRIPE_KEY)];
+        env.extend_from_slice(extra);
+        Http::start(&self.c.manifest, &self.c.addr, &env)
+    }
+
+    fn ledger(&self) -> Vec<Json> {
+        std::fs::read_to_string(self.c.dir().join("journals/server.ledger"))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    fn settled(&self) -> Vec<Json> {
+        self.ledger().into_iter().filter(|e| e["e"] == "settle").collect()
+    }
+
+    fn refunds(&self) -> usize {
+        self.service.effects("/v1/refunds")
+    }
+}
+
+fn stripe_call(id: i64, tool: &str) -> Json {
+    rpc(id, "tools/call", json!({ "name": tool, "arguments": { "payment": "pi_usd", "amount": usd("25.00") } }))
+}
+
+/// Kills the server at `fp` during a call of `tool` by `token`'s principal, then starts
+/// it again and sends the same call; returns the answer to the call sent again.
+fn crash_then_retry(case: &RefundCase, tool: &str, fp: (&str, &str), token: &str) -> Json {
+    let mut s = case.start(&[fp]);
+    let auth = format!("Bearer {token}");
+    let lost = send_raw(&case.c.addr, &request_bytes(&case.c.addr, &stripe_call(1, tool), &[("Authorization", &auth)]));
+    assert!(lost.is_none(), "{fp:?}: no answer before the crash, got {lost:?}");
+    let status = s.child.wait().unwrap();
+    assert_ne!(status.code(), Some(0), "{fp:?}: the server was killed");
+    let s = case.start(&[]);
+    let r = authed(&case.c.addr, &stripe_call(2, tool), token);
+    let (code, err) = s.stop();
+    assert_eq!(code, Some(0), "{err}");
+    r["result"].clone()
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn over_http_with_once_a_call_sent_again_after_any_crash_refunds_exactly_once() {
+    let clean = refund_case("http-crash-clean");
+    let s = clean.start(&[]);
+    let expected = authed(&clean.c.addr, &stripe_call(1, "refund"), &clean.c.token_for("kim"))["result"].clone();
+    s.stop();
+    assert_eq!(expected["isError"], false, "{expected}");
+    assert_eq!(clean.refunds(), 1);
+
+    let mut points: Vec<(&str, String)> = Vec::new();
+    for n in 1..=2 {
+        points.push(("STAALC_MCP_FAILPOINT", format!("ledger_write:{n}")));
+    }
+    for n in 1..=6 {
+        points.push(("STAALC_FAILPOINT", format!("after_write:{n}")));
+    }
+    for op in ["1", "2"] {
+        points.push(("STAALC_FAILPOINT", format!("before_result:{op}")));
+    }
+    for (k, v) in &points {
+        let case = refund_case(&format!("http-crash-{}", v.replace(':', "-")));
+        let token = case.c.token_for("kim");
+        let r = crash_then_retry(&case, "refund", (k, v), &token);
+        assert_eq!(r["isError"], false, "{v}: {r}");
+        assert_eq!(r["structuredContent"]["result"]["capability"], expected["structuredContent"]["result"]["capability"], "{v}");
+        assert_eq!(case.refunds(), 1, "{v}: refunded exactly once");
+        let keys: std::collections::HashSet<String> = case
+            .service
+            .requests()
+            .iter()
+            .filter(|q| q.path == "/v1/refunds")
+            .map(|q| q.headers.get("idempotency-key").cloned().unwrap_or_default())
+            .collect();
+        assert_eq!(keys.len(), 1, "{v}: {keys:?}");
+        let settled = case.settled();
+        assert_eq!(settled.len(), 1, "{v}: {:?}", case.ledger());
+        assert_eq!(settled[0]["charged"], json!([usd("25.00")]), "{v}");
+        let ends = case.ledger().iter().filter(|e| e["e"] == "settle" || e["e"] == "release").count();
+        assert_eq!(ends, case.ledger().iter().filter(|e| e["e"] == "reserve").count(), "{v}: {:?}", case.ledger());
+        // Every reservation is the principal's, and neither the token nor the Stripe key
+        // is in any file.
+        assert!(case.ledger().iter().filter(|e| e["e"] == "reserve").all(|e| e["scope"].as_str().is_some_and(|s| s.len() == 64)), "{v}");
+        for f in common::mcp::files_under(&case.c.dir().join("journals")) {
+            let text = std::fs::read_to_string(&f).unwrap_or_default();
+            assert!(!text.contains(STRIPE_KEY) && !text.contains(&token) && !text.contains("kim"), "{v}: {}", f.display());
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn over_http_without_once_a_call_sent_again_after_the_refund_refunds_again() {
+    let case = refund_case("http-any-after-settle");
+    let token = case.c.token_for("lee");
+    let r = crash_then_retry(&case, "refund_any", ("STAALC_MCP_FAILPOINT", "ledger_write:2"), &token);
+    assert_eq!(r["isError"], false, "{r}");
+    assert_eq!(case.refunds(), 2, "a second run is a second refund");
+    let case = refund_case("http-any-after-reserve");
+    let token = case.c.token_for("lee");
+    let r = crash_then_retry(&case, "refund_any", ("STAALC_MCP_FAILPOINT", "ledger_write:1"), &token);
+    assert_eq!(r["isError"], false, "{r}");
+    assert_eq!(case.refunds(), 1);
+    assert_eq!(case.settled().len(), 1);
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn after_a_crash_one_principal_never_gets_or_repeats_anothers_refund() {
+    // Mia's refund succeeded and settled; the server died before she was answered.
+    let case = refund_case("http-two-principals");
+    let (mia, ned) = (case.c.token_for("mia"), case.c.token_for("ned"));
+    let mut s = case.start(&[("STAALC_MCP_FAILPOINT", "ledger_write:2")]);
+    let lost = send_raw(&case.c.addr, &request_bytes(&case.c.addr, &stripe_call(1, "refund"), &[("Authorization", &format!("Bearer {mia}"))]));
+    assert!(lost.is_none());
+    s.child.wait().unwrap();
+    assert_eq!(case.refunds(), 1);
+    let s = case.start(&[]);
+    // Ned sends the same arguments: his own operation, a run of his own, not Mia's result.
+    let n = authed(&case.c.addr, &stripe_call(2, "refund"), &ned)["result"].clone();
+    assert_eq!(n["isError"], false, "{n}");
+    assert_eq!(case.refunds(), 2);
+    // Mia sends hers again: answered from her run, with no new refund.
+    let m = authed(&case.c.addr, &stripe_call(3, "refund"), &mia)["result"].clone();
+    assert_eq!(m["isError"], false, "{m}");
+    assert_eq!(case.refunds(), 2, "Mia's retry refunded nothing more");
+    let receipt = |r: &Json| r["structuredContent"]["result"]["receipt"].as_str().unwrap().to_string();
+    assert_ne!(receipt(&m), receipt(&n), "each got their own refund's receipt");
+    s.stop();
+    let scopes: std::collections::HashSet<String> =
+        case.ledger().iter().filter(|e| e["e"] == "reserve").map(|e| e["scope"].as_str().unwrap().to_string()).collect();
+    assert_eq!(scopes.len(), 2);
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn a_connection_closed_before_the_reservation_does_nothing_and_after_it_refunds_once() {
+    // Before: the server holds the call for 1.5 s just before reserving; the client
+    // closes its connection meanwhile.
+    let case = refund_case("http-cancel-before");
+    let token = case.c.token_for("oli");
+    let s = case.start(&[("STAALC_MCP_PAUSE", "before_reserve:1500")]);
+    let mut conn = TcpStream::connect(&case.c.addr).unwrap();
+    conn.write_all(&request_bytes(&case.c.addr, &stripe_call(1, "refund"), &[("Authorization", &format!("Bearer {token}"))])).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    drop(conn);
+    std::thread::sleep(Duration::from_millis(2000));
+    let (code, err) = s.stop();
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(case.refunds(), 0, "nothing reached the service");
+    assert!(case.ledger().iter().all(|e| e["e"] != "reserve"), "nothing was reserved: {:?}", case.ledger());
+
+    // After: the client asks for progress, and closes the stream once the run has begun.
+    let case = refund_case("http-cancel-after");
+    let token = case.c.token_for("oli");
+    let s = case.start(&[]);
+    let mut call = stripe_call(1, "refund");
+    call["params"]["_meta"]["progressToken"] = json!("p");
+    let mut conn = TcpStream::connect(&case.c.addr).unwrap();
+    conn.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    conn.write_all(&request_bytes(&case.c.addr, &call, &[("Authorization", &format!("Bearer {token}"))])).unwrap();
+    let mut seen = Vec::new();
+    let mut b = [0u8; 256];
+    let run = loop {
+        let n = conn.read(&mut b).unwrap();
+        assert!(n > 0, "the stream ended before the run began");
+        seen.extend_from_slice(&b[..n]);
+        let t = String::from_utf8_lossy(&seen).into_owned();
+        if let Some(i) = t.find("run ") {
+            break t[i + 4..i + 36].to_string();
+        }
+    };
+    drop(conn);
+    // The run goes on to its end, is recorded, and refunds exactly once; its principal
+    // can find it, and the same call is answered from it.
+    let start = Instant::now();
+    while case.settled().is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(20), "the run never settled: {:?}", case.ledger());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(case.refunds(), 1);
+    let st = authed(&case.c.addr, &rpc(2, "tools/call", json!({ "name": "staal_run_status", "arguments": { "run": run } })), &token);
+    assert_eq!(st["result"]["structuredContent"]["status"], "done", "{st}");
+    let again = authed(&case.c.addr, &stripe_call(3, "refund"), &token);
+    assert_eq!(again["result"]["isError"], false);
+    assert_eq!(case.refunds(), 1, "answered from the same run");
+    s.stop();
+}

@@ -414,6 +414,7 @@ impl Host {
                 keep: o.keep_ms,
             }
         });
+        pause("before_reserve");
         let run = {
             let mut st = match self.state() {
                 Ok(s) => s,
@@ -1152,6 +1153,23 @@ fn failpoint(name: &str) {
 
 #[cfg(not(feature = "failpoints"))]
 fn failpoint(_: &str) {}
+
+/// Test-only pause (feature `failpoints`): `STAALC_MCP_PAUSE=<name>:<ms>` sleeps that
+/// long at the point of that name, so a test can act at a known moment (close a
+/// connection before a reservation, say) instead of racing the server.
+#[cfg(feature = "failpoints")]
+fn pause(name: &str) {
+    if let Ok(v) = std::env::var("STAALC_MCP_PAUSE")
+        && let Some((n, ms)) = v.split_once(':')
+        && n == name
+        && let Ok(ms) = ms.parse::<u64>()
+    {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+}
+
+#[cfg(not(feature = "failpoints"))]
+fn pause(_: &str) {}
 
 /// Runs the notify command with a cleared environment, no input and at most
 /// NOTIFY_LIMIT; its output goes to the server's standard error.

@@ -957,8 +957,11 @@ build: stage 1 (the HTTP server, its settings, TLS and the checks of 12.3, in
 `src/mcp/http.rs`), and of stage 2 the token verification (`src/mcp/jwt.rs`), the keys
 (`src/mcp/keys.rs`), the protected resource metadata, the 401 and 403 challenges, tool
 scopes, the principal's scope and key fingerprint (`src/mcp/principal.rs`), app
-inputs from claims and the limits per principal. Stage 2 is complete; stage 3 (the
-crash and duplicate tests over HTTP) is next. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`. It is written against MCP 2026-07-28 (the Streamable HTTP
+inputs from claims and the limits per principal; and stage 3, the crash, duplicate
+and cancellation tests over HTTP. Stage 4 (SDK conformance and the independent
+review) is next. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`.
+
+It is written against MCP 2026-07-28 (the Streamable HTTP
 transport and the authorization specification of that revision) and the RFCs they
 name. When it is built, this section becomes the specification and moves into
 sections 2 to 9, and the tests of section 9 gain the ones listed here.
@@ -1123,6 +1126,12 @@ write to the stream sets it too. What it decides is exactly what
   `staal_run_status` (for its principal) under its run id. A client that asked for
   progress was given the run id when the run started; one that did not has only `once`
   to find the run again: the same call is answered from the same run.
+
+**Stopping.** On SIGINT or SIGTERM the server stops accepting connections, tells
+every connection to finish the request it is serving and then close (an idle one
+closes at once), lets the calls in progress finish and answers them, and then gives
+the connections at most 10 s to write those answers before the process ends, so a
+client that does not read its answer cannot hold it.
 
 **Resources a client can hold.** The request line and headers must arrive within
 10 s of when the server is ready to read a request: when the connection opens (after
@@ -1362,9 +1371,17 @@ included:
    run began, SIGINT and SIGTERM letting calls in progress finish and be answered,
    and a release build refusing `server.http`.
 2. OAuth: the metadata, discovery and keys, token validation, scopes, the principal
-   and its limits.
+   and its limits. Done.
 3. Calls over HTTP through the existing host: reservation, ledger, journals, recovery
-   and cancellation, and the crash and duplicate tests over HTTP.
+   and cancellation, and the crash and duplicate tests over HTTP. Done: the server
+   killed at every ledger write, journal write and action result during a refund
+   over HTTP, the same call sent again with the same token refunds exactly once with
+   `once` and again without it; two principals with the same arguments after a crash
+   each get their own refund and neither gets or repeats the other's; a connection
+   closed before the reservation (held there by a test build's `STAALC_MCP_PAUSE`)
+   reserves and refunds nothing, and one closed after it refunds once and is found
+   by its principal. Building these found that stopping on SIGTERM could drop an
+   answer already made: the server now shuts down gracefully (12.3).
 4. SDK conformance, the adversarial tests above, and the independent review.
 
 ### 12.8 Decisions

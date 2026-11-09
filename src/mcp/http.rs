@@ -54,6 +54,10 @@ fn times() -> (Duration, Duration) {
     (HEADER_TIME, BODY_TIME)
 }
 
+/// After the calls in progress have finished on SIGINT or SIGTERM, connections get at
+/// most this long to write their answers and close before the process ends.
+const FLUSH_TIME: Duration = Duration::from_secs(10);
+
 /// The most a request's line and headers may take.
 const MAX_HEAD_BYTES: usize = 64 * 1024;
 /// The most a body may hold: the longest message stdio reads.
@@ -364,17 +368,32 @@ pub fn serve(path: &Path) -> u8 {
     log(&format!("serving {tools} tool(s) from {} on {scheme}://{}{}", path.display(), settings.listen, settings.path));
 
     let state = Arc::new(State { settings, session: session.clone(), next: AtomicU64::new(0), verifier, rates: Default::default() });
-    let accepting = rt.spawn(accept_loop(listener, state));
+    let graceful = Arc::new(hyper_util::server::graceful::GracefulShutdown::new());
+    let accepting = rt.spawn(accept_loop(listener, state, graceful.clone()));
     // Until SIGINT or SIGTERM.
     let got = wait_for_stop_signal(&signals);
     log(&format!("{got}: no new connection is accepted; finishing the calls in progress"));
+    // Graceful shutdown: the accept loop ends (and lets go of its handle on `graceful`);
+    // every connection is told to finish the request it is serving and then close, and
+    // an idle one closes at once.
     accepting.abort();
-    // Calls in progress finish and are answered while the runtime still runs; then
-    // connections still open (idle, or waiting for a call that is done) are dropped
-    // with the runtime.
+    let _ = rt.block_on(accepting);
+    let closed = match Arc::try_unwrap(graceful) {
+        Ok(g) => Some(rt.spawn(g.shutdown())),
+        Err(_) => None,
+    };
+    // The calls in progress finish, and their answers go to their connections while
+    // the runtime still runs.
     let finishing = session.clone();
     let finished = rt.spawn_blocking(move || finishing.finish());
     let _ = rt.block_on(finished);
+    // Then the connections write those answers and close, within FLUSH_TIME (a client
+    // that does not read its answer cannot hold the process).
+    if let Some(closed) = closed
+        && rt.block_on(async { tokio::time::timeout(FLUSH_TIME, closed).await }).is_err()
+    {
+        log(&format!("some connections did not close within {} s of their calls ending; they are dropped", FLUSH_TIME.as_secs()));
+    }
     rt.shutdown_timeout(Duration::from_secs(1));
     if let Some(r) = refresher {
         r.stop();
@@ -635,7 +654,7 @@ fn wait_for_stop_signal(set: &libc::sigset_t) -> &'static str {
     }
 }
 
-async fn accept_loop(listener: tokio::net::TcpListener, state: Arc<State>) {
+async fn accept_loop(listener: tokio::net::TcpListener, state: Arc<State>, graceful: Arc<hyper_util::server::graceful::GracefulShutdown>) {
     let slots = Arc::new(tokio::sync::Semaphore::new(state.settings.max_connections));
     let tls = state.settings.tls.clone().map(tokio_rustls::TlsAcceptor::from);
     loop {
@@ -654,14 +673,17 @@ async fn accept_loop(listener: tokio::net::TcpListener, state: Arc<State>) {
             continue;
         };
         let (state, tls) = (state.clone(), tls.clone());
+        // Subscribed now, before any TLS handshake, so a shutdown signalled meanwhile
+        // still reaches this connection.
+        let watcher = graceful.watcher();
         tokio::spawn(async move {
             let _slot = slot;
             match tls {
-                None => connection(hyper_util::rt::TokioIo::new(stream), state).await,
+                None => connection(hyper_util::rt::TokioIo::new(stream), state, watcher).await,
                 Some(acceptor) => {
                     // A failed or slow handshake ends the connection; nothing was asked.
                     if let Ok(Ok(s)) = tokio::time::timeout(HANDSHAKE_TIME, acceptor.accept(stream)).await {
-                        connection(hyper_util::rt::TokioIo::new(s), state).await;
+                        connection(hyper_util::rt::TokioIo::new(s), state, watcher).await;
                     }
                 }
             }
@@ -669,7 +691,7 @@ async fn accept_loop(listener: tokio::net::TcpListener, state: Arc<State>) {
     }
 }
 
-async fn connection<I>(io: I, state: Arc<State>)
+async fn connection<I>(io: I, state: Arc<State>, watcher: hyper_util::server::graceful::Watcher)
 where
     I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
 {
@@ -681,7 +703,7 @@ where
     b.timer(hyper_util::rt::TokioTimer::new()).header_read_timeout(times().0).max_buf_size(MAX_HEAD_BYTES);
     // Errors here are the client's (a malformed request, a closed connection, a slow
     // head): hyper has answered or closed already, and there is nothing to log.
-    let _ = b.serve_connection(io, service).await;
+    let _ = watcher.watch(b.serve_connection(io, service)).await;
 }
 
 /// An answer's body: a whole one, or an SSE stream fed by a call.

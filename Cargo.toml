@@ -50,7 +50,7 @@ webpki-root-certs = "1.0.9"
 # hyper, on the tokio runtime the PostgreSQL client already brings in, with TLS through
 # tokio-rustls on the same rustls and ring. Runs stay on their own threads.
 hyper = { version = "=1.12.0", default-features = false, features = ["server", "http1"] }
-hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }
+hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio", "server-graceful", "http1"] }
 # Signature checks for the HTTP transport's access tokens (src/mcp/jwt.rs): the ring
 # rustls already uses, at the same version.
 ring = "=0.17.14"

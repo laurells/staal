@@ -48,7 +48,9 @@ the language or its file formats.
   fetches, the protected resource metadata, 401 and 403 challenges, tool scopes, each
   caller's runs and `once` keys held apart by an HMAC of its identity, app inputs from
   token claims, and limits per caller (request rate, runs in progress, a durable
-  share of a quota). A release build still refuses `server.http` until the release
+  share of a quota). Then the crash, duplicate and cancellation tests over HTTP
+  (stage 3), which found that stopping on SIGTERM could drop an answer already made;
+  the server now shuts down gracefully. A release build still refuses `server.http` until the release
   gate (SDK conformance and an independent security review); only a test build
   serves it.
 
