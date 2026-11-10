@@ -1,13 +1,14 @@
-# Staal Agent Manifest Specification, revision v0.1.4 (freeze candidate)
+# Staal Agent Manifest Specification, revision v0.1.5 (freeze candidate, pending implementation proof)
 
 **Status: a design, not built.** Nothing here exists in `staalc` yet except what it
 says it reuses. It is written to be reviewed before any of it is built, as
 [MCP.md](MCP.md) section 12 was. v0.1 took in the first review's decisions (section
-12); v0.1.1 to v0.1.4 resolve the later reviews' points without widening the scope
-(sections 13 to 15 and 17 list each and where it is answered). Section 16 lists what must be
-built and demonstrated in the runtime before the format is frozen.
+12); v0.1.1 to v0.1.5 resolve the later reviews' points without widening the scope
+(sections 13 to 15, 17 and 18 list each and where it is answered). Section 16 lists what must
+be built and demonstrated before the format is frozen; from v0.1.5 the remaining
+blockers are closed by building those, not by further revisions of this text.
 
-**Revision and format version are separate.** v0.1.4 is a revision of this
+**Revision and format version are separate.** v0.1.5 is a revision of this
 document. The manifest format it defines is version `0.1`, the value of `"manifest"`.
 Review revisions do not change the format version; it is fixed when the specification
 is frozen and first implemented, and changes after that follow section 9.
@@ -156,7 +157,7 @@ The example is the refund agent of `examples/finops`, written as a deployable ag
       },
       "grants": {
         "pay":  { "suggested": { "each": { "amount": "100.00", "currency": "USD" }, "uses": 1 },
-                  "needs": { "post": { "reach": ["https://BANK/refunds"], "idempotency_key": true } } },
+                  "needs": { "post": { "reach": ["https://{{BANK}}/refunds"], "idempotency_key": true } } },
         "text": { "suggested": { "uses": 1 } },
         "db":   { "suggested": {} },
         "book": { "suggested": {} }
@@ -192,7 +193,13 @@ The example is the refund agent of `examples/finops`, written as a deployable ag
   `program`, `entry`, `app_inputs`, `once` and `deadline`, and two that change meaning:
   - `grants`: for every capability parameter of the entry function, the `suggested`
     limits, and for each runtime capability it needs, the `reach` it expects: the
-    `only` patterns, with placeholders (`BANK`) the business fills at install.
+    `only` patterns, with placeholders the business fills at install. A placeholder
+    is `{{NAME}}`, `NAME` matching `[A-Z][A-Z0-9_]{0,31}`, and stands for a whole host
+    name and nothing else (`https://{{BANK}}/refunds`). The business supplies a host
+    name; it is substituted, and the pattern is then checked as any `only` pattern is.
+    A value that is not a host name, or that holds `/`, `*`, `@`, `:` or a space, is
+    refused. Text outside `{{` and `}}` is literal; there is no escape, since `{` and
+    `}` cannot occur in a canonical URL pattern.
     Every parameter must appear, and only parameters may.
   - `quota.suggested`: a suggested quota; the business sets the real one.
   - `app_input_requirements`: for every app input, what the business must supply.
@@ -520,6 +527,30 @@ revoked version, and installs a flagged one only after the business confirms it 
 read the advisory. The tradeoff is deliberate: a remote switch would put the registry
 in the execution path and make it a single point of failure and attack.
 
+## 8a. Grants and their nested needs
+
+A library capability (`pay: cap bank.payments.refund`) and each runtime capability
+it needs (`needs post: cap net.http.post`) are **separate grants**, as the runtime
+already treats them (RUNTIME.md, Library capabilities: "A need that is a capability is
+a grant like any other"). Neither inherits limits from the other:
+
+| Identity | What the business grants | Where the runtime enforces it |
+| --- | --- | --- |
+| `pay` | the library capability: money per action (`each`), in total (`max`), attempts (`uses`), targets (`only`, over the action's `@target`) | the broker, on every action the program calls through `pay`, before the action's code runs |
+| `pay.post` | the need: targets (`only`, over URLs), `idempotency_key` | the broker, on every request the action's code makes through `post`, narrowed to the need's own type |
+
+So a refund through `pay` is checked against `pay`'s limits, and every request it makes
+is checked against `pay.post`'s. A restriction on `pay.post` limits where the library's
+code can send requests; it is not a restriction on every possible use of `pay`, and a
+money limit on `pay` is not a limit on `pay.post`, which carries no money. The install
+page shows them as separate rows under their stable identities (`pay`, `pay.post`),
+each with its own effective grant and consumers. The external expenditure ceiling comes
+from the library capability's money limits, since the runtime counts money on actions,
+whose `@amount` must reach a request (RUNTIME.md, Declaring).
+
+In `agent.json`, `grants.pay.suggested` is the suggestion for `pay`, and
+`grants.pay.needs.post` holds the suggestion and declared reach for `pay.post`.
+
 ## 9. Compatibility
 
 Five things must agree for an installed agent to be enforced as described:
@@ -568,6 +599,32 @@ evidence is for the version it names.
   `staalc`, with a warning at check and install, before an agent using it is refused.
 - A journal written by one released `staalc` resumes under the next, by its journal
   version, without repeating an action (section 16, R5).
+
+**What a resumed run uses.** A run is resumed from what it was started with, never
+from the current manifest (MCP.md section 7). Its execution configuration is:
+
+| Part | Held in | Bound by |
+| --- | --- | --- |
+| Program path and engine | the run file, written before the journal | the program's text by the source fingerprint, checked again at resume; the engine may differ on resume, by design (both give identical results) and recorded by R2 |
+| The run config: `entry`, `inputs` (the caller's arguments and the app inputs' values), `grants` with their needs, `secrets` (variable names only), `model`, `net` (including `proxy`), `fs`, `adapters`, `limits` (including the tool's deadline, as `deadline_ms`) | the run file | the journal's config hash, checked at resume |
+| The tool, the scope, the `once` key and the quota reservation | the ledger's `reserve` event, written before the run | the ledger, append-only and flushed |
+
+Editing the manifest after a run starts (its program path, entry, app input mapping,
+`once`, deadline or quota) therefore changes nothing for that run: it resumes under the
+configuration in its run file and reserve event, or refuses to resume if its program's
+text changed. Publisher metadata from `agent.json` (title, summary, categories, data
+declaration) reaches no run. Two gaps, both **required before freezing** (R7):
+
+- The config hash is SHA-256 of the run config as `serde_json` writes it: keys sorted,
+  compact, deterministic within `staalc`, but not specified. The new journal version
+  hashes it as RFC 8785.
+- `"proxy": "environment"` is bound, but the proxy it names is read from `HTTPS_PROXY`
+  when the run starts, and is not recorded. The new journal version records the proxy
+  URL a run used, and a resume under a different one is refused.
+
+Corrected while checking this: MCP.md section 7 said that upgrading `staalc` makes an
+unfinished run refuse to resume. The code refuses when the program, the config or the
+journal's format version differs, not on every upgrade; MCP.md now says so.
 
 ## 10. Scope of quotas, `once` and money
 
@@ -703,10 +760,18 @@ be demonstrated by a test that fails without it:
 | --- | --- | --- |
 | R1 | The source program fingerprint of section 5, in a new journal version; old journals resume by their own | a test that changes each input of section 5 in turn (a module, `staal.json`, `staal.lock`, a package's manifest, a package file) and sees the fingerprint change and a resume refused |
 | R2 | The `staalc` version and engine in the start record; a `resume` record per resume | a test that crashes and resumes across both engines and checks every record |
-| R3 | `staalc schema` reports the limits written in capability types, and every consumer of every grant with its boundary | tests over programs with entry limits, package slots and library needs |
+| R3 | `staalc schema` reports the limits written in capability types, and every consumer of every grant with its boundary | tests over programs with entry limits, package slots and library needs, and over propagation: a capability passed through several functions, returned from one, stored in a value and read back, passed through a function value, re-exported by a package, passed from one package's function into another's, and one grant with several consumers of different limits. Each test asserts one of two outcomes: the consumer graph complete and exact, or marked incomplete with the agent refused Verified |
 | R4 | A package cannot exercise more than its declared boundary while the agent's own code holds broader authority over the same grant | a runtime test in which the agent's code reaches `https://bank.example.com/x` through a grant the package also receives, and the package's attempt at `/x` is refused while its `/refunds` succeeds |
-| R5 | A crash and resume across engines and across `staalc` versions never repeats an action blindly | the existing crash tests across engine pairings, plus journals of every journal version still supported, kept as fixtures from the releases that wrote them and resumed by the current one at every crash point |
-| R6 | One authority decision per request, kept through the whole request: the URL whose canonical form is checked against `only` is the one connected to, verified by TLS and sent, with the HTTP authority (`Host`), the TLS verification name (and SNI) and the checked canonical host always the same. No proxy is used unless the deployment's config names one: today `net.http` uses none unless the run config asks for the environment's, and the model provider's `"proxy": "environment"` likewise; a configured proxy is an explicit deployment dependency, shown at install as part of the network boundary. A pooled connection is reused only for a request to the same scheme, host and port it was opened and verified for. Today the URL is parsed by the `url` crate for the check and again inside the HTTP client: whether the two can disagree is part of this review | a review of `net.http`, the model provider and key fetching against this rule; tests with URLs that parse differently across libraries, with a proxy set in the environment and not configured, and with a kept-alive connection followed by a request to another host |
+| R5 | A crash and resume across engines and across `staalc` versions never repeats an action blindly | the existing crash tests across engine pairings, plus journals of every journal version still supported, kept as fixtures from the releases that wrote them and resumed by the current one at every crash point. A **release gate for `staalc` itself**, in CI, not only a Verified check: a broken resume would affect every installed agent |
+| R6 | One authority decision per request, kept through the whole request: the request target is parsed and made canonical once, into one immutable representation; the `only` check, the connection, TLS verification and the request line all use that representation, and the HTTP client never re-reads the original string. The HTTP authority (`Host`, and `:authority` if HTTP/2 is ever used), the TLS verification name (and SNI) and the checked canonical host are always the same. No proxy is used unless the deployment's config names one: today `net.http` uses none unless the run config asks for the environment's, and the model provider's `"proxy": "environment"` likewise; a configured proxy is an explicit deployment dependency, shown at install as part of the network boundary. A pooled connection is reused only for a request to the same scheme, host and port it was opened and verified for. Today the URL is parsed by the `url` crate for the check and again inside the HTTP client: whether the two can disagree is part of this review | a review of `net.http`, the model provider and key fetching against this rule; adversarial tests for international names (IDNA), IPv4 and IPv6 literals, explicit and default ports, trailing dots and case, percent-encoded separators and dot segments, a proxy set in the environment and not configured, and a kept-alive connection followed by a request to another host. Each asserts that the authority the policy checked and the authority actually connected to are identical, not only that the request was accepted or refused |
+| R7 | The run config hashed as RFC 8785; the proxy URL a run used recorded, and a resume under another refused (section 9) | a test that changes, between a crash and its resume, each manifest field a run depends on (program path, entry, app input mapping, `once`, deadline, quota, grants, proxy) and shows the resumed run either uses the original or refuses, never the change |
+| R8 | A normative JSON Schema (2020-12) for `agent.json` and `agent.described.json`, with the semantic rules a schema cannot state, and valid and invalid fixtures. Unknown keys refused at every depth. Types fixed: money as `{"amount": decimal string, "currency": ISO 4217 code}` with at most the currency's decimal places, as the runtime reads it; durations as the tool host reads them (a whole number and `s`, `m`, `h` or `d`, per field as MCP.md allows); `requires_staalc` as a version range in the grammar packages use; an empty `suggested` as no suggestion in any dimension | the fixtures, each refused or accepted as marked, by `staalc agent check` |
+| R9 | A normative fingerprint algorithm: UTF-8 bytes without Unicode normalization; the domain label `staal-program-v3` as the first framed field; every group framed with a record count, every package framed as a nested record holding its own fields and file records; ordering by the bytes of UTF-8, never by locale; digests as lowercase hex in the description and raw 32 bytes inside the construction | test vectors: one project, one package, several packages, nested dependencies, a changed path, a changed content, a changed manifest; a second implementation, written separately (in Python), produces the same digest for every vector. And a demonstration, against the project and package loader, that no file outside the inputs can change what compiles or runs |
+
+**Verified never transfers.** A Verified designation is shown with the exact
+`staalc` release and platform it was earned on, as a historical fact about that
+combination. A business on another release or platform sees that its own environment
+was not the one verified; no part of a listing may imply otherwise.
 
 These test Staal's execution model, not only the marketplace. They are worth doing
 whether or not the marketplace is built.
@@ -729,3 +794,25 @@ whether or not the marketplace is built.
 
 The data handling declaration stays a declaration: a complete `data` object is never
 shown as a check mark or a verified privacy claim.
+
+## 18. Changes in v0.1.5 (the sixth review)
+
+| Review point | Resolution | Section |
+| --- | --- | --- |
+| The journal-bound run configuration | Defined: run file (program path, engine, run config with every key listed) plus the ledger's reserve event; a resumed run never reads the current manifest; two gaps made R7 (RFC 8785 config hash, the proxy URL recorded) | 9, 16 |
+| An unambiguous fingerprint encoding | Made R9: a normative algorithm with test vectors and a second, independent implementation, plus a demonstration against the loader | 16 |
+| Grants and nested needs | Separate grants with stable identities (`pay`, `pay.post`), neither inheriting from the other; where each is enforced | 8a |
+| R6's single parsed representation | One immutable parsed target used by check, connection, TLS and request; adversarial tests that compare checked and connected authority | 16 |
+| A normative manifest schema | Made R8, with the types fixed now; placeholders defined (`{{NAME}}`, a whole host only) | 4, 16 |
+| Verified across compiler versions | Never transfers; shown with release and platform; R5 a release gate for `staalc` | 16 |
+| Consumer analysis under propagation | R3's tests list the hard cases and assert one of two outcomes | 16 |
+
+Found while checking the review against the code, and corrected in MCP.md: section 7
+said an upgrade of `staalc` stops unfinished runs from resuming. The code stops them
+when the program, the config or the journal format version differs.
+
+**Why the next step is code, not v0.1.6.** The last two reviews found no
+architectural problem; their findings are precision that only an implementation can
+settle: a schema that parses, an encoding with vectors two implementations agree on,
+tests that pass or fail. R1 to R9 are where those are closed. The format is frozen
+when they pass, with whatever corrections building them forces into this text.

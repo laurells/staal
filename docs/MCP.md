@@ -550,7 +550,7 @@ journal directory together:
 - **A `reserve` whose journal records no end** is resumed. Before any run is resumed,
   every unfinished run is checked: its run file is there, its program is checked again
   from the file the run file names, and its journal was started with the identical
-  program, config and runtime version.
+  program and config, in a journal format version this `staalc` reads.
   Any failure stops the server, naming each run (see Upgrades below). If it ends, it is settled
   from the `usage` its result reports, which counts the replayed actions too; if it
   stops in doubt, it keeps its reservation and its waiting record is rewritten.
@@ -683,10 +683,12 @@ So an operator learns of every stopped run even if the notify command is broken:
 record is on disk, `staalc mcp status` lists it, and stderr has it. The notify command
 only makes the news faster.
 
-**Upgrades.** A journal is tied to its program, config and runtime version. The config
-comes from the run file, so changing a tool in the manifest (its grants, quota, even
-removing it) does not stop its unfinished runs from resuming as they started. Editing
-a program's file, or upgrading `staalc`, does: those runs refuse to resume. The policy
+**Upgrades.** A journal is tied to its program, its config and its journal format
+version. The config comes from the run file, so changing a tool in the manifest (its
+grants, quota, even removing it) does not stop its unfinished runs from resuming as they
+started. Editing a program's file does: those runs refuse to resume. So does upgrading
+to a `staalc` that writes a different journal format version; an upgrade that keeps the
+format resumes them on the new version. The policy
 is explicit: before an upgrade or a change to a program, the operator runs `staalc mcp
 status` and lets every unfinished run end (resolving any that wait).
 If the server starts and finds an unfinished run it cannot resume for this reason, it
