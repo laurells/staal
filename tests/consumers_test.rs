@@ -165,8 +165,9 @@ capability shop.pay {{
     }}
 
     action send(id: Text @target) -> Text {{
+        let r = post.post("https://bank.example.com/v1/" + url_segment(id), "a")
         let s = m.refund(post)
-        return "sent " + json(s)
+        return "sent " + json(r.status + s)
     }}
 }}
 

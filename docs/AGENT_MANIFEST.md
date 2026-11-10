@@ -775,7 +775,8 @@ be demonstrated by a test that fails without it:
 
 **Status.** R1, R2, R7 and R9 are implemented, in journal version 3; R6 in the HTTP
 clients; R4 holds by the language, now demonstrated; R5's gate is in place, with the
-limit stated below. Each is demonstrated by these tests. R3 and R8 are open.
+limit stated below; R3 in `staalc schema`. Each is demonstrated by these tests. R8 is
+open.
 
 - R1: `every_input_of_a_program_is_bound_by_its_journal` (tests/packages_test.rs)
   changes, alone, a module, the project's `staal.json` and `staal.lock` (only their
@@ -838,6 +839,27 @@ limit stated below. Each is demonstrated by these tests. R3 and R8 are open.
   client is built without `.proxy(None)`. `a_library_cannot_set_host`
   (tests/http_test.rs) refuses `Host`, `:authority` and `proxy-` headers set from a
   library.
+- R3: `staalc schema` reports each grant's `limits` (its program ceiling) and
+  `consumers`: for every grant, the agent's own code, each package slot it can be
+  passed to from outside that package, and each library need, with the boundary each
+  is held to and its source (RUNTIME.md section 1). The analysis (src/consumers.rs)
+  follows parameters, `let`, return values and needs, per assignment of grants to a
+  function's parameters, and recursion to a fixed point; it reports anything it cannot
+  follow under `consumer_analysis.unresolved` and marks itself incomplete.
+  `every_consumer_of_every_grant_with_its_boundary` (tests/consumers_test.rs) checks
+  the exact list for a project where grants pass through several functions, are
+  returned from the agent's function and from a package's, go through a package into
+  another package (and a package's own function, which is not a consumer), are called
+  by a name imported from a package, and are needs of library capabilities, the
+  agent's and a package's, one handing its need to a package; one grant reaches four
+  consumers with different limits. Other tests cover entry limits, a function that
+  returns either of two grants, and recursion. Storing a capability in a value,
+  carrying it in a function value and reassigning it are not in the language (the
+  tests assert the checker refuses them), and the language has no re-export, so those
+  cases of the requirement cannot arise; a package that wraps another's function is
+  the case that can, and is tested. The incomplete outcome, which no accepted program
+  produces, is tested on a program altered by hand. Verified does not exist yet; when
+  it does, it must refuse an agent whose analysis is incomplete.
 - R4: a capability can travel only as a parameter, a typed `let`, a return value or a
   library's need: it can be held in no list, record, tuple, optional, map or function
   value, and never reassigned (E101, E003). Each of those entries narrows it to the

@@ -89,8 +89,27 @@ parameter with a default is not required and each declared record or enum is a
 `output`, a JSON Schema of the result as a run writes it; and `grants` and `secrets`,
 the parameters only an operator gives, which are never inputs; and `reads_console`,
 whether the function can reach `read_line()`, which a host whose standard input is
-not a console must refuse. Money is described
-with its currency's decimal places. The runtime's own check of inputs (section 3)
+not a console must refuse. Each grant has `limits`: those its
+type writes (`each`, `max`, `uses`, `only`, each only if written), its program ceiling.
+Money is described with its currency's decimal places.
+
+`consumers` lists, for every grant, each part of the program that can come to hold it
+and the boundary it is held to (`src/consumers.rs`): `agent`, the program's own code,
+bounded by the entry parameter's type; `package`, a parameter of a package's function
+the grant can be passed to from outside that package, bounded by that parameter's type;
+and `library_need`, the body of a library capability whose need it is, bounded by the
+need's type. A grant is an entry parameter, or `<grant>.<need>` for a need of a library
+capability granted to one, and so on. Each record gives the grant, the capability, the
+holder, its `limits` and their `source`. A limit a holder's type leaves out was in no
+type the capability passed through, since a capability can only go where its limits
+are kept (E003); `max` and `uses` count from each arrival in a slot, and also against
+every limit it passed through. The analysis follows every way the language lets a
+capability move (parameters, `let`, return values and needs; nothing else can hold
+one), per assignment of grants to a function's parameters, and through recursion to a
+fixed point. Branches are not evaluated: a listed consumer may be one no input reaches,
+never the reverse. `consumer_analysis` says whether it is `complete`; anything it
+could not follow is listed under `unresolved`, with where and why, rather than
+guessed. The runtime's own check of inputs (section 3)
 still decides: the one thing it refuses that the schema accepts is a money amount too
 large to hold exactly.
 

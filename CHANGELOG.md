@@ -50,6 +50,14 @@ end (`staalc mcp status` lists them) or resolve it with the `staalc` that starte
   or an encoded `/` or `\` in the path, and `base_url` accepts plain HTTP to any
   loopback address (`127.0.0.0/8`, `::1`, `localhost`), as `net.http` does.
 
+### Added
+
+- `staalc schema` reports each grant's `limits` (the limits its type writes) and its
+  `consumers`: the program's own code, each package function parameter it can be
+  passed to, and each library capability's need, with the boundary each is held to
+  and where that boundary comes from, plus `consumer_analysis`, which says whether the
+  analysis is complete and what it could not follow (RUNTIME.md section 1).
+
 ### Fixed
 
 - `net.http` through a proxy no longer looks the target's host up on this machine
