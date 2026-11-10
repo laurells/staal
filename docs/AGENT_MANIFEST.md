@@ -1,13 +1,13 @@
-# Staal Agent Manifest Specification, revision v0.1.3 (for final technical review)
+# Staal Agent Manifest Specification, revision v0.1.4 (freeze candidate)
 
 **Status: a design, not built.** Nothing here exists in `staalc` yet except what it
 says it reuses. It is written to be reviewed before any of it is built, as
 [MCP.md](MCP.md) section 12 was. v0.1 took in the first review's decisions (section
-12); v0.1.1 to v0.1.3 resolve the later reviews' points without widening the scope
-(sections 13 to 15 list each and where it is answered). Section 16 lists what must be
+12); v0.1.1 to v0.1.4 resolve the later reviews' points without widening the scope
+(sections 13 to 15 and 17 list each and where it is answered). Section 16 lists what must be
 built and demonstrated in the runtime before the format is frozen.
 
-**Revision and format version are separate.** v0.1.3 is a revision of this
+**Revision and format version are separate.** v0.1.4 is a revision of this
 document. The manifest format it defines is version `0.1`, the value of `"manifest"`.
 Review revisions do not change the format version; it is fixed when the specification
 is frozen and first implemented, and changes after that follow section 9.
@@ -22,7 +22,7 @@ without either having to read the code.
 | Source | Says | Written by | Trust |
 | --- | --- | --- | --- |
 | **Description** (`agent.json`) | what the publisher claims the agent does | the publisher | a claim |
-| **Computed description** (`agent.described.json`) | what the program is capable of doing | `staalc`, from the compiled program | as strong as the compiler and runtime |
+| **Computed description** (`agent.described.json`) | what the program is capable of doing | `staalc`, from the compiler-checked program and its resolved dependencies (no executable exists at publication) | as strong as the compiler and runtime |
 | **Execution record** (journals and logs of the business's own host) | what actually happened | the runtime, while it runs | a record |
 
 Every screen that shows an agent says which source each statement comes from. No
@@ -44,16 +44,25 @@ them are authority; the other two are statements:
   the program ceiling. The suggestion has no authority of its own and is not a second
   ceiling.
 
-Two invariants hold, over things of the same kind:
+Three invariants hold, each over things of one kind:
 
-    effective grant  ⊆  program ceiling      at every consumer boundary   (always; the runtime)
-    effective reach  ⊆  declared reach       unless a recorded override says otherwise   (install)
+1. **Per consumer (the runtime).** For every consumer of a granted capability, the
+   authority available to that consumer is no greater than the boundary the program
+   and package rules declare for that consumer (the table below), in every dimension:
+   money per action (`each`), money in total over the run (`max`), attempts (`uses`)
+   and targets (`only`).
+2. **Per grant (install).** The grant supplied at install fits within the widest
+   boundary the program can exercise for it: the entry parameter's or library need's
+   type, which is the maximum authority available to any consumer. It need not fit
+   within the narrower boundaries of package slots: a broader grant can be available
+   to the agent's own code and be narrowed where it is passed into a package. "Widest"
+   means the most available to any one consumer, not that every consumer receives it.
+3. **Reach (install).** The effective reach, the targets (`only` patterns) of the
+   effective grant, lies within the declared reach, unless a recorded override says
+   otherwise. Only the target dimension is compared.
 
-A grant has several dimensions (money per action, money in total, uses, targets); the
-first invariant holds in each, at each consumer boundary of the table below. Reach is
-one dimension, the targets (`only` patterns), and the second invariant compares only
-that dimension. The install page shows the widest authority the agent's own code can
-exercise, beside the narrower boundaries of packages and library capabilities.
+The install page shows the widest authority the agent's own code can exercise, beside
+the narrower boundaries of packages and library capabilities.
 
 **Authority is bounded where it is used, not once per grant.** A granted capability
 can be used by more than one part of the program, and each use has its own boundary,
@@ -62,9 +71,9 @@ exactly as the compiler and runtime enforce it today (RUNTIME.md section 6 and
 
 | Consumer | Its boundary |
 | --- | --- |
-| The agent's own code, holding the entry capability | the entry parameter's type limits: the program ceiling. The program's own code is not limited by any package's manifest. |
-| A package function the capability is passed to | narrowed, at that slot, to the slot type's limits, which E108 keeps within the package's declared authority |
-| A library capability's need (`needs post: cap net.http.post`) | the need's type limits, narrowed when the run starts; held only inside that capability's body, never by the program |
+| **Agent code**: the agent's own code, holding the entry capability | the entry capability type bounds the authority available to it. No package's manifest limits it. |
+| **Package consumer**: a package function the capability is passed to | the package slot type narrows the capability passed in, and E108 keeps that type within the package's declared authority |
+| **Library need**: a library capability's need (`needs post: cap net.http.post`) | the need type bounds the capability held inside that library capability's body, narrowed when the run starts; never held by the program |
 
 So a package's declared authority protects only what flows into that package. If the
 agent's own code holds `post` granted as `https://bank.example.com/*` and passes it to
@@ -113,7 +122,9 @@ files:
 | `agent.json` | the developer | identity, description, tools, suggestions, data handling declaration |
 | `agent.described.json` | `staalc agent describe` | everything computed from the program (section 5) |
 
-`agent.described.json` is committed so it can be read without building anything.
+`agent.described.json` is committed so it can be read without building anything,
+and must be regenerated and committed again after every change to the source, the
+manifests or the lock.
 `staalc agent check` refuses an agent whose committed description differs from a
 fresh one, so it cannot go stale or be edited by hand.
 
@@ -208,7 +219,14 @@ For the agent, and for each tool:
        its text;
     2. the project's `staal.json` and `staal.lock`, as bytes;
     3. for each package: its name, its git location, its commit, its `staal.json` as
-       bytes, and the SHA-256 of every file `staal.lock` records for it.
+       bytes, and one record per file `staal.lock` records for it: the file's path and
+       its SHA-256, so content is bound to the path it sits at.
+    Paths are as packages already require them (RUNTIME.md, Fetching): relative to the
+    package root, `/`-separated, with no empty, `.` or `..` part, no backslash or
+    colon, and no two differing only in letter case; a link or submodule is refused,
+    so every file is a regular file and the kind needs no field. A tree that breaks a
+    rule is refused before anything is computed, so two implementations cannot read
+    one tree two ways.
     Nothing else in the project affects compilation or execution: the run config
     (grants, model, limits) is bound by the journal separately, as its own hash.
     `agent.json` is not an input: its deployment settings reach a run only through the
@@ -217,7 +235,10 @@ For the agent, and for each tool:
     item as a field, in the order above, sorted by module path or package name within
     each group; every field is a label (`module`, `project-manifest`, `lock`,
     `package`, ...), then its value, each preceded by its length as an 8-byte
-    big-endian integer, so no two inputs can produce the same string. **Required before
+    big-endian integer, so no two inputs can produce the same string. Any change to
+    the input set, the path rules or the field encoding takes a new label
+    (`staal-program-v4`, ...) and a new journal version; a journal always resumes
+    under the construction its version names. **Required before
     implementation** (section 16): today's fingerprint covers items 1 and the package
     names, locations and commits of item 3, joined with newline framing and, for a
     single-file program, with no framing or domain label at all; it does not cover
@@ -233,9 +254,22 @@ For the agent, and for each tool:
     manifest and in Verified evidence, not in the description, which is the same on
     every platform.
 - **Consumers**: for every grant, each consumer and its boundary, as section 1's table
-  says: the agent's own code, each package slot the capability can be passed to that
-  the checker can see, and each library need.
-- **Interface**: input and output JSON Schemas, as `staalc schema` gives them.
+  says: the agent's own code, each package slot the capability can be passed to, and
+  each library need. Each record names the grant (an entry parameter, or a need of a
+  library capability granted to one), the consumer, and its boundary per dimension,
+  with the source of each limit: the entry type, a package slot type, or a need type.
+  **Incomplete analysis.** If the checker cannot establish every consumer of a
+  capability, or the boundary at any reachable use (a capability stored or returned
+  through an abstraction, passed through a function value, re-exported, or passed on
+  by one package function to another beyond what it resolves), that capability's
+  consumer analysis is marked incomplete. An agent with any incomplete authority
+  analysis cannot be Verified, and the install page shows the unresolved boundary and
+  never presents the consumer list as exhaustive. The agent's own boundary, the entry
+  type, is enforced by the runtime either way.
+- **Interface**: input and output JSON Schemas, as `staalc schema` gives them. When
+  `staalc schema` gains capability limits (R3), it reports each limit with its source,
+  so the limits declared on an entry parameter are never confused with those a
+  package slot imposes.
 - **Inputs and their provenance**: for each input of each tool, where its value comes
   from, as the host establishes it:
   - *Caller argument*: sent with each call by the MCP client or agent framework, so
@@ -277,13 +311,16 @@ For the agent, and for each tool:
 - **Model use**: the worst-case model calls and tokens per run, from the budget the
   compiler checks (E004). Counts, never money: a price is a registry's display, dated
   and naming the price list it used (section 7).
-- **External expenditure ceiling**: the most one run can move, per currency, computed
-  as the host already computes a quota reservation (MCP.md section 6): the sum over
-  the tool's money-limited capabilities of `max`, or of `each` times `uses` where there
-  is no `max`. Amounts in different currencies are listed separately and never added.
-  A capability with `each` and no `uses` or `max` makes the per-run figure unbounded,
-  and the description says so. Shown apart from model use: a tool with no model calls
-  can still move money.
+- **External expenditure ceiling**: a bound on the external expenditure the runtime's
+  capability accounting permits in one run, per currency. Not an estimate of actual
+  spend. `max` is the most money spent through a capability in total over the run, and
+  `each` the most one action may spend (RUNTIME.md section 6), so the bound is the sum
+  over the tool's money-limited capabilities of `max`, or of `each` times `uses` where
+  there is no `max`: the formula the host already uses to reserve a quota (MCP.md
+  section 6). Amounts in different currencies are listed separately and never added.
+  If a capability has `each` and neither `uses` nor `max`, the number of permitted
+  actions has no finite bound and the result is **unbounded**, never a guess. Shown
+  apart from model use: a tool with no model calls can still move money.
 - **Failure behaviour**, per action, in three separate parts:
   - *Runtime recovery*: what Staal does after a crash: replays a completed action,
     resends an action in doubt with the same idempotency key, repeats an action that
@@ -312,9 +349,11 @@ For the agent, and for each tool:
   Scheme (RFC 8785): keys sorted, no insignificant space, numbers and strings in one
   form. Every list whose order carries no meaning (packages, capabilities, reach
   patterns) is sorted by its stated key. The program fingerprint is the one the
-  journal binds; its inputs are every module's text by module path and each package's
-  repository and commit. Two `staalc` builds of one version on any platform produce
-  byte-identical descriptions; `staalc agent check` compares bytes.
+  journal binds. Its inputs and construction are exactly those defined under *Source
+  program fingerprint* above; no second or abbreviated construction is used for
+  descriptions, journals or verification evidence. Two `staalc` builds of one version
+  on any platform produce byte-identical descriptions; `staalc agent check` compares
+  bytes.
 
 ## 6. The checks
 
@@ -336,8 +375,11 @@ commit; any failure refuses):
 **At install** (`staalc agent install`, run by the business on its own machine; it
 writes an ordinary tool manifest from `agent.json` and the business's settings):
 
-1. The agent is fetched by version and verified: the commit its listing names, and
-   every file against its hash, as packages are today.
+1. The agent is fetched by version and verified as packages are today: files are read
+   from git's objects at the commit its listing names, never from a checkout, so
+   attributes and filters cannot change a byte; links, submodules and unsafe paths are
+   refused; size and file-count limits apply; and every file is checked against its
+   hash.
 2. The installing `staalc` satisfies `requires_staalc`, implements the manifest
    version, and recomputes the description from the fetched source: it must equal
    the published one byte for byte, or install stops (section 9).
@@ -357,8 +399,10 @@ writes an ordinary tool manifest from `agent.json` and the business's settings):
    package authority, the program ceiling (or "unbounded by the program"), the declared
    reach, the effective grant and any override, side by side; each input with its
    provenance and the obligations acknowledged; the quotas and their scope (section
-   10); the model use; the external expenditure ceiling per run, per tool's quota
-   window, and for the whole deployment; the failure behaviour in its three parts; and
+   10); the model use; three money figures, labelled as different constraints: the
+   per-run external expenditure ceiling, each tool's quota-window limit, and the sum
+   of the tools' quota limits, labelled as the maximum configured quota exposure, not
+   predicted or actual spend; the failure behaviour in its three parts; and
    the data handling declaration under its heading.
 
 **At run time** nothing changes: the host and broker enforce the generated manifest
@@ -397,12 +441,16 @@ Proposed **profile 1**, for review with this document:
 | Scenarios | at least one scenario per tool: inputs, app inputs and the stand-in services the tool calls, written by the publisher, which the registry runs |
 | Crash | every scenario is crashed at every journal write, on both engines and each pairing of engines for crash and resume. What passes depends on each action's recovery contract (section 5), in the same terms: a completed action is replayed and its stand-in sees it once; an action in doubt that is resent with an idempotency key may reach the stand-in twice, and passes when the stand-in, deduplicating by that key, performed it once; an action whose outcome cannot be known stops the run for an operator, and passes when it does exactly that, with no claim that the external effect happened once; an action safe to repeat may be repeated. The resumed run's result must equal an uncrashed run's wherever the run finishes |
 | Coverage report | for each scenario, the actions, capabilities and refusal or failure paths its runs exercised, read from their journals; the listing shows what no scenario exercised. A passing scenario never implies coverage it did not have |
-| Fuzzing | the registry fuzzes each tool's arguments, generated from its input schema, for 10 minutes against the scenario's stand-ins, asserting no crash, no hang, and that the tool host's checks hold; the agent's own fuzz targets, if any, run too, and having none is not a failure. **Sanitizer coverage, stated with the evidence:** AddressSanitizer instruments the Rust code of `staalc` and its Rust dependencies as compiled for the fuzzer. It does not instrument the Rust standard library (precompiled, though its allocations go through the sanitizer's allocator), C code compiled by dependencies (SQLite, ring's C and assembly), or native code generated at run time by Cranelift, whose memory accesses are limited to its context header and its own stack frames (UNSAFE.md section 2) |
+| Fuzzing | the registry fuzzes each tool's arguments, generated from its input schema, for 10 minutes against the scenario's stand-ins, asserting no crash, no hang, and that the tool host's checks hold; the agent's own fuzz targets, if any, run too, and having none is not a failure. **Sanitizer coverage, stated with the evidence:** AddressSanitizer instruments the Rust code of `staalc` and its Rust dependencies as compiled for the fuzzer. It does not instrument the Rust standard library (precompiled, though its allocations go through the sanitizer's allocator) or C code compiled by dependencies (SQLite, ring's C and assembly). Native code generated at run time by Cranelift is not instrumented by AddressSanitizer; the profile records this limitation separately, and sanitizer results are never read as coverage of memory accesses made by generated code |
 | Compiler and runtime | the publish checks; no `cap ffi` a tool can be granted |
+| Execution environment | fixed by the profile and recorded in every evidence record: operating system and architecture (profile 1: Linux x86_64), the exact `staalc` release (one build serves as compiler, interpreter and native engine), the fuzzer and sanitizer toolchain versions, and the resource and time limits of each check |
+| Retries | none: a scenario, crash point or fuzz run that fails once fails the check, and the evidence records it. A flaky result is a finding, not noise |
 | Evidence | written by the harness in RFC 8785 JSON, kept for as long as the version is listed and 2 years after |
 
 These numbers are proposals; their purpose is that every Verified agent passed the
-same named bar.
+same named bar. A publisher-written scenario that passes shows that scenario passed,
+not that it represents the tool's risks; the coverage report keeps what was not
+exercised visible on the listing.
 
 **When the profile changes.** A new profile never rewrites old evidence or
 designations. A listing shows the profile its version passed, whether that profile is
@@ -657,8 +705,27 @@ be demonstrated by a test that fails without it:
 | R2 | The `staalc` version and engine in the start record; a `resume` record per resume | a test that crashes and resumes across both engines and checks every record |
 | R3 | `staalc schema` reports the limits written in capability types, and every consumer of every grant with its boundary | tests over programs with entry limits, package slots and library needs |
 | R4 | A package cannot exercise more than its declared boundary while the agent's own code holds broader authority over the same grant | a runtime test in which the agent's code reaches `https://bank.example.com/x` through a grant the package also receives, and the package's attempt at `/x` is refused while its `/refunds` succeeds |
-| R5 | A crash and resume across engines and across `staalc` versions never repeats an action blindly | the existing crash tests across engine pairings, plus journals written by the previous release kept as fixtures and resumed by the current one at every crash point |
-| R6 | One authority decision per request: the URL whose canonical form is checked against `only` is the one connected to, verified by TLS and sent; no reused connection carries a request to a host other than its own | a review of `net.http` against this rule, and tests with URLs that parse differently across libraries, and with a kept-alive connection followed by a request to another host |
+| R5 | A crash and resume across engines and across `staalc` versions never repeats an action blindly | the existing crash tests across engine pairings, plus journals of every journal version still supported, kept as fixtures from the releases that wrote them and resumed by the current one at every crash point |
+| R6 | One authority decision per request, kept through the whole request: the URL whose canonical form is checked against `only` is the one connected to, verified by TLS and sent, with the HTTP authority (`Host`), the TLS verification name (and SNI) and the checked canonical host always the same. No proxy is used unless the deployment's config names one: today `net.http` uses none unless the run config asks for the environment's, and the model provider's `"proxy": "environment"` likewise; a configured proxy is an explicit deployment dependency, shown at install as part of the network boundary. A pooled connection is reused only for a request to the same scheme, host and port it was opened and verified for. Today the URL is parsed by the `url` crate for the check and again inside the HTTP client: whether the two can disagree is part of this review | a review of `net.http`, the model provider and key fetching against this rule; tests with URLs that parse differently across libraries, with a proxy set in the environment and not configured, and with a kept-alive connection followed by a request to another host |
 
 These test Staal's execution model, not only the marketplace. They are worth doing
 whether or not the marketplace is built.
+
+## 17. Changes in v0.1.4 (the fifth review)
+
+| Review point | Resolution | Section |
+| --- | --- | --- |
+| The fingerprint defined twice, the second time incompletely | One definition; Determinism refers to it and forbids any other | 5 |
+| Package files bound by hash alone | One record per file: path and SHA-256; path rules stated; links and submodules refused, so no kind field is needed | 5 |
+| Versioning of the fingerprint algorithm | Any change to inputs, path rules or encoding takes a new label and journal version | 5 |
+| The authority invariant mixed a grant with consumer authority | Three invariants: per consumer (runtime), per grant against the widest boundary (install), reach (install); "widest" defined | 1 |
+| R6 incomplete | Host, TLS name and canonical host kept the same; proxies only when configured, shown at install; pooled connections only for the same origin; the double URL parse named for review | 16 |
+| "From the compiled program" | From the compiler-checked program and its resolved dependencies | 1 |
+| Consumer analysis that cannot be completed | Marked incomplete, never shown as exhaustive, and bars Verified | 5 |
+| What the expenditure ceiling bounds | `max` per run and `each` per action stated; a bound, not an estimate; unbounded when no finite bound exists; three money figures kept apart at install | 5, 6 |
+| The sanitizer claim about generated code | Stated only as a limitation: generated code is not instrumented | 7 |
+| Profile execution environment | Platform, `staalc` release, toolchains and limits fixed and recorded; no retries | 7 |
+| Smaller points | Description regenerated on every change; consumer records name grant, consumer and limit source; schema reports each limit's source; install's fetch rules spelt out; resume tests over every supported journal version; quota sum labelled as configured exposure | 3, 5, 6, 16 |
+
+The data handling declaration stays a declaration: a complete `data` object is never
+shown as a check mark or a verified privacy claim.

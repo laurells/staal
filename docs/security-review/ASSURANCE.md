@@ -143,9 +143,12 @@ sanitizer to rustc only (cargo-fuzz 0.13.1), so it instruments the Rust code of
 (precompiled; its allocations still go through the sanitizer's allocator), C code
 built by dependencies' build scripts (SQLite, ring's C and assembly), or the machine
 code Cranelift generates at run time. So `engines` checked the native engine's Rust
-helpers and the values they handle, not the generated code itself, whose memory
-accesses are limited to its context header and its own stack frames (UNSAFE.md
-section 2); that code is checked by the engines agreeing.
+helpers and the values they handle. The generated code is not instrumented, and these
+results say nothing about its memory accesses. By the code generator's design it
+reads and writes only its context header and the argument arrays on its own stack
+(UNSAFE.md section 2); that is a property of the generator, examined by review and
+exercised by the engines agreeing on every case, not something the sanitizer
+establishes.
 
 Fifteen minutes per target is a smoke test, not a campaign. The weekly CI job runs
 every target for 20 minutes with AddressSanitizer (`.github/workflows/fuzz.yml`),
