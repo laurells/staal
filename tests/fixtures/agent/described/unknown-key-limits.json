@@ -49,6 +49,7 @@
         {
           "cap": "net.http.post",
           "grant": "pay.post",
+          "outcome_can_be_unknown": false,
           "recovery": "resend_with_key",
           "relies_on_service": true
         }
@@ -178,6 +179,22 @@
         "tokens": 0
       },
       "name": "refund_order",
+      "network": [
+        {
+          "cap": "net.http.post",
+          "checked": "canonical_target",
+          "dns_trusted": true,
+          "grant": "pay.post",
+          "ip_isolation": false,
+          "program_only": null,
+          "reach": [
+            "https://{{BANK}}/refunds"
+          ],
+          "redirects_followed": false,
+          "tls": "https_targets"
+        }
+      ],
+      "package_boundaries": [],
       "program": "refund.staal",
       "program_sha256": "cb6ccabdda102f729a705a89f01d7ce86c67da8b1aea0219ce71b867a8ff6a29",
       "unchecked": {

@@ -42,7 +42,7 @@ fn main(name: Text, count: Int, urgent: Bool, total: Money, who: Customer, ask: 
     let p = &input["properties"];
     assert!(p.get("pay").is_none() && p.get("key").is_none());
     assert_eq!(p["name"], json!({ "type": "string" }));
-    assert_eq!(p["count"], json!({ "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX }));
+    assert_eq!(p["count"], json!({ "type": "integer", "description": "a whole number from -9223372036854775808 to 9223372036854775807 (64 bits)" }));
     assert_eq!(p["retries"], p["count"]);
     assert_eq!(p["urgent"], json!({ "type": "boolean" }));
     // One alternative per number of decimal places: JPY has none, the rest two.

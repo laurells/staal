@@ -393,12 +393,21 @@ fn money_schema() -> Json {
     json!({ "anyOf": options, "description": "money: a decimal amount as a string, e.g. {\"amount\": \"12.50\", \"currency\": \"USD\"}" })
 }
 
+/// An `Int`: a signed 64-bit integer. Its bounds, -2^63 and 2^63-1, are stated in the
+/// description rather than as `minimum` and `maximum`: no IEEE double holds 2^63-1, so
+/// a JSON number of that size is not interoperable (I-JSON, RFC 7493 section 2.2), many
+/// clients would read it as 2^63, and RFC 8785 cannot write it. The runtime refuses an
+/// integer outside them (section 3).
+fn int_schema() -> Json {
+    json!({ "type": "integer", "description": "a whole number from -9223372036854775808 to 9223372036854775807 (64 bits)" })
+}
+
 /// The JSON Schema of a value a caller gives as type `t`, as `inputs` accepts it.
 fn input_schema(prog: &Program, t: &Ty, defs: &mut Map<String, Json>) -> Result<Json, String> {
     Ok(match t {
         Ty::Named(n) => match n.as_str() {
             "Text" => json!({ "type": "string" }),
-            "Int" => json!({ "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX }),
+            "Int" => int_schema(),
             "Bool" => json!({ "type": "boolean" }),
             "Money" => money_schema(),
             "Secret" | "Header" => return Err(format!("a {n} cannot be given as data")),
@@ -440,7 +449,7 @@ fn output_schema(prog: &Program, t: &Ty, defs: &mut Map<String, Json>) -> Result
     Ok(match t {
         Ty::Named(n) => match n.as_str() {
             "Text" => json!({ "type": "string" }),
-            "Int" => json!({ "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX }),
+            "Int" => int_schema(),
             "Bool" => json!({ "type": "boolean" }),
             "Money" => money_schema(),
             "Receipt" => json!({

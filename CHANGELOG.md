@@ -63,6 +63,11 @@ end (`staalc mcp status` lists them) or resolve it with the `staalc` that starte
   computed description, `agent.described.json` (docs/schemas/agent.described.schema.json),
   written in RFC 8785 form and compared byte for byte (AGENT_MANIFEST.md sections 4 to 6).
 
+- An `Int` in `staalc schema` (and so in an MCP tool's `inputSchema`) no longer has
+  `minimum` and `maximum` of -2^63 and 2^63-1: no IEEE double holds the latter, so many
+  clients read it as 2^63, and RFC 8785 cannot write it. The bounds are in its
+  `description`; the runtime still refuses an integer outside them.
+
 ### Fixed
 
 - `net.http` through a proxy no longer looks the target's host up on this machine

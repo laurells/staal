@@ -110,8 +110,10 @@ fixed point. Branches are not evaluated: a listed consumer may be one no input r
 never the reverse. `consumer_analysis` says whether it is `complete`; anything it
 could not follow is listed under `unresolved`, with where and why, rather than
 guessed. The runtime's own check of inputs (section 3)
-still decides: the one thing it refuses that the schema accepts is a money amount too
-large to hold exactly.
+still decides: what it refuses that the schema accepts is a money amount too large to
+hold exactly, and an `Int` outside 64 bits. An `Int`'s bounds are given in its
+`description`, not as `minimum` and `maximum`: no IEEE double holds 2^63-1, so a JSON
+number of that size is read differently by different clients (I-JSON, RFC 7493).
 
 ## 2. Values
 
