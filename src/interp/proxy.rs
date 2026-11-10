@@ -61,7 +61,9 @@ pub fn from_environment(get: impl Fn(&str) -> Option<String>) -> Result<Option<C
         .find_map(|v| get(v))
         .map(|list| list.split(',').map(|e| e.trim().to_ascii_lowercase()).filter(|e| !e.is_empty()).collect())
         .unwrap_or_default();
-    let mut builder = ureq::Proxy::builder(parsed.protocol()).host(parsed.host()).port(parsed.port());
+    // `resolve_target(false)`: the CONNECT names the target's host as checked, never an
+    // address this side looked up (ureq's default for HTTP proxies, made explicit).
+    let mut builder = ureq::Proxy::builder(parsed.protocol()).host(parsed.host()).port(parsed.port()).resolve_target(false);
     for e in &no_proxy {
         builder = builder.no_proxy(e);
     }

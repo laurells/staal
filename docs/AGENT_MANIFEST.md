@@ -768,13 +768,13 @@ be demonstrated by a test that fails without it:
 | R3 | `staalc schema` reports the limits written in capability types, and every consumer of every grant with its boundary | tests over programs with entry limits, package slots and library needs, and over propagation: a capability passed through several functions, returned from one, stored in a value and read back, passed through a function value, re-exported by a package, passed from one package's function into another's, and one grant with several consumers of different limits. Each test asserts one of two outcomes: the consumer graph complete and exact, or marked incomplete with the agent refused Verified |
 | R4 | A package cannot exercise more than its declared boundary while the agent's own code holds broader authority over the same grant | a runtime test in which the agent's code reaches `https://bank.example.com/x` through a grant the package also receives, and the package's attempt at `/x` is refused while its `/refunds` succeeds |
 | R5 | A crash and resume across engines and across `staalc` versions never repeats an action blindly | the existing crash tests across engine pairings, plus journals of every journal version still supported, kept as fixtures from the releases that wrote them and resumed by the current one at every crash point. A **release gate for `staalc` itself**, in CI, not only a Verified check: a broken resume would affect every installed agent |
-| R6 | One authority decision per request, kept through the whole request: the request target is parsed and made canonical once, into one immutable representation; the `only` check, the connection, TLS verification and the request line all use that representation, and the HTTP client never re-reads the original string. The HTTP authority (`Host`, and `:authority` if HTTP/2 is ever used), the TLS verification name (and SNI) and the checked canonical host are always the same. No proxy is used unless the deployment's config names one: today `net.http` uses none unless the run config asks for the environment's, and the model provider's `"proxy": "environment"` likewise; a configured proxy is an explicit deployment dependency, shown at install as part of the network boundary. A pooled connection is reused only for a request to the same scheme, host and port it was opened and verified for. Today the URL is parsed by the `url` crate for the check and again inside the HTTP client: whether the two can disagree is part of this review | a review of `net.http`, the model provider and key fetching against this rule; adversarial tests for international names (IDNA), IPv4 and IPv6 literals, explicit and default ports, trailing dots and case, percent-encoded separators and dot segments, a proxy set in the environment and not configured, and a kept-alive connection followed by a request to another host. Each asserts that the authority the policy checked and the authority actually connected to are identical, not only that the request was accepted or refused |
+| R6 | One authority decision per request, kept through the whole request: the request target is parsed and made canonical once, into one immutable representation; the `only` check, the connection, TLS verification and the request line all use that representation, and the HTTP client never re-reads the original string. The HTTP authority (`Host`, and `:authority` if HTTP/2 is ever used), the TLS verification name (and SNI) and the checked canonical host are always the same. No proxy is used unless the deployment's config names one: today `net.http` uses none unless the run config asks for the environment's, and the model provider's `"proxy": "environment"` likewise; a configured proxy is an explicit deployment dependency, shown at install as part of the network boundary. A pooled connection is reused only for a request to the same scheme, host and port it was opened and verified for. Before R6 the URL was parsed by the `url` crate for the check and again inside the HTTP client: whether the two can disagree was part of this review | a review of `net.http`, the model provider and key fetching against this rule; adversarial tests for international names (IDNA), IPv4 and IPv6 literals, explicit and default ports, trailing dots and case, percent-encoded separators and dot segments, a proxy set in the environment and not configured, and a kept-alive connection followed by a request to another host. Each asserts that the authority the policy checked and the authority actually connected to are identical, not only that the request was accepted or refused |
 | R7 | The run config hashed as RFC 8785; the proxy URL a run used recorded, and a resume under another refused (section 9) | a test that changes, between a crash and its resume, each manifest field a run depends on (program path, entry, app input mapping, `once`, deadline, quota, grants, proxy) and shows the resumed run either uses the original or refuses, never the change |
 | R8 | A normative JSON Schema (2020-12) for `agent.json` and `agent.described.json`, with the semantic rules a schema cannot state, and valid and invalid fixtures. Unknown keys refused at every depth. Types fixed: money as `{"amount": decimal string, "currency": ISO 4217 code}` with at most the currency's decimal places, as the runtime reads it; durations as the tool host reads them (a whole number and `s`, `m`, `h` or `d`, per field as MCP.md allows); `requires_staalc` as a version range in the grammar packages use; an empty `suggested` as no suggestion in any dimension | the fixtures, each refused or accepted as marked, by `staalc agent check` |
 | R9 | A normative fingerprint algorithm: UTF-8 bytes without Unicode normalization; the domain label `staal-program-v3` as the first framed field; every group framed with a record count, every package framed as a nested record holding its own fields and file records; ordering by the bytes of UTF-8, never by locale; digests as lowercase hex, in the description and inside the construction (which is UTF-8 text, so it holds no raw bytes) | test vectors: one project, one package, several packages, nested dependencies, a changed path, a changed content, a changed manifest; a second implementation, written separately (in Python), produces the same digest for every vector. And a demonstration, against the project and package loader, that no file outside the inputs can change what compiles or runs |
 
-**Status.** R1, R2, R7 and R9 are implemented, in journal version 3, and
-demonstrated by these tests; the rest are open.
+**Status.** R1, R2, R7 and R9 are implemented, in journal version 3, and R6 in the
+HTTP clients; each is demonstrated by these tests. R3, R4, R5 and R8 are open.
 
 - R1: `every_input_of_a_program_is_bound_by_its_journal` (tests/packages_test.rs)
   changes, alone, a module, the project's `staal.json` and `staal.lock` (only their
@@ -809,6 +809,34 @@ demonstrated by these tests; the rest are open.
   another commit, a package with no files, module paths and package names that differ
   only in order), and `staalc` agrees on every one. `no_file_outside_the_inputs_changes_what_compiles`
   (tests/packages_test.rs) is the demonstration against the loader.
+- R6: a URL is parsed once into a target (`targets::Target`, src/targets.rs) that
+  cannot change; the `only` check uses its canonical text and the HTTP client is given
+  the URI built from the same parsed parts, refused if the HTTP layer would read it
+  back as anything else. The double parse named in the requirement is gone: the
+  client never parses the program's text. The review of the three clients found the
+  same double parse in the model provider (its `base_url` was checked parsed, then
+  sent as the text given) and in key fetching; both now use a target. It also found
+  that `net.http` looked the host up itself before sending even through a proxy,
+  which would refuse every request where only the proxy can resolve names; it no
+  longer does. ureq takes the connection's address, `Host`, the TLS name and SNI, the
+  `CONNECT` destination and the request line from that one URI, and keys its
+  connection pool by scheme, authority and proxy (ureq 3.4.2, `pool.rs`). Tests:
+  `the_uri_sent_is_the_target_checked` (src/targets.rs) over international names,
+  full-width dots, IPv4 in hexadecimal, octal, short and integer forms, IPv6 and
+  IPv4-mapped literals, default, explicit and zero-padded ports, trailing dots and
+  case, encoded dot segments and separators, a backslash before an `@`, tabs and
+  newlines; `the_request_sent_is_the_target_checked` (src/interp/http.rs) sends such
+  spellings to a local server and compares the request line and `Host` it receives;
+  `a_kept_alive_connection_is_used_only_for_its_own_authority` shows the pool reused
+  for one authority and never for another reaching the same address;
+  `a_proxy_is_asked_for_the_checked_host_and_port` reads the `CONNECT` line and its
+  `Host` at a proxy; `a_proxy_in_the_environment_is_not_used_unless_the_config_asks`
+  (tests/http_test.rs and tests/claude_test.rs) and
+  `keys_are_never_fetched_through_a_proxy_in_the_environment` (tests/mcp_http_test.rs)
+  set every proxy variable and see no connection to the proxy; each fails when its
+  client is built without `.proxy(None)`. `a_library_cannot_set_host`
+  (tests/http_test.rs) refuses `Host`, `:authority` and `proxy-` headers set from a
+  library.
 
 **Verified never transfers.** A Verified designation is shown with the exact
 `staalc` release and platform it was earned on, as a historical fact about that

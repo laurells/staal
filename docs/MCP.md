@@ -1228,7 +1228,11 @@ otherwise it refuses to start. It then fetches `jwks_uri`. Every one of these fe
 
 - is HTTPS, the server's certificate verified against Mozilla's roots and those
   `auth.extra_root_certificates` adds, and against the host; `auth.issuer` and
-  `jwks_uri` must be `https` URLs without a fragment, or the server refuses to start;
+  `jwks_uri` must be `https` URLs without a fragment, a user name or password, or an
+  encoded `/` or `\` in the path, or the server refuses to start. Each URL is parsed
+  once, as a `net.http` target is (RUNTIME.md section 12, Canonical targets), and the
+  request is built from that parse;
+- uses no proxy, whatever the environment says;
 - follows no redirect: a 3xx answer is a failed fetch, so an answer cannot send the
   server to fetch keys from somewhere else;
 - must connect within 5 s and finish within 10 s, and its body be at most 256 KiB,

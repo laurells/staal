@@ -590,3 +590,86 @@ fn engines() -> Vec<staalc::interp::Engine> {
     }
     e
 }
+
+/// A listener that counts the connections made to it, and answers none.
+fn connection_counter() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+    let n = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let n2 = n.clone();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            n2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            drop(c);
+        }
+    });
+    (url, n)
+}
+
+/// AGENT_MANIFEST.md section 16, R6: no proxy is used unless the run config names one.
+/// Every proxy variable is set, to a listener that would see any connection; the
+/// request goes straight to the server, and the proxy sees nothing.
+#[test]
+fn a_proxy_in_the_environment_is_not_used_unless_the_config_asks() {
+    let s = Server::start();
+    let (proxy, connections) = connection_counter();
+    let dir = std::fs::canonicalize(env!("CARGO_TARGET_TMPDIR")).unwrap().join("http-no-proxy");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = s.url("/ok");
+    std::fs::write(dir.join("p.staal"), format!("fn f(http: cap net.http.get) -> Int {{\n    let r = http.get(\"{url}\")\n    return r.status\n}}\n")).unwrap();
+    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get" } } });
+    std::fs::write(dir.join("c.json"), cfg.to_string()).unwrap();
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_staalc"));
+    cmd.args(["run", dir.join("p.staal").to_str().unwrap(), "--config", dir.join("c.json").to_str().unwrap()]);
+    for v in ["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+        cmd.env(v, &proxy);
+    }
+    cmd.env_remove("NO_PROXY").env_remove("no_proxy");
+    let out = cmd.output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "200", "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(s.requests().len(), 1, "the request went straight to the server");
+    assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0, "the proxy in the environment was used");
+}
+
+/// R6, request authority: a library cannot set `Host` (or `:authority`, or any
+/// `proxy-` header) to reach another host through a grant checked for this one.
+#[test]
+fn a_library_cannot_set_host() {
+    let s = Server::start();
+    let src = format!(
+        r#"capability bank.pay {{
+    needs get: cap net.http.get
+
+    canonical(id: Text) -> Text {{
+        return id
+    }}
+
+    action fetch(id: Text @target, header_name: Text) -> Text {{
+        let r = get.get("{}" + url_segment(id), [header(header_name, "bank.example.com")])
+        return "status " + json(r.status)
+    }}
+}}
+
+fn f(name: Text, pay: cap bank.pay.fetch) -> Receipt {{
+    return pay.fetch("ok", name)
+}}"#,
+        s.url("/")
+    );
+    for name in ["Host", "host", ":authority", "Proxy-Authorization"] {
+        let cfg = json!({ "entry": "f", "inputs": { "name": name },
+                          "grants": { "pay": { "cap": "bank.pay.fetch", "needs": { "get": { "cap": "net.http.get", "only": [s.url("/ok")] } } } },
+                          "model": { "provider": "script", "responses": [] } });
+        let f = run(&src, cfg).result.unwrap_err();
+        assert_eq!(f.kind, FailKind::Value, "{name}: {}", f.message);
+    }
+    assert!(s.requests().is_empty(), "a request with a forbidden header reached the server");
+    // Any other header is sent, so the library does reach the server.
+    let cfg = json!({ "entry": "f", "inputs": { "name": "X-Note" },
+                      "grants": { "pay": { "cap": "bank.pay.fetch", "needs": { "get": { "cap": "net.http.get", "only": [s.url("/ok")] } } } },
+                      "model": { "provider": "script", "responses": [] } });
+    assert!(run(&src, cfg).result.is_ok());
+    let reqs = s.requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].headers["host"], s.url("").trim_start_matches("http://"));
+}

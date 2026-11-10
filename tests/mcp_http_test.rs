@@ -825,6 +825,35 @@ fn app_inputs_come_from_the_token_and_never_from_the_caller() {
     assert_eq!(r["result"]["structuredContent"]["result"], "shop-9: x");
 }
 
+/// AGENT_MANIFEST.md section 16, R6, for key fetching: the authorization server's
+/// metadata and keys are fetched directly, never through a proxy the environment names.
+/// Every proxy variable is set to a listener that would see any connection, with no
+/// host exempted.
+#[test]
+#[cfg(feature = "failpoints")]
+fn keys_are_never_fetched_through_a_proxy_in_the_environment() {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let c2 = connections.clone();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            c2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            drop(c);
+        }
+    });
+    let c = oauth_case("keys-no-proxy");
+    let mut env: Vec<(&str, &str)> =
+        ["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].iter().map(|v| (*v, proxy.as_str())).collect();
+    env.extend([("NO_PROXY", ""), ("no_proxy", "")]);
+    let s = Http::start(&c.manifest, &c.addr, &env);
+    let r = authed(&c.addr, &rpc(1, "tools/call", json!({ "name": "echo", "arguments": { "x": "hi" } })), &c.token_for("erin"));
+    assert_eq!(r["result"]["structuredContent"]["result"], "hi", "{r}");
+    let (code, err) = s.stop();
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0, "a proxy in the environment was used");
+}
+
 /// AGENT_MANIFEST.md section 16, R7, for the app input mapping: a run killed after it
 /// started resumes with the app input values it started with, even when the manifest
 /// now takes that input from another claim.

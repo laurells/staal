@@ -2793,10 +2793,12 @@ impl<'p> Interp<'p> {
             }
             Some(_) => return internal("net.http headers are not a list"),
         }
-        let url = match crate::targets::canonical_url(&raw_url) {
-            Ok(u) => u,
+        // Parsed once: the check, the journal and the request all use this target.
+        let target = match crate::targets::target(&raw_url) {
+            Ok(t) => t,
             Err(e) => return self.refuse(path, method, FailKind::Capability, e),
         };
+        let url = target.as_str().to_string();
         for (n, v) in &headers {
             let value = match v {
                 HeaderValue::Text(t) => t.as_str(),
@@ -2838,7 +2840,7 @@ impl<'p> Interp<'p> {
             if keyed {
                 send.push(("Idempotency-Key".into(), key.to_string()));
             }
-            let req = http::Request { method, url: &url, headers: &send, body: body.as_deref() };
+            let req = http::Request { method, target: &target, headers: &send, body: body.as_deref() };
             match it.http.send(&req) {
                 http::Outcome::Response { status, headers, body, complete } => {
                     let headers: Vec<Json> = headers

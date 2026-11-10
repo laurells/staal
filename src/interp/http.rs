@@ -1,7 +1,9 @@
 // The HTTP client behind `net.http` (RUNTIME.md section 12).
 //
-// The broker has already checked the canonical URL against every `only` pattern.
-// This module sends exactly that request and reports exactly what is known about it:
+// The broker has already checked the target (`targets::Target`) against every `only`
+// pattern. This module sends exactly that request, to the URI built from the same
+// parsed target (never a string parsed again), and reports exactly what is known about
+// it:
 //
 //   Response  the server answered (any status); the request reached it.
 //   NotSent   it failed before anything was sent (no such host, connection refused,
@@ -46,7 +48,7 @@ impl Default for Settings {
 
 pub struct Request<'a> {
     pub method: &'a str,
-    pub url: &'a str,
+    pub target: &'a crate::targets::Target,
     pub headers: &'a [(String, String)],
     pub body: Option<&'a str>,
 }
@@ -74,6 +76,8 @@ pub enum Outcome {
 pub struct Client {
     agent: ureq::Agent,
     max: u64,
+    /// The proxy requests go through, if the run config asked for one.
+    proxy: Option<ureq::Proxy>,
 }
 
 impl Client {
@@ -92,25 +96,46 @@ impl Client {
             .proxy(s.proxy.as_ref().map(|c| c.proxy.clone()))
             .user_agent(concat!("staalc/", env!("CARGO_PKG_VERSION")))
             .build();
-        Client { agent: ureq::Agent::new_with_config(config), max: s.max_response_bytes }
+        Client { agent: ureq::Agent::new_with_config(config), max: s.max_response_bytes, proxy: s.proxy.as_ref().map(|c| c.proxy.clone()) }
     }
 
     pub fn send(&self, r: &Request) -> Outcome {
+        let shown = r.target.as_str();
         // Resolve the host first: a name that cannot be looked up is certain not to have
         // received anything, and the client below reports that only as a general error.
-        match url::Url::parse(r.url).map(|u| u.socket_addrs(|| None)) {
-            Ok(Ok(addrs)) if !addrs.is_empty() => {}
-            Ok(Ok(_)) => return Outcome::NotSent(format!("{} has no address", r.url)),
-            Ok(Err(e)) => return Outcome::NotSent(format!("cannot look up the host of {}: {e}", r.url)),
-            Err(e) => return Outcome::NotSent(format!("{} is not a URL: {e}", r.url)),
+        // An address literal needs no lookup, and nor does a host reached through a
+        // proxy: the proxy looks it up, and this side may not be able to.
+        let proxied = self.proxy.as_ref().is_some_and(|p| !p.is_no_proxy(r.target.uri()));
+        if let (url::Host::Domain(d), false) = (r.target.host(), proxied) {
+            use std::net::ToSocketAddrs;
+            match (d.as_str(), r.target.port()).to_socket_addrs().map(|mut a| a.next().is_some()) {
+                Ok(true) => {}
+                Ok(false) => return Outcome::NotSent(format!("{shown} has no address")),
+                Err(e) => return Outcome::NotSent(format!("cannot look up the host of {shown}: {e}")),
+            }
+        }
+        use ureq::http::Method;
+        let method = match r.method {
+            "get" => Method::GET,
+            "delete" => Method::DELETE,
+            "post" => Method::POST,
+            "put" => Method::PUT,
+            "patch" => Method::PATCH,
+            other => return Outcome::NotSent(format!("unknown HTTP method '{other}'")),
+        };
+        let mut builder = ureq::http::Request::builder().method(method).uri(r.target.uri().clone());
+        for (k, v) in r.headers {
+            builder = builder.header(k.as_str(), v.as_str());
         }
         let result = match r.method {
-            "get" => with_headers(self.agent.get(r.url), r.headers).call(),
-            "delete" => with_headers(self.agent.delete(r.url), r.headers).call(),
-            "post" => with_headers(self.agent.post(r.url), r.headers).send(r.body.unwrap_or("")),
-            "put" => with_headers(self.agent.put(r.url), r.headers).send(r.body.unwrap_or("")),
-            "patch" => with_headers(self.agent.patch(r.url), r.headers).send(r.body.unwrap_or("")),
-            other => return Outcome::NotSent(format!("unknown HTTP method '{other}'")),
+            "post" | "put" | "patch" => match builder.body(r.body.unwrap_or("")) {
+                Ok(req) => self.agent.run(req),
+                Err(e) => return Outcome::NotSent(format!("the request cannot be made: {e}")),
+            },
+            _ => match builder.body(()) {
+                Ok(req) => self.agent.run(req),
+                Err(e) => return Outcome::NotSent(format!("the request cannot be made: {e}")),
+            },
         };
         let mut resp = match result {
             Ok(resp) => resp,
@@ -160,13 +185,6 @@ pub(crate) fn roots(extra: &[Vec<u8>]) -> Vec<ureq::tls::Certificate<'static>> {
         .collect()
 }
 
-fn with_headers<B>(mut rb: ureq::RequestBuilder<B>, headers: &[(String, String)]) -> ureq::RequestBuilder<B> {
-    for (k, v) in headers {
-        rb = rb.header(k.as_str(), v.as_str());
-    }
-    rb
-}
-
 /// Reads the certificates in a PEM file, for `extra_roots`. A file that holds a
 /// private key is refused: a key has no place in a run's configuration.
 pub fn read_root_certificates(path: &str) -> Result<Vec<Vec<u8>>, String> {
@@ -199,6 +217,8 @@ pub(super) fn classify(e: ureq::Error) -> Outcome {
         | E::BadUri(_)
         | E::Http(_)
         | E::InvalidProxyUrl
+        // The proxy refused the tunnel or did not answer: nothing reached the target.
+        | E::ConnectProxyFailed(_)
         | E::Tls(_)
         | E::Timeout(T::Resolve | T::Connect) => Outcome::NotSent(text),
         // TLS checks the server's certificate, and agrees on a protocol, before the
@@ -292,7 +312,8 @@ mod tests {
     fn a_host_that_does_not_exist_means_not_sent() {
         // `.invalid` never resolves (RFC 6761).
         let c = Client::new(&Settings::default());
-        match c.send(&Request { method: "post", url: "https://no-such-host.invalid/x", headers: &[], body: Some("x") }) {
+        let t = crate::targets::target("https://no-such-host.invalid/x").unwrap();
+        match c.send(&Request { method: "post", target: &t, headers: &[], body: Some("x") }) {
             Outcome::NotSent(_) => {}
             other => panic!("expected NotSent, got {other:?}"),
         }
@@ -304,9 +325,193 @@ mod tests {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let c = Client::new(&Settings::default());
         let url = format!("http://127.0.0.1:{port}/x");
-        match c.send(&Request { method: "post", url: &url, headers: &[], body: Some("x") }) {
+        let t = crate::targets::target(&url).unwrap();
+        match c.send(&Request { method: "post", target: &t, headers: &[], body: Some("x") }) {
             Outcome::NotSent(_) => {}
             other => panic!("expected NotSent, got {other:?}"),
+        }
+    }
+
+    /// One request a recording server received: which connection (numbered from 1 in
+    /// the order accepted), its request line and its `Host`.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Seen {
+        conn: usize,
+        line: String,
+        host: String,
+    }
+
+    /// A server on `listener` that answers every request `200 ok` and keeps each
+    /// connection open for the next, recording what it received.
+    fn recorder(listener: std::net::TcpListener) -> std::sync::Arc<std::sync::Mutex<Vec<Seen>>> {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = seen.clone();
+        std::thread::spawn(move || {
+            for (i, conn) in listener.incoming().enumerate() {
+                let Ok(conn) = conn else { continue };
+                let seen = seen.clone();
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(conn.try_clone().unwrap());
+                    let mut conn = conn;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        let (mut host, mut len) = (String::new(), 0usize);
+                        loop {
+                            let mut h = String::new();
+                            if reader.read_line(&mut h).unwrap_or(0) == 0 {
+                                return;
+                            }
+                            let h = h.trim_end();
+                            if h.is_empty() {
+                                break;
+                            }
+                            if let Some((k, v)) = h.split_once(':') {
+                                match k.to_ascii_lowercase().as_str() {
+                                    "host" => host = v.trim().to_string(),
+                                    "content-length" => len = v.trim().parse().unwrap_or(0),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        let mut body = vec![0u8; len];
+                        if reader.read_exact(&mut body).is_err() {
+                            return;
+                        }
+                        seen.lock().unwrap().push(Seen { conn: i + 1, line: line.trim_end().to_string(), host });
+                        if conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        out
+    }
+
+    /// The `Host` a target sends: its authority, as checked.
+    fn authority(t: &crate::targets::Target) -> String {
+        t.uri().authority().unwrap().as_str().to_string()
+    }
+
+    /// AGENT_MANIFEST.md section 16, R6: whatever spelling a program gives, the request
+    /// reaches the address checked, with the checked authority as its `Host` and the
+    /// checked path and query as its request line.
+    #[test]
+    fn the_request_sent_is_the_target_checked() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let seen = recorder(l);
+        let c = Client::new(&Settings::default());
+        let cases = [
+            (format!("http://127.0.0.1:{port}/a/./b/%2e%2E/c?x=%7e#f"), format!("127.0.0.1:{port}"), "/a/c?x=~"),
+            (format!("http://0x7f.1:{port}/x"), format!("127.0.0.1:{port}"), "/x"),
+            (format!("http://2130706433:{port}/y"), format!("127.0.0.1:{port}"), "/y"),
+            (format!("http://LOCALHOST:{port}/z"), format!("localhost:{port}"), "/z"),
+            (format!("http://127.0.0.1:{port}\\@evil.example/w"), format!("127.0.0.1:{port}"), "/@evil.example/w"),
+            (format!("http://127.0.0.1:0{port}/v"), format!("127.0.0.1:{port}"), "/v"),
+        ];
+        for (i, (given, host, path)) in cases.iter().enumerate() {
+            let t = crate::targets::target(given).unwrap();
+            assert_eq!(&authority(&t), host, "{given}");
+            match c.send(&Request { method: "get", target: &t, headers: &[], body: None }) {
+                Outcome::Response { status: 200, .. } => {}
+                other => panic!("{given}: {other:?}"),
+            }
+            let got = seen.lock().unwrap()[i].clone();
+            assert_eq!((got.line.as_str(), got.host.as_str()), (format!("GET {path} HTTP/1.1").as_str(), host.as_str()), "{given}");
+        }
+        // IPv6, where this machine has it.
+        if let Ok(l6) = std::net::TcpListener::bind("[::1]:0") {
+            let p6 = l6.local_addr().unwrap().port();
+            let seen6 = recorder(l6);
+            let t = crate::targets::target(&format!("http://[0:0:0:0:0:0:0:1]:{p6}/six")).unwrap();
+            assert!(matches!(c.send(&Request { method: "get", target: &t, headers: &[], body: None }), Outcome::Response { status: 200, .. }));
+            let got = seen6.lock().unwrap()[0].clone();
+            assert_eq!((got.line.as_str(), got.host.as_str()), ("GET /six HTTP/1.1", format!("[::1]:{p6}").as_str()));
+        }
+    }
+
+    /// R6: a kept-alive connection carries only requests for the authority it was
+    /// opened for. Here two authorities reach the same listener: a request for the
+    /// second never travels on the first's connection, though the first's is reused.
+    #[test]
+    fn a_kept_alive_connection_is_used_only_for_its_own_authority() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        use std::net::ToSocketAddrs;
+        let localhost_v4 = ("localhost", port).to_socket_addrs().map(|mut a| a.any(|x| x.ip().is_ipv4())).unwrap_or(false);
+        assert!(localhost_v4, "localhost must resolve to 127.0.0.1 for this test");
+        let seen = recorder(l);
+        let c = Client::new(&Settings::default());
+        let ip = crate::targets::target(&format!("http://127.0.0.1:{port}/1")).unwrap();
+        let name = crate::targets::target(&format!("http://localhost:{port}/2")).unwrap();
+        for t in [&ip, &ip, &name, &ip] {
+            assert!(matches!(c.send(&Request { method: "get", target: t, headers: &[], body: None }), Outcome::Response { status: 200, .. }));
+        }
+        let got = seen.lock().unwrap().clone();
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[0].conn, got[1].conn, "the pool is in use, so the test can see misuse: {got:?}");
+        assert_ne!(got[2].conn, got[0].conn, "a request for localhost travelled on 127.0.0.1's connection: {got:?}");
+        assert_eq!(got[2].host, format!("localhost:{port}"));
+        for g in [&got[0], &got[1], &got[3]] {
+            assert_eq!(g.host, format!("127.0.0.1:{port}"));
+            assert_ne!(g.conn, got[2].conn, "a request for 127.0.0.1 travelled on localhost's connection: {got:?}");
+        }
+    }
+
+    /// R6: through a proxy, the CONNECT names the checked host and port (the host as
+    /// written after checking, never an address looked up here), and its `Host` is the
+    /// same.
+    #[test]
+    fn a_proxy_is_asked_for_the_checked_host_and_port() {
+        use std::io::{BufRead, BufReader, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy_port = l.local_addr().unwrap().port();
+        let heads = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let h2 = heads.clone();
+        std::thread::spawn(move || {
+            for conn in l.incoming() {
+                let Ok(mut conn) = conn else { continue };
+                let mut r = BufReader::new(conn.try_clone().unwrap());
+                let mut line = String::new();
+                let _ = r.read_line(&mut line);
+                let mut host = String::new();
+                loop {
+                    let mut h = String::new();
+                    if r.read_line(&mut h).unwrap_or(0) == 0 || h.trim_end().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.trim_end().strip_prefix("Host:") {
+                        host = v.trim().to_string();
+                    }
+                }
+                h2.lock().unwrap().push((line.trim_end().to_string(), host));
+                // Refuse the tunnel: nothing reaches the target.
+                let _ = conn.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+        let env = |k: &str| (k == "HTTPS_PROXY").then(|| format!("http://127.0.0.1:{proxy_port}"));
+        let proxy = super::super::proxy::from_environment(env).unwrap();
+        let c = Client::new(&Settings { proxy, ..Settings::default() });
+        let cases = [
+            ("https://LOCALHOST:9443/x", "localhost:9443"),
+            ("https://BÜCHER.example/x", "xn--bcher-kva.example:443"),
+            ("https://0x7f.1/x", "127.0.0.1:443"),
+            ("https://[0:0::1]:8443/x", "[::1]:8443"),
+            ("http://127.1:8080/x", "127.0.0.1:8080"),
+        ];
+        for (i, (given, dest)) in cases.iter().enumerate() {
+            let t = crate::targets::target(given).unwrap();
+            match c.send(&Request { method: "post", target: &t, headers: &[], body: Some("x") }) {
+                Outcome::NotSent(_) => {}
+                other => panic!("{given}: a refused tunnel is not sent: {other:?}"),
+            }
+            let got = heads.lock().unwrap()[i].clone();
+            assert_eq!((got.0.as_str(), got.1.as_str()), (format!("CONNECT {dest} HTTP/1.1").as_str(), *dest), "{given}");
         }
     }
 }

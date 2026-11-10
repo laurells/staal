@@ -601,7 +601,7 @@ as one per 4 bytes of the request's JSON.
 | --- | --- | --- |
 | `model` | the Claude model id, e.g. `claude-sonnet-5-5` or `claude-haiku-5-5` | required |
 | `api_key` | `{"env": NAME}`: the environment variable holding the key | required |
-| `base_url` | the API's address; HTTPS, or plain HTTP to 127.0.0.1 or localhost only | `https://api.anthropic.com` |
+| `base_url` | the API's address; HTTPS, or plain HTTP to `localhost`, `127.0.0.0/8` or `::1` only; a path but no query, fragment, user name or password. Parsed once as a `net.http` target is (section 12, Canonical targets), and each request is sent to a fixed path under it | `https://api.anthropic.com` |
 | `timeout_ms` | the most one request may take | 600000 |
 | `connect_timeout_ms` | the most connecting may take | 10000 |
 | `retries` | extra attempts after a rate limit, an overload or a server error (0 to 10) | 2 |
@@ -1077,6 +1077,19 @@ target that cannot be is refused (`capability`) before anything is sent.
   passwords in URLs are refused; an encoded `/` or `\` in the path is refused,
   since servers disagree on what it means; escapes of unreserved characters are
   decoded and other escapes uppercased; the fragment is dropped.
+
+  The URL is parsed **once**, into one target that cannot change afterwards. The
+  `only` check and the journal use its canonical text; the request is built from the
+  same parsed parts (scheme, host, port, path and query), never from the text the
+  program gave, and a URL the HTTP layer would read back as anything else is refused.
+  So the host and port connected to, the `Host` header, the name the server's
+  certificate is checked against (and sent as SNI), a proxy's `CONNECT` destination
+  and the request line are all the host, port, path and query that were checked. An
+  IPv4 address in any form (`0x7f.1`, `2130706433`) is one address; an IPv6 address
+  is written compressed; a trailing dot is kept, so `api.example.com.` is not
+  `api.example.com` to `only`. A connection kept open is used again only for a
+  request to the same scheme, host and port. A program cannot set `Host`, any
+  `proxy-` header or any other header the HTTP layer owns.
 - **Paths** must be absolute; empty and `.` segments are removed and `..` resolved
   as text, never above `/`.
 - **Patterns** in `only` for these capabilities must themselves be canonical
@@ -1332,7 +1345,10 @@ a user name or password (it would be written to the journal), or names a SOCKS p
 route. What was chosen (the variable, `http` or `https`, the host, the port and the
 bypass list) is recorded in the journal, and the client is built from exactly that;
 a resume whose environment chooses differently is refused (section 11). No variable
-set means no proxy.
+set means no proxy. Without `"proxy": "environment"` no proxy is used, whatever the
+environment says. Through a proxy, the client asks for a tunnel (`CONNECT`) to the
+checked host and port by name, so the proxy resolves it; the client does not look
+the host up itself.
 
 Server certificates are verified against Mozilla's root certificates, the list
 browsers use. An organisation whose services are signed by its own authority adds

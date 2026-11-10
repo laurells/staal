@@ -36,7 +36,8 @@ const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
 #[derive(Clone)]
 pub struct AnthropicProvider {
     agent: ureq::Agent,
-    base: String,
+    /// The API's address, parsed once; each request goes to a fixed path under it.
+    base: crate::targets::Target,
     model: String,
     key: String,
     retries: u32,
@@ -77,10 +78,10 @@ impl AnthropicProvider {
         if key.chars().any(|c| c.is_control() || c == ' ') {
             return Err(format!("model.api_key: the value of {env} is not a valid key"));
         }
-        let base = match obj.get("base_url") {
-            None => DEFAULT_BASE.to_string(),
-            Some(v) => base_url(v.as_str().ok_or("model.base_url: expected a URL")?)?,
-        };
+        let base = base_url(match obj.get("base_url") {
+            None => DEFAULT_BASE,
+            Some(v) => v.as_str().ok_or("model.base_url: expected a URL")?,
+        })?;
         let millis = |k: &str, default: u64| -> Result<u64, String> {
             match obj.get(k) {
                 None => Ok(default),
@@ -159,17 +160,20 @@ impl AnthropicProvider {
     /// Sends one POST, retrying what may succeed later. Returns the status and body of
     /// a final answer, or why there is none.
     fn post(&self, path: &str, body: &Json) -> Result<(u16, String), ProviderError> {
-        let url = format!("{}{path}", self.base);
+        // The fixed paths are plain, so joining them cannot fail.
+        let target = self.base.joined(path).map_err(ProviderError::Failed)?;
         let text = body.to_string();
         let mut attempt = 0u32;
         loop {
-            let result = self
-                .agent
-                .post(&url)
+            let request = ureq::http::Request::post(target.uri().clone())
                 .header("x-api-key", &self.key)
                 .header("anthropic-version", API_VERSION)
                 .header("content-type", "application/json")
-                .send(&text);
+                .body(text.as_str());
+            let result = match request {
+                Ok(r) => self.agent.run(r),
+                Err(e) => return Err(ProviderError::Failed(format!("the request cannot be made: {e}"))),
+            };
             let (wait, why) = match result {
                 Ok(mut resp) => {
                     let status = resp.status().as_u16();
@@ -366,18 +370,20 @@ fn retry_after(v: &str) -> Option<Duration> {
     v.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
-/// The API's address: HTTPS, or plain HTTP to this machine only (for a local test
-/// server or proxy).
-fn base_url(s: &str) -> Result<String, String> {
-    let u = url::Url::parse(s).map_err(|e| format!("model.base_url: {e}"))?;
-    let local = matches!(u.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
-    if u.scheme() != "https" && !(u.scheme() == "http" && local) {
-        return Err("model.base_url: must be https (plain http only to 127.0.0.1 or localhost)".into());
-    }
-    if u.query().is_some() || u.fragment().is_some() || !u.username().is_empty() || u.password().is_some() {
+/// The API's address, parsed once as `net.http` parses a target (`targets::target`):
+/// HTTPS, or plain HTTP to this machine only (for a local test server or proxy), and no
+/// user name or password. It may have a path, under which the API's paths are added;
+/// no query and no fragment.
+fn base_url(s: &str) -> Result<crate::targets::Target, String> {
+    // A `#` always starts a fragment in the URL Standard, which parsing would drop.
+    if s.contains('#') {
         return Err("model.base_url: give only a scheme, host, port and path".into());
     }
-    Ok(s.trim_end_matches('/').to_string())
+    let t = crate::targets::target(s).map_err(|e| format!("model.base_url: {e}"))?;
+    if t.has_query() {
+        return Err("model.base_url: give only a scheme, host, port and path".into());
+    }
+    Ok(t)
 }
 
 #[cfg(test)]
@@ -449,6 +455,12 @@ mod tests {
         assert!(base_url("http://api.example.com").is_err());
         assert!(base_url("https://user:pw@api.example.com").is_err());
         assert!(base_url("https://api.example.com/?k=1").is_err());
+        assert!(base_url("https://api.example.com/#k").is_err());
+        assert!(base_url("https://api.example.com/x%2Fy").is_err());
+        // What is sent is the parsed address, not the text given.
+        let b = base_url("https://API.example.com/proxy/").unwrap();
+        assert_eq!(b.joined("/v1/messages").unwrap().uri().to_string(), "https://api.example.com/proxy/v1/messages");
+        assert_eq!(base_url(DEFAULT_BASE).unwrap().joined("/v1/messages").unwrap().as_str(), "https://api.anthropic.com/v1/messages");
     }
 
     #[test]

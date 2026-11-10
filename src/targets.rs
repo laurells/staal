@@ -7,44 +7,151 @@
 // config require `only` patterns for these capabilities to be canonical too, so a
 // pattern can never silently fail to match its own targets.
 
-/// The canonical form of a URL for `net.http`, or why it is refused.
+/// A request target for `net.http`, parsed and made canonical once (AGENT_MANIFEST.md
+/// section 16, R6). It cannot be changed after it is made, and everything that acts on
+/// a request uses it: the `only` check compares `as_str`, and the HTTP client is given
+/// `uri`, built from the same parsed parts, never the text the program gave. The
+/// HTTP client takes the connection's host and port, the `Host` header, the TLS name
+/// (and SNI), a proxy's `CONNECT` destination and the request line from that `uri`, so
+/// each is the host and port that were checked.
 ///
 /// Parsed by the WHATWG URL Standard (the `url` crate, as browsers do), which lowercases
-/// the scheme and host, converts international hosts to ASCII, drops the default port
-/// and resolves `.` and `..` segments, including percent-encoded ones. Then:
+/// the scheme and host, converts international hosts to ASCII, reads every IPv4 form
+/// (`0x7f.1`, `2130706433`) as one address, writes IPv6 addresses compressed, drops the
+/// default port and resolves `.` and `..` segments, including percent-encoded ones.
+/// Then:
 ///  - the scheme must be `https`, or `http` for a loopback host (local testing only);
 ///  - user names and passwords in the URL are refused (credentials go in headers);
 ///  - an encoded `/` or `\` in the path is refused: servers disagree on what it means;
 ///  - percent-encoded unreserved characters are decoded and other escapes uppercased,
 ///    so `%7e` and `~` are the same target;
-///  - the fragment is dropped, since it is never sent.
-pub fn canonical_url(s: &str) -> Result<String, String> {
+///  - the fragment is dropped, since it is never sent;
+///  - the result must be a URI the HTTP layer reads back as exactly these parts, or it
+///    is refused: a target is never sent in a form other than the one checked.
+#[derive(Debug, Clone)]
+pub struct Target {
+    canonical: String,
+    https: bool,
+    host: url::Host<String>,
+    port: u16,
+    path: String,
+    query: Option<String>,
+    uri: ureq::http::Uri,
+}
+
+impl Target {
+    /// The canonical text: what `only` patterns are matched against and the journal
+    /// records.
+    pub fn as_str(&self) -> &str {
+        &self.canonical
+    }
+
+    /// The URI the request is sent to: the same parts as `as_str`.
+    pub fn uri(&self) -> &ureq::http::Uri {
+        &self.uri
+    }
+
+    pub fn host(&self) -> &url::Host<String> {
+        &self.host
+    }
+
+    /// The port connected to: the one in the URL, or the scheme's default.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn is_https(&self) -> bool {
+        self.https
+    }
+
+    pub fn has_query(&self) -> bool {
+        self.query.is_some()
+    }
+
+    /// This target with `suffix` appended to its path, for a client that sends to
+    /// fixed paths under a configured base (the model provider). The base must have no
+    /// query; a trailing `/` of its path is dropped first. `suffix` is a path of
+    /// unreserved characters and `/`, starting with `/`, so it needs no parsing.
+    pub fn joined(&self, suffix: &str) -> Result<Target, String> {
+        if self.query.is_some() {
+            return Err(format!("'{}' has a query, so no path can be added to it", self.canonical));
+        }
+        let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~' | '/');
+        if !suffix.starts_with('/') || !suffix.chars().all(plain) || suffix.split('/').any(|seg| seg == "." || seg == "..") {
+            return Err(format!("'{suffix}' is not a plain path"));
+        }
+        let path = format!("{}{suffix}", self.path.trim_end_matches('/'));
+        Target::from_parts(self.https, self.host.clone(), self.port, path, None, &self.canonical)
+    }
+
+    /// Builds the target from parsed parts, and checks that the HTTP layer reads the URI
+    /// back as exactly those parts. `given` names the URL in messages.
+    fn from_parts(https: bool, host: url::Host<String>, port: u16, path: String, query: Option<String>, given: &str) -> Result<Target, String> {
+        let scheme = if https { "https" } else { "http" };
+        // As the URL Standard writes a host: a domain as it is, IPv4 in dotted decimal,
+        // IPv6 compressed in brackets (`::ffff:7f00:1`, where Rust's own form would be
+        // `::ffff:127.0.0.1`).
+        let host_text = host.to_string();
+        let default = if https { 443 } else { 80 };
+        let explicit = (port != default).then_some(port);
+        let authority = match explicit {
+            Some(p) => format!("{host_text}:{p}"),
+            None => host_text.clone(),
+        };
+        let path_and_query = match &query {
+            Some(q) => format!("{path}?{q}"),
+            None => path.clone(),
+        };
+        let canonical = format!("{scheme}://{authority}{path_and_query}");
+        let refuse = |why: String| format!("'{}' cannot be sent exactly as checked: {why}", crate::clip::clip(given));
+        let uri = ureq::http::Uri::builder()
+            .scheme(scheme)
+            .authority(authority.as_str())
+            .path_and_query(path_and_query.as_str())
+            .build()
+            .map_err(|e| refuse(e.to_string()))?;
+        let same = uri.scheme_str() == Some(scheme)
+            && uri.authority().map(|a| a.as_str()) == Some(authority.as_str())
+            && uri.host() == Some(host_text.as_str())
+            && uri.port_u16() == explicit
+            && uri.path_and_query().map(|p| p.as_str()) == Some(path_and_query.as_str())
+            && uri.to_string() == canonical;
+        if !same {
+            return Err(refuse(format!("the HTTP layer reads it as {uri}")));
+        }
+        Ok(Target { canonical, https, host, port, path, query, uri })
+    }
+}
+
+/// The target a URL names, under `net.http`'s rules (see `Target`), or why it is
+/// refused.
+pub fn target(s: &str) -> Result<Target, String> {
     let u = url::Url::parse(s).map_err(|e| format!("'{}' is not a valid URL: {e}", crate::clip::clip(s)))?;
-    let host = u.host_str().filter(|h| !h.is_empty()).ok_or_else(|| format!("'{}' has no host", crate::clip::clip(s)))?;
-    match u.scheme() {
-        "https" => {}
-        "http" if is_loopback(&u) => {}
+    let host = match u.host() {
+        Some(url::Host::Domain("")) | None => return Err(format!("'{}' has no host", crate::clip::clip(s))),
+        Some(h) => h.to_owned(),
+    };
+    let https = match u.scheme() {
+        "https" => true,
+        "http" if is_loopback(&u) => false,
         "http" => return Err(format!("'{}' uses http://; only https:// is allowed (http:// only for localhost)", crate::clip::clip(s))),
         other => return Err(format!("'{}' uses {}://; only https:// is allowed", crate::clip::clip(s), crate::clip::clip(other))),
-    }
+    };
     if !u.username().is_empty() || u.password().is_some() {
         return Err(format!("'{}' contains a user name or password; send credentials in a header", crate::clip::clip(s)));
     }
-    let path = u.path();
-    let lower = path.to_ascii_lowercase();
+    let lower = u.path().to_ascii_lowercase();
     if lower.contains("%2f") || lower.contains("%5c") {
         return Err(format!("'{}' has an encoded '/' or '\\' in its path, which servers interpret differently", crate::clip::clip(s)));
     }
-    let mut out = format!("{}://{host}", u.scheme());
-    if let Some(port) = u.port() {
-        out.push_str(&format!(":{port}"));
-    }
-    out.push_str(&normalize_escapes(path));
-    if let Some(q) = u.query() {
-        out.push('?');
-        out.push_str(&normalize_escapes(q));
-    }
-    Ok(out)
+    // http and https always have a default port.
+    let port = u.port_or_known_default().ok_or_else(|| format!("'{}' has no port", crate::clip::clip(s)))?;
+    Target::from_parts(https, host, port, normalize_escapes(u.path()), u.query().map(normalize_escapes), s)
+}
+
+/// The canonical form of a URL for `net.http` (`Target::as_str`), or why it is refused.
+pub fn canonical_url(s: &str) -> Result<String, String> {
+    target(s).map(|t| t.canonical)
 }
 
 fn is_loopback(u: &url::Url) -> bool {
@@ -238,6 +345,76 @@ mod tests {
             assert!(check_address_pattern(bad).is_err(), "{bad}");
         }
         assert!(check_address_pattern("Example.com:*").unwrap_err().contains("\"example.com:*\""));
+    }
+
+    /// R6: for each spelling, the authority checked (`as_str`), the authority the HTTP
+    /// layer is given (`uri`: its host, port and the `Host` it sends) and the port
+    /// connected to are one and the same.
+    #[test]
+    fn the_uri_sent_is_the_target_checked() {
+        for (given, canonical, host, port) in [
+            // International names, as ASCII; full-width dots are dots.
+            ("https://BÜCHER.example/x", "https://xn--bcher-kva.example/x", "xn--bcher-kva.example", 443),
+            ("https://a\u{ff0e}example/x", "https://a.example/x", "a.example", 443),
+            // Every IPv4 form is one address.
+            ("http://0x7f.1:8080/", "http://127.0.0.1:8080/", "127.0.0.1", 8080),
+            ("http://2130706433/", "http://127.0.0.1/", "127.0.0.1", 80),
+            ("http://127.1/", "http://127.0.0.1/", "127.0.0.1", 80),
+            ("https://0300.0250.0.1/", "https://192.168.0.1/", "192.168.0.1", 443),
+            // IPv6, compressed, in brackets.
+            ("https://[0:0:0:0:0:0:0:1]:8443/", "https://[::1]:8443/", "[::1]", 8443),
+            ("https://[2001:DB8::0:1]/", "https://[2001:db8::1]/", "[2001:db8::1]", 443),
+            ("https://[::ffff:127.0.0.1]/", "https://[::ffff:7f00:1]/", "[::ffff:7f00:1]", 443),
+            // Default and explicit ports.
+            ("https://a.example:443/", "https://a.example/", "a.example", 443),
+            ("https://a.example:0443/", "https://a.example/", "a.example", 443),
+            ("https://a.example:80/", "https://a.example:80/", "a.example", 80),
+            ("http://localhost:80/", "http://localhost/", "localhost", 80),
+            ("https://a.example:8443", "https://a.example:8443/", "a.example", 8443),
+            // Case and a trailing dot: the dot is kept, so it is another host to `only`.
+            ("https://API.Example.COM./x", "https://api.example.com./x", "api.example.com.", 443),
+            // Dot segments, plain and percent-encoded, are resolved before the check.
+            ("https://a.example/x/%2e%2E/y/./z", "https://a.example/y/z", "a.example", 443),
+            // A backslash is a slash: the host is a.example, the rest is path.
+            ("https://a.example\\@b.example/", "https://a.example/@b.example/", "a.example", 443),
+            // Tabs and newlines are removed, as browsers do.
+            ("https://a.exa\tmple/x\n", "https://a.example/x", "a.example", 443),
+            ("https://a.example/a?b=%7e#c", "https://a.example/a?b=~", "a.example", 443),
+        ] {
+            let t = target(given).unwrap_or_else(|e| panic!("{given}: {e}"));
+            assert_eq!(t.as_str(), canonical, "{given}");
+            assert_eq!(t.uri().to_string(), canonical, "{given}");
+            assert_eq!(t.uri().host(), Some(host), "{given}");
+            assert_eq!(t.uri().port_u16().unwrap_or(if t.is_https() { 443 } else { 80 }), port, "{given}");
+            assert_eq!(t.port(), port, "{given}");
+            assert_eq!(t.host().to_string(), host, "{given}");
+        }
+        for refused in [
+            "https://a.example@b.example/",
+            "https://a.example%2Fb.example/",
+            "https://a.example/x%2Fy",
+            "https://a.example/x%5cy",
+            "https://a.example:99999/",
+            "http://a.example/",
+            "http://127.0.0.1.example/",
+            "https://[::1/",
+            "https://exa mple.com/",
+            "https:///",
+        ] {
+            assert!(target(refused).is_err(), "{refused} was accepted as {:?}", target(refused).map(|t| t.as_str().to_string()));
+        }
+    }
+
+    #[test]
+    fn a_fixed_path_joins_a_base_without_parsing_again() {
+        let base = target("https://API.example.com/proxy/").unwrap();
+        let t = base.joined("/v1/messages").unwrap();
+        assert_eq!((t.as_str(), t.uri().to_string().as_str()), ("https://api.example.com/proxy/v1/messages", "https://api.example.com/proxy/v1/messages"));
+        assert_eq!(target("http://127.0.0.1:9/").unwrap().joined("/v1/x").unwrap().as_str(), "http://127.0.0.1:9/v1/x");
+        for bad in ["v1", "/v1/../x", "/v1?q", "/v1#f", "/v1/%2e"] {
+            assert!(base.joined(bad).is_err(), "{bad}");
+        }
+        assert!(target("https://a.example/?q=1").unwrap().joined("/x").is_err());
     }
 
     #[test]

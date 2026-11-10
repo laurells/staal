@@ -51,11 +51,18 @@ impl Fetcher {
     /// GETs `url`: Ok(Some(document)) for a 200 with a JSON object, Ok(None) for a 404
     /// (another discovery location may answer), Err for anything else.
     pub fn get(&self, url: &str) -> Result<Option<serde_json::Map<String, Json>>, String> {
-        let parsed = url::Url::parse(url).map_err(|e| format!("{url}: {e}"))?;
-        if parsed.scheme() != "https" || parsed.fragment().is_some() {
+        // Parsed once, as `net.http` parses a target; the request is sent to the URI
+        // built from that parse, never to the text again. A `#` always starts a
+        // fragment in the URL Standard.
+        let target = crate::targets::target(url).map_err(|e| format!("{url}: {e}"))?;
+        if !target.is_https() || url.contains('#') {
             return Err(format!("{url}: only https URLs without a fragment are fetched"));
         }
-        let mut resp = self.agent.get(url).header("accept", "application/json").call().map_err(|e| format!("fetching {url}: {e}"))?;
+        let request = ureq::http::Request::get(target.uri().clone())
+            .header("accept", "application/json")
+            .body(())
+            .map_err(|e| format!("fetching {url}: {e}"))?;
+        let mut resp = self.agent.run(request).map_err(|e| format!("fetching {url}: {e}"))?;
         let status = resp.status().as_u16();
         if status == 404 {
             return Ok(None);

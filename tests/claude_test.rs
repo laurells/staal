@@ -197,7 +197,18 @@ impl Case {
     }
 
     fn staalc(&self, cmd: &str, failpoint: Option<&str>) -> (Option<i32>, String, String) {
+        self.staalc_with(cmd, failpoint, &[])
+    }
+
+    fn staalc_with(&self, cmd: &str, failpoint: Option<&str>, env: &[(&str, &str)]) -> (Option<i32>, String, String) {
         let mut c = Command::new(BIN);
+        if !env.is_empty() {
+            // Only the variables given: none of this machine's own NO_PROXY.
+            c.env_remove("NO_PROXY").env_remove("no_proxy");
+        }
+        for (k, v) in env {
+            c.env(k, v);
+        }
         c.args([cmd, &self.p("prog.staal"), "--config", &self.p("cfg.json"), "--journal", &self.p("journal"), "--log", &self.p("log")])
             .env("STAAL_CLAUDE_KEY", KEY);
         match failpoint {
@@ -372,7 +383,8 @@ fn bad_configs_are_refused_before_anything_runs() {
     let api = Api::start(vec![]);
     for (extra, want) in [
         (json!({ "api_key": { "env": "STAAL_CLAUDE_KEY_NOT_SET" } }), "STAAL_CLAUDE_KEY_NOT_SET is not set"),
-        (json!({ "base_url": "http://api.example.com" }), "must be https"),
+        (json!({ "base_url": "http://api.example.com" }), "only https:// is allowed"),
+        (json!({ "base_url": "https://api.example.com/v%2F1" }), "encoded '/'"),
         (json!({ "model": "" }), "name the Claude model"),
         (json!({ "temperature": 0 }), "unknown key 'temperature'"),
         (json!({ "retries": 11 }), "from 0 to 10"),
@@ -417,4 +429,28 @@ fn a_crash_at_every_point_resumes_to_the_same_answer() {
         assert_eq!(c.staalc("resume", None).1, out, "{fp}");
         assert_eq!(api.seen.lock().unwrap().len(), before, "{fp}: replay contacted the API");
     }
+}
+
+/// AGENT_MANIFEST.md section 16, R6: the provider uses no proxy unless its config names
+/// one. Every proxy variable is set, to a listener that would see any connection; the
+/// model call goes straight to the API.
+#[test]
+fn a_proxy_in_the_environment_is_not_used_unless_the_config_asks() {
+    let api = Api::start(vec![ok(json!({ "refund": false, "cents": 0, "reason": "none" }), 290, 40)]);
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+    let connections = Arc::new(Mutex::new(0usize));
+    let c2 = connections.clone();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            *c2.lock().unwrap() += 1;
+            drop(c);
+        }
+    });
+    let c = Case::new("no-env-proxy", &api, "decide", json!({}));
+    let env: Vec<(&str, &str)> = ["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].iter().map(|v| (*v, proxy.as_str())).collect();
+    let (code, _, err) = c.staalc_with("run", None, &env);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(api.seen("/v1/messages").len(), 1);
+    assert_eq!(*connections.lock().unwrap(), 0, "the proxy in the environment was used");
 }

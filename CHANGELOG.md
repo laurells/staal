@@ -42,6 +42,20 @@ end (`staalc mcp status` lists them) or resolve it with the `staalc` that starte
   use one). `NO_PROXY` entries are trimmed and lowercased.
 - A journal of any version but 3 is refused, saying to finish or resolve its run with
   the `staalc` that started it; `staalc resolve` checks the version too.
+- A `net.http` URL is parsed once, into one target the `only` check, the journal and
+  the request all use: the request is built from the parsed parts, never from the
+  program's text, and a URL the HTTP layer would read back as anything else is
+  refused. The model provider's `base_url` and the MCP server's `auth.issuer` and
+  `jwks_uri` are parsed the same way, so they too now refuse a user name, a password
+  or an encoded `/` or `\` in the path, and `base_url` accepts plain HTTP to any
+  loopback address (`127.0.0.0/8`, `::1`, `localhost`), as `net.http` does.
+
+### Fixed
+
+- `net.http` through a proxy no longer looks the target's host up on this machine
+  before sending: the proxy resolves it. Before, a request to a host only the proxy
+  could resolve failed as not sent. A proxy that refuses the tunnel is reported as not
+  sent.
 
 ## 0.27.0 — 2026-11-09
 
