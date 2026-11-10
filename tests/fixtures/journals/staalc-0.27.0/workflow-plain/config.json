@@ -1,0 +1,63 @@
+{
+  "adapters": {
+    "simulated": {
+      "fail": [
+        {
+          "cap": "email.send",
+          "when_arg": "bounce@example.com"
+        }
+      ],
+      "idempotent": false,
+      "world": "world.jsonl"
+    }
+  },
+  "entry": "handle",
+  "grants": {
+    "mail": {
+      "cap": "email.send"
+    },
+    "pay": {
+      "cap": "payments.refund",
+      "max": {
+        "amount": "500.00",
+        "currency": "USD"
+      }
+    }
+  },
+  "inputs": {
+    "message": "I was charged twice for order A1.",
+    "order": {
+      "customer": {
+        "email": "ada@example.com",
+        "name": "Ada"
+      },
+      "id": "A1",
+      "total": {
+        "amount": "100.00",
+        "currency": "USD"
+      }
+    }
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "amount": {
+            "amount": "30.00",
+            "currency": "USD"
+          },
+          "order_id": "A1",
+          "reason": "double charge"
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "body": "Refunded a double charge on A1."
+        },
+        "output_tokens": 12
+      }
+    ]
+  }
+}

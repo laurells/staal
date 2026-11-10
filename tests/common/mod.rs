@@ -5,6 +5,7 @@
 pub mod authserver;
 pub mod fake;
 pub mod http;
+pub mod journal_fixtures;
 pub mod mcp;
 pub mod package_case;
 pub mod postgres;

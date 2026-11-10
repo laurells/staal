@@ -5,6 +5,8 @@
 # Publishing the draft runs publish.yml, which uploads the wheels and the npm package.
 # Linux builds in a manylinux_2_28 container (x86_64 and arm64), so what it makes runs
 # on glibc 2.28 and later.
+# The tests include tests/journal_compat_test.rs, which resumes the journals earlier
+# releases wrote at every crash point: a staalc that cannot is never released.
 name: release
 on:
   push:

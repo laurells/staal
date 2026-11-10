@@ -1,0 +1,30 @@
+// A crash-test scenario for the native engine: pure functions (compiled to native
+// code) computed between actions, so a run can crash on one engine after native code
+// ran and resume on the other. 3 actions, one failing and caught.
+
+fn score(n: Int) -> Int {
+    let total = 0
+    let i = 1
+    repeat 50 {
+        set total = total + i * n
+        set i = i + 1
+    }
+    return total
+}
+
+fn big(x: Int) -> Bool {
+    return x > 3000 and not (x > 1000000)
+}
+
+fn handle(mail: cap email.send(uses: 5)) -> Done {
+    let a = score(3)
+    let first = mail.send("ops@example.com: score " + json(a))
+    let b = score(a / 1000 + 1)
+    let bounced = try mail.send("bounce@example.com")
+    if big(b) {
+        let second = mail.send("big@example.com: " + json(b))
+        return done(evidence: [first, second])
+    }
+    let second = mail.send("small@example.com: " + json(b))
+    return done(evidence: [first, second])
+}

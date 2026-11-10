@@ -14,6 +14,8 @@
 
 #![cfg(feature = "failpoints")]
 
+mod common;
+
 use serde_json::{json, Value as Json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -944,4 +946,58 @@ fn open_actions(c: &Case) -> Vec<(String, String)> {
         }
     }
     open
+}
+
+/// A journal and its world with the run id and the config hash replaced: the two
+/// things that differ between two runs of one scenario (the run id is drawn at random,
+/// and each case's config names its own world file).
+fn comparable(journal: &str, world: &str) -> (String, String) {
+    let Some(start) = journal.lines().next().and_then(|l| serde_json::from_str::<Json>(l).ok()) else {
+        return (journal.to_string(), world.to_string());
+    };
+    let (id, cfg) = (start["run_id"].as_str().unwrap().to_string(), start["config_sha256"].as_str().unwrap().to_string());
+    (journal.replace(&id, "RUN").replace(&cfg, "CONFIG"), world.replace(&id, "RUN"))
+}
+
+/// AGENT_MANIFEST.md section 16, R5: the crash states tests/journal_compat_test.rs
+/// derives from a released binary's uninterrupted run (tests/common/journal_fixtures.rs)
+/// are exactly the states a real crash leaves. For each deterministic scenario, on
+/// each engine, with and without a deduplicating service, every derived state is
+/// compared, byte for byte apart from the run id, with the journal and world a crash
+/// injected at that point leaves.
+#[test]
+fn derived_crash_states_are_the_states_a_crash_leaves() {
+    for (tag, sc) in [("workflow", &WORKFLOW), ("access", &ACCESS), ("native", &NATIVE)] {
+        for idempotent in [true, false] {
+            for engine in ["interpreter", "native"] {
+                if engine == "native" && !cfg!(feature = "native") {
+                    continue;
+                }
+                let mode = format!("derived-{tag}-{idempotent}-{engine}");
+                let mut whole = Case::of(sc, &format!("{mode}-whole"), idempotent);
+                whole.engines = (engine, engine);
+                let out = whole.run(None);
+                assert_eq!(out.code, Some(0), "{mode}: {}", out.stderr);
+                let journal = std::fs::read_to_string(whole.path("journal")).unwrap();
+                let world = std::fs::read_to_string(whole.path("world.jsonl")).unwrap_or_default();
+                let states = common::journal_fixtures::crash_states(&journal, &world).unwrap_or_else(|e| panic!("{mode}: {e}"));
+                let records = journal.lines().count();
+                let ops = journal.lines().filter(|l| l.contains("\"j\":\"intent\"")).count();
+                assert_eq!(states.len(), records + ops, "{mode}: one state per write and per operation");
+                for s in &states {
+                    let mut c = Case::of(sc, &format!("{mode}-{}", s.name.replace(':', "-")), idempotent);
+                    c.engines = (engine, engine);
+                    let crashed = c.run(Some(&s.name));
+                    assert_eq!(crashed.code, None, "{mode} {}: the injected crash did not happen: {}", s.name, crashed.stderr);
+                    let (j, w) = comparable(
+                        &std::fs::read_to_string(c.path("journal")).unwrap_or_default(),
+                        &std::fs::read_to_string(c.path("world.jsonl")).unwrap_or_default(),
+                    );
+                    let (dj, dw) = comparable(&s.journal, &s.world);
+                    assert_eq!(j, dj, "{mode} {}: journal", s.name);
+                    assert_eq!(w, dw, "{mode} {}: world", s.name);
+                }
+            }
+        }
+    }
 }

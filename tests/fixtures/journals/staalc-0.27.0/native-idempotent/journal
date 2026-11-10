@@ -1,0 +1,8 @@
+{"config_sha256":"107bc544f5403e9a6913a09c22925c66d4b727d3a89052bb0c75867160d63b61","j":"start","program_sha256":"d242d9c1acbdf82b8c47b05abb8084cb56f3721656e33ef84a256c1f2cd0836c","run_id":"05188dca9751cc8460132f1ce62cd760","version":2}
+{"body":{"amount":null,"args":["ops@example.com: score 3825"],"capability":"email.send","method":"send","target":"ops@example.com: score 3825"},"j":"intent","key":"05188dca9751cc8460132f1ce62cd760-1","n":1,"op":"action"}
+{"j":"result","n":1,"ok":{"receipt":"sim-1"}}
+{"body":{"amount":null,"args":["bounce@example.com"],"capability":"email.send","method":"send","target":"bounce@example.com"},"j":"intent","key":"05188dca9751cc8460132f1ce62cd760-2","n":2,"op":"action"}
+{"err":"simulated failure of email.send.send","j":"result","n":2}
+{"body":{"amount":null,"args":["big@example.com: 5100"],"capability":"email.send","method":"send","target":"big@example.com: 5100"},"j":"intent","key":"05188dca9751cc8460132f1ce62cd760-3","n":3,"op":"action"}
+{"j":"result","n":3,"ok":{"receipt":"sim-2"}}
+{"j":"end","ok":true,"result":{"done":[{"capability":"email.send","method":"send","receipt":"sim-1"},{"capability":"email.send","method":"send","receipt":"sim-2"}]}}

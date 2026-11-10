@@ -1,0 +1,3 @@
+{"args":[{"amount":{"amount":"30.00","currency":"USD"},"order_id":"A1","reason":"double charge"}],"capability":"payments.refund","key":"498b25d77350b216ffe6dcbe0f36717b-5","method":"refund","receipt":"sim-1"}
+{"args":["ada@example.com"],"capability":"email.send","key":"498b25d77350b216ffe6dcbe0f36717b-7","method":"send","receipt":"sim-2"}
+{"args":[{"body":"Refunded a double charge on A1."}],"capability":"email.send","key":"498b25d77350b216ffe6dcbe0f36717b-8","method":"send","receipt":"sim-3"}

@@ -844,3 +844,161 @@ fn no_file_outside_the_inputs_changes_what_compiles() {
     assert_eq!(last.fingerprint, original.fingerprint);
     assert!(last.result.is_ok());
 }
+
+/// The engines a run can use in this build.
+fn engines() -> Vec<staalc::interp::Engine> {
+    let mut e = vec![staalc::interp::Engine::Interpreter];
+    if cfg!(feature = "native") {
+        e.push(staalc::interp::Engine::Native);
+    }
+    e
+}
+
+/// AGENT_MANIFEST.md section 16, R4: a package cannot exercise more than its declared
+/// boundary while the agent's own code holds broader authority over the same grant.
+///
+/// The agent holds `net.http.post` with no limit. Package `bank` declares
+/// `net.http.post` only for `<server>/v1/refunds`; package `other`, which `bank`
+/// depends on, declares all of `<server>/*`. The agent posts to `<server>/ok` itself,
+/// and hands the same grant to `bank` along every path a capability can take: a direct
+/// call, through a function of its own, through `bank` into `other`, back out of
+/// `bank` as a return value, and as a need of `bank`'s library capability granted by
+/// the operator without limits. Along every path `/v1/refunds` succeeds and `/ok` is
+/// refused before anything is sent, on every engine; the agent's own `/ok` succeeds.
+/// And `bank` cannot hand its capability to a slot of `other`'s that is wider than
+/// `bank`'s boundary, though `other`'s own boundary allows that slot: the program does
+/// not check.
+#[test]
+fn a_package_is_held_to_its_boundary_when_the_agent_holds_more() {
+    let s = Server::start();
+    let refunds = s.url("/v1/refunds");
+    let ok = s.url("/ok");
+    let any = s.url("/*");
+    let b = base("boundary");
+    let other_repo = b.join("repos/other");
+    let other_commit = repo(
+        &other_repo,
+        &[
+            ("staal.json", json!({ "package": "other", "authority": { "net.http.post": [any] } }).to_string().as_str()),
+            (
+                "n.staal",
+                format!(
+                    "pub fn go(h: cap net.http.post(only: [\"{refunds}\"]), url: Text) -> Int {{\n    let r = h.post(url, \"amount=1\")\n    return r.status\n}}\n\n\
+                     pub fn wide(h: cap net.http.post(only: [\"{any}\"]), url: Text) -> Int {{\n    let r = h.post(url, \"amount=1\")\n    return r.status\n}}\n"
+                )
+                .as_str(),
+            ),
+        ],
+    );
+    let bank_manifest = json!({ "package": "bank", "authority": { "net.http.post": [refunds] },
+        "dependencies": { "other": { "git": other_repo.to_str().unwrap(), "commit": other_commit } } });
+    let bank_code = format!(
+        r#"import other.n
+
+pub fn refund(h: cap net.http.post(only: ["{refunds}"]), url: Text) -> Int {{
+    let r = h.post(url, "amount=1")
+    return r.status
+}}
+
+pub fn pass_on(h: cap net.http.post(only: ["{refunds}"]), url: Text) -> Int {{
+    return n.go(h, url)
+}}
+
+pub fn give_back(h: cap net.http.post(only: ["{refunds}"])) -> cap net.http.post(only: ["{refunds}"]) {{
+    return h
+}}
+
+capability bank.pay {{
+    needs post: cap net.http.post(only: ["{refunds}"])
+
+    canonical(url: Text) -> Text {{
+        return url
+    }}
+
+    action send(url: Text @target) -> Text {{
+        let r = post.post(url, "amount=1")
+        return "status " + json(r.status)
+    }}
+}}
+"#
+    );
+    let bank_repo = b.join("repos/bank");
+    let bank_commit = repo(&bank_repo, &[("staal.json", bank_manifest.to_string().as_str()), ("m.staal", bank_code.as_str())]);
+    let main = project(
+        &b.join("app"),
+        &[("bank", &bank_repo, &bank_commit)],
+        r#"import bank.m
+
+fn direct(h: cap net.http.post, url: Text) -> Int {
+    let r = h.post(url, "a")
+    return r.status
+}
+
+fn through_package(h: cap net.http.post, url: Text) -> Int {
+    return m.refund(h, url)
+}
+
+fn helper(h: cap net.http.post, url: Text) -> Int {
+    return m.refund(h, url)
+}
+
+fn through_own_function(h: cap net.http.post, url: Text) -> Int {
+    return helper(h, url)
+}
+
+fn into_another_package(h: cap net.http.post, url: Text) -> Int {
+    return m.pass_on(h, url)
+}
+
+fn given_back(h: cap net.http.post, url: Text) -> Int {
+    let g = m.give_back(h)
+    let r = g.post(url, "a")
+    return r.status
+}
+
+fn library(p: cap bank.pay.send, url: Text) -> Receipt {
+    return p.send(url)
+}
+"#
+    );
+    packages::fetch(&b.join("app")).unwrap();
+    let checked = staalc::check_path(&main).unwrap();
+    let fingerprint = checked.fingerprint.clone();
+    let prog = checked.result.unwrap_or_else(|d| panic!("{}", d.iter().map(|x| x.msg.clone()).collect::<Vec<_>>().join("\n")));
+    let run = |entry: &str, url: &str, engine: staalc::interp::Engine| {
+        let grants = if entry == "library" {
+            json!({ "p": { "cap": "bank.pay.send", "needs": { "post": { "cap": "net.http.post" } } } })
+        } else {
+            json!({ "h": { "cap": "net.http.post" } })
+        };
+        let cfg = json!({ "entry": entry, "inputs": { "url": url }, "grants": grants, "model": { "provider": "script", "responses": [] } });
+        staalc::interp::run_config_engine(&prog, &fingerprint, &cfg, Durability::None, engine).unwrap()
+    };
+    for engine in engines() {
+        let before = s.requests().len();
+        // The agent's own code reaches /ok.
+        assert_eq!(run("direct", &ok, engine).result.unwrap(), json!(200), "{engine:?}");
+        for entry in ["through_package", "through_own_function", "into_another_package", "given_back", "library"] {
+            let allowed = run(entry, &refunds, engine);
+            assert!(allowed.result.is_ok(), "{entry} {engine:?}: /v1/refunds: {:?}", allowed.result);
+            let refused = run(entry, &ok, engine);
+            let f = refused.result.expect_err(&format!("{entry} {engine:?}: /ok was allowed"));
+            assert_eq!(f.kind, staalc::interp::FailKind::Capability, "{entry} {engine:?}: {}", f.message);
+            assert!(f.message.contains("only"), "{entry} {engine:?}: {}", f.message);
+        }
+        let paths: Vec<String> = s.requests()[before..].iter().map(|r| r.path.clone()).collect();
+        let mut want = vec!["/ok".to_string()];
+        want.extend(std::iter::repeat_n("/v1/refunds".to_string(), 5));
+        assert_eq!(paths, want, "{engine:?}: only the agent's /ok and the packages' refunds reached the server");
+    }
+
+    // A capability is never widened on its way into another package.
+    let widening = format!(
+        "{bank_code}\npub fn pass_wide(h: cap net.http.post(only: [\"{refunds}\"]), url: Text) -> Int {{\n    return n.wide(h, url)\n}}\n"
+    );
+    let c2 = repo(&bank_repo, &[("m.staal", widening.as_str())]);
+    std::fs::write(b.join("app/staal.json"), manifest(&[("bank", &bank_repo, &c2)])).unwrap();
+    packages::fetch(&b.join("app")).unwrap();
+    let shown = messages(&main);
+    assert!(shown.contains("cannot be widened"), "{shown}");
+}

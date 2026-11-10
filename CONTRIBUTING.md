@@ -57,6 +57,12 @@ them is not finished, however well it works.
   a crash test (`tests/crash_test.rs`) that kills the run at every journal write and
   checks the resumed run ends exactly as an uninterrupted one, with nothing done
   twice. An action whose outcome is unknown is never guessed.
+- **Journals from releases.** `tests/journal_compat_test.rs` resumes, at every crash
+  point, the journals earlier releases wrote (`tests/fixtures/journals/`), and checks
+  that a journal of a version this `staalc` does not read is refused untouched. It
+  runs before every release. After publishing a release, record its journals with the
+  released binary (`tests/fixtures/journals/README.md`); if it is the first release
+  to write a journal version, clear `UNRELEASED` in the same commit.
 - **Failing closed.** When something is uncertain (a value from outside, a file that
   might have changed, an answer that might be cut short), the code refuses, with a
   message that says what was refused and what to do.

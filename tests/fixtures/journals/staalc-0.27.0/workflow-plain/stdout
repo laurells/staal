@@ -1,0 +1,1 @@
+{"done":[{"capability":"payments.refund","method":"refund","receipt":"sim-1"},{"error":"","ok":true},{"capability":"email.send","method":"send","receipt":"sim-3"}]}

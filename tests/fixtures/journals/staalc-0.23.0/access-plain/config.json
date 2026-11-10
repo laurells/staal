@@ -1,0 +1,98 @@
+{
+  "adapters": {
+    "simulated": {
+      "idempotent": false,
+      "world": "world.jsonl"
+    }
+  },
+  "entry": "admit",
+  "grants": {
+    "audit": {
+      "cap": "audit.log.write"
+    },
+    "lock": {
+      "cap": "building.lock.open"
+    }
+  },
+  "inputs": {
+    "visits": [
+      {
+        "door": "north-door",
+        "reason": "delivery",
+        "visitor": "Ade"
+      },
+      {
+        "door": "server-room",
+        "reason": "delivery",
+        "visitor": "Bisi"
+      },
+      {
+        "door": "floor-3",
+        "reason": "delivery",
+        "visitor": "Chika"
+      },
+      {
+        "door": "loading-bay",
+        "reason": "just looking",
+        "visitor": "Dayo"
+      },
+      {
+        "door": "north-door",
+        "reason": "delivery",
+        "visitor": "Ese"
+      },
+      {
+        "door": "loading-bay",
+        "reason": "delivery",
+        "visitor": "Femi"
+      }
+    ]
+  },
+  "model": {
+    "provider": "script",
+    "responses": [
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": false,
+          "note": "no business reason"
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      },
+      {
+        "output": {
+          "approve": true,
+          "note": ""
+        },
+        "output_tokens": 40
+      }
+    ]
+  }
+}

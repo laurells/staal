@@ -773,8 +773,9 @@ be demonstrated by a test that fails without it:
 | R8 | A normative JSON Schema (2020-12) for `agent.json` and `agent.described.json`, with the semantic rules a schema cannot state, and valid and invalid fixtures. Unknown keys refused at every depth. Types fixed: money as `{"amount": decimal string, "currency": ISO 4217 code}` with at most the currency's decimal places, as the runtime reads it; durations as the tool host reads them (a whole number and `s`, `m`, `h` or `d`, per field as MCP.md allows); `requires_staalc` as a version range in the grammar packages use; an empty `suggested` as no suggestion in any dimension | the fixtures, each refused or accepted as marked, by `staalc agent check` |
 | R9 | A normative fingerprint algorithm: UTF-8 bytes without Unicode normalization; the domain label `staal-program-v3` as the first framed field; every group framed with a record count, every package framed as a nested record holding its own fields and file records; ordering by the bytes of UTF-8, never by locale; digests as lowercase hex, in the description and inside the construction (which is UTF-8 text, so it holds no raw bytes) | test vectors: one project, one package, several packages, nested dependencies, a changed path, a changed content, a changed manifest; a second implementation, written separately (in Python), produces the same digest for every vector. And a demonstration, against the project and package loader, that no file outside the inputs can change what compiles or runs |
 
-**Status.** R1, R2, R7 and R9 are implemented, in journal version 3, and R6 in the
-HTTP clients; each is demonstrated by these tests. R3, R4, R5 and R8 are open.
+**Status.** R1, R2, R7 and R9 are implemented, in journal version 3; R6 in the HTTP
+clients; R4 holds by the language, now demonstrated; R5's gate is in place, with the
+limit stated below. Each is demonstrated by these tests. R3 and R8 are open.
 
 - R1: `every_input_of_a_program_is_bound_by_its_journal` (tests/packages_test.rs)
   changes, alone, a module, the project's `staal.json` and `staal.lock` (only their
@@ -837,6 +838,39 @@ HTTP clients; each is demonstrated by these tests. R3, R4, R5 and R8 are open.
   client is built without `.proxy(None)`. `a_library_cannot_set_host`
   (tests/http_test.rs) refuses `Host`, `:authority` and `proxy-` headers set from a
   library.
+- R4: a capability can travel only as a parameter, a typed `let`, a return value or a
+  library's need: it can be held in no list, record, tuple, optional, map or function
+  value, and never reassigned (E101, E003). Each of those entries narrows it to the
+  slot's declared limits at run time (a child capability that counts against every
+  ancestor), and a package must declare limits within its manifest at every one
+  (E108). So a package holds only children within its boundary, whatever the agent
+  holds. A slot wider than the capability flowing into it is refused at check time.
+  `a_package_is_held_to_its_boundary_when_the_agent_holds_more` (tests/packages_test.rs):
+  the agent holds `net.http.post` without limits and posts to `/ok` itself; handed
+  directly, through a function of its own, through the package into a second package,
+  back out as a return value, and as a library need the operator granted without
+  limits, the package's `/v1/refunds` succeeds and its `/ok` is refused, nothing sent,
+  on both engines; and a program in which the package passes its capability to the
+  second package's wider slot does not check.
+- R5: `tests/journal_compat_test.rs` resumes the journals released binaries wrote,
+  kept in `tests/fixtures/journals/`, at every crash point (each journal write, and
+  between each operation and its result) and on both engines; a journal of a version
+  the build reads must end with the release's output and exactly its world, and one of
+  any other version must be refused with nothing changed. `release.yml` runs it before
+  every release. The crash states are derived from each release's uninterrupted run,
+  since a released binary has no crash injection; `derived_crash_states_are_the_states_a_crash_leaves`
+  (tests/crash_test.rs) shows, for the current build, each derived state equal byte
+  for byte (apart from the run id and the config hash) to what a real crash at that
+  point leaves. The limit today: no release has written journal version 3 yet, so the
+  committed fixtures (from 0.23.0 and 0.27.0, version 2) show refusal only; the
+  resume half was run against the current build's own journals (420 crash states
+  across both engines) and starts gating releases when the first version 3 release's
+  journals are recorded. `UNRELEASED` in that test marks version 3 as written by no
+  release yet; the test fails if its journals are added while it is set, and, once it
+  is cleared, if none are present. A set's `staalc` must match its name. No release before 0.23.0 published a Linux
+  binary, so there is no version 1 fixture. Scenarios with random numbers and the
+  clock are excluded from the fixtures, since a resumed run draws new values after the
+  crash point; tests/crash_test.rs covers them on the current build.
 
 **Verified never transfers.** A Verified designation is shown with the exact
 `staalc` release and platform it was earned on, as a historical fact about that

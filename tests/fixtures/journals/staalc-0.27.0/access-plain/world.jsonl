@@ -1,0 +1,10 @@
+{"args":["north-door"],"capability":"building.lock.open","key":"99193f60de444f5f07accb65b7d16cfb-3","method":"open","receipt":"sim-1"}
+{"args":["opened north-door for Ade"],"capability":"audit.log.write","key":"99193f60de444f5f07accb65b7d16cfb-4","method":"write","receipt":"sim-2"}
+{"args":["refused server-room for Bisi: capability: 'building.lock.open' may only act on [\"north-door\", \"loading-bay\", \"floor-*\"]; this action targets \"server-room\""],"capability":"audit.log.write","key":"99193f60de444f5f07accb65b7d16cfb-7","method":"write","receipt":"sim-3"}
+{"args":["floor-3"],"capability":"building.lock.open","key":"99193f60de444f5f07accb65b7d16cfb-10","method":"open","receipt":"sim-4"}
+{"args":["opened floor-3 for Chika"],"capability":"audit.log.write","key":"99193f60de444f5f07accb65b7d16cfb-11","method":"write","receipt":"sim-5"}
+{"args":["denied Dayo: no business reason"],"capability":"audit.log.write","key":"99193f60de444f5f07accb65b7d16cfb-14","method":"write","receipt":"sim-6"}
+{"args":["north-door"],"capability":"building.lock.open","key":"99193f60de444f5f07accb65b7d16cfb-17","method":"open","receipt":"sim-7"}
+{"args":["opened north-door for Ese"],"capability":"audit.log.write","key":"99193f60de444f5f07accb65b7d16cfb-18","method":"write","receipt":"sim-8"}
+{"args":["refused loading-bay for Femi: capability: 'building.lock.open' has used all 3 of its allowed uses"],"capability":"audit.log.write","key":"99193f60de444f5f07accb65b7d16cfb-21","method":"write","receipt":"sim-9"}
+{"args":["batch complete"],"capability":"audit.log.write","key":"99193f60de444f5f07accb65b7d16cfb-22","method":"write","receipt":"sim-10"}

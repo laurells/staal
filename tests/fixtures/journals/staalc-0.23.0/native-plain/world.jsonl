@@ -1,0 +1,2 @@
+{"args":["ops@example.com: score 3825"],"capability":"email.send","key":"7d392473ccca194d5d5027a5b86eef11-1","method":"send","receipt":"sim-1"}
+{"args":["big@example.com: 5100"],"capability":"email.send","key":"7d392473ccca194d5d5027a5b86eef11-3","method":"send","receipt":"sim-2"}
