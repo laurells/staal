@@ -281,7 +281,12 @@ pub fn interface(prog: &Program, entry: Option<&str>) -> Result<Json, String> {
     let (mut props, mut required, mut grants, mut secrets) = (Map::new(), Vec::new(), Vec::new(), Vec::new());
     for p in &f.params {
         match &p.ty {
-            Ty::Cap { path, .. } => grants.push(json!({ "name": p.name, "cap": path.join(".") })),
+            Ty::Cap { path, limits } => {
+                // The program ceiling of this grant: the limits its type writes, which the
+                // runtime narrows the operator's grant to.
+                let limits = crate::consumers::Limits::of(limits).to_json().map_err(|e| format!("parameter '{}': {e}", p.name))?;
+                grants.push(json!({ "name": p.name, "cap": path.join("."), "limits": limits }))
+            }
             Ty::Named(x) if x == "Secret" => secrets.push(json!(p.name)),
             t => {
                 let s = input_schema(prog, t, &mut defs).map_err(|why| format!("parameter '{}': {why}", p.name))?;

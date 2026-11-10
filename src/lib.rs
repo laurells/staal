@@ -17,6 +17,7 @@ pub mod doc;
 pub mod fmt;
 pub mod identity;
 pub mod interp;
+pub mod consumers;
 pub mod jcs;
 pub mod lexer;
 pub mod lsp;
@@ -50,6 +51,10 @@ pub struct Checked {
     /// The program, only if every file loads and every check passes, so nothing that
     /// fails a check can ever be run.
     pub result: Result<ast::Program, Vec<Diagnostic>>,
+    /// For each file (by `Pos::file`), the package it belongs to, or None for the
+    /// program's own; None as a whole when that is not known (a program loaded again
+    /// from what an executable recorded).
+    pub packages: Option<Vec<Option<String>>>,
 }
 
 /// Loads, resolves and checks a program: the entry file and every module it imports.
@@ -66,7 +71,8 @@ pub fn check_files(entry: SourceFile, fetch: impl FnMut(&[String]) -> Result<Sou
         checker::supply_capacities(&mut prog, &capacities);
         Ok(prog)
     });
-    Checked { files: loaded.files, fingerprint, result }
+    let packages = Some(vec![None; loaded.files.len()]);
+    Checked { files: loaded.files, fingerprint, result, packages }
 }
 
 /// Checks the program in the file at `path`. Modules are found under the folder that
@@ -199,7 +205,8 @@ fn check_text_at_recorded(path: &Path, text: String) -> Result<(Checked, Recorde
         Ok(prog)
     });
     let recorded = rec.borrow().clone();
-    Ok((Checked { files: loaded.files, fingerprint, result }, recorded))
+    let packages = Some(loaded.paths.iter().map(|m| project.as_ref().and_then(|p| p.package_of(m)).map(|p| p.name.clone())).collect());
+    Ok((Checked { files: loaded.files, fingerprint, result, packages }, recorded))
 }
 
 /// Loads and checks a recorded program again, without its files. Package authority
@@ -218,7 +225,7 @@ pub fn check_recorded(rec: &Recorded) -> Checked {
         checker::supply_capacities(&mut prog, &capacities);
         Ok(prog)
     });
-    Checked { files: loaded.files, fingerprint, result }
+    Checked { files: loaded.files, fingerprint, result, packages: None }
 }
 
 fn no_modules(module: &[String]) -> Result<SourceFile, String> {
