@@ -1,12 +1,13 @@
-# Staal Agent Manifest Specification, revision v0.1.2 (review candidate)
+# Staal Agent Manifest Specification, revision v0.1.3 (for final technical review)
 
 **Status: a design, not built.** Nothing here exists in `staalc` yet except what it
 says it reuses. It is written to be reviewed before any of it is built, as
 [MCP.md](MCP.md) section 12 was. v0.1 took in the first review's decisions (section
-12); v0.1.1 and v0.1.2 resolve the second and third reviews' points without widening
-the scope (sections 13 and 14 list each and where it is answered).
+12); v0.1.1 to v0.1.3 resolve the later reviews' points without widening the scope
+(sections 13 to 15 list each and where it is answered). Section 16 lists what must be
+built and demonstrated in the runtime before the format is frozen.
 
-**Revision and format version are separate.** v0.1.2 is a revision of this
+**Revision and format version are separate.** v0.1.3 is a revision of this
 document. The manifest format it defines is version `0.1`, the value of `"manifest"`.
 Review revisions do not change the format version; it is fixed when the specification
 is frozen and first implemented, and changes after that follow section 9.
@@ -43,10 +44,16 @@ them are authority; the other two are statements:
   the program ceiling. The suggestion has no authority of its own and is not a second
   ceiling.
 
-Two invariants hold:
+Two invariants hold, over things of the same kind:
 
-    effective grant  ⊆  program ceiling                              (always; the runtime)
-    effective grant  ⊆  declared reach, unless a recorded override says otherwise   (install)
+    effective grant  ⊆  program ceiling      at every consumer boundary   (always; the runtime)
+    effective reach  ⊆  declared reach       unless a recorded override says otherwise   (install)
+
+A grant has several dimensions (money per action, money in total, uses, targets); the
+first invariant holds in each, at each consumer boundary of the table below. Reach is
+one dimension, the targets (`only` patterns), and the second invariant compares only
+that dimension. The install page shows the widest authority the agent's own code can
+exercise, beside the narrower boundaries of packages and library capabilities.
 
 **Authority is bounded where it is used, not once per grant.** A granted capability
 can be used by more than one part of the program, and each use has its own boundary,
@@ -193,9 +200,29 @@ The example is the refund agent of `examples/finops`, written as a deployable ag
 For the agent, and for each tool:
 
 - **Identity**, four items, each named for what it is:
-  - *Source program fingerprint*: the SHA-256 of every module's text, by module path,
-    and each package's repository and commit. It identifies the source, not a binary.
-    It is the program hash every run's journal binds (RUNTIME.md section 11).
+  - *Source program fingerprint*: identifies the source, not a binary, and is the
+    program hash every run's journal binds (RUNTIME.md section 11). The rule: if
+    changing a file can change what the agent executes or what authority it can
+    exercise, the change changes the fingerprint. Its inputs, exactly:
+    1. every module of the program, the agent's and its packages', by module path, with
+       its text;
+    2. the project's `staal.json` and `staal.lock`, as bytes;
+    3. for each package: its name, its git location, its commit, its `staal.json` as
+       bytes, and the SHA-256 of every file `staal.lock` records for it.
+    Nothing else in the project affects compilation or execution: the run config
+    (grants, model, limits) is bound by the journal separately, as its own hash.
+    `agent.json` is not an input: its deployment settings reach a run only through the
+    generated tool manifest and run config, which are bound there.
+    The construction: SHA-256 over the byte string `staal-program-v3` followed by each
+    item as a field, in the order above, sorted by module path or package name within
+    each group; every field is a label (`module`, `project-manifest`, `lock`,
+    `package`, ...), then its value, each preceded by its length as an 8-byte
+    big-endian integer, so no two inputs can produce the same string. **Required before
+    implementation** (section 16): today's fingerprint covers items 1 and the package
+    names, locations and commits of item 3, joined with newline framing and, for a
+    single-file program, with no framing or domain label at all; it does not cover
+    `staal.json` or `staal.lock`. Journals written under the old construction keep
+    resuming under it, by their journal version.
   - *Compiler and runtime*: the `staalc` version that computed the description.
   - *Dependencies*: each package's name, commit, every file's SHA-256 (from
     `staal.lock`) and declared authority.
@@ -215,16 +242,25 @@ For the agent, and for each tool:
     in effect chosen by the model and everything it read. Untrusted: it can be any
     value its type allows. Arguments never become grants, app inputs or scopes
     (MCP.md section 5).
-  - *App input*: supplied by the business's application with each call, never by
-    the caller; a call that names one in its arguments is refused (MCP.md section 11).
-    Trusted by the program. What makes it correct (for example, that `customer` is the
-    authenticated customer) is the business's obligation, stated in
-    `app_input_requirements` and shown at install as an obligation, not a guarantee.
+  - *App input*: **host-supplied, not caller-controlled**. The business's
+    application supplies it with each call; a call that names one in its arguments is
+    refused (MCP.md section 11). That is all Staal establishes about it. Its
+    correctness is the business application's responsibility, stated in
+    `app_input_requirements` and shown at install as an obligation, not a guarantee:
+
+    | Property | Established by |
+    | --- | --- |
+    | The input came from the application host | the Staal host |
+    | The input was not supplied by the model or its caller | the Staal host |
+    | The customer is actually authenticated | the business application |
+    | The customer may access the record asked for | the business application and its data-access controls |
   - *Token claim*: over the HTTP transport, taken from a verified access token's
     claim (MCP.md section 12.6). As trustworthy as the authorization server the
     business configures.
   Inside the program, a model's output is `Proposed<T>` until it is validated
-  (E001); that is the compiler's guarantee and needs no manifest field. A tool whose
+  (E001); that is the compiler's guarantee and needs no manifest field. Validated
+  means the program's validation condition passed, not that what the model said is
+  true; the developer documentation keeps that distinction visible. A tool whose
   security depends on an app input says so in `app_input_requirements`. This version
   computes provenance only: whether a grant's targets are derived from an app input is
   not computed, and the install page says that the dependency is stated by the
@@ -359,13 +395,21 @@ Proposed **profile 1**, for review with this document:
 | --- | --- |
 | Tests | `staalc test` over the project's `tests/` passes on both engines, which it runs by default; an agent with no tests fails |
 | Scenarios | at least one scenario per tool: inputs, app inputs and the stand-in services the tool calls, written by the publisher, which the registry runs |
-| Crash | every scenario is crashed at every journal write, on both engines and each pairing of engines for crash and resume; a pass is the same result as an uncrashed run, and every action counted once by its stand-in, or stopped for an operator where the action's outcome is unknown |
-| Fuzzing | the registry fuzzes each tool's arguments, generated from its input schema, for 10 minutes under AddressSanitizer against the scenario's stand-ins, asserting no crash, no hang, and that the tool host's checks hold; the agent's own fuzz targets, if any, run too, and having none is not a failure |
+| Crash | every scenario is crashed at every journal write, on both engines and each pairing of engines for crash and resume. What passes depends on each action's recovery contract (section 5), in the same terms: a completed action is replayed and its stand-in sees it once; an action in doubt that is resent with an idempotency key may reach the stand-in twice, and passes when the stand-in, deduplicating by that key, performed it once; an action whose outcome cannot be known stops the run for an operator, and passes when it does exactly that, with no claim that the external effect happened once; an action safe to repeat may be repeated. The resumed run's result must equal an uncrashed run's wherever the run finishes |
+| Coverage report | for each scenario, the actions, capabilities and refusal or failure paths its runs exercised, read from their journals; the listing shows what no scenario exercised. A passing scenario never implies coverage it did not have |
+| Fuzzing | the registry fuzzes each tool's arguments, generated from its input schema, for 10 minutes against the scenario's stand-ins, asserting no crash, no hang, and that the tool host's checks hold; the agent's own fuzz targets, if any, run too, and having none is not a failure. **Sanitizer coverage, stated with the evidence:** AddressSanitizer instruments the Rust code of `staalc` and its Rust dependencies as compiled for the fuzzer. It does not instrument the Rust standard library (precompiled, though its allocations go through the sanitizer's allocator), C code compiled by dependencies (SQLite, ring's C and assembly), or native code generated at run time by Cranelift, whose memory accesses are limited to its context header and its own stack frames (UNSAFE.md section 2) |
 | Compiler and runtime | the publish checks; no `cap ffi` a tool can be granted |
 | Evidence | written by the harness in RFC 8785 JSON, kept for as long as the version is listed and 2 years after |
 
 These numbers are proposals; their purpose is that every Verified agent passed the
-same named bar. Publisher evidence may be shown beside the registry's, labelled, and
+same named bar.
+
+**When the profile changes.** A new profile never rewrites old evidence or
+designations. A listing shows the profile its version passed, whether that profile is
+still current, and whether a newer one exists; a version re-verified under a newer
+profile shows both results. A profile is withdrawn only when its checks are found to
+be wrong, and designations under it are then shown as resting on a withdrawn profile,
+with the reason. Publisher evidence may be shown beside the registry's, labelled, and
 never replaces it. Running an untrusted agent's tests is itself an attack surface,
 so the checks run in an environment made for one run and destroyed after it:
 
@@ -443,10 +487,21 @@ Five things must agree for an installed agent to be enforced as described:
 What the journal binds is the source program fingerprint and the run config, not a
 binary or a `staalc` version: a run resumed after `staalc` is upgraded resumes the same
 source, under the same config, on the new version. Since every engine of every version
-is held to the same results, that is the intended behaviour, but the journal does not
-record which `staalc` started a run. **Required before implementation:** the
-journal's start record gains the `staalc` version and the engine, so the execution
-record says what executed it, and a resume on a different version is logged.
+is held to the same results, that is the intended behaviour. But today a journal does
+not record what executed it, which matters because recovery is Staal's guarantee.
+**Required before implementation** (section 16):
+
+- The start record, written once and never changed, gains the `staalc` version and
+  the engine that started the run.
+- Each resume appends a `resume` record, flushed before the resumed run does anything:
+  the run id; the resuming `staalc` version; the engine; the journal format version;
+  the source program fingerprint hash and the run config hash, as the resume checked
+  them; and the time. Its outcome is what the records after it show: the operations
+  replayed or made, and the `end` record or the next crash.
+
+So a run started by one version with the interpreter, crashed, resumed by a second
+version with native code, crashed again and resumed by a third, shows all three in its
+journal, in order.
 
 Parsing an agent is not the same as enforcing it. A `staalc` older than
 `requires_staalc` refuses the agent even if it could parse it, because it may lack a
@@ -463,6 +518,8 @@ evidence is for the version it names.
   registry states which versions it accepts.
 - A capability that is deprecated stays checkable for at least one minor version of
   `staalc`, with a warning at check and install, before an agent using it is refused.
+- A journal written by one released `staalc` resumes under the next, by its journal
+  version, without repeating an action (section 16, R5).
 
 ## 10. Scope of quotas, `once` and money
 
@@ -572,3 +629,36 @@ Corrected from v0.1.1: it said package authority is part of one program ceiling 
 grant. It is a boundary at the package's own slots, and does not limit the agent's
 own code (RUNTIME.md, "Authority (E108)": "The program's own code is not limited by a
 manifest").
+
+## 15. Changes in v0.1.3 (the fourth review)
+
+| Review point | Resolution | Section |
+| --- | --- | --- |
+| The fingerprint must cover every security-relevant input | Inputs enumerated (modules, `staal.json`, `staal.lock`, each package's identity, manifest and file hashes); a domain-separated, length-framed construction; a requirement, since today's construction misses the manifests and lock and frames a single-file program not at all | 5, 16 |
+| An append-only resume record | The start record stays as written; each resume appends a record of version, engine, journal version and the hashes it checked | 9, 16 |
+| The invariants, over sets of one kind | Effective grant within the ceiling in every dimension at every consumer boundary; effective reach within declared reach | 1 |
+| Profile 1's precision | Sanitizer coverage stated, including what it does not instrument; crash passes by each action's recovery contract; a coverage report per scenario; new profiles never rewrite old evidence | 7 |
+| Provenance is not correctness | App inputs called host-supplied, not caller-controlled; who establishes what, in a table; validated is not true | 5 |
+| One request, one authority decision | A requirement: the URL that is checked is the one connected to, verified and sent | 16 |
+
+Found by checking the review against the code: the existing fuzz evidence in
+docs/security-review/ASSURANCE.md says `engines` ran under AddressSanitizer without
+saying that native code generated by Cranelift is not instrumented. That is corrected
+there too.
+
+## 16. Required before the format is frozen
+
+Changes to the runtime, each needed for a claim this specification makes, and each to
+be demonstrated by a test that fails without it:
+
+| | Requirement | Demonstrated by |
+| --- | --- | --- |
+| R1 | The source program fingerprint of section 5, in a new journal version; old journals resume by their own | a test that changes each input of section 5 in turn (a module, `staal.json`, `staal.lock`, a package's manifest, a package file) and sees the fingerprint change and a resume refused |
+| R2 | The `staalc` version and engine in the start record; a `resume` record per resume | a test that crashes and resumes across both engines and checks every record |
+| R3 | `staalc schema` reports the limits written in capability types, and every consumer of every grant with its boundary | tests over programs with entry limits, package slots and library needs |
+| R4 | A package cannot exercise more than its declared boundary while the agent's own code holds broader authority over the same grant | a runtime test in which the agent's code reaches `https://bank.example.com/x` through a grant the package also receives, and the package's attempt at `/x` is refused while its `/refunds` succeeds |
+| R5 | A crash and resume across engines and across `staalc` versions never repeats an action blindly | the existing crash tests across engine pairings, plus journals written by the previous release kept as fixtures and resumed by the current one at every crash point |
+| R6 | One authority decision per request: the URL whose canonical form is checked against `only` is the one connected to, verified by TLS and sent; no reused connection carries a request to a host other than its own | a review of `net.http` against this rule, and tests with URLs that parse differently across libraries, and with a kept-alive connection followed by a request to another host |
+
+These test Staal's execution model, not only the marketplace. They are worth doing
+whether or not the marketplace is built.

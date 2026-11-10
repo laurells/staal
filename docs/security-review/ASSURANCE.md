@@ -137,6 +137,16 @@ Staal.
 | `journal` | AddressSanitizer | 223,220 | 15 min | nothing |
 | `engines` | AddressSanitizer | 203,933 | 15 min | nothing: the engines agreed on every input |
 
+What AddressSanitizer covered: `cargo fuzz --sanitizer address` passes the
+sanitizer to rustc only (cargo-fuzz 0.13.1), so it instruments the Rust code of
+`staalc` and its Rust dependencies. It does not instrument the Rust standard library
+(precompiled; its allocations still go through the sanitizer's allocator), C code
+built by dependencies' build scripts (SQLite, ring's C and assembly), or the machine
+code Cranelift generates at run time. So `engines` checked the native engine's Rust
+helpers and the values they handle, not the generated code itself, whose memory
+accesses are limited to its context header and its own stack frames (UNSAFE.md
+section 2); that code is checked by the engines agreeing.
+
 Fifteen minutes per target is a smoke test, not a campaign. The weekly CI job runs
 every target for 20 minutes with AddressSanitizer (`.github/workflows/fuzz.yml`),
 from repository seeds only, since CI keeps no corpus.
