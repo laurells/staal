@@ -117,7 +117,8 @@ impl Limits {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Unresolved {
     pub grant: Option<String>,
-    pub pos: Option<Pos>,
+    /// Where: file (by `Pos::file`), line and column.
+    pub at: Option<(u32, usize, usize)>,
     pub why: String,
 }
 
@@ -164,7 +165,7 @@ impl<'a> Analyzer<'a> {
     }
 
     fn unresolved(&mut self, grant: Option<&str>, pos: Option<Pos>, why: String) {
-        self.out.unresolved.insert(Unresolved { grant: grant.map(str::to_string), pos, why });
+        self.out.unresolved.insert(Unresolved { grant: grant.map(str::to_string), at: pos.map(|p| (p.file, p.line, p.col)), why });
     }
 
     /// The grants a capability-typed expression holds, or None if it is not one the
@@ -494,17 +495,17 @@ pub fn describe(analysis: &Analysis, files: &[crate::SourceFile]) -> Result<Json
             consumers.push(json!({ "grant": c.grant, "cap": c.cap, "holder": holder, "limits": c.limits.to_json()?, "source": source }));
         }
     }
-    let unresolved: Vec<Json> = analysis
-        .unresolved
-        .iter()
-        .map(|u| {
-            let at = u.pos.map(|p| {
-                let name = files.get(p.file as usize).map(|f| f.name.as_str()).unwrap_or("?");
-                format!("{name}:{}:{}", p.line, p.col)
-            });
-            json!({ "grant": u.grant, "at": at, "why": u.why })
-        })
-        .collect();
+    let mut unresolved = Vec::new();
+    for u in &analysis.unresolved {
+        let at = match u.at {
+            None => None,
+            Some((file, line, col)) => {
+                let f = files.get(file as usize).ok_or_else(|| format!("a position names file {file}, which the program does not have"))?;
+                Some(format!("{}:{line}:{col}", f.name))
+            }
+        };
+        unresolved.push(json!({ "grant": u.grant, "at": at, "why": u.why }));
+    }
     Ok(json!({
         "consumers": consumers,
         "consumer_analysis": { "complete": unresolved.is_empty(), "unresolved": unresolved },

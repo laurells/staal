@@ -28,7 +28,7 @@ fn main(name: Text, count: Int, urgent: Bool, total: Money, who: Customer, ask: 
 "#;
     let i = interface(src, None).unwrap();
     assert_eq!(i["entry"], "main");
-    assert_eq!(i["grants"], json!([{ "name": "pay", "cap": "payments.refund" }]));
+    assert_eq!(i["grants"], json!([{ "name": "pay", "cap": "payments.refund", "limits": { "each": { "amount": "50.00", "currency": "USD" } } }]));
     assert_eq!(i["secrets"], json!(["key"]));
     let input = &i["input"];
     assert_eq!(input["$schema"], "https://json-schema.org/draft/2020-12/schema");
