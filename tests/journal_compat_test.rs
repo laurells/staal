@@ -38,8 +38,9 @@ const BIN: &str = env!("CARGO_BIN_EXE_staalc");
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// The journal version this build writes and no release has written yet, if any.
-/// Cleared in the commit that adds the first release's fixtures of it.
-const UNRELEASED: Option<u64> = Some(3);
+/// Cleared in the commit that adds the first release's fixtures of it (version 3:
+/// 0.28.0).
+const UNRELEASED: Option<u64> = None;
 
 /// The scenarios a fixture set holds: deterministic programs, so that a resumed run's
 /// output and world can be compared with the release's exactly. Each is a program and a

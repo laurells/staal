@@ -994,13 +994,11 @@ check` and `describe`. Each is demonstrated by these tests.
   since a released binary has no crash injection; `derived_crash_states_are_the_states_a_crash_leaves`
   (tests/crash_test.rs) shows, for the current build, each derived state equal byte
   for byte (apart from the run id and the config hash) to what a real crash at that
-  point leaves. The limit today: no release has written journal version 3 yet, so the
-  committed fixtures (from 0.23.0 and 0.27.0, version 2) show refusal only; the
-  resume half was run against the current build's own journals (420 crash states
-  across both engines) and starts gating releases when the first version 3 release's
-  journals are recorded. `UNRELEASED` in that test marks version 3 as written by no
-  release yet; the test fails if its journals are added while it is set, and, once it
-  is cleared, if none are present. A set's `staalc` must match its name. No release before 0.23.0 published a Linux
+  point leaves. The committed fixtures from 0.23.0 and 0.27.0 (version 2) show
+  refusal; those from 0.28.0, the first release to write version 3, show every derived
+  crash state resuming, on each engine, to exactly that release's output and world.
+  `UNRELEASED` in that test was cleared when the 0.28.0 journals were recorded; the
+  test fails if a journal version this build reads has no release's journals. A set's `staalc` must match its name. No release before 0.23.0 published a Linux
   binary, so there is no version 1 fixture. Scenarios with random numbers and the
   clock are excluded from the fixtures, since a resumed run draws new values after the
   crash point; tests/crash_test.rs covers them on the current build.
