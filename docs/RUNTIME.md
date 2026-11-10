@@ -606,7 +606,7 @@ as one per 4 bytes of the request's JSON.
 | `connect_timeout_ms` | the most connecting may take | 10000 |
 | `retries` | extra attempts after a rate limit, an overload or a server error (0 to 10) | 2 |
 | `retry_delay_ms` | the first wait between attempts, doubling each time, unless the API sends `retry-after` (at most 60 s) | 1000 |
-| `proxy` | `"none"`, or `"environment"` to use `HTTPS_PROXY` | `"none"` |
+| `proxy` | `"none"`, or `"environment"` to use the first of `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` (each also in lower case) that is set, with `NO_PROXY` (ureq 3.4) | `"none"` |
 | `extra_root_certificates` | PEM files of root certificates to trust in addition to Mozilla's, for a network whose proxy signs TLS with its own authority | none |
 
 - **Request.** The instruction goes in the system prompt, after a fixed
@@ -1267,8 +1267,8 @@ run config asks for one.
 "fs":  { "max_read_bytes": 16777216 }
 ```
 
-(These are the defaults. `proxy` is `"none"` or `"environment"`, which reads the
-usual `HTTPS_PROXY` and `NO_PROXY` variables.)
+(These are the defaults. `proxy` is `"none"` or `"environment"`, which uses
+the first of `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` (each also in lower case) that is set, with `NO_PROXY` (ureq 3.4).)
 
 Server certificates are verified against Mozilla's root certificates, the list
 browsers use. An organisation whose services are signed by its own authority adds

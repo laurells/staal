@@ -618,9 +618,11 @@ declaration) reaches no run. Two gaps, both **required before freezing** (R7):
 - The config hash is SHA-256 of the run config as `serde_json` writes it: keys sorted,
   compact, deterministic within `staalc`, but not specified. The new journal version
   hashes it as RFC 8785.
-- `"proxy": "environment"` is bound, but the proxy it names is read from `HTTPS_PROXY`
-  when the run starts, and is not recorded. The new journal version records the proxy
-  URL a run used, and a resume under a different one is refused.
+- `"proxy": "environment"` is bound, but the proxy it names is read from the
+  environment when the run starts (the first of `ALL_PROXY`, `HTTPS_PROXY` and
+  `HTTP_PROXY` set, in either case, with `NO_PROXY`), and none of it is recorded. R7
+  records the effective proxy configuration, and a resume under a different one is
+  refused.
 
 Corrected while checking this: MCP.md section 7 said that upgrading `staalc` makes an
 unfinished run refuse to resume. The code refuses when the program, the config or the
@@ -816,3 +818,51 @@ architectural problem; their findings are precision that only an implementation 
 settle: a schema that parses, an encoding with vectors two implementations agree on,
 tests that pass or fail. R1 to R9 are where those are closed. The format is frozen
 when they pass, with whatever corrections building them forces into this text.
+
+### Conditions carried into implementation (the seventh review)
+
+The seventh review approved v0.1.5 as the implementation baseline. These are its
+conditions, recorded here rather than in a new revision; each is part of the
+requirement it names and must hold before the format is frozen.
+
+- **R7, proxies.** Bind the effective proxy configuration of every subsystem that
+  makes requests (`net.http`, the model provider, key fetching): every variable read
+  (`ALL_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY` in both cases, and `NO_PROXY`; RUNTIME.md
+  said only `HTTPS_PROXY` and is corrected), and which one won. A proxy URL holding a
+  user name or password is refused, since its credentials would otherwise be written
+  to the journal; credentials for a proxy, if ever supported, come through a secret
+  reference like any secret. What is recorded is the proxy's scheme, host and port and
+  the `NO_PROXY` list; a resume under any other is refused.
+- **R7, program path.** A test shows that pointing a run file at another file cannot
+  run different source under the original fingerprint. (A different path holding
+  different text changes the fingerprint and is refused; the same text at another
+  path is the same program.)
+- **`once` scope.** The scope is the value the app passes with each call (the C
+  interface's `scope` argument, the Python and Node.js `scope` parameter) or, over
+  HTTP, the principal's HMAC (MCP.md 12.6); it is stored in the ledger's `reserve`
+  event with the key. The app must pass the same scope for retries of one operation;
+  that is its obligation, stated at install with `app_input_requirements`. A test:
+  two tenants submit the same order, then each retries, and each retry gets its own
+  tenant's run.
+- **R6, request authority.** A program cannot set `Host` (or any `proxy-` header): the
+  runtime refuses them today (`http.rs`, `reserved_header`). Tests add: a library that
+  tries to set `Host` to another host, and a proxy whose `CONNECT` destination must be
+  the checked host and port.
+- **R8, money.** The runtime's reading of money is the single source of truth, and R8
+  states its grammar exactly: digits with an optional `.` and at most the currency's
+  minor-unit digits; no sign, exponent, leading `+`, spaces or grouping; whether a
+  leading zero or `"100"` for `"100.00"` is accepted, as the runtime does; the
+  ISO 4217 table and revision the runtime uses, with zero- and three-digit currencies
+  among the fixtures; unknown codes refused.
+- **R9, encoding.** A byte-level grammar or normative pseudocode, not prose, with
+  vectors for empty groups, empty files, non-ASCII paths and names that differ only in
+  order.
+- **Wording.** Declared package authority is a compiler-enforced boundary on a package
+  consumer, not an install-time grant; section 5's "authority, in two layers" is read
+  that way.
+- **Publisher identity.** The registry establishes that the publishing account may
+  publish for the repository (its owner, or authorised by an organisation that owns
+  it), not only that it signed in.
+- **Fuzzing.** Profile 1's argument fuzzing tests valid inputs; the host's own
+  protocol and parser fuzzing (malformed JSON, bad encodings) is a separate target of
+  Staal's, not of the agent's.
