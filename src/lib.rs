@@ -15,7 +15,9 @@ pub mod consts;
 pub mod debug;
 pub mod doc;
 pub mod fmt;
+pub mod identity;
 pub mod interp;
+pub mod jcs;
 pub mod lexer;
 pub mod lsp;
 #[cfg(unix)]
@@ -41,7 +43,9 @@ use std::path::Path;
 pub struct Checked {
     /// Every file of the program, indexed by `Pos::file`; 0 is the entry file.
     pub files: Vec<SourceFile>,
-    /// Identifies the exact program text across all files; journals record its hash.
+    /// The source program fingerprint (`identity`, `staal-program-v3`): identifies every
+    /// module's text and, for a project, its manifest, lockfile and packages. A journal
+    /// binds its SHA-256.
     pub fingerprint: String,
     /// The program, only if every file loads and every check passes, so nothing that
     /// fails a check can ever be run.
@@ -52,7 +56,7 @@ pub struct Checked {
 /// `fetch` returns the file for a module path such as ["sms", "termii"].
 pub fn check_files(entry: SourceFile, fetch: impl FnMut(&[String]) -> Result<SourceFile, String>) -> Checked {
     let loaded = modules::load(entry, fetch);
-    let fingerprint = loaded.fingerprint();
+    let fingerprint = identity::fingerprint(&loaded.modules(), &identity::project_part(None));
     let result = loaded.program.and_then(|mut prog| {
         let (mut diags, for_bounds, capacities) = checker::check_and_resolve(&mut prog);
         diags.extend(budget::check(&prog, &for_bounds));
@@ -83,8 +87,10 @@ pub struct Recorded {
     pub locate: Vec<(Vec<String>, Vec<String>, Vec<String>)>,
     /// (module, file name, text)
     pub files: Vec<(Vec<String>, String, String)>,
-    /// The part of the fingerprint that names the packages and their commits.
-    pub packages: String,
+    /// The project part of the fingerprint (`identity::project_part`): the project's
+    /// manifest and lockfile and its packages' files, which the executable does not
+    /// carry but its fingerprint must cover.
+    pub project: String,
 }
 
 impl Recorded {
@@ -93,7 +99,7 @@ impl Recorded {
             "entry": [self.entry.0, self.entry.1],
             "locate": self.locate,
             "files": self.files.iter().map(|(m, n, t)| serde_json::json!([m, n, t])).collect::<Vec<_>>(),
-            "packages": self.packages,
+            "project": self.project,
         })
     }
 
@@ -114,7 +120,7 @@ impl Recorded {
             let f = f.as_array().filter(|a| a.len() == 3).ok_or_else(bad)?;
             files.push((strs(&f[0])?, s(&f[1])?, s(&f[2])?));
         }
-        Ok(Recorded { entry: (s(&entry[0])?, s(&entry[1])?), locate, files, packages: s(&j["packages"])? })
+        Ok(Recorded { entry: (s(&entry[0])?, s(&entry[1])?), locate, files, project: s(&j["project"])? })
     }
 }
 
@@ -173,21 +179,13 @@ fn check_text_at_recorded(path: &Path, text: String) -> Result<(Checked, Recorde
         entry: (entry.name.clone(), entry.text.clone()),
         locate: Vec::new(),
         files: Vec::new(),
-        packages: String::new(),
+        project: String::new(),
     }));
     let source = Recording { inner: packages::ProjectSource::new(root, project.clone(), path), rec: rec.clone() };
     let loaded = modules::load_from(entry, source);
-    let mut packages_part = String::new();
-    if let Some(p) = &project
-        && !p.packages.is_empty()
-    {
-        packages_part.push_str("\npackages\n");
-        for (n, pkg) in &p.packages {
-            packages_part.push_str(&format!("{n} {} {}\n", pkg.dep.git, pkg.dep.commit));
-        }
-    }
-    let fingerprint = loaded.fingerprint() + &packages_part;
-    rec.borrow_mut().packages = packages_part;
+    let project_part = identity::project_part(project.as_ref().map(|p| p.identity()).as_ref());
+    let fingerprint = identity::fingerprint(&loaded.modules(), &project_part);
+    rec.borrow_mut().project = project_part;
     let result = loaded.program.and_then(|mut prog| {
         let (mut diags, for_bounds, capacities) = checker::check_and_resolve(&mut prog);
         diags.extend(budget::check(&prog, &for_bounds));
@@ -210,7 +208,7 @@ fn check_text_at_recorded(path: &Path, text: String) -> Result<(Checked, Recorde
 pub fn check_recorded(rec: &Recorded) -> Checked {
     let entry = SourceFile { name: rec.entry.0.clone(), text: rec.entry.1.clone() };
     let loaded = modules::load_from(entry, Replay(rec));
-    let fingerprint = loaded.fingerprint() + &rec.packages;
+    let fingerprint = identity::fingerprint(&loaded.modules(), &rec.project);
     let result = loaded.program.and_then(|mut prog| {
         let (mut diags, for_bounds, capacities) = checker::check_and_resolve(&mut prog);
         diags.extend(budget::check(&prog, &for_bounds));

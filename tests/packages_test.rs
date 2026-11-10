@@ -697,3 +697,147 @@ fn go(ps: cap payments.paystack.refund(max: 50000 NGN), fw: cap payments.flutter
     let log = serde_json::to_string(&out.log).unwrap();
     assert!(!log.contains(KEY), "the log contains the key");
 }
+
+/// RUNTIME.md section 11: the program a journal binds is every input that can change
+/// what runs. Each of these changes, made alone after a run, gives a different
+/// fingerprint and a refused resume: a module of the program, the project's
+/// `staal.json` and `staal.lock` (as text, even when only their layout changes), the
+/// package's own `staal.json`, and a module of the package. Putting every input back
+/// gives the original fingerprint, and the run resumes again.
+#[test]
+fn every_input_of_a_program_is_bound_by_its_journal() {
+    let b = base("binding");
+    let r = b.join("repos/lib");
+    let pkg_manifest = r#"{"package": "lib", "authority": {}}"#;
+    let pkg_code = "pub fn f() -> Int {\n    return 1\n}\n";
+    let c1 = repo(&r, &[("staal.json", pkg_manifest), ("m.staal", pkg_code)]);
+    let app = b.join("app");
+    let main = project(&app, &[("lib", &r, &c1)], "import lib.m\nimport util\nfn go() -> Int {\n    return m.f() + util.g()\n}\n");
+    std::fs::write(app.join("util.staal"), "pub fn g() -> Int {\n    return 2\n}\n").unwrap();
+    packages::fetch(&app).unwrap();
+    let original = staalc::check_path(&main).unwrap();
+    let prog = original.result.unwrap_or_else(|d| panic!("{d:?}"));
+    let original_fp = original.fingerprint;
+    let cfg = json!({ "entry": "go" });
+    let journal = b.join("run.journal");
+    let out = run_config_durable(&prog, &original_fp, &cfg, Durability::Create(&journal)).unwrap();
+    assert_eq!(out.result.unwrap(), json!(3));
+
+    let read = |p: &Path| std::fs::read(p).unwrap();
+    let saved: Vec<(PathBuf, Vec<u8>)> =
+        ["main.staal", "util.staal", "staal.json", "staal.lock"].iter().map(|f| (app.join(f), read(&app.join(f)))).collect();
+    let restore = || {
+        std::fs::write(app.join("staal.json"), manifest(&[("lib", &r, &c1)])).unwrap();
+        packages::fetch(&app).unwrap();
+        for (p, bytes) in &saved {
+            std::fs::write(p, bytes).unwrap();
+        }
+    };
+    // The run resumes while every input is as it was.
+    let resumes = || {
+        let c = staalc::check_path(&main).unwrap();
+        let fp = c.fingerprint.clone();
+        (fp.clone(), c.result.ok().map(|p| run_config_durable(&p, &fp, &cfg, Durability::Resume(&journal))))
+    };
+    let (fp, run) = resumes();
+    assert_eq!(fp, original_fp);
+    assert_eq!(run.unwrap().unwrap().result.unwrap(), json!(3));
+
+    let changes: Vec<(&str, Box<dyn Fn() + '_>)> = vec![
+        ("a module of the program", Box::new(|| std::fs::write(app.join("util.staal"), "pub fn g() -> Int {\n    return 2\n}\n\n").unwrap())),
+        (
+            "the project's staal.json, only its layout",
+            Box::new(|| {
+                let v: serde_json::Value = serde_json::from_slice(&read(&app.join("staal.json"))).unwrap();
+                std::fs::write(app.join("staal.json"), serde_json::to_string_pretty(&v).unwrap()).unwrap();
+            }),
+        ),
+        (
+            "the project's staal.lock, only its layout",
+            Box::new(|| {
+                let v: serde_json::Value = serde_json::from_slice(&read(&app.join("staal.lock"))).unwrap();
+                std::fs::write(app.join("staal.lock"), v.to_string()).unwrap();
+            }),
+        ),
+        (
+            "the package's staal.json",
+            Box::new(|| {
+                let c = repo(&r, &[("staal.json", r#"{"package": "lib", "version": "0.1.0", "authority": {}}"#)]);
+                std::fs::write(app.join("staal.json"), manifest(&[("lib", &r, &c)])).unwrap();
+                packages::fetch(&app).unwrap();
+            }),
+        ),
+        (
+            "a module of the package",
+            Box::new(|| {
+                let c = repo(&r, &[("staal.json", pkg_manifest), ("m.staal", "pub fn f() -> Int {\n    return 1 \n}\n")]);
+                std::fs::write(app.join("staal.json"), manifest(&[("lib", &r, &c)])).unwrap();
+                packages::fetch(&app).unwrap();
+            }),
+        ),
+    ];
+    for (what, change) in &changes {
+        change();
+        let (fp, run) = resumes();
+        assert_ne!(fp, original_fp, "{what}: the fingerprint did not change");
+        match run {
+            Some(Err(e)) => assert!(e.contains("different program"), "{what}: {e}"),
+            Some(Ok(_)) => panic!("{what}: the run resumed"),
+            None => panic!("{what}: the changed program does not check"),
+        }
+        restore();
+        let (fp, run) = resumes();
+        assert_eq!(fp, original_fp, "{what}: putting it back did not give the original fingerprint");
+        assert_eq!(run.unwrap().unwrap().result.unwrap(), json!(3), "{what}");
+    }
+}
+
+/// AGENT_MANIFEST.md section 16, R9: the loader reads nothing that the fingerprint does
+/// not hold. A file it does not hold either changes nothing (a module no one imports,
+/// any other file of the project) or is refused before anything compiles (a file added
+/// to a fetched package, a file or folder of the program named like a dependency).
+#[test]
+fn no_file_outside_the_inputs_changes_what_compiles() {
+    let b = base("outside");
+    let r = b.join("repos/lib");
+    let c1 = repo(&r, &[("staal.json", r#"{"package": "lib", "authority": {}}"#), ("m.staal", "pub fn f() -> Int {\n    return 1\n}\n")]);
+    let app = b.join("app");
+    let main = project(&app, &[("lib", &r, &c1)], "import lib.m\nfn go() -> Int {\n    return m.f()\n}\n");
+    packages::fetch(&app).unwrap();
+    let original = staalc::check_path(&main).unwrap();
+    assert!(original.result.is_ok());
+
+    // Files the program does not import change nothing.
+    std::fs::write(app.join("unused.staal"), "pub fn f() -> Int {\n    return 2\n}\n").unwrap();
+    std::fs::write(app.join("notes.txt"), "anything").unwrap();
+    std::fs::create_dir_all(app.join("m")).unwrap();
+    std::fs::write(app.join("m/f.staal"), "pub fn f() -> Int {\n    return 3\n}\n").unwrap();
+    let again = staalc::check_path(&main).unwrap();
+    assert_eq!(again.fingerprint, original.fingerprint);
+    assert!(again.result.is_ok());
+
+    // A file added to a fetched package is refused before anything is read from it.
+    let extra = app.join(".staal/packages/lib/n.staal");
+    std::fs::write(&extra, "pub fn f() -> Int {\n    return 4\n}\n").unwrap();
+    let e = staalc::check_path(&main).err().expect("an extra package file must be refused");
+    assert!(e.contains("n.staal is not part of it"), "{e}");
+    std::fs::remove_file(&extra).unwrap();
+
+    // A file or folder of the program named like a dependency: refused, never read in
+    // its place.
+    for local in ["lib.staal", "lib/m.staal"] {
+        let p = app.join(local);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, "pub fn f() -> Int {\n    return 5\n}\n").unwrap();
+        let c = staalc::check_path(&main).unwrap();
+        let shown = messages(&main);
+        assert!(c.result.is_err() && shown.contains("both a dependency and a file or folder"), "{local}: {shown}");
+        std::fs::remove_file(&p).unwrap();
+        if local.contains('/') {
+            std::fs::remove_dir(p.parent().unwrap()).unwrap();
+        }
+    }
+    let last = staalc::check_path(&main).unwrap();
+    assert_eq!(last.fingerprint, original.fingerprint);
+    assert!(last.result.is_ok());
+}

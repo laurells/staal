@@ -825,6 +825,41 @@ fn app_inputs_come_from_the_token_and_never_from_the_caller() {
     assert_eq!(r["result"]["structuredContent"]["result"], "shop-9: x");
 }
 
+/// AGENT_MANIFEST.md section 16, R7, for the app input mapping: a run killed after it
+/// started resumes with the app input values it started with, even when the manifest
+/// now takes that input from another claim.
+#[test]
+#[cfg(feature = "failpoints")]
+fn a_resumed_run_keeps_its_app_inputs_when_the_mapping_changes() {
+    let c = oauth_case("claims-resume");
+    let mut s = Http::start(&c.manifest, &c.addr, &[("STAALC_FAILPOINT", "after_write:1")]);
+    let t = c.token_for("carol");
+    let call = rpc(1, "tools/call", json!({ "name": "whoami", "arguments": { "note": "hi" } }));
+    let raw = request_bytes(&c.addr, &call, &[("Authorization", &format!("Bearer {t}"))]);
+    assert!(send_raw(&c.addr, &raw).is_none(), "no answer before the crash");
+    let status = s.child.wait().unwrap();
+    assert!(!status.success(), "the server was killed: {}", s.stderr.lock().unwrap());
+    drop(s);
+    let mut m: Json = serde_json::from_str(&std::fs::read_to_string(&c.manifest).unwrap()).unwrap();
+    let whoami = m["tools"].as_array_mut().unwrap().iter_mut().find(|x| x["name"] == "whoami").unwrap();
+    whoami["app_inputs"] = json!({ "customer": { "claim": "tenant" } });
+    std::fs::write(&c.manifest, serde_json::to_string_pretty(&m).unwrap()).unwrap();
+    let s = Http::start(&c.manifest, &c.addr, &[]);
+    let (code, err) = s.stop();
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("tool whoami run") && err.contains(": resuming"), "{err}");
+    let journals: Vec<PathBuf> = common::mcp::files_under(&c.dir().join("journals/whoami"))
+        .into_iter()
+        .filter(|p| p.to_string_lossy().ends_with(".journal"))
+        .collect();
+    assert_eq!(journals.len(), 1, "{journals:?}");
+    let records: Vec<Json> = std::fs::read_to_string(&journals[0]).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let resume = records.iter().find(|r| r["j"] == "resume").expect("a resume record");
+    assert_eq!(resume["config_sha256"], records[0]["config_sha256"]);
+    let end = records.last().unwrap();
+    assert_eq!((&end["j"], &end["ok"], &end["result"]), (&json!("end"), &json!(true), &json!("carol: hi")), "{records:?}");
+}
+
 #[test]
 #[cfg(feature = "failpoints")]
 fn a_changed_principal_key_cannot_hide_callers_runs() {

@@ -14,7 +14,7 @@
 
 #![cfg(feature = "failpoints")]
 
-use serde_json::Value as Json;
+use serde_json::{json, Value as Json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -257,6 +257,28 @@ fn crash_everywhere_on(sc: &Scenario, tag: &str, idempotent: bool, engines: (&'s
         let out = c.run(Some(fp));
         assert_eq!(out.code, None, "{label}: the injected crash did not happen (exit {:?}): {}", out.code, out.stderr);
         check_recovered(&c, &b, &label);
+        check_run_records(&c, *fp == format!("after_write:{}", b.writes), &label);
+    }
+}
+
+/// The start record names the staalc and engine that started the run; each resume of
+/// the unfinished run appended a `resume` record naming the engine that carried it on,
+/// binding what the start binds (RUNTIME.md section 11).
+fn check_run_records(c: &Case, crashed_after_end: bool, label: &str) {
+    let records = c.journal_lines();
+    let start = &records[0];
+    assert_eq!(start["j"], "start", "{label}");
+    assert_eq!((&start["version"], &start["staalc"], &start["engine"]), (&json!(3), &json!(env!("CARGO_PKG_VERSION")), &json!(c.engines.0)), "{label}");
+    let end = records.iter().position(|r| r["j"] == "end").unwrap_or_else(|| panic!("{label}: no end"));
+    assert_eq!(end, records.len() - 1, "{label}: nothing comes after the end");
+    let resumes: Vec<&Json> = records.iter().filter(|r| r["j"] == "resume").collect();
+    assert_eq!(resumes.is_empty(), crashed_after_end, "{label}: a resume of an unfinished run, and only of one, is recorded");
+    for r in resumes {
+        assert_eq!((&r["run_id"], &r["version"], &r["staalc"], &r["engine"]), (&start["run_id"], &json!(3), &start["staalc"], &json!(c.engines.1)), "{label}: {r}");
+        for k in ["program_sha256", "config_sha256", "proxies"] {
+            assert_eq!(r[k], start[k], "{label}: {k}");
+        }
+        assert!(r["at_ms"].is_u64(), "{label}: {r}");
     }
 }
 
@@ -904,6 +926,10 @@ fn concurrent_tasks_recover_exactly_after_any_crash() {
 fn open_actions(c: &Case) -> Vec<(String, String)> {
     let mut last: std::collections::BTreeMap<String, Json> = std::collections::BTreeMap::new();
     for r in c.journal_lines() {
+        // A resume record belongs to the run, not to the main task's stream of records.
+        if r["j"] == "resume" {
+            continue;
+        }
         let t = r["t"].as_str().unwrap_or("").to_string();
         last.insert(t, r);
     }

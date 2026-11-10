@@ -15,7 +15,8 @@
 //
 // Redirects are never followed (a redirect could lead outside `only`; the program
 // gets the 3xx response), HTTP error statuses are responses, not errors, and no
-// proxy is used unless the run config asks for one.
+// proxy is used unless the run config asks for one; then the proxy is the one
+// `proxy::of_setting` chose and the journal recorded, never one read again.
 
 use std::time::Duration;
 
@@ -24,7 +25,8 @@ pub struct Settings {
     pub timeout: Duration,
     pub connect_timeout: Duration,
     pub max_response_bytes: u64,
-    pub proxy_from_env: bool,
+    /// The proxy `net.proxy` chose, if any (`proxy`).
+    pub proxy: Option<super::proxy::Choice>,
     /// Root certificates (DER) trusted in addition to Mozilla's, for services signed by
     /// an organisation's own authority. Never instead of them; verification is never off.
     pub extra_roots: Vec<Vec<u8>>,
@@ -36,7 +38,7 @@ impl Default for Settings {
             timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(10),
             max_response_bytes: 4 * 1024 * 1024,
-            proxy_from_env: false,
+            proxy: None,
             extra_roots: Vec::new(),
         }
     }
@@ -87,7 +89,7 @@ impl Client {
             .http_status_as_error(false)
             .timeout_global(Some(s.timeout))
             .timeout_connect(Some(s.connect_timeout))
-            .proxy(if s.proxy_from_env { ureq::Proxy::try_from_env() } else { None })
+            .proxy(s.proxy.as_ref().map(|c| c.proxy.clone()))
             .user_agent(concat!("staalc/", env!("CARGO_PKG_VERSION")))
             .build();
         Client { agent: ureq::Agent::new_with_config(config), max: s.max_response_bytes }

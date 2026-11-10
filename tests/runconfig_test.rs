@@ -77,7 +77,11 @@ fn a_run_without_a_model_says_so_and_records_nothing() {
     assert_eq!(code, Some(1));
     assert!(err.contains("provider: this run names no model"), "{err}");
     let text = std::fs::read_to_string(&j).unwrap();
-    assert!(!text.contains("\"count\"") && !text.contains("\"model\""), "something was recorded: {text}");
+    let records: Vec<Json> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    // Only the run's start and end: no operation was begun, so nothing was sent or charged.
+    let kinds: Vec<&str> = records.iter().map(|r| r["j"].as_str().unwrap()).collect();
+    assert!(kinds.first() == Some(&"start") && kinds[1..].iter().all(|k| *k == "end"), "something was recorded: {text}");
+    assert_eq!(records[0]["proxies"], json!({ "net": null, "model": null }), "{text}");
 }
 
 #[test]

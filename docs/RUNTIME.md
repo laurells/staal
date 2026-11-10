@@ -606,7 +606,7 @@ as one per 4 bytes of the request's JSON.
 | `connect_timeout_ms` | the most connecting may take | 10000 |
 | `retries` | extra attempts after a rate limit, an overload or a server error (0 to 10) | 2 |
 | `retry_delay_ms` | the first wait between attempts, doubling each time, unless the API sends `retry-after` (at most 60 s) | 1000 |
-| `proxy` | `"none"`, or `"environment"` to use the first of `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` (each also in lower case) that is set, with `NO_PROXY` (ureq 3.4) | `"none"` |
+| `proxy` | `"none"`, or `"environment"` (section 12, Proxies) | `"none"` |
 | `extra_root_certificates` | PEM files of root certificates to trust in addition to Mozilla's, for a network whose proxy signs TLS with its own authority | none |
 
 - **Request.** The instruction goes in the system prompt, after a fixed
@@ -839,15 +839,55 @@ Resuming re-executes the program from the start. At each external operation:
 - once the recorded operations are used up, the run continues live,
   appending to the same journal.
 
-Resume requires the **identical** program text and run config: the journal's
-first record holds the SHA-256 of each, and any difference is refused before
-anything runs. For a program with modules, the program hash covers every file
-it loads (each file's module path, length and text), so a change to any imported
-module is refused too. File names are not part of it: the same program resumed
-from another folder, or after its folder was moved, is the same program. A
-single-file program's hash is the hash of its text. (Journals of multi-file
-programs written before v0.17 recorded file names, and cannot be resumed by
-v0.17.)
+Resume requires the **identical** program, the **identical** run config and the
+same proxies: the journal's first record binds each, and any difference is refused
+before anything runs.
+
+- **The program** is bound by the SHA-256 of its **source program fingerprint**,
+  `staal-program-v3` (below): every module the program loads, by module path and
+  text, and, for a project, its `staal.json`, its `staal.lock` and every file of every
+  package with its SHA-256. So a change to any module, to the project's manifest or
+  lock, or to any package file is refused. File names are not part of it: the same
+  program resumed from another folder, or after its folder was moved, is the same
+  program.
+- **The run config** is bound by the SHA-256 of its JSON Canonicalization Scheme
+  form (RFC 8785): members sorted by their names' UTF-16 code units, numbers written
+  as ECMAScript writes a double, no whitespace. So the same config written with
+  other spacing or key order is the same config. A config holding a number that an
+  IEEE double cannot hold exactly (an integer beyond 2^53 that no double equals) is
+  refused, rather than rounded.
+- **The proxies**: for `net` and the model, the proxy `"proxy": "environment"`
+  chose, as recorded (section 12, Proxies), or none. A resume whose environment now
+  chooses another is refused, so requests take the route they took.
+
+The engine may differ between the start and a resume, since both give the same
+results; each records which it was.
+
+**The source program fingerprint**, `staal-program-v3`, is UTF-8 text made of
+netstrings: `ns(b)` is the byte length of `b` in decimal (no sign, no leading zeros),
+`:`, `b`, `,`. Its grammar, with groups in this order:
+
+```
+fingerprint = ns("staal-program-v3") modules project
+modules     = ns("modules") ns(count) { ns(module-path) ns(text) }
+project     = ns("project") ( ns("none") | ns("some") ns(staal.json) lock packages )
+lock        = ns("lock") ( ns("none") | ns("some") ns(staal.lock) )
+packages    = ns("packages") ns(count) { ns(name) ns(git) ns(commit) ns(count) { ns(path) ns(sha256) } }
+```
+
+`count` is the number of items that follow, in decimal. Modules are sorted by module
+path, packages by name, a package's files by path, each by the bytes of their UTF-8.
+A module path is its segments joined by `.`, empty for the entry file. A package's
+files and their SHA-256 (64 lowercase hexadecimal digits) are those `staal.lock`
+records and loading verified. Nothing is normalized: no Unicode normalization, no
+change of line endings. `scripts/fingerprint.py` is a second implementation written
+from this grammar, and the test vectors in `tests/fixtures/fingerprint/` are its
+output; `staalc`'s tests check it agrees. A change to the inputs, their order, the
+path rules or the encoding takes a new label and a new journal version.
+
+**Older journals.** A journal of version 1 or 2 bound other hashes, which this
+`staalc` does not compute, and is refused with the version and the `staalc` that wrote
+it: finish or resolve such a run with the `staalc` that started it, before upgrading.
 
 ### The crash window, and idempotency
 
@@ -898,7 +938,10 @@ Both are fatal, like `step_limit`: `try` never catches them.
 JSON lines, append-only. Records:
 
 ```
-{"j":"start","version":2,"run_id":"…","program_sha256":"…","config_sha256":"…"}
+{"j":"start","version":3,"run_id":"…","program_sha256":"…","config_sha256":"…",
+ "staalc":"0.27.0","engine":"interpreter","proxies":{"net":null,"model":null}}
+{"j":"resume","run_id":"…","version":3,"staalc":"…","engine":"native",
+ "program_sha256":"…","config_sha256":"…","proxies":{…},"at_ms":…}
 {"j":"intent","n":1,"op":"count","key":"…","body":{…}}
 {"j":"result","n":1,"ok":…}            or  {"j":"result","n":1,"err":"…"}
 {"j":"retry","n":3}                    an operator authorized one more attempt at action 3
@@ -910,7 +953,14 @@ JSON lines, append-only. Records:
 its result, or, for an action, `retry`/`attempt` pairs and then its result. A record of a concurrent
 task (section 18) also has `"t"`, the task's id: each task's operations are numbered from 1 by
 themselves and must follow these rules among themselves, and the tasks' records may interleave in any
-order. Version 1 journals, which have no tasks, are read as they are. A crash can tear only the last line; a
+order. The start record is written once and never changed: it holds the hashes the run is
+bound to, and the `staalc` version, engine and proxies that started it. Each resume of a run
+that has not ended appends a `resume` record, flushed before the resumed run does anything:
+the run id (the start record's), the `staalc` version and engine that carry it on, the hashes and
+proxies it checked, and the time in milliseconds since 1970. So a run started by one version on the interpreter and
+resumed by another on native code shows both, in order. A `resume` record has no task and no
+number and changes no operation. A resume of a run that has ended only replays it and adds
+nothing. A crash can tear only the last line; a
 torn last line is discarded on resume (it was never acknowledged). Any other
 malformed line is corruption, and resume refuses. Resuming a journal that
 already has an `end` record replays it without contacting the world and
@@ -1267,8 +1317,22 @@ run config asks for one.
 "fs":  { "max_read_bytes": 16777216 }
 ```
 
-(These are the defaults. `proxy` is `"none"` or `"environment"`, which uses
-the first of `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` (each also in lower case) that is set, with `NO_PROXY` (ureq 3.4).)
+(These are the defaults. `proxy` is `"none"` or `"environment"`: see Proxies below.)
+
+**Proxies.** `"proxy": "environment"` (here, and in a model's config) reads the
+environment once, when the run starts or resumes: the proxy URL is the value of the
+first of `ALL_PROXY`, `all_proxy`, `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`,
+`http_proxy` that is set and not empty, and the hosts that bypass it are the first of
+`NO_PROXY`, `no_proxy` that is set, split at commas, each entry trimmed and lowercased
+(an exact host, `.suffix`, `*.suffix`, or `*` for every host). That is the order the
+HTTP client, ureq, uses. Unlike ureq, which skips a value it cannot use and tries the
+next variable, a run refuses to start when the chosen value is not a proxy URL, names
+a user name or password (it would be written to the journal), or names a SOCKS proxy
+(this build cannot use one), so a mistyped proxy never sends requests by another
+route. What was chosen (the variable, `http` or `https`, the host, the port and the
+bypass list) is recorded in the journal, and the client is built from exactly that;
+a resume whose environment chooses differently is refused (section 11). No variable
+set means no proxy.
 
 Server certificates are verified against Mozilla's root certificates, the list
 browsers use. An organisation whose services are signed by its own authority adds

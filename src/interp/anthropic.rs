@@ -41,6 +41,8 @@ pub struct AnthropicProvider {
     key: String,
     retries: u32,
     retry_delay: Duration,
+    /// What the journal records of the proxy `model.proxy` chose (`proxy::record`).
+    proxy: Json,
 }
 
 impl AnthropicProvider {
@@ -95,11 +97,7 @@ impl AnthropicProvider {
             None => 1000,
             Some(v) => v.as_u64().filter(|n| *n <= 60_000).ok_or("model.retry_delay_ms: expected at most 60000")?,
         };
-        let proxy = match obj.get("proxy").map(|v| v.as_str()) {
-            None | Some(Some("none")) => false,
-            Some(Some("environment")) => true,
-            _ => return Err("model.proxy: expected \"none\" or \"environment\"".into()),
-        };
+        let proxy = super::proxy::of_setting(obj.get("proxy"), "model.proxy")?;
         let mut extra = Vec::new();
         if let Some(v) = obj.get("extra_root_certificates") {
             let list = v.as_array().ok_or("model.extra_root_certificates: expected a list of PEM file paths")?;
@@ -121,7 +119,7 @@ impl AnthropicProvider {
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_millis(timeout)))
             .timeout_connect(Some(Duration::from_millis(connect)))
-            .proxy(if proxy { ureq::Proxy::try_from_env() } else { None })
+            .proxy(proxy.as_ref().map(|c| c.proxy.clone()))
             .user_agent(concat!("staalc/", env!("CARGO_PKG_VERSION")))
             .build();
         Ok(AnthropicProvider {
@@ -131,6 +129,7 @@ impl AnthropicProvider {
             key,
             retries,
             retry_delay: Duration::from_millis(retry_delay),
+            proxy: super::proxy::record(&proxy),
         })
     }
 
@@ -222,6 +221,10 @@ impl Provider for AnthropicProvider {
     fn fork(&self) -> Box<dyn Provider + Send> {
         // The agent's connection pool is shared; each request stands alone.
         Box::new(self.clone())
+    }
+
+    fn proxy(&self) -> Json {
+        self.proxy.clone()
     }
 
     fn count_input_tokens(&mut self, req: &ModelRequest) -> Result<u64, ProviderError> {

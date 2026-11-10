@@ -683,12 +683,18 @@ So an operator learns of every stopped run even if the notify command is broken:
 record is on disk, `staalc mcp status` lists it, and stderr has it. The notify command
 only makes the news faster.
 
-**Upgrades.** A journal is tied to its program, its config and its journal format
-version. The config comes from the run file, so changing a tool in the manifest (its
-grants, quota, even removing it) does not stop its unfinished runs from resuming as they
-started. Editing a program's file does: those runs refuse to resume. So does upgrading
-to a `staalc` that writes a different journal format version; an upgrade that keeps the
-format resumes them on the new version. The policy
+**Upgrades.** A journal is tied to its program (every module, and for a project its
+`staal.json`, `staal.lock` and every package file), its config, the proxies its
+requests went through and its journal format version (RUNTIME.md section 11). The
+config comes from the run file, so changing a tool in the manifest (its program path,
+entry, grants, `once`, deadline, quota, even removing it) does not stop its unfinished
+runs from resuming as they started, and none of the change reaches them. Editing a
+program's file does: those runs refuse to resume. So does a change to the proxy
+variables of the environment, for a tool whose `net` or `model` takes its proxy from
+there. So does upgrading to a `staalc` that writes a different journal format version;
+an upgrade that keeps the format resumes them on the new version. The release after
+0.27.0 changes the format (journal version 3), so runs left unfinished by 0.27.0 or
+earlier do not resume on it. The policy
 is explicit: before an upgrade or a change to a program, the operator runs `staalc mcp
 status` and lets every unfinished run end (resolving any that wait).
 If the server starts and finds an unfinished run it cannot resume for this reason, it

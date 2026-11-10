@@ -62,7 +62,10 @@ fn outcome(r: &Result<RunResult, String>) -> Json {
     }
 }
 
-fn journal(path: &Path) -> Vec<Json> {
+/// The journal's records, normalized. Its start and resume records name the engine that
+/// wrote them, the one field that rightly differs between the engines: it must be
+/// `engine`, and is then blanked so the rest can be compared.
+fn journal(path: &Path, engine: &str) -> Vec<Json> {
     let text = fs::read_to_string(path).unwrap_or_default();
     let id = text
         .lines()
@@ -70,7 +73,16 @@ fn journal(path: &Path) -> Vec<Json> {
         .and_then(|l| serde_json::from_str::<Json>(l).ok())
         .and_then(|v| v["run_id"].as_str().map(str::to_string))
         .unwrap_or_default();
-    text.lines().map(|l| without_id(l, &id)).collect()
+    text.lines()
+        .map(|l| {
+            let mut r = without_id(l, &id);
+            if r["j"] == "start" || r["j"] == "resume" {
+                assert_eq!(r["engine"], engine, "{}: {r}", path.display());
+                r["engine"] = json!("-");
+            }
+            r
+        })
+        .collect()
 }
 
 #[test]
@@ -91,10 +103,10 @@ fn every_runtime_case_is_identical_on_both_engines() {
         let mut cfg: Json = serde_json::from_str(&fs::read_to_string(case).unwrap()).unwrap();
         cfg.as_object_mut().unwrap().remove("expect");
         let mut outs = Vec::new();
-        for (tag, engine) in [("i", Engine::Interpreter), ("n", Engine::Native)] {
+        for (tag, engine, name) in [("i", Engine::Interpreter, "interpreter"), ("n", Engine::Native, "native")] {
             let j = work.join(format!("{stem}.{tag}.journal"));
             let r = run_config_engine(&prog, &src, &cfg, Durability::Create(&j), engine);
-            outs.push((outcome(&r), journal(&j)));
+            outs.push((outcome(&r), journal(&j, name)));
         }
         ran += 1;
         if outs[0] != outs[1] {

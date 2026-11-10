@@ -225,9 +225,10 @@ For the agent, and for each tool:
     1. every module of the program, the agent's and its packages', by module path, with
        its text;
     2. the project's `staal.json` and `staal.lock`, as bytes;
-    3. for each package: its name, its git location, its commit, its `staal.json` as
-       bytes, and one record per file `staal.lock` records for it: the file's path and
-       its SHA-256, so content is bound to the path it sits at.
+    3. for each package: its name, its git location, its commit, and one record per
+       file `staal.lock` records for it: the file's path and its SHA-256, so content is
+       bound to the path it sits at. The package's own `staal.json` is one of those
+       files, so it is bound by its record like any other.
     Paths are as packages already require them (RUNTIME.md, Fetching): relative to the
     package root, `/`-separated, with no empty, `.` or `..` part, no backslash or
     colon, and no two differing only in letter case; a link or submodule is refused,
@@ -238,19 +239,18 @@ For the agent, and for each tool:
     (grants, model, limits) is bound by the journal separately, as its own hash.
     `agent.json` is not an input: its deployment settings reach a run only through the
     generated tool manifest and run config, which are bound there.
-    The construction: SHA-256 over the byte string `staal-program-v3` followed by each
-    item as a field, in the order above, sorted by module path or package name within
-    each group; every field is a label (`module`, `project-manifest`, `lock`,
-    `package`, ...), then its value, each preceded by its length as an 8-byte
-    big-endian integer, so no two inputs can produce the same string. Any change to
-    the input set, the path rules or the field encoding takes a new label
-    (`staal-program-v4`, ...) and a new journal version; a journal always resumes
-    under the construction its version names. **Required before
-    implementation** (section 16): today's fingerprint covers items 1 and the package
-    names, locations and commits of item 3, joined with newline framing and, for a
-    single-file program, with no framing or domain label at all; it does not cover
-    `staal.json` or `staal.lock`. Journals written under the old construction keep
-    resuming under it, by their journal version.
+    The construction: SHA-256 of UTF-8 text made of netstrings (each field its length
+    in decimal bytes, `:`, the field, `,`), starting with the label
+    `staal-program-v3`, then each group above with a record count, sorted by the bytes
+    of the UTF-8 of module path, package name and file path; the byte-level grammar is
+    in RUNTIME.md section 11. Every field is length-framed, so no two inputs produce
+    the same text. Any change to the input set, the path rules or the encoding takes a
+    new label (`staal-program-v4`, ...) and a new journal version. Implemented (journal
+    version 3; section 16, R1 and R9). A journal of an earlier version bound a weaker
+    hash (the modules' text and the packages' names, locations and commits, without
+    `staal.json`, `staal.lock` or the package files' hashes), which this `staalc` no
+    longer computes: such a journal is refused, with a message to finish its run on the
+    `staalc` that started it, never resumed under a hash that binds less.
   - *Compiler and runtime*: the `staalc` version that computed the description.
   - *Dependencies*: each package's name, commit, every file's SHA-256 (from
     `staal.lock`) and declared authority.
@@ -566,9 +566,9 @@ Five things must agree for an installed agent to be enforced as described:
 What the journal binds is the source program fingerprint and the run config, not a
 binary or a `staalc` version: a run resumed after `staalc` is upgraded resumes the same
 source, under the same config, on the new version. Since every engine of every version
-is held to the same results, that is the intended behaviour. But today a journal does
-not record what executed it, which matters because recovery is Staal's guarantee.
-**Required before implementation** (section 16):
+is held to the same results, that is the intended behaviour. A journal also records
+what executed it, since recovery is Staal's guarantee. Implemented (journal version 3;
+section 16, R2):
 
 - The start record, written once and never changed, gains the `staalc` version and
   the engine that started the run.
@@ -597,8 +597,10 @@ evidence is for the version it names.
   registry states which versions it accepts.
 - A capability that is deprecated stays checkable for at least one minor version of
   `staalc`, with a warning at check and install, before an agent using it is refused.
-- A journal written by one released `staalc` resumes under the next, by its journal
-  version, without repeating an action (section 16, R5).
+- A journal resumes under any later `staalc` that reads its journal version, without
+  repeating an action (section 16, R5). A release that stops reading a version refuses
+  such a journal and says so in its notes, as journal version 3 does for versions 1
+  and 2; the operator lets those runs finish first (MCP.md section 7).
 
 **What a resumed run uses.** A run is resumed from what it was started with, never
 from the current manifest (MCP.md section 7). Its execution configuration is:
@@ -613,16 +615,17 @@ Editing the manifest after a run starts (its program path, entry, app input mapp
 `once`, deadline or quota) therefore changes nothing for that run: it resumes under the
 configuration in its run file and reserve event, or refuses to resume if its program's
 text changed. Publisher metadata from `agent.json` (title, summary, categories, data
-declaration) reaches no run. Two gaps, both **required before freezing** (R7):
+declaration) reaches no run. Two gaps were found here and are closed in journal
+version 3 (R7):
 
-- The config hash is SHA-256 of the run config as `serde_json` writes it: keys sorted,
-  compact, deterministic within `staalc`, but not specified. The new journal version
-  hashes it as RFC 8785.
-- `"proxy": "environment"` is bound, but the proxy it names is read from the
-  environment when the run starts (the first of `ALL_PROXY`, `HTTPS_PROXY` and
-  `HTTP_PROXY` set, in either case, with `NO_PROXY`), and none of it is recorded. R7
-  records the effective proxy configuration, and a resume under a different one is
-  refused.
+- The config hash is SHA-256 of the run config's RFC 8785 form (it was the form
+  `serde_json` writes: deterministic within `staalc`, but not specified). A number an
+  IEEE double cannot hold exactly is refused rather than rounded.
+- `"proxy": "environment"` is read once when the run starts, recorded in the start
+  record (the variable that won, the proxy's scheme, host and port, and the
+  `NO_PROXY` entries), and used as recorded; a resume under a different one is
+  refused. A proxy URL with a user name or password, and one this build cannot use,
+  are refused (RUNTIME.md section 12, Proxies).
 
 Corrected while checking this: MCP.md section 7 said that upgrading `staalc` makes an
 unfinished run refuse to resume. The code refuses when the program, the config or the
@@ -760,7 +763,7 @@ be demonstrated by a test that fails without it:
 
 | | Requirement | Demonstrated by |
 | --- | --- | --- |
-| R1 | The source program fingerprint of section 5, in a new journal version; old journals resume by their own | a test that changes each input of section 5 in turn (a module, `staal.json`, `staal.lock`, a package's manifest, a package file) and sees the fingerprint change and a resume refused |
+| R1 | The source program fingerprint of section 5, in a new journal version; a journal of an older version is refused, never resumed under a weaker hash | a test that changes each input of section 5 in turn (a module, `staal.json`, `staal.lock`, a package's manifest, a package file) and sees the fingerprint change and a resume refused |
 | R2 | The `staalc` version and engine in the start record; a `resume` record per resume | a test that crashes and resumes across both engines and checks every record |
 | R3 | `staalc schema` reports the limits written in capability types, and every consumer of every grant with its boundary | tests over programs with entry limits, package slots and library needs, and over propagation: a capability passed through several functions, returned from one, stored in a value and read back, passed through a function value, re-exported by a package, passed from one package's function into another's, and one grant with several consumers of different limits. Each test asserts one of two outcomes: the consumer graph complete and exact, or marked incomplete with the agent refused Verified |
 | R4 | A package cannot exercise more than its declared boundary while the agent's own code holds broader authority over the same grant | a runtime test in which the agent's code reaches `https://bank.example.com/x` through a grant the package also receives, and the package's attempt at `/x` is refused while its `/refunds` succeeds |
@@ -768,7 +771,44 @@ be demonstrated by a test that fails without it:
 | R6 | One authority decision per request, kept through the whole request: the request target is parsed and made canonical once, into one immutable representation; the `only` check, the connection, TLS verification and the request line all use that representation, and the HTTP client never re-reads the original string. The HTTP authority (`Host`, and `:authority` if HTTP/2 is ever used), the TLS verification name (and SNI) and the checked canonical host are always the same. No proxy is used unless the deployment's config names one: today `net.http` uses none unless the run config asks for the environment's, and the model provider's `"proxy": "environment"` likewise; a configured proxy is an explicit deployment dependency, shown at install as part of the network boundary. A pooled connection is reused only for a request to the same scheme, host and port it was opened and verified for. Today the URL is parsed by the `url` crate for the check and again inside the HTTP client: whether the two can disagree is part of this review | a review of `net.http`, the model provider and key fetching against this rule; adversarial tests for international names (IDNA), IPv4 and IPv6 literals, explicit and default ports, trailing dots and case, percent-encoded separators and dot segments, a proxy set in the environment and not configured, and a kept-alive connection followed by a request to another host. Each asserts that the authority the policy checked and the authority actually connected to are identical, not only that the request was accepted or refused |
 | R7 | The run config hashed as RFC 8785; the proxy URL a run used recorded, and a resume under another refused (section 9) | a test that changes, between a crash and its resume, each manifest field a run depends on (program path, entry, app input mapping, `once`, deadline, quota, grants, proxy) and shows the resumed run either uses the original or refuses, never the change |
 | R8 | A normative JSON Schema (2020-12) for `agent.json` and `agent.described.json`, with the semantic rules a schema cannot state, and valid and invalid fixtures. Unknown keys refused at every depth. Types fixed: money as `{"amount": decimal string, "currency": ISO 4217 code}` with at most the currency's decimal places, as the runtime reads it; durations as the tool host reads them (a whole number and `s`, `m`, `h` or `d`, per field as MCP.md allows); `requires_staalc` as a version range in the grammar packages use; an empty `suggested` as no suggestion in any dimension | the fixtures, each refused or accepted as marked, by `staalc agent check` |
-| R9 | A normative fingerprint algorithm: UTF-8 bytes without Unicode normalization; the domain label `staal-program-v3` as the first framed field; every group framed with a record count, every package framed as a nested record holding its own fields and file records; ordering by the bytes of UTF-8, never by locale; digests as lowercase hex in the description and raw 32 bytes inside the construction | test vectors: one project, one package, several packages, nested dependencies, a changed path, a changed content, a changed manifest; a second implementation, written separately (in Python), produces the same digest for every vector. And a demonstration, against the project and package loader, that no file outside the inputs can change what compiles or runs |
+| R9 | A normative fingerprint algorithm: UTF-8 bytes without Unicode normalization; the domain label `staal-program-v3` as the first framed field; every group framed with a record count, every package framed as a nested record holding its own fields and file records; ordering by the bytes of UTF-8, never by locale; digests as lowercase hex, in the description and inside the construction (which is UTF-8 text, so it holds no raw bytes) | test vectors: one project, one package, several packages, nested dependencies, a changed path, a changed content, a changed manifest; a second implementation, written separately (in Python), produces the same digest for every vector. And a demonstration, against the project and package loader, that no file outside the inputs can change what compiles or runs |
+
+**Status.** R1, R2, R7 and R9 are implemented, in journal version 3, and
+demonstrated by these tests; the rest are open.
+
+- R1: `every_input_of_a_program_is_bound_by_its_journal` (tests/packages_test.rs)
+  changes, alone, a module, the project's `staal.json` and `staal.lock` (only their
+  layout), a package's `staal.json` and a package module; each gives another
+  fingerprint and a refused resume, and putting it back gives the original and a
+  resume.
+- R2: the crash tests (tests/crash_test.rs) crash a run at every journal write and
+  before every result, on the interpreter and on native code, resume it on each engine
+  pairing, and check every start and `resume` record: the start names the `staalc`
+  version and the engine that started the run, each resume of the unfinished run is
+  recorded (and none of a finished one) with its run id, `staalc` version, engine,
+  journal version, both hashes, proxies and time.
+  `every_runtime_case_is_identical_on_both_engines` and
+  `every_runtime_case_is_identical_as_an_executable` require each start record to name
+  the engine that wrote it.
+- R7: `a_resumed_run_never_takes_a_change_to_the_manifest` (tests/mcp_crash_test.rs)
+  changes, alone, between a crash and the resume, the program path, the entry, `once`,
+  the deadline, the quota, the grants (`only`, then `each`) and the proxy; each time the
+  resume record binds the same program, config and proxies as the start, and the run
+  refunds the original amount once. `a_resumed_run_keeps_its_app_inputs_when_the_mapping_changes`
+  (tests/mcp_http_test.rs) does the same for the app input mapping.
+  `a_run_file_pointed_at_another_program_is_refused` shows a run file pointed at other
+  text is refused and the same text at another path resumes.
+  `a_run_resumes_only_under_the_proxy_it_started_with` refuses a resume under another
+  proxy, another `NO_PROXY`, a variable read before the recorded one, and none, and a
+  proxy URL holding a credential, without showing it. The RFC 8785 serializer is
+  checked against Node.js 22 on 6,119 committed vectors (src/jcs.rs).
+- R9: `scripts/fingerprint.py`, written from the grammar alone, produces the 19 vectors
+  in `tests/fixtures/fingerprint/vectors.json` (no project, an empty file, non-ASCII
+  paths and text, an empty lock, a changed manifest, one package, several packages
+  given out of order, nested dependencies, a file at another path, other content,
+  another commit, a package with no files, module paths and package names that differ
+  only in order), and `staalc` agrees on every one. `no_file_outside_the_inputs_changes_what_compiles`
+  (tests/packages_test.rs) is the demonstration against the loader.
 
 **Verified never transfers.** A Verified designation is shown with the exact
 `staalc` release and platform it was earned on, as a historical fact about that

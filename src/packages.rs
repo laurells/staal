@@ -106,6 +106,9 @@ pub struct Package {
     pub dep: Dep,
     pub manifest: Manifest,
     modules: BTreeMap<String, String>,
+    /// Every file of the package and its SHA-256, as `staal.lock` records them and
+    /// loading verified them: part of the program's fingerprint (`identity`).
+    pub files: BTreeMap<String, String>,
 }
 
 /// A project with packages, verified against its lockfile.
@@ -114,6 +117,10 @@ pub struct Project {
     pub root: PathBuf,
     pub deps: BTreeMap<String, Spec>,
     pub packages: BTreeMap<String, Package>,
+    /// The project's `staal.json` and `staal.lock` as they were read, for the
+    /// program's fingerprint (`identity`).
+    pub manifest_text: String,
+    pub lock_text: Option<String>,
 }
 
 fn is_name(s: &str) -> bool {
@@ -454,7 +461,13 @@ impl Project {
         };
         let manifest = Manifest::parse(&mtext, MANIFEST, false)?;
         if manifest.dependencies.is_empty() && !lpath.exists() {
-            return Ok(Some(Project { root: root.to_path_buf(), deps: BTreeMap::new(), packages: BTreeMap::new() }));
+            return Ok(Some(Project {
+                root: root.to_path_buf(),
+                deps: BTreeMap::new(),
+                packages: BTreeMap::new(),
+                manifest_text: mtext,
+                lock_text: None,
+            }));
         }
         let ltext = std::fs::read_to_string(&lpath)
             .map_err(|e| format!("cannot read {}: {e}; run `staalc fetch` to fetch the dependencies", lpath.display()))?;
@@ -479,7 +492,7 @@ impl Project {
                     modules.insert(stem.to_string(), text);
                 }
             }
-            packages.insert(name.clone(), Package { name: name.clone(), dep: lp.dep.clone(), manifest: m, modules });
+            packages.insert(name.clone(), Package { name: name.clone(), dep: lp.dep.clone(), manifest: m, modules, files: lp.files.clone() });
         }
         // The lock must be exactly the dependency graph: every package locked at what
         // everything that depends on it asks for, and nothing else.
@@ -505,12 +518,30 @@ impl Project {
                 return Err(format!("{LOCKFILE} has package {n}, which nothing depends on; run `staalc fetch`"));
             }
         }
-        Ok(Some(Project { root: root.to_path_buf(), deps: manifest.dependencies, packages }))
+        Ok(Some(Project { root: root.to_path_buf(), deps: manifest.dependencies, packages, manifest_text: mtext, lock_text: Some(ltext) }))
     }
 
     /// The package a module belongs to, or None for the program's own modules.
     pub fn package_of(&self, module: &[String]) -> Option<&Package> {
         if module.len() >= 2 { self.packages.get(&module[0]) } else { None }
+    }
+
+    /// What the project contributes to the program's fingerprint.
+    pub fn identity(&self) -> crate::identity::ProjectId {
+        crate::identity::ProjectId {
+            manifest: self.manifest_text.clone(),
+            lock: self.lock_text.clone(),
+            packages: self
+                .packages
+                .values()
+                .map(|p| crate::identity::PackageId {
+                    name: p.name.clone(),
+                    git: p.dep.git.clone(),
+                    commit: p.dep.commit.clone(),
+                    files: p.files.iter().map(|(f, h)| (f.clone(), h.clone())).collect(),
+                })
+                .collect(),
+        }
     }
 
     /// One line per package: what it is and the authority it may use.

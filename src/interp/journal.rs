@@ -21,9 +21,41 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 
-/// The version a new journal is written in. Version 2 adds tasks (`"t"`); a version 1
-/// journal, which has none, reads the same.
-pub const VERSION: u64 = 2;
+/// The version a new journal is written in, and the only one this `staalc` resumes.
+/// Version 3 binds the source program fingerprint `staal-program-v3` (`identity`) and the
+/// run config's RFC 8785 form (`jcs`), records the `staalc` version, the engine and the
+/// proxies in the start record, and adds a `resume` record per resume. A journal of
+/// version 1 or 2 bound other hashes, which this `staalc` does not compute; such a run
+/// is finished with the `staalc` that started it (RUNTIME.md section 11).
+pub const VERSION: u64 = 3;
+
+/// What a journal binds a run to, and what it records about what executes it. The
+/// start record holds it; each resume must present the same program, config and
+/// proxies, and records its own `staalc` version and engine (RUNTIME.md section 11).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Binding {
+    /// SHA-256 of the source program fingerprint (`identity`).
+    pub program_sha256: String,
+    /// SHA-256 of the run config in RFC 8785 form (`jcs`).
+    pub config_sha256: String,
+    /// `"interpreter"` or `"native"`: may differ between the start and a resume.
+    pub engine: &'static str,
+    /// The proxies the run's network clients use, as `interp::proxy` resolved them:
+    /// `{"net": ..., "model": ...}`, each `null` for none.
+    pub proxies: Json,
+}
+
+impl Binding {
+    /// The SHA-256 of a fingerprint and of a config's RFC 8785 form. Fails for a config
+    /// holding a number RFC 8785 cannot represent exactly (`jcs`).
+    pub fn of(fingerprint: &str, config: &Json, engine: &'static str, proxies: Json) -> Result<Binding, String> {
+        let canonical = crate::jcs::canonical(config).map_err(|e| format!("run config: {e}"))?;
+        Ok(Binding { program_sha256: sha256_hex(fingerprint.as_bytes()), config_sha256: sha256_hex(canonical.as_bytes()), engine, proxies })
+    }
+}
+
+/// The `staalc` version that writes a record.
+const STAALC: &str = env!("CARGO_PKG_VERSION");
 
 /// An operation's name in messages: its number, after its task's id for a task's.
 pub fn op_id(task: &str, n: u64) -> String {
@@ -130,12 +162,12 @@ impl Journal {
     }
 
     /// Creates a new journal for a new run. Fails if the file already exists.
-    pub fn create(path: &Path, program_sha256: &str, config_sha256: &str) -> Result<Journal, String> {
-        Journal::create_with_id(path, &new_run_id()?, program_sha256, config_sha256)
+    pub fn create(path: &Path, binding: &Binding) -> Result<Journal, String> {
+        Journal::create_with_id(path, &new_run_id()?, binding)
     }
 
     /// As `create`, for a run whose id the caller drew with `new_run_id`.
-    pub fn create_with_id(path: &Path, run_id: &str, program_sha256: &str, config_sha256: &str) -> Result<Journal, String> {
+    pub fn create_with_id(path: &Path, run_id: &str, binding: &Binding) -> Result<Journal, String> {
         if run_id.len() != 32 || !run_id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
             return Err(format!("run id '{run_id}' is not 32 lowercase hexadecimal characters"));
         }
@@ -157,16 +189,20 @@ impl Journal {
         let mut j = Journal::with(Some(file), run_id.clone(), BTreeMap::new(), None);
         j.write(&json!({
             "j": "start", "version": VERSION, "run_id": run_id,
-            "program_sha256": program_sha256, "config_sha256": config_sha256,
+            "program_sha256": binding.program_sha256, "config_sha256": binding.config_sha256,
+            "staalc": STAALC, "engine": binding.engine, "proxies": binding.proxies,
         }))?;
         // Make the new file's directory entry durable too.
         sync_parent_dir(path)?;
         Ok(j)
     }
 
-    /// Opens an existing journal to resume its run. The program and config must be
-    /// exactly those it was started with.
-    pub fn resume(path: &Path, program_sha256: &str, config_sha256: &str) -> Result<Journal, String> {
+    /// Opens an existing journal to resume its run. The program, config and proxies must
+    /// be exactly those it was started with. Unless the run has already ended, a
+    /// `resume` record is appended, and flushed, before anything else happens: which
+    /// `staalc` and which engine carry the run on. A run that has ended is only replayed,
+    /// which changes nothing, and gets no record.
+    pub fn resume(path: &Path, binding: &Binding) -> Result<Journal, String> {
         let (file, records) = open_existing(path)?;
         let start = records.first().ok_or_else(|| {
             format!(
@@ -174,10 +210,23 @@ impl Journal {
                 path.display()
             )
         })?;
-        check_start(start, program_sha256, config_sha256, path)?;
+        check_start(start, binding, path)?;
         let run_id = start["run_id"].as_str().unwrap_or_default().to_string(); // checked by check_start
-        let (pending, recorded_end) = check_body(&records[1..], path)?;
-        Ok(Journal::with(Some(file), run_id, pending, recorded_end))
+        let (pending, recorded_end) = check_body(&records[1..], &run_id, path)?;
+        let ended = recorded_end.is_some();
+        let mut j = Journal::with(Some(file), run_id, pending, recorded_end);
+        if !ended {
+            let at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| "the system clock is before 1970".to_string())?
+                .as_millis() as u64;
+            j.write(&json!({
+                "j": "resume", "run_id": j.run_id, "version": VERSION, "staalc": STAALC, "engine": binding.engine,
+                "program_sha256": binding.program_sha256, "config_sha256": binding.config_sha256,
+                "proxies": binding.proxies, "at_ms": at_ms,
+            }))?;
+        }
+        Ok(j)
     }
 
     /// Records an operator's answer for an action left in doubt.
@@ -189,7 +238,9 @@ impl Journal {
         if start["j"] != "start" {
             return Err(format!("journal {}: first record is not a start record", path.display()));
         }
-        let (pending, recorded_end) = check_body(&records[1..], path)?;
+        check_version(start, path)?;
+        let run_id = start["run_id"].as_str().unwrap_or_default();
+        let (pending, recorded_end) = check_body(&records[1..], run_id, path)?;
         if recorded_end.is_some() {
             return Err("this run has already finished; nothing is in doubt".into());
         }
@@ -481,32 +532,51 @@ pub fn read_records(path: &Path) -> Result<Vec<Json>, String> {
 }
 
 /// Whether a run could be resumed from the journal whose first record is `start`:
-/// the same journal version, the identical program and the identical config. A host
-/// checks this for every unfinished run before resuming any (RUNTIME.md section 11).
-pub fn check_resumable(start: &Json, program_source: &str, config: &Json, path: &Path) -> Result<(), String> {
-    check_start(start, &sha256_hex(program_source.as_bytes()), &sha256_hex(config.to_string().as_bytes()), path)
+/// this journal version, and the identical program, config and proxies. A host checks
+/// this for every unfinished run before resuming any (RUNTIME.md section 11).
+pub fn check_resumable(start: &Json, binding: &Binding, path: &Path) -> Result<(), String> {
+    check_start(start, binding, path)
 }
 
-fn check_start(start: &Json, program_sha256: &str, config_sha256: &str, path: &Path) -> Result<(), String> {
+/// A journal is read only in this version: an older one bound other hashes.
+fn check_version(start: &Json, path: &Path) -> Result<(), String> {
+    if start["version"] != VERSION {
+        let wrote = start.get("staalc").and_then(Json::as_str).map(|v| format!("staalc {v}")).unwrap_or("an older staalc".into());
+        return Err(format!(
+            "journal {} has version {}, written by {wrote}; this staalc {STAALC} reads version {VERSION} only. \
+             Finish or resolve the run with the staalc that started it (RUNTIME.md section 11)",
+            path.display(),
+            start["version"]
+        ));
+    }
+    Ok(())
+}
+
+fn check_start(start: &Json, binding: &Binding, path: &Path) -> Result<(), String> {
     let shown = path.display();
     if start["j"] != "start" {
         return Err(format!("journal {shown}: first record is not a start record"));
     }
-    if start["version"] != 1 && start["version"] != VERSION {
-        return Err(format!("journal {shown} has version {}, but this staalc reads version {VERSION}", start["version"]));
-    }
+    check_version(start, path)?;
     let id_ok = start["run_id"].as_str().is_some_and(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit()));
     if !id_ok {
         return Err(format!("journal {shown}: start record has no valid run id"));
     }
-    if start["program_sha256"] != program_sha256 {
+    if start["program_sha256"] != binding.program_sha256.as_str() {
         return Err(format!(
             "journal {shown} was started with a different program; resume needs the identical program, every module included"
         ));
     }
-    if start["config_sha256"] != config_sha256 {
+    if start["config_sha256"] != binding.config_sha256.as_str() {
         return Err(format!(
             "journal {shown} was started with a different run config; resume needs the identical config"
+        ));
+    }
+    if start["proxies"] != binding.proxies {
+        return Err(format!(
+            "journal {shown} was started with the proxies {}, but they are now {}; resume needs the same proxy \
+             configuration (the proxy variables of the environment), so requests take the route they took",
+            start["proxies"], binding.proxies
         ));
     }
     Ok(())
@@ -520,7 +590,7 @@ fn check_start(start: &Json, program_sha256: &str, config_sha256: &str, path: &P
 /// Each stream's records, by task ("" for the program's own).
 type Streams = BTreeMap<String, VecDeque<Json>>;
 
-fn check_body(records: &[Json], path: &Path) -> Result<(Streams, Option<Json>), String> {
+fn check_body(records: &[Json], run_id: &str, path: &Path) -> Result<(Streams, Option<Json>), String> {
     let bad = |i: usize, why: String| format!("journal {} is corrupt at line {}: {why}", path.display(), i + 2);
     /// Within an open operation: the last record was its intent or an attempt (the
     /// operation is in doubt), or a retry authorization (an attempt must come next).
@@ -589,6 +659,26 @@ fn check_body(records: &[Json], path: &Path) -> Result<(Streams, Option<Json>), 
                 st.open_intent = false;
                 st.last_was_retry = false;
                 st.expect_n += 1;
+            }
+            Some("resume") => {
+                // Which staalc and engine carried the run on after a crash. Not an
+                // operation: no task, no number; it changes no stream.
+                let hex64 = |v: &Json| v.as_str().is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+                let ok = rec.get("t").is_none()
+                    && rec.get("n").is_none()
+                    && !run_id.is_empty()
+                    && rec["run_id"] == run_id
+                    && rec["version"] == VERSION
+                    && rec["staalc"].is_string()
+                    && matches!(rec["engine"].as_str(), Some("interpreter" | "native"))
+                    && hex64(&rec["program_sha256"])
+                    && hex64(&rec["config_sha256"])
+                    && rec["proxies"].is_object()
+                    && rec["at_ms"].is_u64();
+                if !ok {
+                    return Err(bad(i, "malformed resume record".into()));
+                }
+                continue;
             }
             Some("end") => {
                 if let Some((t, s)) = states.iter().find(|(_, s)| s.open_intent) {
@@ -690,6 +780,27 @@ impl Failpoint {
 mod tests {
     use super::*;
 
+    /// A binding whose hashes are the SHA-256 of `program` and `config`, on the
+    /// interpreter, with no proxies.
+    fn bind(program: &str, config: &str) -> Binding {
+        Binding {
+            program_sha256: sha256_hex(program.as_bytes()),
+            config_sha256: sha256_hex(config.as_bytes()),
+            engine: "interpreter",
+            proxies: json!({ "net": null, "model": null }),
+        }
+    }
+
+    /// The start record `bind(program, config)` writes, as a line, with a fixed run id.
+    fn start_line(program: &str, config: &str) -> String {
+        let b = bind(program, config);
+        json!({ "j": "start", "version": VERSION, "run_id": "00000000000000000000000000000000",
+                "program_sha256": b.program_sha256, "config_sha256": b.config_sha256,
+                "staalc": STAALC, "engine": b.engine, "proxies": b.proxies })
+        .to_string()
+            + "\n"
+    }
+
     fn tmp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("staalc-journal-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -720,7 +831,7 @@ mod tests {
     #[test]
     fn a_new_run_replays_exactly_after_reopening() {
         let p = tmp("roundtrip");
-        let mut j = Journal::create(&p, "P", "C").unwrap();
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         let Step::Perform { n, key } = j.begin("", "model", json!({ "q": 1 })).unwrap() else { panic!() };
         assert_eq!(n, 1);
         assert!(key.ends_with("-1"));
@@ -731,7 +842,7 @@ mod tests {
         let run_id = j.run_id().to_string();
         drop(j);
 
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert_eq!(r.run_id(), run_id);
         assert!(r.is_resuming());
         assert_eq!(r.begin("", "model", json!({ "q": 1 })).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": { "a": 2 } })));
@@ -739,7 +850,7 @@ mod tests {
         r.end(json!({ "ok": true, "result": 7 })).unwrap();
         // Resuming again is idempotent.
         drop(r);
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         r.begin("", "model", json!({ "q": 1 })).unwrap();
         r.begin("", "action", json!({ "x": "y" })).unwrap();
         assert!(r.end(json!({ "ok": false })).is_err(), "a different ending is divergence");
@@ -748,7 +859,7 @@ mod tests {
     #[test]
     fn tasks_are_streams_of_their_own_and_replay_whatever_the_interleaving() {
         let p = tmp("tasks");
-        let mut j = Journal::create(&p, "P", "C").unwrap();
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         let Step::Perform { n, key } = j.begin("", "count", json!(0)).unwrap() else { panic!() };
         j.finish("", n, Ok(json!(1))).unwrap();
         // Two tasks, interleaved: each numbered from 1 by itself, with keys of its own.
@@ -767,14 +878,14 @@ mod tests {
         j.end(json!({ "ok": true })).unwrap();
         drop(j);
         // Replayed in a different order across tasks: each task still gets its own.
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert!(matches!(r.begin("", "count", json!(0)).unwrap(), Step::Replay(_)));
         assert_eq!(r.begin("2.0", "model", json!("a")).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": "A", "t": "2.0" })));
         assert_eq!(r.begin("2.0", "action", json!("a2")).unwrap(), Step::Replay(json!({ "j": "result", "n": 2, "ok": { "receipt": "r" }, "t": "2.0" })));
         assert_eq!(r.begin("2.1", "model", json!("b")).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": "B", "t": "2.1" })));
         // A task that asks for something else than it recorded diverges.
         drop(r);
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         r.begin("", "count", json!(0)).unwrap();
         assert!(r.begin("2.1", "model", json!("a")).unwrap_err().contains("operation 2.1:1"));
     }
@@ -782,7 +893,7 @@ mod tests {
     #[test]
     fn each_task_in_doubt_is_resolved_by_name() {
         let p = tmp("tasks-doubt");
-        let mut j = Journal::create(&p, "P", "C").unwrap();
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         j.begin("1.0", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
         j.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
         drop(j); // both in flight when the process died
@@ -793,14 +904,14 @@ mod tests {
         // One left: it is the one resolved without a name.
         let msg = Journal::resolve(&p, Resolution::Retry, None).unwrap();
         assert!(msg.contains("operation 1.0:1"), "{msg}");
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert!(matches!(r.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" })).unwrap(), Step::Replay(_)));
         assert!(matches!(r.begin("1.0", "action", json!({ "capability": "email.send", "method": "send" })).unwrap(), Step::Perform { .. }));
     }
 
     #[test]
     fn task_records_are_validated_stream_by_stream() {
-        let start = "{\"j\":\"start\",\"version\":2,\"run_id\":\"00000000000000000000000000000000\",\"program_sha256\":\"P\",\"config_sha256\":\"C\"}\n";
+        let start = start_line("P", "C");
         let intent = |t: &str, n: u64| format!("{{\"j\":\"intent\",\"n\":{n},\"op\":\"count\",\"key\":\"k\",\"body\":1,\"t\":\"{t}\"}}\n");
         let result = |t: &str, n: u64| format!("{{\"j\":\"result\",\"n\":{n},\"ok\":1,\"t\":\"{t}\"}}\n");
         for (body, why) in [
@@ -811,22 +922,22 @@ mod tests {
         ] {
             let p = tmp("tasks-bad");
             std::fs::write(&p, format!("{start}{body}")).unwrap();
-            let e = Journal::resume(&p, "P", "C").unwrap_err();
+            let e = Journal::resume(&p, &bind("P", "C")).unwrap_err();
             assert!(e.contains(why), "{e}");
         }
         // Interleaved streams, each complete: valid.
         let p = tmp("tasks-good");
         std::fs::write(&p, format!("{start}{}{}{}{}", intent("1.0", 1), intent("1.1", 1), result("1.1", 1), result("1.0", 1))).unwrap();
-        assert!(Journal::resume(&p, "P", "C").is_ok());
+        assert!(Journal::resume(&p, &bind("P", "C")).is_ok());
     }
 
     #[test]
     fn an_intent_without_result_is_in_doubt() {
         let p = tmp("doubt");
-        let mut j = Journal::create(&p, "P", "C").unwrap();
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         let Step::Perform { key, .. } = j.begin("", "action", json!(1)).unwrap() else { panic!() };
         drop(j); // crash before finish
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert_eq!(r.begin("", "action", json!(1)).unwrap(), Step::InDoubt { n: 1, key: key.clone() });
         r.finish("", 1, Ok(json!({ "receipt": "R" }))).unwrap();
         let Step::Perform { n, .. } = r.begin("", "count", json!(2)).unwrap() else { panic!() };
@@ -836,11 +947,11 @@ mod tests {
     #[test]
     fn divergence_is_detected() {
         let p = tmp("diverge");
-        let mut j = Journal::create(&p, "P", "C").unwrap();
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         let Step::Perform { n, .. } = j.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap() else { panic!() };
         j.finish("", n, Ok(json!({}))).unwrap();
         drop(j);
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         let e = r.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap_err();
         assert!(e.contains("payments.refund") && e.contains("email.send"), "{e}");
     }
@@ -848,16 +959,16 @@ mod tests {
     #[test]
     fn program_and_config_must_be_identical() {
         let p = tmp("hashes");
-        drop(Journal::create(&p, "P", "C").unwrap());
-        assert!(Journal::resume(&p, "P2", "C").unwrap_err().contains("different program"));
-        assert!(Journal::resume(&p, "P", "C2").unwrap_err().contains("different run config"));
-        assert!(Journal::create(&p, "P", "C").unwrap_err().contains("already exists"));
+        drop(Journal::create(&p, &bind("P", "C")).unwrap());
+        assert!(Journal::resume(&p, &bind("P2", "C")).unwrap_err().contains("different program"));
+        assert!(Journal::resume(&p, &bind("P", "C2")).unwrap_err().contains("different run config"));
+        assert!(Journal::create(&p, &bind("P", "C")).unwrap_err().contains("already exists"));
     }
 
     #[test]
     fn a_torn_last_line_is_discarded() {
         let p = tmp("torn");
-        let mut j = Journal::create(&p, "P", "C").unwrap();
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         let Step::Perform { n, .. } = j.begin("", "count", json!(1)).unwrap() else { panic!() };
         j.finish("", n, Ok(json!(5))).unwrap();
         drop(j);
@@ -865,30 +976,30 @@ mod tests {
         let mut f = OpenOptions::new().append(true).open(&p).unwrap();
         f.write_all(b"{\"j\":\"intent\",\"n\":2,\"op\":\"mod").unwrap();
         drop(f);
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert!(matches!(r.begin("", "count", json!(1)).unwrap(), Step::Replay(_)));
         assert!(matches!(r.begin("", "model", json!(2)).unwrap(), Step::Perform { n: 2, .. }), "op 2 never started");
         drop(r);
         // The repaired file is well formed.
-        Journal::resume(&p, "P", "C").unwrap();
+        Journal::resume(&p, &bind("P", "C")).unwrap();
     }
 
     #[test]
     fn damage_before_the_last_line_is_refused() {
         let p = tmp("corrupt");
-        let mut j = Journal::create(&p, "P", "C").unwrap();
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         let Step::Perform { n, .. } = j.begin("", "count", json!(1)).unwrap() else { panic!() };
         j.finish("", n, Ok(json!(5))).unwrap();
         drop(j);
         let text = std::fs::read_to_string(&p).unwrap().replace("\"result\"", "\"resul");
         std::fs::write(&p, text).unwrap();
-        assert!(Journal::resume(&p, "P", "C").unwrap_err().contains("corrupt"));
+        assert!(Journal::resume(&p, &bind("P", "C")).unwrap_err().contains("corrupt"));
     }
 
     #[test]
     fn structure_is_validated_before_anything_runs() {
         let p = tmp("structure");
-        drop(Journal::create(&p, "P", "C").unwrap());
+        drop(Journal::create(&p, &bind("P", "C")).unwrap());
         let base = std::fs::read_to_string(&p).unwrap();
         let cases = [
             ("{\"j\":\"result\",\"n\":1,\"ok\":1}\n", "does not follow its intent"),
@@ -906,7 +1017,7 @@ mod tests {
         ];
         for (extra, want) in cases {
             std::fs::write(&p, format!("{base}{extra}")).unwrap();
-            let e = Journal::resume(&p, "P", "C").unwrap_err();
+            let e = Journal::resume(&p, &bind("P", "C")).unwrap_err();
             assert!(e.contains(want), "{extra:?}: {e}");
         }
     }
@@ -914,40 +1025,40 @@ mod tests {
     #[test]
     fn only_one_process_may_hold_a_journal() {
         let p = tmp("lock");
-        let held = Journal::create(&p, "P", "C").unwrap();
+        let held = Journal::create(&p, &bind("P", "C")).unwrap();
         // The lock is per open file description, so a second open in this process is refused too.
-        assert!(Journal::resume(&p, "P", "C").unwrap_err().contains("in use"));
+        assert!(Journal::resume(&p, &bind("P", "C")).unwrap_err().contains("in use"));
         drop(held);
-        Journal::resume(&p, "P", "C").unwrap();
+        Journal::resume(&p, &bind("P", "C")).unwrap();
     }
 
     #[test]
     fn an_authorized_retry_is_one_attempt() {
         let p = tmp("retry");
         let body = json!({ "capability": "email.send", "method": "send" });
-        let mut j = Journal::create(&p, "P", "C").unwrap();
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         j.begin("", "action", body.clone()).unwrap();
         drop(j); // crash: the action is in doubt
-        assert!(matches!(Journal::resume(&p, "P", "C").unwrap().begin("", "action", body.clone()).unwrap(), Step::InDoubt { .. }));
+        assert!(matches!(Journal::resume(&p, &bind("P", "C")).unwrap().begin("", "action", body.clone()).unwrap(), Step::InDoubt { .. }));
         Journal::resolve(&p, Resolution::Retry, None).unwrap();
         assert!(Journal::resolve(&p, Resolution::Retry, None).unwrap_err().contains("already authorized"));
         // Resume performs it, recording the attempt first.
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert!(matches!(r.begin("", "action", body.clone()).unwrap(), Step::Perform { n: 1, .. }));
         drop(r); // crash during the authorized attempt
         // That attempt may have happened: in doubt again, never silently retried twice.
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert!(matches!(r.begin("", "action", body.clone()).unwrap(), Step::InDoubt { n: 1, .. }));
         drop(r);
         Journal::resolve(&p, Resolution::Performed { receipt: "R9".into() }, None).unwrap();
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert_eq!(r.begin("", "action", body).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": { "receipt": "R9" } })));
     }
 
     #[test]
     fn retries_are_only_for_actions_in_doubt() {
         let p = tmp("retry-structure");
-        drop(Journal::create(&p, "P", "C").unwrap());
+        drop(Journal::create(&p, &bind("P", "C")).unwrap());
         let base = std::fs::read_to_string(&p).unwrap();
         let count = "{\"j\":\"intent\",\"n\":1,\"op\":\"count\",\"key\":\"k\",\"body\":1}\n";
         let action = "{\"j\":\"intent\",\"n\":1,\"op\":\"action\",\"key\":\"k\",\"body\":1}\n";
@@ -963,24 +1074,24 @@ mod tests {
         ];
         for (extra, want) in cases {
             std::fs::write(&p, format!("{base}{extra}")).unwrap();
-            let e = Journal::resume(&p, "P", "C").unwrap_err();
+            let e = Journal::resume(&p, &bind("P", "C")).unwrap_err();
             assert!(e.contains(want), "{extra:?}: {e}");
         }
         // The valid shape: intent, retry, attempt, result.
         std::fs::write(&p, format!("{base}{action}{retry}{attempt}{result}")).unwrap();
-        Journal::resume(&p, "P", "C").unwrap();
+        Journal::resume(&p, &bind("P", "C")).unwrap();
     }
 
     #[test]
     fn resolve_answers_only_an_action_in_doubt() {
         let p = tmp("resolve");
-        let mut j = Journal::create(&p, "P", "C").unwrap();
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         j.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap();
         drop(j);
         let msg = Journal::resolve(&p, Resolution::Performed { receipt: "re_123".into() }, None).unwrap();
         assert!(msg.contains("payments.refund.refund"), "{msg}");
         assert!(Journal::resolve(&p, Resolution::Failed { message: "x".into() }, None).unwrap_err().contains("no operation is in doubt"));
-        let mut r = Journal::resume(&p, "P", "C").unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         let step = r.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap();
         assert_eq!(step, Step::Replay(json!({ "j": "result", "n": 1, "ok": { "receipt": "re_123" } })));
     }
@@ -989,7 +1100,7 @@ mod tests {
     fn an_action_resume_makes_again_is_never_resolved() {
         for cap in ["fs.read", "fs.write", "db.sqlite.query", "net.tcp.accept", "net.tcp.reply", "net.tls.accept", "net.tls.reply"] {
             let p = tmp(&format!("again-{cap}"));
-            let mut j = Journal::create(&p, "P", "C").unwrap();
+            let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
             j.begin("", "action", json!({ "capability": cap, "method": "m" })).unwrap();
             drop(j);
             let before = std::fs::read_to_string(&p).unwrap();
@@ -999,5 +1110,136 @@ mod tests {
             }
             assert_eq!(std::fs::read_to_string(&p).unwrap(), before, "{cap}: the journal changed");
         }
+    }
+
+    fn records(p: &Path) -> Vec<Json> {
+        read_records(p).unwrap()
+    }
+
+    #[test]
+    fn the_start_record_says_what_started_the_run() {
+        let p = tmp("start-record");
+        let mut b = bind("P", "C");
+        b.engine = "native";
+        b.proxies = json!({ "net": { "from": "HTTPS_PROXY", "scheme": "http", "host": "proxy.example", "port": 3128, "no_proxy": [] }, "model": null });
+        drop(Journal::create(&p, &b).unwrap());
+        let start = &records(&p)[0];
+        assert_eq!(start["version"], VERSION);
+        assert_eq!(start["staalc"], STAALC);
+        assert_eq!(start["engine"], "native");
+        assert_eq!(start["proxies"], b.proxies);
+        assert_eq!(start["program_sha256"], sha256_hex(b"P"));
+        assert_eq!(start["config_sha256"], sha256_hex(b"C"));
+    }
+
+    #[test]
+    fn each_resume_of_an_unfinished_run_is_recorded_and_the_start_never_changes() {
+        let p = tmp("resume-records");
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+        let Step::Perform { n, .. } = j.begin("", "action", json!({ "x": 1 })).unwrap() else { panic!() };
+        drop(j); // crashed with the action in doubt
+        let start = records(&p)[0].clone();
+
+        // Resumed on the other engine, then again on the first.
+        let mut native = bind("P", "C");
+        native.engine = "native";
+        drop(Journal::resume(&p, &native).unwrap());
+        drop(Journal::resume(&p, &bind("P", "C")).unwrap());
+        let recs = records(&p);
+        assert_eq!(recs[0], start, "the start record changed");
+        let resumes: Vec<&Json> = recs.iter().filter(|r| r["j"] == "resume").collect();
+        assert_eq!(resumes.len(), 2);
+        assert_eq!((resumes[0]["engine"].as_str(), resumes[1]["engine"].as_str()), (Some("native"), Some("interpreter")));
+        for r in &resumes {
+            assert_eq!(r["run_id"], start["run_id"]);
+            assert_eq!(r["staalc"], STAALC);
+            assert_eq!(r["version"], VERSION);
+            assert_eq!(r["program_sha256"], sha256_hex(b"P"));
+            assert_eq!(r["config_sha256"], sha256_hex(b"C"));
+            assert!(r["at_ms"].as_u64().unwrap() > 1_700_000_000_000);
+        }
+        // The resume records change no stream: the action is still in doubt, and once
+        // resolved the run finishes as it would have.
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
+        assert!(matches!(r.begin("", "action", json!({ "x": 1 })).unwrap(), Step::InDoubt { n: 1, .. }));
+        r.finish("", n, Ok(json!({ "receipt": "R" }))).unwrap();
+        r.end(json!({ "ok": true })).unwrap();
+        drop(r);
+
+        // A run that has ended is only replayed: nothing is added.
+        let before = std::fs::read_to_string(&p).unwrap();
+        drop(Journal::resume(&p, &bind("P", "C")).unwrap());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn a_malformed_resume_record_is_corruption() {
+        let good = json!({ "j": "resume", "run_id": "00000000000000000000000000000000", "version": VERSION, "staalc": STAALC, "engine": "interpreter",
+            "program_sha256": sha256_hex(b"P"), "config_sha256": sha256_hex(b"C"),
+            "proxies": { "net": null, "model": null }, "at_ms": 1_800_000_000_000u64 });
+        let mut bad: Vec<Json> = Vec::new();
+        for (k, v) in [("run_id", json!("11111111111111111111111111111111")), ("engine", json!("jit")), ("version", json!(2)), ("program_sha256", json!("P")), ("at_ms", json!(-1)),
+            ("proxies", json!(null)), ("t", json!("1.0")), ("n", json!(1))]
+        {
+            let mut r = good.clone();
+            r[k] = v;
+            bad.push(r);
+        }
+        let mut missing = good.clone();
+        missing.as_object_mut().unwrap().remove("staalc");
+        bad.push(missing);
+        for r in bad {
+            let p = tmp("resume-bad");
+            std::fs::write(&p, format!("{}{r}\n", start_line("P", "C"))).unwrap();
+            let e = Journal::resume(&p, &bind("P", "C")).unwrap_err();
+            assert!(e.contains("malformed resume record"), "{r}: {e}");
+        }
+        let p = tmp("resume-good");
+        std::fs::write(&p, format!("{}{good}\n", start_line("P", "C"))).unwrap();
+        Journal::resume(&p, &bind("P", "C")).unwrap();
+    }
+
+    #[test]
+    fn a_resume_needs_the_proxies_the_run_started_with() {
+        let p = tmp("proxies");
+        drop(Journal::create(&p, &bind("P", "C")).unwrap());
+        let mut other = bind("P", "C");
+        other.proxies = json!({ "net": null, "model": { "from": "ALL_PROXY", "scheme": "http", "host": "p", "port": 80, "no_proxy": [] } });
+        let e = Journal::resume(&p, &other).unwrap_err();
+        assert!(e.contains("proxies"), "{e}");
+        assert!(check_resumable(&records(&p)[0], &other, &p).is_err());
+        assert!(check_resumable(&records(&p)[0], &bind("P", "C"), &p).is_ok());
+    }
+
+    #[test]
+    fn an_older_journal_version_is_refused_by_name() {
+        for (version, staalc) in [(1, None), (2, Some("0.27.0"))] {
+            let p = tmp("old-version");
+            let mut start = json!({ "j": "start", "version": version, "run_id": "00000000000000000000000000000000",
+                "program_sha256": "P", "config_sha256": "C" });
+            if let Some(v) = staalc {
+                start["staalc"] = json!(v);
+            }
+            std::fs::write(&p, format!("{start}\n")).unwrap();
+            let e = Journal::resume(&p, &bind("P", "C")).unwrap_err();
+            assert!(e.contains(&format!("has version {version}")) && e.contains("with the staalc that started it"), "{e}");
+            let e = Journal::resolve(&p, Resolution::Retry, None).unwrap_err();
+            assert!(e.contains(&format!("has version {version}")), "{e}");
+        }
+    }
+
+    #[test]
+    fn the_config_is_bound_by_its_canonical_form() {
+        // The same config, written with its keys in another order and other spacing,
+        // binds the same; any change of value does not.
+        let a: Json = serde_json::from_str(r#"{"entry":"main","inputs":{"b":1,"a":2.50}}"#).unwrap();
+        let b: Json = serde_json::from_str(r#"{ "inputs" : { "a" : 2.5 , "b" : 1 } , "entry" : "main" }"#).unwrap();
+        let c: Json = serde_json::from_str(r#"{"entry":"main","inputs":{"b":1,"a":2.51}}"#).unwrap();
+        let p = json!({ "net": null, "model": null });
+        let ba = Binding::of("F", &a, "interpreter", p.clone()).unwrap();
+        assert_eq!(ba, Binding::of("F", &b, "interpreter", p.clone()).unwrap());
+        assert_ne!(ba.config_sha256, Binding::of("F", &c, "interpreter", p.clone()).unwrap().config_sha256);
+        assert_eq!(ba.config_sha256, sha256_hex(br#"{"entry":"main","inputs":{"a":2.5,"b":1}}"#));
+        assert!(Binding::of("F", &json!({ "n": 9007199254740993u64 }), "interpreter", p).is_err());
     }
 }

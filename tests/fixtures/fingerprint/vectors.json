@@ -1,0 +1,466 @@
+{
+ "generated_by": "scripts/fingerprint.py",
+ "vectors": [
+  {
+   "name": "one file, no project",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": null,
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:none,",
+   "sha256": "008c7651fb28c239adfb9a49769ca27979e1f620c41d169f5d70744b6572fc34"
+  },
+  {
+   "name": "one file, its text changed by one byte",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 2\n}\n"
+    ]
+   ],
+   "project": null,
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 2\n}\n,7:project,4:none,",
+   "sha256": "405a0d62a40cb22ffaeb17f7b1624976813f2d731835ad37d7cb02a0b3064856"
+  },
+  {
+   "name": "an empty file",
+   "modules": [
+    [
+     "",
+     ""
+    ]
+   ],
+   "project": null,
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,0:,7:project,4:none,",
+   "sha256": "c73ff51cb4c75ee23c480fb5251be8efd03900c27b5bb7059763a5942c7783e7"
+  },
+  {
+   "name": "two modules",
+   "modules": [
+    [
+     "",
+     "import m\nfn main() -> Int {\n    return 1\n}\n"
+    ],
+    [
+     "m",
+     "pub fn f() {}\n"
+    ]
+   ],
+   "project": null,
+   "fingerprint": "16:staal-program-v3,7:modules,1:2,0:,43:import m\nfn main() -> Int {\n    return 1\n}\n,1:m,14:pub fn f() {}\n,7:project,4:none,",
+   "sha256": "cfc75e4cc94e01edaa406b2526b7a1e281dd57edd133e958ea74829508176d52"
+  },
+  {
+   "name": "non-ASCII path and text",
+   "modules": [
+    [
+     "",
+     "import été\nfn main() -> Int {\n    return 1\n}\n"
+    ],
+    [
+     "été.x",
+     "// π 😀\n"
+    ]
+   ],
+   "project": null,
+   "fingerprint": "16:staal-program-v3,7:modules,1:2,0:,47:import été\nfn main() -> Int {\n    return 1\n}\n,7:été.x,11:// π 😀\n,7:project,4:none,",
+   "sha256": "d0f465d2b3b33b281fa2886cd19cee90e420beb06decf8e8117975b7df0013e8"
+  },
+  {
+   "name": "a project with no lock and no packages",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{}",
+    "lock": null,
+    "packages": []
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,2:{},4:lock,4:none,8:packages,1:0,",
+   "sha256": "19f3ce46f769cc1b3f0e97dbb2fd698567875f8ce892be343c118adda0c052df"
+  },
+  {
+   "name": "a project with an empty lock",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{}",
+    "lock": "{\"packages\":{}}",
+    "packages": []
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,2:{},4:lock,4:some,15:{\"packages\":{}},8:packages,1:0,",
+   "sha256": "34cb5ccdd6d15f849b8992d1ce2ca2e5841d703b32c6aaaacfac00cf6415a217"
+  },
+  {
+   "name": "a project whose manifest changed",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{ }",
+    "lock": null,
+    "packages": []
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,3:{ },4:lock,4:none,8:packages,1:0,",
+   "sha256": "84fb5305155ff989e015cf4a4c97daa1f4622d6ad4eb250a04524f988c5ca406"
+  },
+  {
+   "name": "one package",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ],
+    [
+     "sms.termii",
+     "pub fn f() {}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+    "lock": "{\"packages\":{}}",
+    "packages": [
+     {
+      "name": "sms",
+      "git": "https://example.com/sms.git",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": [
+       [
+        "staal.json",
+        "7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee"
+       ],
+       [
+        "termii.staal",
+        "16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47"
+       ]
+      ]
+     }
+    ]
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:2,0:,34:fn main() -> Int {\n    return 1\n}\n,10:sms.termii,14:pub fn f() {}\n,7:project,4:some,114:{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}},4:lock,4:some,15:{\"packages\":{}},8:packages,1:1,3:sms,27:https://example.com/sms.git,40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1:2,10:staal.json,64:7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee,12:termii.staal,64:16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47,",
+   "sha256": "10b8e814f65f7a9db7c5c5c4b86b57ab5f05728b12d9497751a90741b31a5d4c"
+  },
+  {
+   "name": "two packages given out of order",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+    "lock": "{\"packages\":{}}",
+    "packages": [
+     {
+      "name": "sms",
+      "git": "https://example.com/sms.git",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": [
+       [
+        "staal.json",
+        "7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee"
+       ],
+       [
+        "termii.staal",
+        "16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47"
+       ]
+      ]
+     },
+     {
+      "name": "pay",
+      "git": "https://example.com/pay.git",
+      "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "files": [
+       [
+        "staal.json",
+        "8bb7747e01fa16c13c68845cc441bd902c89ea872a80f2d8f9da0246820508a0"
+       ],
+       [
+        "a/b.staal",
+        "1ee1c112ff9f2a6225817fc14caf3eb23f8f6a82bc0155f1b1616a4aa3efc983"
+       ]
+      ]
+     }
+    ]
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,114:{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}},4:lock,4:some,15:{\"packages\":{}},8:packages,1:2,3:pay,27:https://example.com/pay.git,40:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,1:2,9:a/b.staal,64:1ee1c112ff9f2a6225817fc14caf3eb23f8f6a82bc0155f1b1616a4aa3efc983,10:staal.json,64:8bb7747e01fa16c13c68845cc441bd902c89ea872a80f2d8f9da0246820508a0,3:sms,27:https://example.com/sms.git,40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1:2,10:staal.json,64:7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee,12:termii.staal,64:16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47,",
+   "sha256": "0b0954a17c81805b53640e14e34d3d6633b9ca8f7f80cdf6d35bdf44d069ceb0"
+  },
+  {
+   "name": "a package file at another path",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+    "lock": "{\"packages\":{}}",
+    "packages": [
+     {
+      "name": "sms",
+      "git": "https://example.com/sms.git",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": [
+       [
+        "staal.json",
+        "7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee"
+       ],
+       [
+        "termii2.staal",
+        "16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47"
+       ]
+      ]
+     }
+    ]
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,114:{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}},4:lock,4:some,15:{\"packages\":{}},8:packages,1:1,3:sms,27:https://example.com/sms.git,40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1:2,10:staal.json,64:7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee,13:termii2.staal,64:16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47,",
+   "sha256": "431e31c5f1c87efdc9b377baa781c9cd3dba09494ccd0f00517c2ae2ba8f22f7"
+  },
+  {
+   "name": "a package file with other content",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+    "lock": "{\"packages\":{}}",
+    "packages": [
+     {
+      "name": "sms",
+      "git": "https://example.com/sms.git",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": [
+       [
+        "staal.json",
+        "7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee"
+       ],
+       [
+        "termii.staal",
+        "9508badae5945475db5f9a0d68d936c4c6c4535da84fcada990ce356240855f7"
+       ]
+      ]
+     }
+    ]
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,114:{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}},4:lock,4:some,15:{\"packages\":{}},8:packages,1:1,3:sms,27:https://example.com/sms.git,40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1:2,10:staal.json,64:7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee,12:termii.staal,64:9508badae5945475db5f9a0d68d936c4c6c4535da84fcada990ce356240855f7,",
+   "sha256": "3b08d02747fc1d73ab8bff5ef17a4e0db75e1f715dc4299dfc81edb826016453"
+  },
+  {
+   "name": "a package at another commit",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+    "lock": "{\"packages\":{}}",
+    "packages": [
+     {
+      "name": "sms",
+      "git": "https://example.com/sms.git",
+      "commit": "cccccccccccccccccccccccccccccccccccccccc",
+      "files": [
+       [
+        "staal.json",
+        "7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee"
+       ],
+       [
+        "termii.staal",
+        "16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47"
+       ]
+      ]
+     }
+    ]
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,114:{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}},4:lock,4:some,15:{\"packages\":{}},8:packages,1:1,3:sms,27:https://example.com/sms.git,40:cccccccccccccccccccccccccccccccccccccccc,1:2,10:staal.json,64:7525a62edb1bcda93fc0f131abd65ebe1786f7efbddde6cc069a8185bface5ee,12:termii.staal,64:16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47,",
+   "sha256": "a9ccfc79a3523d2c6fa3a7fa0890b5049810b6d445f7bca6154d25e068472327"
+  },
+  {
+   "name": "a package with no files",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+    "lock": "{\"packages\":{}}",
+    "packages": [
+     {
+      "name": "sms",
+      "git": "https://example.com/sms.git",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": []
+     }
+    ]
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,114:{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}},4:lock,4:some,15:{\"packages\":{}},8:packages,1:1,3:sms,27:https://example.com/sms.git,40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1:0,",
+   "sha256": "b0e895985bf064ee253148d134f5a5f14900c74357394ccca7ae307989ebd5a4"
+  },
+  {
+   "name": "nested dependencies",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+    "lock": "{\"packages\":{}}",
+    "packages": [
+     {
+      "name": "sms",
+      "git": "https://example.com/sms.git",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": [
+       [
+        "staal.json",
+        "f2b442041f41f3ffcc2f0302148b2fa9e9c8af513dc674d16c92a788f470443b"
+       ],
+       [
+        "termii.staal",
+        "88d6cd3077610e9778e327c39d7b77cbbb365100225f6d6d8c1a18e3deaa262f"
+       ]
+      ]
+     },
+     {
+      "name": "pay",
+      "git": "https://example.com/pay.git",
+      "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "files": [
+       [
+        "staal.json",
+        "8bb7747e01fa16c13c68845cc441bd902c89ea872a80f2d8f9da0246820508a0"
+       ],
+       [
+        "a/b.staal",
+        "1ee1c112ff9f2a6225817fc14caf3eb23f8f6a82bc0155f1b1616a4aa3efc983"
+       ]
+      ]
+     }
+    ]
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,114:{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}},4:lock,4:some,15:{\"packages\":{}},8:packages,1:2,3:pay,27:https://example.com/pay.git,40:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,1:2,9:a/b.staal,64:1ee1c112ff9f2a6225817fc14caf3eb23f8f6a82bc0155f1b1616a4aa3efc983,10:staal.json,64:8bb7747e01fa16c13c68845cc441bd902c89ea872a80f2d8f9da0246820508a0,3:sms,27:https://example.com/sms.git,40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1:2,10:staal.json,64:f2b442041f41f3ffcc2f0302148b2fa9e9c8af513dc674d16c92a788f470443b,12:termii.staal,64:88d6cd3077610e9778e327c39d7b77cbbb365100225f6d6d8c1a18e3deaa262f,",
+   "sha256": "a362f5e2908c5b2f2a7bf3c5a434920678d8d6a01d86bc2bc18b9bc91053c1d7"
+  },
+  {
+   "name": "module path a.b",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ],
+    [
+     "a.b",
+     "pub fn f() {}\n"
+    ]
+   ],
+   "project": null,
+   "fingerprint": "16:staal-program-v3,7:modules,1:2,0:,34:fn main() -> Int {\n    return 1\n}\n,3:a.b,14:pub fn f() {}\n,7:project,4:none,",
+   "sha256": "a1e9d4d8b0821be7599ac1bca97eda138369375abdf051fc9605321960712fbf"
+  },
+  {
+   "name": "module path b.a: the same names in the other order",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ],
+    [
+     "b.a",
+     "pub fn f() {}\n"
+    ]
+   ],
+   "project": null,
+   "fingerprint": "16:staal-program-v3,7:modules,1:2,0:,34:fn main() -> Int {\n    return 1\n}\n,3:b.a,14:pub fn f() {}\n,7:project,4:none,",
+   "sha256": "38b3056a6b28e8b8b6b52bd4563c1c14d2fcf1e88ea1772b4351464867baa304"
+  },
+  {
+   "name": "package named ab",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+    "lock": "{\"packages\":{}}",
+    "packages": [
+     {
+      "name": "ab",
+      "git": "https://example.com/x.git",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": [
+       [
+        "staal.json",
+        "ea6b0adee0fc43369f0619e5b0949770f98cd4c0eb90007ebd2c22dc8c02d775"
+       ],
+       [
+        "m.staal",
+        "16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47"
+       ]
+      ]
+     }
+    ]
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,114:{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}},4:lock,4:some,15:{\"packages\":{}},8:packages,1:1,2:ab,25:https://example.com/x.git,40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1:2,7:m.staal,64:16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47,10:staal.json,64:ea6b0adee0fc43369f0619e5b0949770f98cd4c0eb90007ebd2c22dc8c02d775,",
+   "sha256": "7998685bedbc9727591644aa1e5a3e7addf288e493f07dcb581552e85b265596"
+  },
+  {
+   "name": "package named ba: the same letters in the other order",
+   "modules": [
+    [
+     "",
+     "fn main() -> Int {\n    return 1\n}\n"
+    ]
+   ],
+   "project": {
+    "manifest": "{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+    "lock": "{\"packages\":{}}",
+    "packages": [
+     {
+      "name": "ba",
+      "git": "https://example.com/x.git",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": [
+       [
+        "staal.json",
+        "ea6b0adee0fc43369f0619e5b0949770f98cd4c0eb90007ebd2c22dc8c02d775"
+       ],
+       [
+        "m.staal",
+        "16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47"
+       ]
+      ]
+     }
+    ]
+   },
+   "fingerprint": "16:staal-program-v3,7:modules,1:1,0:,34:fn main() -> Int {\n    return 1\n}\n,7:project,4:some,114:{\"dependencies\":{\"sms\":{\"git\":\"https://example.com/sms.git\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}},4:lock,4:some,15:{\"packages\":{}},8:packages,1:1,2:ba,25:https://example.com/x.git,40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1:2,7:m.staal,64:16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47,10:staal.json,64:ea6b0adee0fc43369f0619e5b0949770f98cd4c0eb90007ebd2c22dc8c02d775,",
+   "sha256": "ffe506d45c1297938d6d30860add93b2452c606686b1f48b0cb8444782a569b4"
+  }
+ ]
+}

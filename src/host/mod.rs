@@ -917,7 +917,8 @@ impl Host {
         if checked.result.is_err() {
             return Err(format!("its program {program} now has check errors"));
         }
-        journal::check_resumable(start, &checked.fingerprint, &cfg, journal)?;
+        let binding = crate::interp::binding_for(&checked.fingerprint, &cfg, engine)?;
+        journal::check_resumable(start, &binding, journal)?;
         Ok((checked, engine, cfg))
     }
 

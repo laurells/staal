@@ -69,6 +69,23 @@ fn normal_lines(path: &Path) -> Vec<Json> {
     text.lines().map(|l| serde_json::from_str(l).unwrap()).collect()
 }
 
+/// A journal's lines as `normal_lines` gives them. Its start and resume records name the
+/// engine that wrote them, the one field that rightly differs between `staalc run` (the
+/// interpreter) and an executable (native code): it must be `engine`, and is then blanked
+/// so the rest can be compared.
+fn journal_lines(path: &Path, engine: &str) -> Vec<Json> {
+    normal_lines(path)
+        .into_iter()
+        .map(|mut r| {
+            if r["j"] == "start" || r["j"] == "resume" {
+                assert_eq!(r["engine"], engine, "{}: {r}", path.display());
+                r["engine"] = Json::from("-");
+            }
+            r
+        })
+        .collect()
+}
+
 #[test]
 fn every_runtime_case_is_identical_as_an_executable() {
     let dir = Path::new(ROOT).join("tests/run");
@@ -101,7 +118,7 @@ fn every_runtime_case_is_identical_as_an_executable() {
                 && i.stdout == a.stdout
                 && i.stderr == a.stderr
                 && normal_lines(Path::new(&p("i.log"))) == normal_lines(Path::new(&p("a.log")))
-                && normal_lines(Path::new(&p("i.journal"))) == normal_lines(Path::new(&p("a.journal")));
+                && journal_lines(Path::new(&p("i.journal")), "interpreter") == journal_lines(Path::new(&p("a.journal")), "native");
             if !same {
                 failures.push(format!(
                     "{stem}:\n  staalc {:?} {} {}\n  app     {:?} {} {}",

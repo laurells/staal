@@ -72,6 +72,12 @@ pub trait Provider {
     fn absent(&self) -> Option<&'static str> {
         None
     }
+    /// The proxy this provider's requests go through, as the journal records it
+    /// (`proxy::record`): null for none, which is every provider but one configured
+    /// with `"proxy": "environment"`.
+    fn proxy(&self) -> Json {
+        Json::Null
+    }
 }
 
 /// The provider a run config's `model` object names.

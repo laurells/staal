@@ -4,6 +4,45 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+This release changes the journal format, to version 3. A run left unfinished by
+0.27.0 or earlier does not resume on it: before upgrading, let every unfinished run
+end (`staalc mcp status` lists them) or resolve it with the `staalc` that started it.
+
+### Changed
+
+- A journal binds the whole program by a new source program fingerprint,
+  `staal-program-v3` (RUNTIME.md section 11): every module's path and text, and for a
+  project its `staal.json` and `staal.lock` as text and every package's name, git
+  source, commit and the path and SHA-256 of each of its files. Before, the
+  fingerprint held the modules' text alone, and a package was bound only through the
+  modules it supplied. The construction is a netstring grammar, specified in
+  RUNTIME.md and `src/identity.rs`, with test vectors produced by a second
+  implementation written separately in Python (`scripts/fingerprint.py`).
+- A journal binds its run config by the SHA-256 of its RFC 8785 (JSON
+  Canonicalization Scheme) form, so the hash is defined by a standard, not by how
+  `serde_json` writes JSON. A number that an IEEE double cannot hold exactly (an
+  integer beyond 2^53 that is not a double) is refused in a run config rather than
+  rounded, so two different configs never hash alike. Numbers are written as
+  ECMAScript writes them, checked against Node.js 22 on 6,119 committed vectors.
+- The start record names the `staalc` version and the engine (`interpreter` or
+  `native`) that wrote it, and records the proxies its requests go through. Each
+  resume of an unfinished run appends a `resume` record with the run id, the same
+  fields and the time, so a journal shows every `staalc` and engine that worked on its
+  run.
+- `"proxy": "environment"` (under `net` and under `model`) is read once when the run
+  starts, checked, recorded in the start record as the variable it came from, its
+  scheme, host and port and the `NO_PROXY` entries, and used exactly as recorded. A
+  resume under other proxy variables is refused. The variables are those ureq reads,
+  in its order (`ALL_PROXY`, `all_proxy`, `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`,
+  `http_proxy`, then `NO_PROXY` or `no_proxy`), but stricter: a value that is not a
+  proxy URL is refused instead of skipped, and so are a proxy URL with a user name or
+  password (it would be written to the journal) and a SOCKS proxy (this build cannot
+  use one). `NO_PROXY` entries are trimmed and lowercased.
+- A journal of any version but 3 is refused, saying to finish or resolve its run with
+  the `staalc` that started it; `staalc resolve` checks the version too.
+
 ## 0.27.0 — 2026-11-09
 
 The version reviewed in Staal's first independent security review

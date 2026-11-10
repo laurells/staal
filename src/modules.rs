@@ -50,21 +50,10 @@ pub struct Loaded {
 }
 
 impl Loaded {
-    /// Text that identifies the program exactly: a journal records its hash, so a run
-    /// cannot be resumed after any of its files changed. For a single-file program it
-    /// is that file's text.
-    pub fn fingerprint(&self) -> String {
-        if self.files.len() == 1 {
-            return self.files[0].text.clone();
-        }
-        // Module paths, not file names: the same program resumed from another folder,
-        // or after the folder was moved, is still the same program.
-        let mut s = String::from("staal-modules-v2\n");
-        for (f, path) in self.files.iter().zip(&self.paths) {
-            let name = path.join(".");
-            s.push_str(&format!("{}\n{name}\n{}\n{}\n", name.len(), f.text.len(), f.text));
-        }
-        s
+    /// Every module of the program: its module path (segments joined by `.`, empty for
+    /// the entry file) and its text, for the program's fingerprint (`identity`).
+    pub fn modules(&self) -> Vec<(String, &str)> {
+        self.files.iter().zip(&self.paths).map(|(f, path)| (path.join("."), f.text.as_str())).collect()
     }
 }
 

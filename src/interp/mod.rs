@@ -20,6 +20,7 @@ pub mod tcp;
 pub mod money;
 pub mod anthropic;
 pub mod provider;
+pub mod proxy;
 pub mod time;
 pub mod value;
 
@@ -525,13 +526,11 @@ fn run_impl(
 ) -> Result<RunResult, String> {
     // Validate everything first: a bad config must not even create a journal.
     let setup = Setup::from_config(prog, config)?;
-    let program_sha = journal::sha256_hex(source.as_bytes());
-    let config_sha = journal::sha256_hex(config.to_string().as_bytes());
     let journal = match durability {
         Durability::None => Journal::memory()?,
-        Durability::Create(path) => Journal::create(path, &program_sha, &config_sha)?,
-        Durability::CreateWithId(path, id) => Journal::create_with_id(path, id, &program_sha, &config_sha)?,
-        Durability::Resume(path) => Journal::resume(path, &program_sha, &config_sha)?,
+        Durability::Create(path) => Journal::create(path, &binding(source, config, &hooks, &setup, provider.as_ref())?)?,
+        Durability::CreateWithId(path, id) => Journal::create_with_id(path, id, &binding(source, config, &hooks, &setup, provider.as_ref())?)?,
+        Durability::Resume(path) => Journal::resume(path, &binding(source, config, &hooks, &setup, provider.as_ref())?)?,
     };
     // The interpreter recurses once per nested call, so it runs on a thread with a
     // stack large enough for the depth ceiling, whatever thread called us.
@@ -558,6 +557,29 @@ fn run_impl(
             .join()
             .map_err(|_| "the interpreter thread crashed; this is a bug in staalc".to_string())
     })
+}
+
+/// What the run's journal binds and records (RUNTIME.md section 11): the program by
+/// its fingerprint (`source`), the config by its RFC 8785 form, the engine, and the
+/// proxies the run's clients were built with.
+fn binding(source: &str, config: &Json, hooks: &Hooks, setup: &Setup, provider: &(dyn Provider + Send)) -> Result<journal::Binding, String> {
+    let engine = if hooks.native.is_some() { "native" } else { "interpreter" };
+    let proxies = json!({ "net": proxy::record(&setup.runtime.net.proxy), "model": provider.proxy() });
+    journal::Binding::of(source, config, engine, proxies)
+}
+
+/// The binding a run with this config would have, for a host that checks a journal
+/// can be resumed before resuming it: the proxies resolved from the environment now,
+/// as a run would resolve them.
+pub fn binding_for(fingerprint: &str, config: &Json, engine: Engine) -> Result<journal::Binding, String> {
+    let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
+    let net = proxy::of_setting(cfg.get("net").and_then(|n| n.get("proxy")), "net.proxy")?;
+    let model = proxy::of_setting(cfg.get("model").and_then(|m| m.get("proxy")), "model.proxy")?;
+    let engine = match engine {
+        Engine::Interpreter => "interpreter",
+        Engine::Native => "native",
+    };
+    journal::Binding::of(fingerprint, config, engine, json!({ "net": proxy::record(&net), "model": proxy::record(&model) }))
 }
 
 #[cfg(feature = "native")]
@@ -979,13 +1001,7 @@ fn runtime_settings(cfg: &Map<String, Json>) -> Result<RuntimeSettings, String> 
                         net.extra_roots.extend(http::read_root_certificates(p).map_err(|e| format!("{at}[{i}]: {e}"))?);
                     }
                 }
-                "proxy" => {
-                    net.proxy_from_env = match v.as_str() {
-                        Some("none") => false,
-                        Some("environment") => true,
-                        _ => return Err(format!("{at}: expected \"none\" or \"environment\"")),
-                    }
-                }
+                "proxy" => net.proxy = proxy::of_setting(Some(v), &at)?,
                 _ => return Err(format!("net: unknown key '{k}'")),
             }
         }
