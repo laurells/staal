@@ -16,6 +16,7 @@
 //   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
 //   staalc config  <file.staal> [--entry <function>]
 //   staalc schema  <file.staal> [--entry <function>]
+//   staalc agent check [<folder>]
 //   staalc mcp     <manifest.json> | status <manifest.json>
 //   staalc run     <file.staal> (--config <run.json> | [--entry <function>] [--input <name>=<value>]...)
 //                  [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
@@ -58,6 +59,7 @@ const USAGE: &str = "usage:
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
   staalc config  <file.staal> [--entry <function>]      (prints a run config to fill in)
   staalc schema  <file.staal> [--entry <function>]      (prints the entry's input and output JSON Schemas)
+  staalc agent check [<folder>]                        (checks an agent: agent.json against its project)
   staalc mcp     <manifest.json>                        (serves programs as MCP tools on standard input and output)
   staalc mcp     status <manifest.json>                 (lists unfinished runs and quota use)
   staalc run     <file.staal> (--config <run.json> | [--entry <function>] [--input <name>=<value>]...)
@@ -151,6 +153,13 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
             Ok((Some(file), opts)) => schema_cmd(&file, opts.get("--entry").map(String::as_str)),
             Ok((None, _)) => u("schema needs a program file"),
             Err(e) => u(&e),
+        },
+        "agent" => match rest.split_first() {
+            Some((sub, more)) if sub == "check" => match parse(more, &[], &[]) {
+                Ok((dir, _)) => agent_check(dir.as_deref().unwrap_or(".")),
+                Err(e) => u(&e),
+            },
+            _ => u("agent needs a subcommand: check"),
         },
         #[cfg(unix)]
         "mcp" => crate::mcp::main(rest),
@@ -418,6 +427,21 @@ fn schema_cmd(file: &str, entry: Option<&str>) -> u8 {
         Err(e) => {
             eprintln!("staalc: {e}");
             2
+        }
+    }
+}
+
+/// `staalc agent check`: 0 when the agent passes, 1 with the first thing that does
+/// not.
+fn agent_check(dir: &str) -> u8 {
+    match crate::agent::check(Path::new(dir)) {
+        Ok(c) => {
+            println!("agent {} {}: ok ({} tool(s))", c.manifest.agent, c.manifest.version, c.manifest.tools.len());
+            0
+        }
+        Err(e) => {
+            eprintln!("staalc: {e}");
+            1
         }
     }
 }

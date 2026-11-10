@@ -761,33 +761,7 @@ fn parse_grant(
         Some(Json::Bool(b)) => *b,
         Some(_) => return Err(format!("{at}.idempotency_key: expected true or false")),
     };
-    if is_runtime_cap(want) {
-        if limits.max.is_some() || limits.each.is_some() {
-            return Err(format!("{at}: `{want}` spends no money the runtime can measure; max and each do not apply"));
-        }
-        let http = want.starts_with("net.http.");
-        for (i, pat) in limits.only.iter().flatten().enumerate() {
-            let checked = if c_function {
-                Err("a C function has no target for `only` to limit".to_string())
-            } else if postgres {
-                Err("the databases a db.postgres grant lists are the only ones it reaches; `only` does not apply".to_string())
-            } else if http {
-                crate::targets::check_url_pattern(pat)
-            } else if ["net.tcp.exchange", "net.tls.exchange", "net.tcp.accept", "net.tls.accept"].contains(&want) {
-                crate::targets::check_address_pattern(pat)
-            } else if want == "net.tcp.reply" || want == "net.tls.reply" {
-                Err("`only` limits which addresses an accept listens on; a reply goes to a connection accepted there".into())
-            } else {
-                crate::targets::check_path_pattern(pat)
-            };
-            checked.map_err(|e| format!("{at}.only[{i}]: {e}"))?;
-        }
-        if idempotency_key && !((http && want != "net.http.get") || want == "db.sqlite.execute" || want == "db.postgres.execute") {
-            return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, db.sqlite.execute and db.postgres.execute"));
-        }
-    } else if idempotency_key {
-        return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, db.sqlite.execute and db.postgres.execute"));
-    }
+    check_runtime_grant(want, &limits, idempotency_key, at)?;
     // The slot's own limits narrow the grant when the run starts. Money limits in
     // different currencies could never both be met: refuse now.
     let d = runtime_limits(declared)?;
@@ -939,12 +913,49 @@ fn load_c_function(
     Ok(std::sync::Arc::new(func))
 }
 
+/// The rules a grant of `want` must follow beyond its limits' own form: a runtime
+/// capability spends no money the runtime can measure, its `only` patterns are of the
+/// kind its targets are (URLs, addresses or paths), and only some capabilities can send
+/// an idempotency key. One definition, for the run config and for `staalc agent check`.
+pub(crate) fn check_runtime_grant(want: &str, limits: &broker::Limits, idempotency_key: bool, at: &str) -> Result<(), String> {
+    let c_function = want.starts_with("ffi.");
+    let postgres = want.starts_with("db.postgres.");
+    if is_runtime_cap(want) {
+        if limits.max.is_some() || limits.each.is_some() {
+            return Err(format!("{at}: `{want}` spends no money the runtime can measure; max and each do not apply"));
+        }
+        let http = want.starts_with("net.http.");
+        for (i, pat) in limits.only.iter().flatten().enumerate() {
+            let checked = if c_function {
+                Err("a C function has no target for `only` to limit".to_string())
+            } else if postgres {
+                Err("the databases a db.postgres grant lists are the only ones it reaches; `only` does not apply".to_string())
+            } else if http {
+                crate::targets::check_url_pattern(pat)
+            } else if ["net.tcp.exchange", "net.tls.exchange", "net.tcp.accept", "net.tls.accept"].contains(&want) {
+                crate::targets::check_address_pattern(pat)
+            } else if want == "net.tcp.reply" || want == "net.tls.reply" {
+                Err("`only` limits which addresses an accept listens on; a reply goes to a connection accepted there".into())
+            } else {
+                crate::targets::check_path_pattern(pat)
+            };
+            checked.map_err(|e| format!("{at}.only[{i}]: {e}"))?;
+        }
+        if idempotency_key && !((http && want != "net.http.get") || want == "db.sqlite.execute" || want == "db.postgres.execute") {
+            return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, db.sqlite.execute and db.postgres.execute"));
+        }
+    } else if idempotency_key {
+        return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, db.sqlite.execute and db.postgres.execute"));
+    }
+    Ok(())
+}
+
 /// The shortest secret accepted: a shorter one would be found by accident in ordinary
 /// text, and removing it from responses and logs would damage them.
 const MIN_SECRET_BYTES: usize = 8;
 
 /// Whether `path` is one of the runtime's own capabilities (`net.http.*`, `fs.*`).
-fn is_runtime_cap(path: &str) -> bool {
+pub(crate) fn is_runtime_cap(path: &str) -> bool {
     path.starts_with("net.") || path.starts_with("fs.") || path.starts_with("db.") || path.starts_with("ffi.")
 }
 
@@ -1078,12 +1089,18 @@ fn grant_limits(g: &Map<String, Json>, at: &str, types: &Types) -> Result<broker
         }
     };
     let limits = broker::Limits { max: money("max")?, each: money("each")?, uses, only };
+    check_currencies(&limits, at)?;
+    Ok(limits)
+}
+
+/// `max` and `each` in different currencies could never both be met.
+pub(crate) fn check_currencies(limits: &broker::Limits, at: &str) -> Result<(), String> {
     if let (Some(m), Some(e)) = (limits.max, limits.each)
         && m.currency != e.currency
     {
         return Err(format!("{at}: max and each are in different currencies, so no action could satisfy both"));
     }
-    Ok(limits)
+    Ok(())
 }
 
 impl Setup {

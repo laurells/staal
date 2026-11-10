@@ -3,6 +3,7 @@
 // CI runs clippy with warnings as errors (docs/security-review/UNSAFE.md).
 #![warn(clippy::undocumented_unsafe_blocks, clippy::missing_safety_doc)]
 
+pub mod agent;
 pub mod aliases;
 pub mod ast;
 pub mod budget;

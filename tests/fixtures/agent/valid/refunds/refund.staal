@@ -1,0 +1,26 @@
+// A refund agent for the agent.json fixtures: a library capability of its own, whose
+// need posts to the bank, and a tool that refunds part of a customer's order.
+
+type Refund { order: Text, amount: Int }
+
+capability bank.payments {
+    needs post: cap net.http.post
+    needs key: Secret
+
+    canonical(order: Text) -> Text {
+        return trim(order)
+    }
+
+    action refund(order: Text @target, amount: Money @amount) -> Text {
+        let r = post.post("https://bank.example.com/refunds", form(Refund { order: trim(order), amount: minor_units(amount) }),
+            [header("Authorization", fill_secret("Bearer {secret}", key))])
+        if r.status != 200 {
+            fail("the bank answered " + json(r.status))
+        }
+        return r.body
+    }
+}
+
+fn main(customer: Text, order: Text, amount: Money, pay: cap bank.payments.refund(max: 500 USD)) -> Receipt {
+    return pay.refund(customer + "/" + order, amount)
+}

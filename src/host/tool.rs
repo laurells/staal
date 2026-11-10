@@ -249,7 +249,7 @@ pub(crate) fn whole(o: &Map<String, Json>, key: &str, at: &str, lo: u64, hi: u64
 }
 
 /// `"90s"`, `"15m"`, `"24h"`, `"30d"`: a positive whole number and a unit from `units`.
-fn duration(v: &Json, at: &str, units: &[&str]) -> Result<u64, String> {
+pub(crate) fn duration(v: &Json, at: &str, units: &[&str]) -> Result<u64, String> {
     let bad = || format!("{at}: expected a whole number and a unit ({}), e.g. \"{}\"", units.join(", "), example(units));
     let s = v.as_str().ok_or_else(bad)?;
     let digits = s.bytes().take_while(u8::is_ascii_digit).count();
@@ -294,7 +294,7 @@ pub(crate) fn env_names(v: &Json, out: &mut Vec<String>) {
     }
 }
 
-fn valid_tool_name(n: &str) -> bool {
+pub(crate) fn valid_tool_name(n: &str) -> bool {
     (1..=128).contains(&n.len())
         && n.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b))
         && n.bytes().any(|b| b != b'.')
