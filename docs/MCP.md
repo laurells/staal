@@ -396,8 +396,8 @@ for `keep` (a whole number and `m`, `h` or `d`; at most `server.keep`, which the
 manifest check enforces; `server.keep` when left out), counted from the run's end;
 after that, the same arguments start a new run. A call that never started (refused
 as busy or over its quota, or released at start) holds no key.
-Over stdio, one server serves one client, so keys are scoped to the tool. There is no
-remote transport (DEFERRED.md). Tools in an app can scope keys per tenant or user
+Over stdio, one server serves one client, so keys are scoped to the tool. Over the HTTP
+transport they are scoped to the principal (12.6). Tools in an app can scope keys per tenant or user
 (section 11, "Scope").
 
 A repeated call returns the same run, and the same run sends the same idempotency keys
