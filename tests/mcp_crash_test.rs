@@ -279,6 +279,9 @@ fn with_other_entries(case: &Case) {
     .unwrap();
 }
 
+/// A change made to a tool's object in the manifest.
+type ToolChange = Box<dyn Fn(&mut Json)>;
+
 /// AGENT_MANIFEST.md section 16, R7: a run is resumed from what it started with, never
 /// from the current manifest. Each field a run depends on is changed, alone, between a
 /// crash and the resume. Read by the resumed run, the program and entry changes would
@@ -290,7 +293,7 @@ fn with_other_entries(case: &Case) {
 /// HTTP, in mcp_http_test.rs.)
 #[test]
 fn a_resumed_run_never_takes_a_change_to_the_manifest() {
-    let changes: Vec<(&str, Box<dyn Fn(&mut Json)>)> = vec![
+    let changes: Vec<(&str, ToolChange)> = vec![
         ("program", Box::new(|t| t["program"] = json!("other.staal"))),
         ("entry", Box::new(|t| t["entry"] = json!("alt"))),
         ("once", Box::new(|t| t["once"] = json!({ "by": ["payment"] }))),

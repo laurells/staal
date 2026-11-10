@@ -698,6 +698,9 @@ fn go(ps: cap payments.paystack.refund(max: 50000 NGN), fw: cap payments.flutter
     assert!(!log.contains(KEY), "the log contains the key");
 }
 
+/// One change made to a project's files.
+type Change<'a> = Box<dyn Fn() + 'a>;
+
 /// RUNTIME.md section 11: the program a journal binds is every input that can change
 /// what runs. Each of these changes, made alone after a run, gives a different
 /// fingerprint and a refused resume: a module of the program, the project's
@@ -743,7 +746,7 @@ fn every_input_of_a_program_is_bound_by_its_journal() {
     assert_eq!(fp, original_fp);
     assert_eq!(run.unwrap().unwrap().result.unwrap(), json!(3));
 
-    let changes: Vec<(&str, Box<dyn Fn() + '_>)> = vec![
+    let changes: Vec<(&str, Change<'_>)> = vec![
         ("a module of the program", Box::new(|| std::fs::write(app.join("util.staal"), "pub fn g() -> Int {\n    return 2\n}\n\n").unwrap())),
         (
             "the project's staal.json, only its layout",
