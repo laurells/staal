@@ -4,7 +4,7 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
-## Unreleased
+## 0.28.0 — 2026-11-10
 
 This release changes the journal format, to version 3. A run left unfinished by
 0.27.0 or earlier does not resume on it: before upgrading, let every unfinished run
