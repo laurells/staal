@@ -59,6 +59,11 @@ jobs:
           "$RUNNER_TEMP/mcpenv/bin/pip" install --quiet pip==26.2.1 && "$RUNNER_TEMP/mcpenv/bin/pip" install --quiet --uploaded-prior-to=P14D -r tests/mcp_sdk/requirements.txt
           (cd tests/mcp_sdk && npm ci)
           STAAL_MCP_SDK=1 STAAL_MCP_PYTHON="$RUNNER_TEMP/mcpenv/bin/python" cargo test --features failpoints --test mcp_sdk_test
+      - name: The agent schemas against an independent JSON Schema validator
+        run: |
+          python3 -m venv "$RUNNER_TEMP/schemaenv"
+          "$RUNNER_TEMP/schemaenv/bin/pip" install --quiet pip==26.2.1 && "$RUNNER_TEMP/schemaenv/bin/pip" install --quiet --uploaded-prior-to=P14D -r tests/schemas/requirements.txt
+          STAAL_SCHEMA_PYTHON="$RUNNER_TEMP/schemaenv/bin/python" cargo test --features failpoints --test agent_check_test
       - name: Framework adapters (OpenAI Agents SDK, LangGraph, Claude Agent SDK, Google ADK), Python
         run: |
           python3 -m venv "$RUNNER_TEMP/fwenv"

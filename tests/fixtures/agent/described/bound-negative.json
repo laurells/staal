@@ -1,0 +1,189 @@
+{
+  "agent": "support-refunds",
+  "dependencies": [],
+  "described": "0.1",
+  "staalc": "0.27.0",
+  "tools": [
+    {
+      "consumer_analysis": {
+        "complete": true,
+        "unresolved": []
+      },
+      "consumers": [
+        {
+          "cap": "bank.payments.refund",
+          "grant": "pay",
+          "holder": {
+            "kind": "agent"
+          },
+          "limits": {
+            "max": {
+              "amount": "500.00",
+              "currency": "USD"
+            }
+          },
+          "source": "the type of entry parameter 'pay'"
+        },
+        {
+          "cap": "net.http.post",
+          "grant": "pay.post",
+          "holder": {
+            "capability": "bank.payments",
+            "kind": "library_need",
+            "need": "post",
+            "package": null
+          },
+          "limits": {},
+          "source": "the type of need 'post' of capability bank.payments"
+        }
+      ],
+      "entry": "main",
+      "expenditure_ceiling": [
+        {
+          "amount": "500.00",
+          "currency": "USD"
+        }
+      ],
+      "failure": [
+        {
+          "cap": "net.http.post",
+          "grant": "pay.post",
+          "recovery": "resend_with_key",
+          "relies_on_service": true
+        }
+      ],
+      "fingerprint": "staal-program-v3",
+      "grants": [
+        {
+          "cap": "bank.payments.refund",
+          "limits": {
+            "max": {
+              "amount": "500.00",
+              "currency": "USD"
+            }
+          },
+          "name": "pay"
+        }
+      ],
+      "inputs": [
+        {
+          "name": "amount",
+          "provenance": "caller"
+        },
+        {
+          "name": "customer",
+          "provenance": "app"
+        },
+        {
+          "name": "order",
+          "provenance": "caller"
+        }
+      ],
+      "interface": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    "currency": {
+                      "enum": [
+                        "JPY"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "currency"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "pattern": "^[0-9]+(\\.[0-9]{1,2})?$",
+                      "type": "string"
+                    },
+                    "currency": {
+                      "enum": [
+                        "USD",
+                        "EUR",
+                        "GBP",
+                        "NGN",
+                        "GHS",
+                        "KES",
+                        "ZAR",
+                        "CAD",
+                        "AUD"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "currency"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "money: a decimal amount as a string, e.g. {\"amount\": \"12.50\", \"currency\": \"USD\"}"
+            },
+            "customer": {
+              "type": "string"
+            },
+            "order": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "customer",
+            "order",
+            "amount"
+          ],
+          "type": "object"
+        },
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "capability": {
+              "type": "string"
+            },
+            "method": {
+              "type": "string"
+            },
+            "receipt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "capability",
+            "method"
+          ],
+          "type": "object"
+        },
+        "secrets": []
+      },
+      "model_use": {
+        "calls": -1,
+        "tokens": 0
+      },
+      "name": "refund_order",
+      "program": "refund.staal",
+      "program_sha256": "cb6ccabdda102f729a705a89f01d7ce86c67da8b1aea0219ce71b867a8ff6a29",
+      "unchecked": {
+        "c_functions": false,
+        "console": false
+      }
+    }
+  ],
+  "version": "0.1.0"
+}

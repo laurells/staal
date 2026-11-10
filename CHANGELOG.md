@@ -58,6 +58,11 @@ end (`staalc mcp status` lists them) or resolve it with the `staalc` that starte
   and where that boundary comes from, plus `consumer_analysis`, which says whether the
   analysis is complete and what it could not follow (RUNTIME.md section 1).
 
+- `staalc agent check` and `staalc agent describe`: an agent's `agent.json` held to
+  its normative form (docs/schemas/agent.schema.json) and to its project, and its
+  computed description, `agent.described.json` (docs/schemas/agent.described.schema.json),
+  written in RFC 8785 form and compared byte for byte (AGENT_MANIFEST.md sections 4 to 6).
+
 ### Fixed
 
 - `net.http` through a proxy no longer looks the target's host up on this machine

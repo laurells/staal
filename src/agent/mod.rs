@@ -10,6 +10,7 @@
 // and patterns are read by the same code the runtime and the tool host use, so the two
 // can never disagree on what one is.
 
+pub mod describe;
 pub mod spdx;
 
 use crate::ast::{CapLimits, Program, Ty};
@@ -642,8 +643,28 @@ pub fn check_manifest(root: &Path) -> Result<Checked, String> {
     Ok(Checked { manifest, programs })
 }
 
-/// `staalc agent check`: everything in `check_manifest`. (The description,
-/// `agent.described.json`, is checked here too once `staalc agent describe` exists.)
+/// `staalc agent check`: everything in `check_manifest`, and `agent.described.json`
+/// equal, byte for byte, to a fresh description (AGENT_MANIFEST.md section 6, check 2).
 pub fn check(root: &Path) -> Result<Checked, String> {
-    check_manifest(root)
+    let checked = check_manifest(root)?;
+    let fresh = describe::bytes(root, &checked)?;
+    let path = root.join("agent.described.json");
+    let committed = std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}; run `staalc agent describe`", path.display()))?;
+    if committed != fresh.as_bytes() {
+        return Err(format!(
+            "{} differs from a fresh description of the agent; run `staalc agent describe` and commit what it writes",
+            path.display()
+        ));
+    }
+    Ok(checked)
+}
+
+/// `staalc agent describe`: checks `agent.json` against the project and writes
+/// `agent.described.json`.
+pub fn write_description(root: &Path) -> Result<Checked, String> {
+    let checked = check_manifest(root)?;
+    let fresh = describe::bytes(root, &checked)?;
+    let path = root.join("agent.described.json");
+    std::fs::write(&path, fresh).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    Ok(checked)
 }

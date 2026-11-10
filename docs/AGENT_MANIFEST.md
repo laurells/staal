@@ -213,6 +213,68 @@ The example is the refund agent of `examples/finops`, written as a deployable ag
   contractual statements Staal cannot check. A business holds the publisher to them;
   Staal does not claim to.
 
+### The form, and value rules
+
+`docs/schemas/agent.schema.json` (JSON Schema 2020-12) is the normative form of
+`agent.json`; `staalc agent check` applies it, and the value rules below that a schema
+cannot state. Unknown keys are refused at every depth. Where this specification left a
+value open, the strictest reading was taken; each such choice is marked *(chosen)*, for
+review before the format is frozen.
+
+- **Money**: `{"amount": decimal string, "currency": code}`, read by the runtime's own
+  reader: one or more digits, then optionally `.` and one or more digits, at most the
+  currency's decimal places; no sign, exponent, space or grouping; a leading zero is
+  accepted (`"0100.00"`), and so is `"100"` for `"100.00"`, as the runtime accepts them.
+  The currencies are the runtime's table: USD, EUR, GBP, NGN, GHS, KES, ZAR, CAD and AUD
+  with two decimal places, JPY with none. It has no three-decimal currency, and another
+  code is refused. An amount too large to hold is refused (value rule).
+- **Durations**: a whole number without a leading zero and a unit: `deadline` in `s`,
+  `m` or `h`; `once.keep` and `quota.suggested.window` in `m`, `h` or `d`, as the tool
+  host reads them. A duration too large to hold, and a window over 30 days, are refused
+  (value rules).
+- **Versions**: `version` is a semantic version without build metadata; numbers without
+  leading zeros and within 64 bits (value rule). `requires_staalc` is a version range in
+  the grammar packages use (RUNTIME.md section 14; value rule), and must include the
+  checking `staalc`.
+- **Suggestions**: `suggested` may be absent or `{}`: either means no suggestion in any
+  dimension. `uses` is at least 1. A suggestion fits the program ceiling in every
+  dimension the ceiling limits: the same currency, no more money, no more uses, and
+  `only` within the type's `only`.
+- **Grants**: `grants` holds exactly the entry's capability parameters, and each library
+  capability's `needs` exactly its capability needs, at every depth. A runtime
+  capability whose grants take target patterns (`net.http.*`, `net.tcp.exchange`,
+  `net.tls.exchange`, `fs.*`, `db.sqlite.*`) must declare its `reach` *(chosen)*; one
+  that takes none may not; a library capability's targets are suggested in
+  `suggested.only`, never `reach`. `reach` patterns are checked as the runtime checks a
+  grant's `only` for that capability, after each placeholder is replaced by a host, and
+  must lie within the type's `only`, so a placeholder cannot be used where the program
+  names the host *(chosen)*. A tool that takes `net.tcp.accept` or `net.tls.accept` is
+  refused, since agent.json cannot give the `wait_ms` the tool host requires.
+  `idempotency_key` only where the runtime accepts it.
+- **Identity** *(chosen)*: `agent` is lowercase letters and digits in parts joined by
+  single `-`, at most 64 characters. `publisher.id` is `github:` and a GitHub account
+  name (1 to 39 letters, digits and single inner hyphens). `security_contact` is an
+  `https://` URL with a host and no user name or password, at most 2048 bytes.
+- **License** *(chosen)*: an SPDX license expression (SPDX 2.3, Annex D) over the
+  identifiers of the SPDX License List 3.27.0, deprecated ones left out, in the list's
+  own letter case; operators upper case with one space on each side; no
+  `LicenseRef-` or `DocumentRef-`, whose text only the publisher has.
+- **Categories** *(chosen)*: one to three, distinct, from: commerce, communications,
+  customer-operations, data, education, finance, healthcare, human-resources,
+  it-operations, legal, logistics, marketing, productivity, sales, security,
+  software-development.
+- **Text and sizes** *(chosen)*: text has no control character. `title` 1 to 80
+  characters, `summary` 1 to 300, `publisher.name` 1 to 100, a tool's `description` 1
+  to 1024, each app input requirement and each data statement 1 to 500. At most 64
+  tools, each named as the tool host requires and unique; `program` is the name of a
+  `.staal` file in the agent's own folder, so every tool is in the one project.
+  `app_input_requirements` holds exactly `app_inputs`. The `data` declaration's eight
+  keys are all required; its lists may be empty.
+
+The tool host accepts each tool as an app's tool would be defined (its program, entry,
+console use, app inputs, `once`, quota and deadline), with a model assumed for a tool
+that can call one, since the business configures the model at install.
+
 ## 5. `agent.described.json`: what `staalc` computes
 
 For the agent, and for each tool:
@@ -352,6 +414,23 @@ For the agent, and for each tool:
   whether it can reach console input. C code a tool cannot be granted cannot run, so
   it does not count; C code a tool can be granted makes the tool unchecked, as its runs
   are marked, and the agent cannot be Verified (section 7).
+- **The form**: `docs/schemas/agent.described.schema.json` is its normative form,
+  written by `staalc agent describe` (`src/agent/describe.rs`). For the agent:
+  `described` (the specification version), `agent`, `version`, `staalc`, and
+  `dependencies` (each package's name, git location, commit, version, every file's
+  path and SHA-256, and declared authority). For each tool: `name`, `program`, `entry`;
+  `fingerprint` (`staal-program-v3`) and `program_sha256`, the hash a journal binds;
+  `interface` (input and output schemas, secrets); `grants` (each entry capability with
+  its ceiling); `consumers` and `consumer_analysis` (section 1, `staalc schema`);
+  `inputs`, each `caller` or `app`; `model_use`, the worst-case model calls and tokens
+  of one run, or `"unbounded"`; `expenditure_ceiling`, per currency, an amount or
+  `unbounded`; `failure`, for each runtime capability among the grants and their needs,
+  its `recovery` (`repeat`, `resend_with_key` or `operator`) and whether that relies on
+  the service deduplicating (`relies_on_service`, from `idempotency_key`); and
+  `unchecked` (`c_functions`, `console`). This version does not yet describe outcome
+  certainty separately from recovery, network reach notes, or a per-package boundary
+  table beyond the consumers; they are statements an install page prints from these
+  fields.
 - **Determinism**: the description is serialized as JSON in the JSON Canonicalization
   Scheme (RFC 8785): keys sorted, no insignificant space, numbers and strings in one
   form. Every list whose order carries no meaning (packages, capabilities, reach
@@ -775,8 +854,8 @@ be demonstrated by a test that fails without it:
 
 **Status.** R1, R2, R7 and R9 are implemented, in journal version 3; R6 in the HTTP
 clients; R4 holds by the language, now demonstrated; R5's gate is in place, with the
-limit stated below; R3 in `staalc schema`. Each is demonstrated by these tests. R8 is
-open.
+limit stated below; R3 in `staalc schema`; R8 in the two schemas and `staalc agent
+check` and `describe`. Each is demonstrated by these tests.
 
 - R1: `every_input_of_a_program_is_bound_by_its_journal` (tests/packages_test.rs)
   changes, alone, a module, the project's `staal.json` and `staal.lock` (only their
@@ -860,6 +939,19 @@ open.
   the case that can, and is tested. The incomplete outcome, which no accepted program
   produces, is tested on a program altered by hand. Verified does not exist yet; when
   it does, it must refuse an agent whose analysis is incomplete.
+- R8: `docs/schemas/agent.schema.json` and `docs/schemas/agent.described.schema.json`,
+  the value rules of section 4, and `staalc agent check` and `staalc agent describe`
+  (src/agent/). `tests/agent_check_test.rs` runs 87 `agent.json` fixtures
+  (tests/fixtures/agent/manifests/, written by `scripts/agent_fixtures.py`: unknown keys
+  at every depth, each money, duration and version rule, licenses, categories,
+  placeholders, reach, ceilings, grants and needs against the program, the tool host's
+  checks), each accepted or refused as marked by `staalc` and by an independent
+  validator, Python's `jsonschema`, over the schema (in CI); none that the schema
+  refuses does `staalc` accept, and the cases the schema accepts and `staalc` refuses
+  are exactly the value rules. The committed description of the valid agent is what
+  `describe` writes, byte for byte, the described schema accepts it, and 16 altered
+  descriptions are refused by both. A test keeps the schema's currencies and categories
+  equal to the runtime's.
 - R4: a capability can travel only as a parameter, a typed `let`, a return value or a
   library's need: it can be held in no list, record, tuple, optional, map or function
   value, and never reassigned (E101, E003). Each of those entries narrows it to the

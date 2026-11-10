@@ -5,6 +5,9 @@ manifest of tests/fixtures/agent/valid/refunds/ with one change, and expected.js
 which says for each whether docs/schemas/agent.schema.json accepts it and whether
 `staalc agent check` does (and if not, a part of its message).
 
+    staalc agent describe tests/fixtures/agent/valid/refunds   (after any change that
+                                                               changes the description,
+                                                               such as a new version)
     python3 scripts/agent_fixtures.py
 
 Some cases are accepted by the schema and refused by staalc: those are the value rules
@@ -166,7 +169,43 @@ CASES = {
 }
 
 
+DESCRIBED = os.path.join(ROOT, "tests/fixtures/agent/valid/refunds/agent.described.json")
+OUT_D = os.path.join(ROOT, "tests/fixtures/agent/described")
+DT = ["tools", 0]
+
+# agent.described.json with one change each: every one refused by the schema, and by
+# staalc as different from a fresh description.
+DESCRIBED_CASES = {
+    "unknown-key-top": setter(["notes"], "x"),
+    "unknown-key-tool": setter(DT + ["title"], "x"),
+    "unknown-key-consumer": setter(DT + ["consumers", 0, "note"], "x"),
+    "unknown-key-holder": setter(DT + ["consumers", 0, "holder", "package"], None),
+    "unknown-key-limits": setter(DT + ["consumers", 0, "limits", "per_day"], 1),
+    "unknown-key-interface": setter(DT + ["interface", "reads_console"], False),
+    "unknown-key-model-use": setter(DT + ["model_use", "money"], 0),
+    "unknown-key-failure": setter(DT + ["failure", 0, "retries"], 1),
+    "unknown-key-unchecked": setter(DT + ["unchecked", "network"], True),
+    "described-version": setter(["described"], "0.2"),
+    "sha-uppercase": lambda m: m["tools"][0].__setitem__("program_sha256", m["tools"][0]["program_sha256"].upper()),
+    "bound-negative": setter(DT + ["model_use", "calls"], -1),
+    "recovery-unknown": setter(DT + ["failure", 0, "recovery"], "retry"),
+    "provenance-unknown": setter(DT + ["inputs", 0, "provenance"], "token"),
+    "ceiling-three-decimals": setter(DT + ["expenditure_ceiling", 0, "amount"], "500.000"),
+    "fingerprint-label": setter(DT + ["fingerprint"], "staal-program-v2"),
+}
+
+
 def main():
+    os.makedirs(OUT_D, exist_ok=True)
+    for f in os.listdir(OUT_D):
+        os.remove(os.path.join(OUT_D, f))
+    described = json.load(open(DESCRIBED))
+    for name, change in DESCRIBED_CASES.items():
+        m = copy.deepcopy(described)
+        change(m)
+        with open(os.path.join(OUT_D, f"{name}.json"), "w") as f:
+            json.dump(m, f, indent=2, ensure_ascii=False)
+            f.write("\n")
     os.makedirs(OUT, exist_ok=True)
     for f in os.listdir(OUT):
         os.remove(os.path.join(OUT, f))

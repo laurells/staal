@@ -28,7 +28,7 @@ fn agent_dir(name: &str, manifest: &Path) -> PathBuf {
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     let valid = Path::new(ROOT).join("tests/fixtures/agent/valid/refunds");
-    for f in ["refund.staal", "staal.json"] {
+    for f in ["refund.staal", "staal.json", "agent.described.json"] {
         std::fs::copy(valid.join(f), d.join(f)).unwrap();
     }
     std::fs::copy(manifest, d.join("agent.json")).unwrap();
@@ -41,10 +41,17 @@ fn staalc_accepts_and_refuses_each_fixture_as_marked() {
     for (name, want) in fixtures() {
         let file = Path::new(ROOT).join(format!("tests/fixtures/agent/manifests/{name}.json"));
         let d = agent_dir(&name, &file);
-        let o = Command::new(BIN).args(["agent", "check", d.to_str().unwrap()]).output().unwrap();
+        // `agent describe` runs every check of `agent check` but the comparison with the
+        // committed description, which it writes; `agent check` must then accept it.
+        let o = Command::new(BIN).args(["agent", "describe", d.to_str().unwrap()]).output().unwrap();
         let err = String::from_utf8_lossy(&o.stderr).to_string();
         match want["staalc"].as_str() {
-            None if o.status.code() == Some(0) => {}
+            None if o.status.code() == Some(0) => {
+                let c = Command::new(BIN).args(["agent", "check", d.to_str().unwrap()]).output().unwrap();
+                if !c.status.success() {
+                    failures.push(format!("{name}: described, then refused by check: {}", String::from_utf8_lossy(&c.stderr)));
+                }
+            }
             None => failures.push(format!("{name}: refused, but should be accepted: {err}")),
             Some(part) if o.status.code() == Some(1) && err.contains(part) => {}
             Some(part) => failures.push(format!("{name}: exit {:?}, expected a refusal containing {part:?}: {err}", o.status.code())),
@@ -115,4 +122,68 @@ fn the_schemas_money_is_the_runtimes() {
     // The categories are staalc's.
     let cats: Vec<&str> = s["properties"]["categories"]["items"]["enum"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
     assert_eq!(cats, staalc::agent::CATEGORIES.to_vec());
+}
+
+fn described_fixtures() -> Vec<PathBuf> {
+    let dir = Path::new(ROOT).join("tests/fixtures/agent/described");
+    let mut out: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    out.sort();
+    assert!(out.len() >= 15, "too few described fixtures");
+    out
+}
+
+/// The committed description of the valid agent is what `staalc agent describe`
+/// writes, byte for byte, and `staalc agent check` refuses any other: each fixture of
+/// tests/fixtures/agent/described/ is the description with one change.
+#[test]
+fn a_description_must_be_exactly_the_fresh_one() {
+    let valid = Path::new(ROOT).join("tests/fixtures/agent/valid/refunds");
+    let d = agent_dir("described-fresh", &valid.join("agent.json"));
+    let o = Command::new(BIN).args(["agent", "check", d.to_str().unwrap()]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = Command::new(BIN).args(["agent", "describe", d.to_str().unwrap()]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(std::fs::read(d.join("agent.described.json")).unwrap(), std::fs::read(valid.join("agent.described.json")).unwrap());
+    for f in described_fixtures() {
+        let name = f.file_stem().unwrap().to_string_lossy().to_string();
+        let d = agent_dir(&format!("described-{name}"), &valid.join("agent.json"));
+        std::fs::copy(&f, d.join("agent.described.json")).unwrap();
+        let o = Command::new(BIN).args(["agent", "check", d.to_str().unwrap()]).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.code() == Some(1) && err.contains("differs from a fresh description"), "{name}: {err}");
+    }
+}
+
+/// docs/schemas/agent.described.schema.json accepts the description staalc writes and
+/// refuses each fixture of tests/fixtures/agent/described/.
+#[test]
+fn the_described_schema_accepts_staalcs_description_and_refuses_each_fixture() {
+    let Ok(python) = std::env::var("STAAL_SCHEMA_PYTHON") else {
+        eprintln!("skipped: set STAAL_SCHEMA_PYTHON to a Python with tests/schemas/requirements.txt installed");
+        return;
+    };
+    let script = r#"
+import json, sys, jsonschema
+schema = json.load(open(sys.argv[1]))
+jsonschema.Draft202012Validator.check_schema(schema)
+v = jsonschema.Draft202012Validator(schema)
+print(json.dumps({p: not any(True for _ in v.iter_errors(json.load(open(p)))) for p in sys.argv[2:]}))
+"#;
+    let valid = Path::new(ROOT).join("tests/fixtures/agent/valid/refunds/agent.described.json");
+    let mut files = vec![valid.to_string_lossy().into_owned()];
+    files.extend(described_fixtures().iter().map(|p| p.to_string_lossy().into_owned()));
+    let o = Command::new(&python)
+        .arg("-I")
+        .arg("-c")
+        .arg(script)
+        .arg(Path::new(ROOT).join("docs/schemas/agent.described.schema.json"))
+        .args(&files)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let got: Json = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(got[&files[0]], true, "the schema refuses staalc's own description");
+    for f in &files[1..] {
+        assert_eq!(got[f], false, "{f}: the schema accepts it");
+    }
 }

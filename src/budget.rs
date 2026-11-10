@@ -117,6 +117,24 @@ pub fn check(prog: &Program, for_bounds: &HashMap<Pos, u64>) -> Vec<Diagnostic> 
     diags
 }
 
+/// Each function's worst-case model use, as `check` computes it: a recursive function
+/// with any model cost is unbounded. Keyed by function name.
+pub fn worst_cases(prog: &Program, for_bounds: &HashMap<Pos, u64>) -> HashMap<String, Cost> {
+    let mut a = Analyzer { fns: HashMap::new(), memo: HashMap::new(), for_bounds };
+    for f in &prog.fns {
+        a.fns.entry(f.name.as_str()).or_insert(f);
+    }
+    let mut out = HashMap::new();
+    for f in &prog.fns {
+        let mut stack = vec![f.name.as_str()];
+        let mut cycles = HashSet::new();
+        let cost = a.block(&f.body, &mut stack, &mut cycles, None);
+        let cost = if cycles.is_empty() || cost.is_zero() { cost } else { cost.forever() };
+        out.insert(f.name.clone(), cost);
+    }
+    out
+}
+
 fn check_dim(diags: &mut Vec<Diagnostic>, f: &FnDecl, b: &Budget, dim: &str, declared: Option<u64>, used: Bound) {
     let Some(limit) = declared else { return };
     let over = match used {

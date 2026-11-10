@@ -17,6 +17,7 @@
 //   staalc config  <file.staal> [--entry <function>]
 //   staalc schema  <file.staal> [--entry <function>]
 //   staalc agent check [<folder>]
+//   staalc agent describe [<folder>]
 //   staalc mcp     <manifest.json> | status <manifest.json>
 //   staalc run     <file.staal> (--config <run.json> | [--entry <function>] [--input <name>=<value>]...)
 //                  [--journal <run.journal>] [--log <run.jsonl>] [--engine native]
@@ -59,7 +60,8 @@ const USAGE: &str = "usage:
   staalc build   <file.staal> -o <executable> [--runtime <libstaalc.a>]
   staalc config  <file.staal> [--entry <function>]      (prints a run config to fill in)
   staalc schema  <file.staal> [--entry <function>]      (prints the entry's input and output JSON Schemas)
-  staalc agent check [<folder>]                        (checks an agent: agent.json against its project)
+  staalc agent check [<folder>]                        (checks an agent: agent.json, its project and its description)
+  staalc agent describe [<folder>]                     (writes agent.described.json)
   staalc mcp     <manifest.json>                        (serves programs as MCP tools on standard input and output)
   staalc mcp     status <manifest.json>                 (lists unfinished runs and quota use)
   staalc run     <file.staal> (--config <run.json> | [--entry <function>] [--input <name>=<value>]...)
@@ -156,10 +158,14 @@ pub fn staalc_main(args: Vec<String>) -> u8 {
         },
         "agent" => match rest.split_first() {
             Some((sub, more)) if sub == "check" => match parse(more, &[], &[]) {
-                Ok((dir, _)) => agent_check(dir.as_deref().unwrap_or(".")),
+                Ok((dir, _)) => agent_check(dir.as_deref().unwrap_or("."), false),
                 Err(e) => u(&e),
             },
-            _ => u("agent needs a subcommand: check"),
+            Some((sub, more)) if sub == "describe" => match parse(more, &[], &[]) {
+                Ok((dir, _)) => agent_check(dir.as_deref().unwrap_or("."), true),
+                Err(e) => u(&e),
+            },
+            _ => u("agent needs a subcommand: check or describe"),
         },
         #[cfg(unix)]
         "mcp" => crate::mcp::main(rest),
@@ -431,12 +437,14 @@ fn schema_cmd(file: &str, entry: Option<&str>) -> u8 {
     }
 }
 
-/// `staalc agent check`: 0 when the agent passes, 1 with the first thing that does
-/// not.
-fn agent_check(dir: &str) -> u8 {
-    match crate::agent::check(Path::new(dir)) {
+/// `staalc agent check` and `staalc agent describe`: 0 when the agent passes (and,
+/// for describe, its description was written), 1 with the first thing that does not.
+fn agent_check(dir: &str, describe: bool) -> u8 {
+    let r = if describe { crate::agent::write_description(Path::new(dir)) } else { crate::agent::check(Path::new(dir)) };
+    match r {
         Ok(c) => {
-            println!("agent {} {}: ok ({} tool(s))", c.manifest.agent, c.manifest.version, c.manifest.tools.len());
+            let did = if describe { "described in agent.described.json" } else { "ok" };
+            println!("agent {} {}: {did} ({} tool(s))", c.manifest.agent, c.manifest.version, c.manifest.tools.len());
             0
         }
         Err(e) => {

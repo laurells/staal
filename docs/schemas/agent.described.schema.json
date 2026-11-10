@@ -1,0 +1,592 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/laurells/staal/blob/main/docs/schemas/agent.described.schema.json",
+  "title": "agent.described.json, Agent Manifest Specification 0.1",
+  "description": "The form of agent.described.json, written by staalc agent describe (docs/AGENT_MANIFEST.md section 5). The file is this JSON in the JSON Canonicalization Scheme (RFC 8785), and staalc agent check compares it byte for byte with a fresh description.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "described",
+    "agent",
+    "version",
+    "staalc",
+    "dependencies",
+    "tools"
+  ],
+  "properties": {
+    "described": {
+      "const": "0.1"
+    },
+    "agent": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+    },
+    "staalc": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/dependency"
+      }
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/tool"
+      }
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "properties": {
+        "amount": {
+          "type": "string"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "NGN",
+            "GHS",
+            "KES",
+            "ZAR",
+            "CAD",
+            "AUD",
+            "JPY"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "currency": {
+            "enum": [
+              "JPY"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "amount": {
+            "pattern": "^[0-9]+$"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "amount": {
+            "pattern": "^[0-9]+(\\.[0-9]{1,2})?$"
+          }
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "max": {
+          "$ref": "#/$defs/money"
+        },
+        "each": {
+          "$ref": "#/$defs/money"
+        },
+        "uses": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "only": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "bound": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        {
+          "const": "unbounded"
+        }
+      ]
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "git",
+        "commit",
+        "version",
+        "files",
+        "authority"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "git": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "version": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "sha256"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        },
+        "authority": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "const": "any"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "holder": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "agent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "capability",
+            "need",
+            "package"
+          ],
+          "properties": {
+            "kind": {
+              "const": "library_need"
+            },
+            "capability": {
+              "type": "string"
+            },
+            "need": {
+              "type": "string"
+            },
+            "package": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "package",
+            "function",
+            "parameter"
+          ],
+          "properties": {
+            "kind": {
+              "const": "package"
+            },
+            "package": {
+              "type": "string"
+            },
+            "function": {
+              "type": "string"
+            },
+            "parameter": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grant",
+        "cap",
+        "holder",
+        "limits",
+        "source"
+      ],
+      "properties": {
+        "grant": {
+          "type": "string"
+        },
+        "cap": {
+          "type": "string"
+        },
+        "holder": {
+          "$ref": "#/$defs/holder"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "source": {
+          "type": "string"
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "program",
+        "entry",
+        "fingerprint",
+        "program_sha256",
+        "interface",
+        "grants",
+        "consumers",
+        "consumer_analysis",
+        "inputs",
+        "model_use",
+        "expenditure_ceiling",
+        "failure",
+        "unchecked"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^(?![.]+$)[A-Za-z0-9_.-]{1,128}$"
+        },
+        "program": {
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.staal$"
+        },
+        "entry": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 128
+        },
+        "fingerprint": {
+          "const": "staal-program-v3"
+        },
+        "program_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "interface": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "input",
+            "output",
+            "secrets"
+          ],
+          "properties": {
+            "input": {
+              "$ref": "https://json-schema.org/draft/2020-12/schema"
+            },
+            "output": {
+              "$ref": "https://json-schema.org/draft/2020-12/schema"
+            },
+            "secrets": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "cap",
+              "limits"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "cap": {
+                "type": "string"
+              },
+              "limits": {
+                "$ref": "#/$defs/limits"
+              }
+            }
+          }
+        },
+        "consumers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/consumer"
+          }
+        },
+        "consumer_analysis": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "complete",
+            "unresolved"
+          ],
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "unresolved": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "grant",
+                  "at",
+                  "why"
+                ],
+                "properties": {
+                  "grant": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "why": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "provenance"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "provenance": {
+                "enum": [
+                  "caller",
+                  "app"
+                ]
+              }
+            }
+          }
+        },
+        "model_use": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "calls",
+            "tokens"
+          ],
+          "properties": {
+            "calls": {
+              "$ref": "#/$defs/bound"
+            },
+            "tokens": {
+              "$ref": "#/$defs/bound"
+            }
+          }
+        },
+        "expenditure_ceiling": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "currency",
+                  "amount"
+                ],
+                "properties": {
+                  "currency": {
+                    "enum": [
+                      "USD",
+                      "EUR",
+                      "GBP",
+                      "NGN",
+                      "GHS",
+                      "KES",
+                      "ZAR",
+                      "CAD",
+                      "AUD",
+                      "JPY"
+                    ]
+                  },
+                  "amount": {
+                    "type": "string",
+                    "pattern": "^[0-9]+(\\.[0-9]{2})?$"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "currency",
+                  "unbounded"
+                ],
+                "properties": {
+                  "currency": {
+                    "enum": [
+                      "USD",
+                      "EUR",
+                      "GBP",
+                      "NGN",
+                      "GHS",
+                      "KES",
+                      "ZAR",
+                      "CAD",
+                      "AUD",
+                      "JPY"
+                    ]
+                  },
+                  "unbounded": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "failure": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "grant",
+              "cap",
+              "recovery",
+              "relies_on_service"
+            ],
+            "properties": {
+              "grant": {
+                "type": "string"
+              },
+              "cap": {
+                "type": "string"
+              },
+              "recovery": {
+                "enum": [
+                  "repeat",
+                  "resend_with_key",
+                  "operator"
+                ]
+              },
+              "relies_on_service": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "unchecked": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "c_functions",
+            "console"
+          ],
+          "properties": {
+            "c_functions": {
+              "type": "boolean"
+            },
+            "console": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  }
+}

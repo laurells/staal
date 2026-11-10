@@ -56,6 +56,9 @@ pub struct Checked {
     /// program's own; None as a whole when that is not known (a program loaded again
     /// from what an executable recorded).
     pub packages: Option<Vec<Option<String>>>,
+    /// Each function's worst-case model use (`budget::worst_cases`); empty when the
+    /// program has check errors.
+    pub costs: std::collections::HashMap<String, budget::Cost>,
 }
 
 /// Loads, resolves and checks a program: the entry file and every module it imports.
@@ -63,9 +66,11 @@ pub struct Checked {
 pub fn check_files(entry: SourceFile, fetch: impl FnMut(&[String]) -> Result<SourceFile, String>) -> Checked {
     let loaded = modules::load(entry, fetch);
     let fingerprint = identity::fingerprint(&loaded.modules(), &identity::project_part(None));
+    let mut costs = std::collections::HashMap::new();
     let result = loaded.program.and_then(|mut prog| {
         let (mut diags, for_bounds, capacities) = checker::check_and_resolve(&mut prog);
         diags.extend(budget::check(&prog, &for_bounds));
+        costs = budget::worst_cases(&prog, &for_bounds);
         if !diags.is_empty() {
             return Err(diags);
         }
@@ -73,7 +78,7 @@ pub fn check_files(entry: SourceFile, fetch: impl FnMut(&[String]) -> Result<Sou
         Ok(prog)
     });
     let packages = Some(vec![None; loaded.files.len()]);
-    Checked { files: loaded.files, fingerprint, result, packages }
+    Checked { files: loaded.files, fingerprint, result, packages, costs }
 }
 
 /// Checks the program in the file at `path`. Modules are found under the folder that
@@ -193,9 +198,11 @@ fn check_text_at_recorded(path: &Path, text: String) -> Result<(Checked, Recorde
     let project_part = identity::project_part(project.as_ref().map(|p| p.identity()).as_ref());
     let fingerprint = identity::fingerprint(&loaded.modules(), &project_part);
     rec.borrow_mut().project = project_part;
+    let mut costs = std::collections::HashMap::new();
     let result = loaded.program.and_then(|mut prog| {
         let (mut diags, for_bounds, capacities) = checker::check_and_resolve(&mut prog);
         diags.extend(budget::check(&prog, &for_bounds));
+        costs = budget::worst_cases(&prog, &for_bounds);
         if let Some(p) = &project {
             diags.extend(packages::check_authority(&prog, &loaded.paths, p));
         }
@@ -207,7 +214,7 @@ fn check_text_at_recorded(path: &Path, text: String) -> Result<(Checked, Recorde
     });
     let recorded = rec.borrow().clone();
     let packages = Some(loaded.paths.iter().map(|m| project.as_ref().and_then(|p| p.package_of(m)).map(|p| p.name.clone())).collect());
-    Ok((Checked { files: loaded.files, fingerprint, result, packages }, recorded))
+    Ok((Checked { files: loaded.files, fingerprint, result, packages, costs }, recorded))
 }
 
 /// Loads and checks a recorded program again, without its files. Package authority
@@ -217,16 +224,18 @@ pub fn check_recorded(rec: &Recorded) -> Checked {
     let entry = SourceFile { name: rec.entry.0.clone(), text: rec.entry.1.clone() };
     let loaded = modules::load_from(entry, Replay(rec));
     let fingerprint = identity::fingerprint(&loaded.modules(), &rec.project);
+    let mut costs = std::collections::HashMap::new();
     let result = loaded.program.and_then(|mut prog| {
         let (mut diags, for_bounds, capacities) = checker::check_and_resolve(&mut prog);
         diags.extend(budget::check(&prog, &for_bounds));
+        costs = budget::worst_cases(&prog, &for_bounds);
         if !diags.is_empty() {
             return Err(diags);
         }
         checker::supply_capacities(&mut prog, &capacities);
         Ok(prog)
     });
-    Checked { files: loaded.files, fingerprint, result, packages: None }
+    Checked { files: loaded.files, fingerprint, result, packages: None, costs }
 }
 
 fn no_modules(module: &[String]) -> Result<SourceFile, String> {
