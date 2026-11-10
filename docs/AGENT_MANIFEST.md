@@ -1,10 +1,15 @@
-# Staal Agent Manifest Specification v0.1.1 (review candidate)
+# Staal Agent Manifest Specification, revision v0.1.2 (review candidate)
 
 **Status: a design, not built.** Nothing here exists in `staalc` yet except what it
 says it reuses. It is written to be reviewed before any of it is built, as
 [MCP.md](MCP.md) section 12 was. v0.1 took in the first review's decisions (section
-12); v0.1.1 resolves the second review's points without widening the scope
-(section 13 lists each and where it is answered).
+12); v0.1.1 and v0.1.2 resolve the second and third reviews' points without widening
+the scope (sections 13 and 14 list each and where it is answered).
+
+**Revision and format version are separate.** v0.1.2 is a revision of this
+document. The manifest format it defines is version `0.1`, the value of `"manifest"`.
+Review revisions do not change the format version; it is fixed when the specification
+is frozen and first implemented, and changes after that follow section 9.
 
 An agent manifest describes one deployable agent: what it does, what it can touch,
 the most it can do, and what happens when it fails. A business uses it to decide
@@ -23,35 +28,55 @@ Every screen that shows an agent says which source each statement comes from. No
 statement moves from one source to another: a description cannot claim what only the
 computed description can establish, and neither speaks for what happened in a run.
 
-Authority has four values, kept apart in the same way:
+Four views of authority and deployment are kept apart in the same way. Only two of
+them are authority; the other two are statements:
 
-- The **program ceiling**: what the code permits. For each capability, the limits
-  written in its type in the program (`each`, `max`, `uses`, `only`) and, for a
-  capability a package uses, the authority that package declares in its
-  `staal.json`, which the compiler and runtime hold it to.
-- The **declared reach**: the targets the publisher says a tool needs (`reach`,
-  section 4). A statement of need, not a limit the program enforces.
-- The **suggestion**: limits the publisher recommends. Guidance, never authority.
-- The **effective grant**: what the business authorises at install.
+- The **program ceiling** (authority): for each grant, the limits written in the type
+  of the entry parameter or library need it is granted to (`each`, `max`, `uses`,
+  `only`). The runtime narrows the grant to them when the run starts.
+- The **effective grant** (authority): what the business authorises at install,
+  narrowed to the ceiling.
+- The **declared reach** (a statement): the targets the publisher says a tool needs
+  (`reach`, section 4). Not a limit anything enforces.
+- The **suggestion** (a statement): limits the publisher recommends. The business may
+  grant less or more than the suggestion, provided the effective grant never exceeds
+  the program ceiling. The suggestion has no authority of its own and is not a second
+  ceiling.
 
 Two invariants hold:
 
-    effective grant  ⊆  program ceiling                              (always)
-    effective grant  ⊆  declared reach, unless a recorded override says otherwise
+    effective grant  ⊆  program ceiling                              (always; the runtime)
+    effective grant  ⊆  declared reach, unless a recorded override says otherwise   (install)
 
-The first is enforced by the runtime, not by this manifest: a grant is narrowed to the
-limits the entry parameter's type declares, and a capability passed into a package is
-narrowed to the package's declared authority (RUNTIME.md section 6). So an override
-can widen a grant beyond the declared reach, never beyond the ceiling: a package that
-declares only `https://bank.example.com/refunds` reaches only that, whatever is
-granted. Install refuses a grant beyond the ceiling rather than let the runtime
-quietly narrow it, so the install page never shows authority that will not apply.
+**Authority is bounded where it is used, not once per grant.** A granted capability
+can be used by more than one part of the program, and each use has its own boundary,
+exactly as the compiler and runtime enforce it today (RUNTIME.md section 6 and
+"Authority (E108)"):
 
-Where the program sets no limit, the ceiling in that dimension is unbounded, and the
-grant is the only bound. The refund example's `post` is used by a module of the agent,
-not a package, so nothing in the program limits where it can post: the install page
-says so in those words, beside the declared reach. Suggestions must fit the ceiling,
-and the business grant may be smaller than the suggestion.
+| Consumer | Its boundary |
+| --- | --- |
+| The agent's own code, holding the entry capability | the entry parameter's type limits: the program ceiling. The program's own code is not limited by any package's manifest. |
+| A package function the capability is passed to | narrowed, at that slot, to the slot type's limits, which E108 keeps within the package's declared authority |
+| A library capability's need (`needs post: cap net.http.post`) | the need's type limits, narrowed when the run starts; held only inside that capability's body, never by the program |
+
+So a package's declared authority protects only what flows into that package. If the
+agent's own code holds `post` granted as `https://bank.example.com/*` and passes it to
+a package that declares only `/refunds`, the package reaches only `/refunds` and the
+agent's own code reaches all of `https://bank.example.com/*`. The computed description
+lists every consumer of every grant with its boundary (section 5), and the install
+page shows them as separate rows: it never presents a package's restriction as if it
+limited the program's direct use.
+
+Install checks a grant against the program ceiling, the widest boundary any consumer
+can exercise, and refuses a grant beyond it rather than let the runtime quietly narrow
+it, so the install page never shows authority that will not apply. An override can
+widen a grant beyond the declared reach, never beyond the ceiling.
+
+Where the program sets no limit, the ceiling in that dimension is unbounded and the
+grant is the only bound. In the refund example, `post` is the need of `bank.payments`,
+a capability declared in the agent's own module, not a package, and its type has no
+`only`: nothing in the program limits where it can post. The install page says so in
+those words, beside the declared reach.
 
 ## 2. Principles
 
@@ -167,9 +192,22 @@ The example is the refund agent of `examples/finops`, written as a deployable ag
 
 For the agent, and for each tool:
 
-- **Program identity**: the program's fingerprint (the hash the journal binds,
-  covering every module and every package's commit), the `staalc` version that
-  computed it, and each package's name, commit and declared authority.
+- **Identity**, four items, each named for what it is:
+  - *Source program fingerprint*: the SHA-256 of every module's text, by module path,
+    and each package's repository and commit. It identifies the source, not a binary.
+    It is the program hash every run's journal binds (RUNTIME.md section 11).
+  - *Compiler and runtime*: the `staalc` version that computed the description.
+  - *Dependencies*: each package's name, commit, every file's SHA-256 (from
+    `staal.lock`) and declared authority.
+  - *Build configuration*: nothing is compiled ahead of time for an agent; the host
+    compiles the source when it starts, for the machine it runs on, and native code is
+    an execution of the same program, tested to give identical results to the
+    interpreter. The target and engine a deployment uses are recorded in its generated
+    manifest and in Verified evidence, not in the description, which is the same on
+    every platform.
+- **Consumers**: for every grant, each consumer and its boundary, as section 1's table
+  says: the agent's own code, each package slot the capability can be passed to that
+  the checker can see, and each library need.
 - **Interface**: input and output JSON Schemas, as `staalc schema` gives them.
 - **Inputs and their provenance**: for each input of each tool, where its value comes
   from, as the host establishes it:
@@ -221,9 +259,14 @@ For the agent, and for each tool:
     and if so that the run stops for an operator rather than guessing.
 - **Network reach, precisely**: a grant's `only` is checked against the canonical URL
   of every request; no redirect is followed (RUNTIME.md, HTTP); outgoing TLS is
-  verified against the host name. A request goes to whatever address the machine's
-  DNS gives for a granted host: DNS is part of the machine, which is trusted
-  (GUARANTEES.md section 2). The description states this rather than implying more.
+  verified against the host name. Staal enforces the canonical host name and the TLS
+  boundary. It does not enforce where that name resolves: a request goes to whatever
+  address the machine's DNS gives, and DNS is part of the machine, which is trusted
+  (GUARANTEES.md section 2). A grant of `https://api.example.com/*` therefore does not
+  mean the service is on the public internet; on a machine whose DNS points that name
+  at an internal address, the request goes there. Host-based reach is not IP-level
+  network isolation; DNS integrity and network isolation are the deployment's
+  responsibility, and the install page says so beside every network grant.
 - **Unchecked parts**: whether a tool's entry takes a C function capability (`cap
   ffi`), directly or through a library's needs, so that a run can call C; and
   whether it can reach console input. C code a tool cannot be granted cannot run, so
@@ -295,11 +338,34 @@ Three, never merged, never written by the publisher, each for one version only:
 | **Verified** | also passed checks the registry ran itself | below |
 | **Independently reviewed** | also assessed by a registry-recognised reviewer outside the publisher | below |
 
-**Verified** is run by the registry, never taken from the publisher. On the pinned
-commit it fetches the source, verifies locks and hashes, runs the publish checks, the
-agent's tests, the crash tests of its actions and its fuzz targets for a set time, and
-records the exact `staalc`, runtime, dependency and test versions. It publishes that
-evidence with the version. Publisher evidence may be shown beside it, labelled, and
+**Verified** is run by the registry, never taken from the publisher, against a
+**verification profile**: a versioned, published definition of the checks, kept by the
+registry apart from this specification, so the standard can rise without changing the
+manifest format. Every Verified designation names the profile and version it passed,
+and the evidence holds the source fingerprint, `staalc` version, platform, engine and
+every check's output. A profile defines:
+
+- the test protocol: which tests are found and how they are run;
+- the crash protocol: which actions are crashed at which journal points, and what a
+  pass means;
+- fuzzing: which targets, for how long, under which sanitizer and resource limits, and
+  which exemptions are allowed and recorded;
+- the compiler and runtime checks;
+- the evidence format and how long evidence is kept.
+
+Proposed **profile 1**, for review with this document:
+
+| Check | Requirement |
+| --- | --- |
+| Tests | `staalc test` over the project's `tests/` passes on both engines, which it runs by default; an agent with no tests fails |
+| Scenarios | at least one scenario per tool: inputs, app inputs and the stand-in services the tool calls, written by the publisher, which the registry runs |
+| Crash | every scenario is crashed at every journal write, on both engines and each pairing of engines for crash and resume; a pass is the same result as an uncrashed run, and every action counted once by its stand-in, or stopped for an operator where the action's outcome is unknown |
+| Fuzzing | the registry fuzzes each tool's arguments, generated from its input schema, for 10 minutes under AddressSanitizer against the scenario's stand-ins, asserting no crash, no hang, and that the tool host's checks hold; the agent's own fuzz targets, if any, run too, and having none is not a failure |
+| Compiler and runtime | the publish checks; no `cap ffi` a tool can be granted |
+| Evidence | written by the harness in RFC 8785 JSON, kept for as long as the version is listed and 2 years after |
+
+These numbers are proposals; their purpose is that every Verified agent passed the
+same named bar. Publisher evidence may be shown beside the registry's, labelled, and
 never replaces it. Running an untrusted agent's tests is itself an attack surface,
 so the checks run in an environment made for one run and destroyed after it:
 
@@ -311,9 +377,11 @@ so the checks run in an environment made for one run and destroyed after it:
   meaningless value made for that run.
 - Limits on time, memory, processes and disk; a check that exceeds one fails.
 - The evidence is written by the registry's harness, outside the environment, never
-  by the agent's code. A clean fuzz run
-is shown as what it is: the named targets ran for the stated time without a finding.
-An agent with C code can be Published, never Verified.
+  by the agent's code.
+
+A clean fuzz run is shown as what it is: the named targets ran for the stated time
+without a finding, not a general security guarantee. An agent with C code a tool can
+be granted can be Published, never Verified.
 
 **Independently reviewed** is granted for a report from a reviewer the registry
 recognises by published criteria: verified identity, relevant experience, areas of
@@ -368,9 +436,17 @@ Five things must agree for an installed agent to be enforced as described:
 | --- | --- | --- |
 | Manifest specification version | `manifest` | refused if unknown |
 | Compiler and runtime | the `staalc` version; Staal's compiler and runtime ship as one binary, so they are one version | `requires_staalc` at install; the version is recorded in the description and the evidence |
-| Program | the fingerprint | recomputed at install and compared |
+| Program | the source program fingerprint | recomputed at install and compared |
 | Dependencies | `staal.lock` | every file's hash at install, as packages are verified today |
 | Journal format | the journal's own version (the `version` of its start record) | a resume refuses a journal of a version it does not read |
+
+What the journal binds is the source program fingerprint and the run config, not a
+binary or a `staalc` version: a run resumed after `staalc` is upgraded resumes the same
+source, under the same config, on the new version. Since every engine of every version
+is held to the same results, that is the intended behaviour, but the journal does not
+record which `staalc` started a run. **Required before implementation:** the
+journal's start record gains the `staalc` version and the engine, so the execution
+record says what executed it, and a resume on a different version is logged.
 
 Parsing an agent is not the same as enforcing it. A `staalc` older than
 `requires_staalc` refuses the agent even if it could parse it, because it may lack a
@@ -480,3 +556,19 @@ possible within a host (`https://bank.example.com/*` for a declared
 Corrected from v0.1: v0.1 said the runtime refuses a grant beyond the program
 ceiling. It narrows it (RUNTIME.md section 6). Install now refuses such a grant, so
 what the business sees is what applies.
+
+## 14. Changes in v0.1.2 (the third review)
+
+| Review point | Resolution | Section |
+| --- | --- | --- |
+| Authority composition | Bounded at each use, as the compiler and runtime already do: the agent's own code by the entry type, a package slot by its type within the package's authority, a library need inside its capability only; every consumer listed with its boundary; install checks against the widest; a package's restriction never shown as limiting the program's own use | 1, 5 |
+| Suggestions independent of grants | The business may grant less or more than the suggestion within the ceiling; "four views", of which two are authority | 1 |
+| What qualifies for Verified | A versioned verification profile, named in every designation; profile 1 proposed | 7 |
+| The network boundary | Staal enforces host name and TLS, not resolution; not IP-level isolation; said beside every network grant | 5 |
+| The fingerprint | Named the source program fingerprint; compiler, dependencies and build configuration recorded apart; the journal's binding stated, and recording the `staalc` version in the journal made a requirement | 5, 9 |
+| Document and format versions | Stated as separate at the top | top |
+
+Corrected from v0.1.1: it said package authority is part of one program ceiling per
+grant. It is a boundary at the package's own slots, and does not limit the agent's
+own code (RUNTIME.md, "Authority (E108)": "The program's own code is not limited by a
+manifest").
