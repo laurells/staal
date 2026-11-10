@@ -137,6 +137,10 @@ CASES = {
     "category-twice": (setter(["categories"], ["finance", "finance"]), False, "listed twice"),
     "data-missing": (remover(["data", "regions"]), False, "data.regions: missing"),
     "tool-name-twice": (lambda m: m["tools"].append(copy.deepcopy(m["tools"][0])), True, "names another tool too"),
+    "program-unicode": (setter(T + ["program"], "r\u00e9fund.staal"), False, "must be the name of a .staal file"),
+    "program-backslash": (setter(T + ["program"], "..\\refund.staal"), False, "must be the name of a .staal file"),
+    "program-absolute": (setter(T + ["program"], "/etc/refund.staal"), False, "must be the name of a .staal file"),
+    "valid-title-decomposed": (setter(["title"], "Re\u0301funds"), True, None),
     "program-outside": (setter(T + ["program"], "../refund.staal"), False, "must be the name of a .staal file"),
     "program-missing": (setter(T + ["program"], "missing.staal"), True, "missing.staal"),
     "entry-missing": (setter(T + ["entry"], "nope"), True, "has no function 'nope'"),
@@ -158,6 +162,13 @@ CASES = {
     "reach-star-in-host": (setter(N + ["reach"], ["https://*.example.com/refunds"]), True, "the `*` is in the host"),
     "reach-not-canonical": (setter(N + ["reach"], ["https://Bank.example.com/refunds"]), True, "not in canonical form"),
     "reach-http": (setter(N + ["reach"], ["http://bank.example.com/refunds"]), True, "post.reach[0]: 'http://bank.example.com/refunds' uses http://"),
+    "valid-reach-root": (setter(N + ["reach"], ["https://{{BANK}}/"]), True, None),
+    "reach-placeholder-no-path": (setter(N + ["reach"], ["https://{{BANK}}"]), True, "not in canonical form"),
+    "reach-placeholder-then-query": (setter(N + ["reach"], ["https://{{BANK}}?x=1"]), True, "a placeholder must be the whole host"),
+    "reach-placeholder-then-fragment": (setter(N + ["reach"], ["https://{{BANK}}#x"]), True, "a placeholder must be the whole host"),
+    "reach-placeholder-after-userinfo": (setter(N + ["reach"], ["https://user@{{BANK}}/refunds"]), True, "a placeholder must be the whole host"),
+    "reach-placeholder-twice": (setter(N + ["reach"], ["https://{{BANK}}/{{BANK}}"]), True, "there is one at most"),
+    "reach-placeholder-unclosed": (setter(N + ["reach"], ["https://{{BANK/refunds"]), True, "not closed"),
     "reach-on-library": (setter(G + ["reach"], ["https://bank.example.com/"]), True, "a library capability's targets"),
     "only-on-runtime": (setter(N + ["suggested"], {"only": ["https://bank.example.com/refunds"]}), True, "are its \"reach\""),
     "money-on-runtime": (setter(N + ["suggested"], {"max": usd("1.00")}), True, "max and each do not apply"),
@@ -195,7 +206,41 @@ DESCRIBED_CASES = {
 }
 
 
+OUT_M = os.path.join(ROOT, "tests/fixtures/agent/malformed")
+
+# agent.json files that are not JSON as an agent's files must be: each refused by
+# staalc with a part of its message. (Python's json module keeps the last of two equal
+# names, so these are not given to the schema test.)
+def _text():
+    return json.dumps(VALID, indent=2, ensure_ascii=False)
+
+
+MALFORMED = {
+    "duplicate-top": (lambda t: t.replace('"manifest": "0.1",', '"manifest": "0.1",\n  "manifest": "0.1",', 1), "appears twice"),
+    "duplicate-nested": (lambda t: t.replace('"uses": 1', '"uses": 1, "uses": 9', 1), "appears twice"),
+    "duplicate-escaped": (lambda t: t.replace('"agent": "support-refunds",', '"agent": "support-refunds",\n  "\\u0061gent": "other",', 1), "appears twice"),
+    "byte-order-mark": (lambda t: "\ufeff" + t, "byte order mark"),
+    "trailing-comma": (lambda t: t.replace('"deadline": "120s"', '"deadline": "120s",', 1), "not JSON"),
+    "truncated": (lambda t: t[: len(t) // 2], "not JSON"),
+    "two-values": (lambda t: t + "\n{}", "not JSON"),
+    "single-quotes": (lambda t: t.replace('"0.1"', "'0.1'", 1), "not JSON"),
+}
+
+
 def main():
+    os.makedirs(OUT_M, exist_ok=True)
+    for f in os.listdir(OUT_M):
+        os.remove(os.path.join(OUT_M, f))
+    expected_m = {}
+    for name, (change, part) in MALFORMED.items():
+        text = change(_text())
+        assert text != _text(), name
+        with open(os.path.join(OUT_M, f"{name}.json"), "w", encoding="utf-8") as f:
+            f.write(text)
+        expected_m[name] = part
+    with open(os.path.join(OUT_M, "expected.json"), "w") as f:
+        json.dump({"generated_by": "scripts/agent_fixtures.py", "cases": expected_m}, f, indent=1, sort_keys=True)
+        f.write("\n")
     os.makedirs(OUT_D, exist_ok=True)
     for f in os.listdir(OUT_D):
         os.remove(os.path.join(OUT_D, f))

@@ -427,10 +427,18 @@ For the agent, and for each tool:
   `unbounded`; `failure`, for each runtime capability among the grants and their needs,
   its `recovery` (`repeat`, `resend_with_key` or `operator`) and whether that relies on
   the service deduplicating (`relies_on_service`, from `idempotency_key`); and
-  `unchecked` (`c_functions`, `console`). This version does not yet describe outcome
-  certainty separately from recovery, network reach notes, or a per-package boundary
-  table beyond the consumers; they are statements an install page prints from these
-  fields.
+  `unchecked` (`c_functions`, `console`). Three more, so no consumer reconstructs them:
+  in `failure`, `outcome_can_be_unknown`, true where a request left in doubt stops the
+  run until an operator answers (a request whose result was recorded is replayed, never
+  made again, and one recorded as not sent is a failure the program saw); `network`,
+  for each runtime capability that leaves the machine, its declared `reach`, the `only`
+  its type writes, and what is enforced: the canonical target of every request
+  (`checked`), no redirect followed, when TLS verifies the host (`tls`), and, always,
+  `dns_trusted: true` and `ip_isolation: false`, so a host-name reach is never shown as
+  network isolation; and `package_boundaries`, for each package of the project, its
+  declared authority and what the tool can hand it (`receives`: each grant, the
+  package's function and parameter, and the limits that slot imposes), so the agent's
+  own grant is never read as what a package can exercise.
 - **Determinism**: the description is serialized as JSON in the JSON Canonicalization
   Scheme (RFC 8785): keys sorted, no insignificant space, numbers and strings in one
   form. Every list whose order carries no meaning (packages, capabilities, reach
@@ -951,7 +959,18 @@ check` and `describe`. Each is demonstrated by these tests.
   are exactly the value rules. The committed description of the valid agent is what
   `describe` writes, byte for byte, the described schema accepts it, and 16 altered
   descriptions are refused by both. A test keeps the schema's currencies and categories
-  equal to the runtime's.
+  equal to the runtime's. Further tests: malformed JSON (a name twice in one object at
+  any depth and however escaped, a byte order mark, trailing commas, truncation, two
+  values), refused by a reader that requires distinct names (I-JSON, RFC 7493); members
+  in another order giving the same description; a program reached through a link
+  outside the folder refused, and one inside it accepted; non-ASCII, absolute and
+  backslash program names; placeholders at every URL boundary; and a project with a
+  package whose committed description goes stale, and is refused, when the package's
+  contents change, when only the lockfile's text changes, when the program hands its
+  grant to the package with agent.json unchanged, and when a reach changes. What the
+  fixtures establish is that the schema states the form and `staalc` enforces the form
+  and rules; that the description is accurate rests on its being computed by the code
+  that enforces each fact (section 5).
 - R4: a capability can travel only as a parameter, a typed `let`, a return value or a
   library's need: it can be held in no list, record, tuple, optional, map or function
   value, and never reassigned (E101, E003). Each of those entries narrows it to the
@@ -985,6 +1004,31 @@ check` and `describe`. Each is demonstrated by these tests.
   binary, so there is no version 1 fixture. Scenarios with random numbers and the
   clock are excluded from the fixtures, since a resumed run draws new values after the
   crash point; tests/crash_test.rs covers them on the current build.
+
+**What each status establishes.** Kept apart in the implementation and on every
+surface; none implies the next:
+
+| Status | What it establishes |
+| --- | --- |
+| Manifest checked (`staalc agent check`) | `agent.json` passes its form, its value rules and the checks against its project |
+| Description fresh | the committed `agent.described.json` is, byte for byte, what `staalc` computes from the program |
+| Published | the agent passed the registry's publication requirements (not built) |
+| Verified | the exact release passed a named, reproducible verification profile (not built) |
+| Independently reviewed | a recognised external reviewer examined a stated scope (not built) |
+
+A checked manifest is not a security certification, a fresh description is not proof
+that the program is harmless, and a passing test suite is not an independent review.
+
+**Decisions recorded from the review of R8 (no new revision).** Strict schema
+validation, the checks against the project and the tool host, the canonical description
+and the independent schema tests are kept. The category list is closed and kept
+provisionally, pending review of its values. SPDX-only licensing is the rule for the
+public registry; custom licences for private enterprise deployments (licence text, its
+hash, the publisher's identity and explicit acceptance) are a future extension. The
+three facts the description lacked (outcome certainty, network reach notes, the
+per-package boundary table) are now in it. Verified is a separate milestone, and nothing
+may imply it exists. `github:<account>` is an identity format; the registry must
+separately establish that the publisher may publish for the repository.
 
 **Verified never transfers.** A Verified designation is shown with the exact
 `staalc` release and platform it was earned on, as a historical fact about that

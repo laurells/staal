@@ -1,0 +1,13 @@
+{
+ "cases": {
+  "byte-order-mark": "byte order mark",
+  "duplicate-escaped": "appears twice",
+  "duplicate-nested": "appears twice",
+  "duplicate-top": "appears twice",
+  "single-quotes": "not JSON",
+  "trailing-comma": "not JSON",
+  "truncated": "not JSON",
+  "two-values": "not JSON"
+ },
+ "generated_by": "scripts/agent_fixtures.py"
+}

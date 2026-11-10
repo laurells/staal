@@ -187,3 +187,180 @@ print(json.dumps({p: not any(True for _ in v.iter_errors(json.load(open(p)))) fo
         assert_eq!(got[f], false, "{f}: the schema accepts it");
     }
 }
+
+fn staalc_agent(cmd: &str, d: &Path) -> (Option<i32>, String) {
+    let o = Command::new(BIN).args(["agent", cmd, d.to_str().unwrap()]).output().unwrap();
+    (o.status.code(), String::from_utf8_lossy(&o.stderr).into_owned())
+}
+
+/// Files that are not JSON as an agent's files must be: a name twice in one object (at
+/// any depth, however escaped), a byte order mark, and text that is not one JSON value.
+#[test]
+fn malformed_json_is_refused() {
+    let dir = Path::new(ROOT).join("tests/fixtures/agent/malformed");
+    let e: Json = serde_json::from_str(&std::fs::read_to_string(dir.join("expected.json")).unwrap()).unwrap();
+    let cases = e["cases"].as_object().unwrap();
+    assert!(cases.len() >= 8);
+    for (name, part) in cases {
+        let d = agent_dir(&format!("malformed-{name}"), &dir.join(format!("{name}.json")));
+        let (code, err) = staalc_agent("check", &d);
+        assert!(code == Some(1) && err.contains(part.as_str().unwrap()), "{name}: {err}");
+    }
+}
+
+/// The order of an object's members does not matter: the same agent.json with every
+/// object's members reversed gives the same description, byte for byte.
+#[test]
+fn member_order_does_not_change_the_description() {
+    /// The JSON text of `v` with every object's members in reverse order (serde_json
+    /// keeps members sorted, so the text is written here).
+    fn reversed(v: &Json) -> String {
+        match v {
+            Json::Object(o) => {
+                let members: Vec<String> = o.iter().rev().map(|(k, x)| format!("{}: {}", Json::String(k.clone()), reversed(x))).collect();
+                format!("{{{}}}", members.join(", "))
+            }
+            Json::Array(a) => format!("[{}]", a.iter().map(reversed).collect::<Vec<_>>().join(", ")),
+            other => other.to_string(),
+        }
+    }
+    let valid = Path::new(ROOT).join("tests/fixtures/agent/valid/refunds");
+    let original = std::fs::read_to_string(valid.join("agent.json")).unwrap();
+    let v: Json = serde_json::from_str(&original).unwrap();
+    let text = reversed(&v);
+    // serde_json writes members in name order; this text has them the other way.
+    assert!(text.starts_with("{\"version\"") && serde_json::to_string(&v).unwrap().starts_with("{\"agent\""), "{text}");
+    assert_eq!(serde_json::from_str::<Json>(&text).unwrap(), v);
+    let d = agent_dir("reordered", &valid.join("agent.json"));
+    std::fs::write(d.join("agent.json"), text).unwrap();
+    let (code, err) = staalc_agent("check", &d);
+    assert_eq!(code, Some(0), "{err}");
+}
+
+/// A tool's program must be a file in the agent's folder after every link is resolved:
+/// a link to a file outside is refused; a link to a file inside is that file.
+#[cfg(unix)]
+#[test]
+fn a_program_outside_the_folder_is_refused_through_a_link() {
+    let valid = Path::new(ROOT).join("tests/fixtures/agent/valid/refunds");
+    let d = agent_dir("link-outside", &valid.join("agent.json"));
+    let outside = d.parent().unwrap().join("link-outside-elsewhere");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::rename(d.join("refund.staal"), outside.join("refund.staal")).unwrap();
+    std::os::unix::fs::symlink(outside.join("refund.staal"), d.join("refund.staal")).unwrap();
+    let (code, err) = staalc_agent("check", &d);
+    assert!(code == Some(1) && err.contains("is not a file in the agent's folder"), "{err}");
+    // A link inside the folder to a file inside it.
+    let d = agent_dir("link-inside", &valid.join("agent.json"));
+    std::fs::rename(d.join("refund.staal"), d.join("real.staal")).unwrap();
+    std::os::unix::fs::symlink(d.join("real.staal"), d.join("refund.staal")).unwrap();
+    let (code, err) = staalc_agent("check", &d);
+    assert_eq!(code, Some(0), "{err}");
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+fn commit(dir: &Path, files: &[(&str, &str)]) -> String {
+    std::fs::create_dir_all(dir).unwrap();
+    if !dir.join(".git").exists() {
+        git(dir, &["init", "-q"]);
+    }
+    for (f, t) in files {
+        std::fs::write(dir.join(f), t).unwrap();
+    }
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "c", "--allow-empty"]);
+    git(dir, &["rev-parse", "HEAD"])
+}
+
+/// An agent with a package. Its description holds the package, what the tool hands it
+/// and the network reach; each of these changes, made alone after the description was
+/// written, makes the committed description stale, and `agent check` refuses it: the
+/// package's contents (a new commit), the lockfile's text, the program's capability
+/// graph with agent.json unchanged, and a reach in agent.json.
+#[test]
+fn a_description_goes_stale_with_every_change_that_matters() {
+    let b = std::fs::canonicalize(env!("CARGO_TARGET_TMPDIR")).unwrap().join("agent-check").join("stale");
+    let _ = std::fs::remove_dir_all(&b);
+    std::fs::create_dir_all(&b).unwrap();
+    let repo = b.join("repos/ledger");
+    let any = "https://ledger.example.com/*";
+    let ledger_manifest = format!(r#"{{"package": "ledger", "authority": {{"net.http.post": ["{any}"]}}}}"#);
+    let ledger_code = format!("pub fn record(h: cap net.http.post(only: [\"{any}\"]), x: Text) -> Int {{\n    let r = h.post(\"https://ledger.example.com/entries\", x)\n    return r.status\n}}\n");
+    let c1 = commit(&repo, &[("staal.json", &ledger_manifest), ("n.staal", &ledger_code)]);
+    let d = b.join("agent");
+    std::fs::create_dir_all(&d).unwrap();
+    let staal_json = |c: &str| format!(r#"{{"dependencies": {{"ledger": {{"git": "{}", "commit": "{c}"}}}}}}"#, repo.display());
+    std::fs::write(d.join("staal.json"), staal_json(&c1)).unwrap();
+    let program = |extra: &str| {
+        format!(
+            "import ledger.n\n\nfn main(note: Text, post: cap net.http.post(only: [\"{any}\"])) -> Int {{\n    let r = post.post(\"https://ledger.example.com/notes\", note)\n{extra}    return r.status\n}}\n"
+        )
+    };
+    std::fs::write(d.join("note.staal"), program("")).unwrap();
+    let manifest = serde_json::json!({
+        "manifest": "0.1", "agent": "ledger-notes", "version": "1.0.0", "requires_staalc": ">=0.27.0",
+        "title": "Ledger notes", "summary": "Writes a note to the ledger.",
+        "publisher": { "id": "github:example-org", "name": "Example", "security_contact": "https://example.com/security" },
+        "license": "MIT", "categories": ["finance"],
+        "tools": [{ "name": "note", "description": "Write a note.", "program": "note.staal",
+                    "grants": { "post": { "reach": ["https://ledger.example.com/*"] } } }],
+        "data": { "reads": [], "writes": ["a note"], "sends": ["the note to the ledger"], "categories": [], "processors": [],
+                  "retention": "none", "model_training": "no model is called", "regions": "the ledger's" }
+    });
+    std::fs::write(d.join("agent.json"), serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    staalc::packages::fetch(&d).unwrap();
+    let describe = || {
+        let (code, err) = staalc_agent("describe", &d);
+        assert_eq!(code, Some(0), "{err}");
+        std::fs::read_to_string(d.join("agent.described.json")).unwrap()
+    };
+    let stale = |what: &str| {
+        let (code, err) = staalc_agent("check", &d);
+        assert!(code == Some(1) && err.contains("differs from a fresh description"), "{what}: {err}");
+    };
+    let first = describe();
+    let v: Json = serde_json::from_str(&first).unwrap();
+    assert_eq!(v["dependencies"][0]["name"], "ledger");
+    assert_eq!(v["tools"][0]["network"][0]["reach"], serde_json::json!(["https://ledger.example.com/*"]));
+    assert_eq!(v["tools"][0]["package_boundaries"], serde_json::json!([{ "package": "ledger", "declared_authority": { "net.http.post": [any] }, "receives": [] }]));
+    assert_eq!(staalc_agent("check", &d).0, Some(0));
+
+    // The capability graph: the program now hands its grant to the package.
+    std::fs::write(d.join("note.staal"), program("    let k = n.record(post, note)\n")).unwrap();
+    stale("the capability graph");
+    let v: Json = serde_json::from_str(&describe()).unwrap();
+    assert_eq!(v["tools"][0]["package_boundaries"][0]["receives"][0]["function"], "ledger.n.record", "{v}");
+
+    // The package's contents.
+    let c2 = commit(&repo, &[("n.staal", &ledger_code.replace("entries", "lines"))]);
+    std::fs::write(d.join("staal.json"), staal_json(&c2)).unwrap();
+    staalc::packages::fetch(&d).unwrap();
+    stale("the package's contents");
+    describe();
+
+    // The lockfile's text alone.
+    let lock: Json = serde_json::from_str(&std::fs::read_to_string(d.join("staal.lock")).unwrap()).unwrap();
+    std::fs::write(d.join("staal.lock"), lock.to_string()).unwrap();
+    stale("the lockfile's text");
+    describe();
+
+    // A reach in agent.json.
+    let mut m2 = manifest.clone();
+    m2["tools"][0]["grants"]["post"]["reach"] = serde_json::json!(["https://ledger.example.com/notes"]);
+    std::fs::write(d.join("agent.json"), serde_json::to_string_pretty(&m2).unwrap()).unwrap();
+    stale("a reach");
+    describe();
+    assert_eq!(staalc_agent("check", &d).0, Some(0));
+}

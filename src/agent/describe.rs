@@ -13,6 +13,8 @@
 //   inputs         by name
 //   consumers      by grant, then holder (crate::consumers)
 //   failure        by grant
+//   network        by grant
+//   packages       by name (package_boundaries), what each receives as `consumers`
 //   expenditure    by currency
 //
 // Every value here is computed by the code that enforces it: the fingerprint is the
@@ -62,18 +64,58 @@ fn recovery(cap: &str, idempotency_key: bool) -> &'static str {
     }
 }
 
-/// Every runtime capability among a tool's grants and their needs: (grant, cap,
-/// idempotency_key), from the program's types and agent.json.
-fn runtime_grants(prog: &Program, grant: &str, cap: &str, node: &GrantNode, out: &mut Vec<(String, String, bool)>) {
+/// A runtime capability among a tool's grants and their needs.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct RuntimeGrant {
+    grant: String,
+    cap: String,
+    idempotency_key: bool,
+    /// The `only` its type writes, if any.
+    program_only: Option<Vec<String>>,
+    /// The `reach` agent.json declares, if any, placeholders kept.
+    reach: Option<Vec<String>>,
+}
+
+/// Every runtime capability among a tool's grants and their needs, from the program's
+/// types and agent.json.
+fn runtime_grants(prog: &Program, grant: &str, cap: &str, only: &Option<Vec<String>>, node: &GrantNode, out: &mut Vec<RuntimeGrant>) {
     if crate::interp::is_runtime_cap(cap) {
-        out.push((grant.to_string(), cap.to_string(), node.idempotency_key == Some(true)));
+        out.push(RuntimeGrant {
+            grant: grant.to_string(),
+            cap: cap.to_string(),
+            idempotency_key: node.idempotency_key == Some(true),
+            program_only: only.clone(),
+            reach: node.reach.clone(),
+        });
         return;
     }
     let Some(decl) = prog.caps.iter().find(|c| c.actions.iter().any(|a| c.action_path(&a.name) == cap)) else { return };
     for (n, t, _) in &decl.needs {
-        if let (Ty::Cap { path, .. }, Some(child)) = (t, node.needs.get(n)) {
-            runtime_grants(prog, &format!("{grant}.{n}"), &path.join("."), child, out);
+        if let (Ty::Cap { path, limits }, Some(child)) = (t, node.needs.get(n)) {
+            runtime_grants(prog, &format!("{grant}.{n}"), &path.join("."), &limits.only, child, out);
         }
+    }
+}
+
+/// Whether requests through `cap` leave the machine: the network, and databases on
+/// other machines.
+fn networked(cap: &str) -> bool {
+    cap.starts_with("net.") || cap.starts_with("db.postgres.")
+}
+
+/// When a network capability's connections are verified with TLS against the host
+/// name: `https_targets` (net.http: every https URL, and only loopback hosts may use
+/// plain http), `always` (net.tls.*; db.postgres verifies when its grant asks for TLS,
+/// which the business sets at install, so `per_grant`), or `never` (net.tcp.*).
+fn tls(cap: &str) -> &'static str {
+    if cap.starts_with("net.http.") {
+        "https_targets"
+    } else if cap.starts_with("net.tls.") {
+        "always"
+    } else if cap.starts_with("db.postgres.") {
+        "per_grant"
+    } else {
+        "never"
     }
 }
 
@@ -118,7 +160,7 @@ fn expenditure(prog: &Program, entry: &str) -> Result<Json, String> {
     ))
 }
 
-fn tool(def: &ToolDef, checked: &crate::Checked) -> Result<Json, String> {
+fn tool(def: &ToolDef, checked: &crate::Checked, authority: &BTreeMap<String, Json>) -> Result<Json, String> {
     let prog = checked.result.as_ref().map_err(|_| format!("{} has check errors", def.program))?;
     let schema = crate::cli::schema_of(checked, prog, Some(&def.entry))?;
     let f = prog.fns.iter().find(|f| f.name == def.entry).ok_or_else(|| format!("no function '{}'", def.entry))?;
@@ -135,14 +177,52 @@ fn tool(def: &ToolDef, checked: &crate::Checked) -> Result<Json, String> {
     grants.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     let mut runtime = Vec::new();
     for p in &f.params {
-        if let (Ty::Cap { path, .. }, Some(node)) = (&p.ty, def.grants.get(&p.name)) {
-            runtime_grants(prog, &p.name, &path.join("."), node, &mut runtime);
+        if let (Ty::Cap { path, limits }, Some(node)) = (&p.ty, def.grants.get(&p.name)) {
+            runtime_grants(prog, &p.name, &path.join("."), &limits.only, node, &mut runtime);
         }
     }
     runtime.sort();
+    // After a crash, a request whose result was recorded is replayed, never made again,
+    // and one recorded as not sent is a failure the program saw. A request left in
+    // doubt (it may or may not have reached the service) is handled by `recovery`; with
+    // `operator`, the run stops and its outcome stays unknown until an operator answers.
     let failure: Vec<Json> = runtime
         .iter()
-        .map(|(g, cap, key)| json!({ "grant": g, "cap": cap, "recovery": recovery(cap, *key), "relies_on_service": *key && recovery(cap, *key) == "resend_with_key" }))
+        .map(|g| {
+            let r = recovery(&g.cap, g.idempotency_key);
+            json!({ "grant": g.grant, "cap": g.cap, "recovery": r, "relies_on_service": r == "resend_with_key",
+                    "outcome_can_be_unknown": r == "operator" })
+        })
+        .collect();
+    // What a network grant's reach means: the canonical target of every request is
+    // checked against it (host, port, path and query; no redirect followed), TLS as
+    // `tls` says; where the host name resolves is the machine's DNS, trusted, so a
+    // reach is never IP-level isolation (AGENT_MANIFEST.md section 5, "Network reach").
+    let network: Vec<Json> = runtime
+        .iter()
+        .filter(|g| networked(&g.cap))
+        .map(|g| {
+            json!({ "grant": g.grant, "cap": g.cap, "reach": g.reach, "program_only": g.program_only,
+                    "checked": "canonical_target", "redirects_followed": false, "tls": tls(&g.cap),
+                    "dns_trusted": true, "ip_isolation": false })
+        })
+        .collect();
+    // For each package of the project, its declared authority and what this tool can
+    // hand it: the package consumers of `consumers`, each with the boundary its slot
+    // imposes. A package receives nothing but these.
+    let package_boundaries: Vec<Json> = authority
+        .iter()
+        .map(|(name, declared)| {
+            let receives: Vec<Json> = schema["consumers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|c| c["holder"]["kind"] == "package" && c["holder"]["package"] == name.as_str())
+                .map(|c| json!({ "grant": c["grant"], "cap": c["cap"], "function": c["holder"]["function"],
+                                  "parameter": c["holder"]["parameter"], "limits": c["limits"] }))
+                .collect();
+            json!({ "package": name, "declared_authority": declared, "receives": receives })
+        })
         .collect();
     let cost = checked.costs.get(&def.entry).ok_or_else(|| format!("no cost for '{}'", def.entry))?;
     // C functions a run can be granted: directly, or through a library capability's needs.
@@ -161,6 +241,8 @@ fn tool(def: &ToolDef, checked: &crate::Checked) -> Result<Json, String> {
         "model_use": { "calls": bound(cost.calls), "tokens": bound(cost.tokens) },
         "expenditure_ceiling": expenditure(prog, &def.entry)?,
         "failure": failure,
+        "network": network,
+        "package_boundaries": package_boundaries,
         "unchecked": { "c_functions": c_functions, "console": schema["reads_console"] },
     }))
 }
@@ -168,12 +250,8 @@ fn tool(def: &ToolDef, checked: &crate::Checked) -> Result<Json, String> {
 /// The described form of a checked agent, as JSON.
 pub fn describe(root: &std::path::Path, checked: &Checked) -> Result<Json, String> {
     let m = &checked.manifest;
-    let mut tools: Vec<Json> = Vec::new();
-    for (def, c) in m.tools.iter().zip(&checked.programs) {
-        tools.push(tool(def, c).map_err(|e| format!("tool '{}': {e}", def.name))?);
-    }
-    tools.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     let mut dependencies = Vec::new();
+    let mut authority_of: BTreeMap<String, Json> = BTreeMap::new();
     if let Some(project) = crate::packages::Project::open(root)? {
         for (name, p) in &project.packages {
             let mut authority = Map::new();
@@ -186,6 +264,7 @@ pub fn describe(root: &std::path::Path, checked: &Checked) -> Result<Json, Strin
                     },
                 );
             }
+            authority_of.insert(name.clone(), Json::Object(authority.clone()));
             let files: Vec<Json> = p.files.iter().map(|(path, sha)| json!({ "path": path, "sha256": sha })).collect();
             dependencies.push(json!({
                 "name": name,
@@ -197,6 +276,11 @@ pub fn describe(root: &std::path::Path, checked: &Checked) -> Result<Json, Strin
             }));
         }
     }
+    let mut tools: Vec<Json> = Vec::new();
+    for (def, c) in m.tools.iter().zip(&checked.programs) {
+        tools.push(tool(def, c, &authority_of).map_err(|e| format!("tool '{}': {e}", def.name))?);
+    }
+    tools.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     Ok(json!({
         "described": DESCRIBED_VERSION,
         "agent": m.agent,

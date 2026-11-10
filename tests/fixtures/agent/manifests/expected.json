@@ -152,11 +152,23 @@
    "schema": true,
    "staalc": "are its \"reach\""
   },
+  "program-absolute": {
+   "schema": false,
+   "staalc": "must be the name of a .staal file"
+  },
+  "program-backslash": {
+   "schema": false,
+   "staalc": "must be the name of a .staal file"
+  },
   "program-missing": {
    "schema": true,
    "staalc": "missing.staal"
   },
   "program-outside": {
+   "schema": false,
+   "staalc": "must be the name of a .staal file"
+  },
+  "program-unicode": {
    "schema": false,
    "staalc": "must be the name of a .staal file"
   },
@@ -188,6 +200,10 @@
    "schema": true,
    "staalc": "a library capability's targets"
   },
+  "reach-placeholder-after-userinfo": {
+   "schema": true,
+   "staalc": "a placeholder must be the whole host"
+  },
   "reach-placeholder-in-path": {
    "schema": true,
    "staalc": "a placeholder must be the whole host"
@@ -196,9 +212,29 @@
    "schema": true,
    "staalc": "a placeholder's name"
   },
+  "reach-placeholder-no-path": {
+   "schema": true,
+   "staalc": "not in canonical form"
+  },
   "reach-placeholder-part-of-host": {
    "schema": true,
    "staalc": "a placeholder must be the whole host"
+  },
+  "reach-placeholder-then-fragment": {
+   "schema": true,
+   "staalc": "a placeholder must be the whole host"
+  },
+  "reach-placeholder-then-query": {
+   "schema": true,
+   "staalc": "a placeholder must be the whole host"
+  },
+  "reach-placeholder-twice": {
+   "schema": true,
+   "staalc": "there is one at most"
+  },
+  "reach-placeholder-unclosed": {
+   "schema": true,
+   "staalc": "not closed"
   },
   "reach-star-in-host": {
    "schema": true,
@@ -317,6 +353,14 @@
    "staalc": null
   },
   "valid-reach-port": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-reach-root": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-title-decomposed": {
    "schema": true,
    "staalc": null
   },

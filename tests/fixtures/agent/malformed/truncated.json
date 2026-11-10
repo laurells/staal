@@ -1,0 +1,37 @@
+{
+  "manifest": "0.1",
+  "agent": "support-refunds",
+  "version": "0.1.0",
+  "requires_staalc": ">=0.27.0",
+  "title": "Support refunds",
+  "summary": "Refunds part of a signed-in customer's order through the bank.",
+  "publisher": {
+    "id": "github:example-org",
+    "name": "Example Publisher",
+    "security_contact": "https://github.com/example-org/refunds/security"
+  },
+  "license": "Apache-2.0",
+  "categories": [
+    "customer-operations",
+    "finance"
+  ],
+  "tools": [
+    {
+      "name": "refund_order",
+      "description": "Refund part of one of the signed-in customer's orders, within the business's limits.",
+      "program": "refund.staal",
+      "entry": "main",
+      "app_inputs": [
+        "customer"
+      ],
+      "app_input_requirements": {
+        "customer": "the id of the customer the business's own application has authenticated"
+      },
+      "grants": {
+        "pay": {
+          "suggested": {
+            "each": {
+              "amount": "100.00",
+              "currency": "USD"
+            },
+          

@@ -322,7 +322,9 @@
         "model_use",
         "expenditure_ceiling",
         "failure",
-        "unchecked"
+        "unchecked",
+        "network",
+        "package_boundaries"
       ],
       "properties": {
         "name": {
@@ -548,7 +550,8 @@
               "grant",
               "cap",
               "recovery",
-              "relies_on_service"
+              "relies_on_service",
+              "outcome_can_be_unknown"
             ],
             "properties": {
               "grant": {
@@ -565,6 +568,9 @@
                 ]
               },
               "relies_on_service": {
+                "type": "boolean"
+              },
+              "outcome_can_be_unknown": {
                 "type": "boolean"
               }
             }
@@ -583,6 +589,135 @@
             },
             "console": {
               "type": "boolean"
+            }
+          }
+        },
+        "network": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "grant",
+              "cap",
+              "reach",
+              "program_only",
+              "checked",
+              "redirects_followed",
+              "tls",
+              "dns_trusted",
+              "ip_isolation"
+            ],
+            "properties": {
+              "grant": {
+                "type": "string"
+              },
+              "cap": {
+                "type": "string"
+              },
+              "reach": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "program_only": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "checked": {
+                "const": "canonical_target"
+              },
+              "redirects_followed": {
+                "const": false
+              },
+              "tls": {
+                "enum": [
+                  "https_targets",
+                  "always",
+                  "per_grant",
+                  "never"
+                ]
+              },
+              "dns_trusted": {
+                "const": true
+              },
+              "ip_isolation": {
+                "const": false
+              }
+            }
+          }
+        },
+        "package_boundaries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "package",
+              "declared_authority",
+              "receives"
+            ],
+            "properties": {
+              "package": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "declared_authority": {
+                "type": "object",
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "const": "any"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                }
+              },
+              "receives": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "grant",
+                    "cap",
+                    "function",
+                    "parameter",
+                    "limits"
+                  ],
+                  "properties": {
+                    "grant": {
+                      "type": "string"
+                    },
+                    "cap": {
+                      "type": "string"
+                    },
+                    "function": {
+                      "type": "string"
+                    },
+                    "parameter": {
+                      "type": "string"
+                    },
+                    "limits": {
+                      "$ref": "#/$defs/limits"
+                    }
+                  }
+                }
+              }
             }
           }
         }

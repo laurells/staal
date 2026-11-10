@@ -12,6 +12,7 @@
 
 pub mod describe;
 pub mod spdx;
+pub mod strict_json;
 
 use crate::ast::{CapLimits, Program, Ty};
 use crate::interp::broker;
@@ -327,7 +328,7 @@ fn https_url(v: &Json, at: &str) -> Result<String, String> {
 /// Reads `agent.json` and holds it to its form (docs/schemas/agent.schema.json and the
 /// value rules beside it).
 pub fn read(text_of_file: &str) -> Result<Manifest, String> {
-    let v: Json = serde_json::from_str(text_of_file).map_err(|e| format!("agent.json: not JSON: {e}"))?;
+    let v: Json = strict_json::parse(text_of_file).map_err(|e| format!("agent.json: not JSON as an agent's files must be: {e}"))?;
     let at = "agent.json";
     let o = object(&v, at)?;
     keys(o, at, &["manifest", "agent", "version", "requires_staalc", "title", "summary", "publisher", "license", "categories", "tools", "data"], &[])?;
