@@ -761,7 +761,7 @@ fn parse_grant(
         Some(Json::Bool(b)) => *b,
         Some(_) => return Err(format!("{at}.idempotency_key: expected true or false")),
     };
-    check_runtime_grant(want, &limits, idempotency_key, at)?;
+    check_runtime_grant(want, &limits, idempotency_key, at, "only")?;
     // The slot's own limits narrow the grant when the run starts. Money limits in
     // different currencies could never both be met: refuse now.
     let d = runtime_limits(declared)?;
@@ -917,7 +917,9 @@ fn load_c_function(
 /// capability spends no money the runtime can measure, its `only` patterns are of the
 /// kind its targets are (URLs, addresses or paths), and only some capabilities can send
 /// an idempotency key. One definition, for the run config and for `staalc agent check`.
-pub(crate) fn check_runtime_grant(want: &str, limits: &broker::Limits, idempotency_key: bool, at: &str) -> Result<(), String> {
+/// `only_key` names the patterns in messages: `only` in a run config, `reach` in
+/// `agent.json`.
+pub(crate) fn check_runtime_grant(want: &str, limits: &broker::Limits, idempotency_key: bool, at: &str, only_key: &str) -> Result<(), String> {
     let c_function = want.starts_with("ffi.");
     let postgres = want.starts_with("db.postgres.");
     if is_runtime_cap(want) {
@@ -939,7 +941,7 @@ pub(crate) fn check_runtime_grant(want: &str, limits: &broker::Limits, idempoten
             } else {
                 crate::targets::check_path_pattern(pat)
             };
-            checked.map_err(|e| format!("{at}.only[{i}]: {e}"))?;
+            checked.map_err(|e| format!("{at}.{only_key}[{i}]: {e}"))?;
         }
         if idempotency_key && !((http && want != "net.http.get") || want == "db.sqlite.execute" || want == "db.postgres.execute") {
             return Err(format!("{at}.idempotency_key: only for net.http.post, put, patch and delete, db.sqlite.execute and db.postgres.execute"));

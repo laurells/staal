@@ -1,0 +1,86 @@
+{
+  "manifest": "0.1",
+  "agent": "support-refunds",
+  "version": "0.1.0",
+  "requires_staalc": ">=0.27.0",
+  "title": "Support refunds",
+  "summary": "Refunds part of a signed-in customer's order through the bank.",
+  "publisher": {
+    "id": "github:example-org",
+    "name": "Example Publisher",
+    "security_contact": "https://github.com/example-org/refunds/security"
+  },
+  "license": "Apache-2.0",
+  "categories": [
+    "customer-operations",
+    "finance"
+  ],
+  "tools": [
+    {
+      "name": "refund_order",
+      "description": "Refund part of one of the signed-in customer's orders, within the business's limits.",
+      "program": "refund.staal",
+      "entry": "nope",
+      "app_inputs": [
+        "customer"
+      ],
+      "app_input_requirements": {
+        "customer": "the id of the customer the business's own application has authenticated"
+      },
+      "grants": {
+        "pay": {
+          "suggested": {
+            "each": {
+              "amount": "100.00",
+              "currency": "USD"
+            },
+            "uses": 1
+          },
+          "needs": {
+            "post": {
+              "reach": [
+                "https://{{BANK}}/refunds"
+              ],
+              "idempotency_key": true
+            }
+          }
+        }
+      },
+      "once": {
+        "by": [
+          "order"
+        ],
+        "keep": "30d"
+      },
+      "quota": {
+        "suggested": {
+          "window": "24h",
+          "calls": 200,
+          "money": {
+            "amount": "1000.00",
+            "currency": "USD"
+          }
+        }
+      },
+      "deadline": "120s"
+    }
+  ],
+  "data": {
+    "reads": [
+      "the order id and amount the caller gives"
+    ],
+    "writes": [],
+    "sends": [
+      "a refund request to the business's bank"
+    ],
+    "categories": [
+      "payment references"
+    ],
+    "processors": [
+      "the business's bank"
+    ],
+    "retention": "nothing is kept by the agent beyond the business's own journals",
+    "model_training": "no model is called",
+    "regions": "wherever the business's bank processes data"
+  }
+}

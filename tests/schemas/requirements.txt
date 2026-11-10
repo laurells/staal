@@ -1,0 +1,2 @@
+# The JSON Schema validator tests/agent_check_test.rs checks docs/schemas against.
+jsonschema==4.26.0

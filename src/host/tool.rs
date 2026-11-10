@@ -18,6 +18,8 @@ pub const STATUS_TOOL: &str = "staal_run_status";
 
 pub(crate) const MS_PER_MINUTE: u64 = 60_000;
 pub(crate) const MS_PER_DAY: u64 = 24 * 60 * MS_PER_MINUTE;
+/// The longest quota window.
+pub(crate) const MAX_QUOTA_WINDOW_MS: u64 = 30 * MS_PER_DAY;
 
 /// Where and how a host keeps its runs: `server` in an MCP manifest, or the settings
 /// given to `staal_host_open`.
@@ -602,7 +604,7 @@ pub fn parse_tool(
             keys_only(qo, &qa, &["window", "calls", "money"])?;
             let w = qo.get("window").ok_or(format!("{qa}.window: missing"))?;
             let window_ms = duration(w, &format!("{qa}.window"), &["m", "h", "d"])?;
-            if window_ms > 30 * MS_PER_DAY {
+            if window_ms > MAX_QUOTA_WINDOW_MS {
                 return Err(format!("{qa}.window: at most 30d"));
             }
             let calls = whole(qo, "calls", &qa, 1, u32::MAX as u64)?;

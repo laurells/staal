@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/laurells/staal/blob/main/docs/schemas/agent.schema.json",
+  "title": "agent.json, Agent Manifest Specification 0.1",
+  "description": "The form of agent.json (docs/AGENT_MANIFEST.md section 4). Normative together with the value rules a schema cannot state, listed in docs/AGENT_MANIFEST.md section 4, 'Value rules'; staalc agent check applies both.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest",
+    "agent",
+    "version",
+    "requires_staalc",
+    "title",
+    "summary",
+    "publisher",
+    "license",
+    "categories",
+    "tools",
+    "data"
+  ],
+  "properties": {
+    "manifest": {
+      "const": "0.1"
+    },
+    "agent": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+    },
+    "requires_staalc": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+    },
+    "publisher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "security_contact"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 46,
+          "pattern": "^github:[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+        },
+        "security_contact": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^https://[^\\s]+$"
+        }
+      }
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "categories": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "commerce",
+          "communications",
+          "customer-operations",
+          "data",
+          "education",
+          "finance",
+          "healthcare",
+          "human-resources",
+          "it-operations",
+          "legal",
+          "logistics",
+          "marketing",
+          "productivity",
+          "sales",
+          "security",
+          "software-development"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/tool"
+      },
+      "minItems": 1,
+      "maxItems": 64
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reads",
+        "writes",
+        "sends",
+        "categories",
+        "processors",
+        "retention",
+        "model_training",
+        "regions"
+      ],
+      "properties": {
+        "reads": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "writes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "sends": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "processors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "retention": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+        },
+        "model_training": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+        },
+        "regions": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ident": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "maxLength": 128
+    },
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "properties": {
+        "amount": {
+          "type": "string"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "NGN",
+            "GHS",
+            "KES",
+            "ZAR",
+            "CAD",
+            "AUD",
+            "JPY"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "currency": {
+            "enum": [
+              "JPY"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "amount": {
+            "pattern": "^[0-9]+$"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "amount": {
+            "pattern": "^[0-9]+(\\.[0-9]{1,2})?$"
+          }
+        }
+      }
+    },
+    "duration_smh": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*[smh]$"
+    },
+    "duration_mhd": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*[mhd]$"
+    },
+    "patterns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+      },
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true
+    },
+    "suggested": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "$ref": "#/$defs/money"
+        },
+        "each": {
+          "$ref": "#/$defs/money"
+        },
+        "uses": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "only": {
+          "$ref": "#/$defs/patterns"
+        }
+      }
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "suggested": {
+          "$ref": "#/$defs/suggested"
+        },
+        "reach": {
+          "$ref": "#/$defs/patterns"
+        },
+        "idempotency_key": {
+          "type": "boolean"
+        },
+        "needs": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/ident"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/grant"
+          }
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "program",
+        "grants"
+      ],
+      "dependentRequired": {
+        "app_inputs": [
+          "app_input_requirements"
+        ]
+      },
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^(?![.]+$)[A-Za-z0-9_.-]{1,128}$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+        },
+        "program": {
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.staal$"
+        },
+        "entry": {
+          "$ref": "#/$defs/ident"
+        },
+        "app_inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ident"
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "app_input_requirements": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/ident"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+          }
+        },
+        "grants": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/ident"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/grant"
+          }
+        },
+        "once": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "by"
+          ],
+          "properties": {
+            "by": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ident"
+              },
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true
+            },
+            "keep": {
+              "$ref": "#/$defs/duration_mhd"
+            }
+          }
+        },
+        "quota": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "suggested"
+          ],
+          "properties": {
+            "suggested": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "window"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "calls"
+                  ]
+                },
+                {
+                  "required": [
+                    "money"
+                  ]
+                }
+              ],
+              "properties": {
+                "window": {
+                  "$ref": "#/$defs/duration_mhd"
+                },
+                "calls": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                "money": {
+                  "$ref": "#/$defs/money"
+                }
+              }
+            }
+          }
+        },
+        "deadline": {
+          "$ref": "#/$defs/duration_smh"
+        }
+      }
+    }
+  }
+}

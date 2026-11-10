@@ -1,0 +1,353 @@
+{
+ "cases": {
+  "agent-double-hyphen": {
+   "schema": false,
+   "staalc": "agent"
+  },
+  "agent-uppercase": {
+   "schema": false,
+   "staalc": "agent"
+  },
+  "app-input-not-a-parameter": {
+   "schema": true,
+   "staalc": "nobody"
+  },
+  "app-inputs-no-requirements": {
+   "schema": false,
+   "staalc": "app_input_requirements: missing"
+  },
+  "category-four": {
+   "schema": false,
+   "staalc": "1 to 3 items"
+  },
+  "category-twice": {
+   "schema": false,
+   "staalc": "listed twice"
+  },
+  "category-unknown": {
+   "schema": false,
+   "staalc": "'travel' is not one of"
+  },
+  "contact-credentials": {
+   "schema": true,
+   "staalc": "no user name or password"
+  },
+  "contact-http": {
+   "schema": false,
+   "staalc": "https URL"
+  },
+  "data-missing": {
+   "schema": false,
+   "staalc": "data.regions: missing"
+  },
+  "deadline-days": {
+   "schema": false,
+   "staalc": "expected a whole number and a unit"
+  },
+  "deadline-overflow": {
+   "schema": true,
+   "staalc": "deadline"
+  },
+  "deadline-zero": {
+   "schema": false,
+   "staalc": "expected a whole number and a unit"
+  },
+  "entry-missing": {
+   "schema": true,
+   "staalc": "has no function 'nope'"
+  },
+  "grant-extra": {
+   "schema": true,
+   "staalc": "has no capability parameter 'other'"
+  },
+  "grant-missing": {
+   "schema": true,
+   "staalc": "grants.pay: missing"
+  },
+  "idempotency-on-library": {
+   "schema": true,
+   "staalc": "idempotency_key: only for"
+  },
+  "keep-seconds": {
+   "schema": false,
+   "staalc": "expected a whole number and a unit"
+  },
+  "license-case": {
+   "schema": true,
+   "staalc": "not an SPDX license identifier"
+  },
+  "license-deprecated": {
+   "schema": true,
+   "staalc": "not an SPDX license identifier"
+  },
+  "license-operator-case": {
+   "schema": true,
+   "staalc": "license"
+  },
+  "license-ref": {
+   "schema": true,
+   "staalc": "names a license only the publisher has"
+  },
+  "manifest-unknown": {
+   "schema": false,
+   "staalc": "is not one this staalc knows"
+  },
+  "money-exponent": {
+   "schema": false,
+   "staalc": "invalid USD amount"
+  },
+  "money-lowercase-currency": {
+   "schema": false,
+   "staalc": "unsupported currency"
+  },
+  "money-number": {
+   "schema": false,
+   "staalc": "expected a decimal string"
+  },
+  "money-on-runtime": {
+   "schema": true,
+   "staalc": "max and each do not apply"
+  },
+  "money-overflow": {
+   "schema": true,
+   "staalc": "too large"
+  },
+  "money-sign": {
+   "schema": false,
+   "staalc": "invalid USD amount"
+  },
+  "money-space": {
+   "schema": false,
+   "staalc": "invalid USD amount"
+  },
+  "money-three-decimals": {
+   "schema": false,
+   "staalc": "at most 2 decimal place"
+  },
+  "money-trailing-point": {
+   "schema": false,
+   "staalc": "invalid USD amount"
+  },
+  "money-unknown-currency": {
+   "schema": false,
+   "staalc": "unsupported currency"
+  },
+  "money-yen-decimals": {
+   "schema": false,
+   "staalc": "at most 0 decimal place"
+  },
+  "need-extra": {
+   "schema": true,
+   "staalc": "has no capability need 'key'"
+  },
+  "need-missing": {
+   "schema": true,
+   "staalc": "needs.post: missing"
+  },
+  "once-by-unknown": {
+   "schema": true,
+   "staalc": "nothing"
+  },
+  "only-on-runtime": {
+   "schema": true,
+   "staalc": "are its \"reach\""
+  },
+  "program-missing": {
+   "schema": true,
+   "staalc": "missing.staal"
+  },
+  "program-outside": {
+   "schema": false,
+   "staalc": "must be the name of a .staal file"
+  },
+  "publisher-hyphen-start": {
+   "schema": false,
+   "staalc": "github:"
+  },
+  "publisher-not-github": {
+   "schema": false,
+   "staalc": "github:"
+  },
+  "quota-empty": {
+   "schema": false,
+   "staalc": "give \"calls\", \"money\" or both"
+  },
+  "reach-http": {
+   "schema": true,
+   "staalc": "post.reach[0]: 'http://bank.example.com/refunds' uses http://"
+  },
+  "reach-missing": {
+   "schema": true,
+   "staalc": "reach: missing"
+  },
+  "reach-not-canonical": {
+   "schema": true,
+   "staalc": "not in canonical form"
+  },
+  "reach-on-library": {
+   "schema": true,
+   "staalc": "a library capability's targets"
+  },
+  "reach-placeholder-in-path": {
+   "schema": true,
+   "staalc": "a placeholder must be the whole host"
+  },
+  "reach-placeholder-lowercase": {
+   "schema": true,
+   "staalc": "a placeholder's name"
+  },
+  "reach-placeholder-part-of-host": {
+   "schema": true,
+   "staalc": "a placeholder must be the whole host"
+  },
+  "reach-star-in-host": {
+   "schema": true,
+   "staalc": "the `*` is in the host"
+  },
+  "requirement-without-input": {
+   "schema": true,
+   "staalc": "is not one of app_inputs"
+  },
+  "requires-bad-grammar": {
+   "schema": true,
+   "staalc": "requires_staalc"
+  },
+  "requires-excludes-this": {
+   "schema": true,
+   "staalc": "does not include this staalc"
+  },
+  "suggestion-currencies-differ": {
+   "schema": true,
+   "staalc": "different currencies"
+  },
+  "suggestion-other-currency": {
+   "schema": true,
+   "staalc": "suggested in EUR"
+  },
+  "suggestion-over-ceiling": {
+   "schema": true,
+   "staalc": "more than the program's ceiling"
+  },
+  "title-control": {
+   "schema": false,
+   "staalc": "control character"
+  },
+  "title-long": {
+   "schema": false,
+   "staalc": "1 to 80 characters"
+  },
+  "tool-name-twice": {
+   "schema": true,
+   "staalc": "names another tool too"
+  },
+  "unknown-key-data": {
+   "schema": false,
+   "staalc": "unknown key 'audits'"
+  },
+  "unknown-key-grant": {
+   "schema": false,
+   "staalc": "unknown key 'limits'"
+  },
+  "unknown-key-money": {
+   "schema": false,
+   "staalc": "unknown key 'minor'"
+  },
+  "unknown-key-need": {
+   "schema": false,
+   "staalc": "unknown key 'wait_ms'"
+  },
+  "unknown-key-once": {
+   "schema": false,
+   "staalc": "unknown key 'scope'"
+  },
+  "unknown-key-publisher": {
+   "schema": false,
+   "staalc": "unknown key 'email'"
+  },
+  "unknown-key-quota": {
+   "schema": false,
+   "staalc": "unknown key 'window'"
+  },
+  "unknown-key-quota-suggested": {
+   "schema": false,
+   "staalc": "unknown key 'per_scope'"
+  },
+  "unknown-key-suggested": {
+   "schema": false,
+   "staalc": "unknown key 'per_day'"
+  },
+  "unknown-key-tool": {
+   "schema": false,
+   "staalc": "unknown key 'title'"
+  },
+  "unknown-key-top": {
+   "schema": false,
+   "staalc": "unknown key 'homepage'"
+  },
+  "uses-zero": {
+   "schema": false,
+   "staalc": "at least 1"
+  },
+  "valid": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-empty-suggested": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-leading-zero-money": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-license-expression": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-no-suggested": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-one-decimal": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-range-wildcard": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-reach-port": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-yen-quota": {
+   "schema": true,
+   "staalc": null
+  },
+  "version-build": {
+   "schema": false,
+   "staalc": "build metadata"
+  },
+  "version-leading-zero": {
+   "schema": false,
+   "staalc": "leading zero"
+  },
+  "version-overflow": {
+   "schema": true,
+   "staalc": "too large"
+  },
+  "version-short": {
+   "schema": false,
+   "staalc": "is not a version"
+  },
+  "window-seconds": {
+   "schema": false,
+   "staalc": "expected a whole number and a unit"
+  },
+  "window-too-long": {
+   "schema": true,
+   "staalc": "quota.suggested.window: at most 30d"
+  }
+ },
+ "generated_by": "scripts/agent_fixtures.py"
+}

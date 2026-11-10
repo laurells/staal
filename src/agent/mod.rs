@@ -152,9 +152,13 @@ fn slug(s: &str, max: usize) -> bool {
     s.len() <= max && !s.is_empty() && s.split('-').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()))
 }
 
-/// An identifier as Staal writes one: a letter or `_`, then letters, digits or `_`.
+/// An identifier as Staal writes one: a letter or `_`, then letters, digits or `_`; at
+/// most 128 characters here.
 fn ident(s: &str) -> bool {
     let mut b = s.bytes();
+    if s.len() > 128 {
+        return false;
+    }
     b.next().is_some_and(|c| c.is_ascii_alphabetic() || c == b'_') && b.all(|c| c.is_ascii_alphanumeric() || c == b'_')
 }
 
@@ -287,7 +291,9 @@ fn tool(v: &Json, at: &str) -> Result<ToolDef, String> {
             let sa = format!("{qa}.suggested");
             let s = object(&qo["suggested"], &sa)?;
             keys(s, &sa, &["window"], &["calls", "money"])?;
-            duration(&s["window"], &format!("{sa}.window"), &["m", "h", "d"])?;
+            if crate::host::tool::duration(&s["window"], &format!("{sa}.window"), &["m", "h", "d"])? > crate::host::tool::MAX_QUOTA_WINDOW_MS {
+                return Err(format!("{sa}.window: at most 30d"));
+            }
             if let Some(c) = s.get("calls") {
                 c.as_u64().filter(|n| (1..=u32::MAX as u64).contains(n)).ok_or_else(|| format!("{sa}.calls: expected a whole number from 1 to {}", u32::MAX))?;
             }
@@ -494,7 +500,7 @@ fn check_node(prog: &Program, node: &GrantNode, cap: &str, limits: &CapLimits, a
             only.push(if url || address { substitute(p, url, &pa)? } else if p.contains("{{") { return Err(format!("{pa}: only a host can be a placeholder")) } else { p.clone() });
         }
         let l = broker::Limits { max: s.max, each: s.each, uses: s.uses, only: node.reach.as_ref().map(|_| only.clone()) };
-        crate::interp::check_runtime_grant(cap, &l, node.idempotency_key == Some(true), at)?;
+        crate::interp::check_runtime_grant(cap, &l, node.idempotency_key == Some(true), at, "reach")?;
         if let Some(ceiling) = &limits.only
             && !crate::pattern::all_contained(&only, ceiling)
         {
@@ -507,7 +513,7 @@ fn check_node(prog: &Program, node: &GrantNode, cap: &str, limits: &CapLimits, a
         return Err(format!("{at}.reach: a library capability's targets are suggested in \"suggested.only\""));
     }
     if node.idempotency_key.is_some() {
-        crate::interp::check_runtime_grant(cap, &broker::Limits::default(), true, at)?;
+        crate::interp::check_runtime_grant(cap, &broker::Limits::default(), true, at, "reach")?;
     }
     if let Some(only) = &s.only {
         for (i, p) in only.iter().enumerate() {
@@ -624,7 +630,7 @@ pub fn check_manifest(root: &Path) -> Result<Checked, String> {
         let mut warnings = Vec::new();
         crate::host::tool::parse_tool(
             &def,
-            &at,
+            &format!("agent.json.tools[{i}]"),
             &root,
             Some(&model),
             &settings,
