@@ -309,7 +309,7 @@ pub fn run_config_profiled(
 /// it is at), and a way to read the variables in scope (innermost last). It answers
 /// whether the run goes on.
 pub trait DebugHook: Send {
-    fn before(&mut self, at: crate::lexer::Pos, stack: &[(String, crate::lexer::Pos)], vars: &dyn Fn() -> Vec<(String, Json)>) -> bool;
+    fn before(&mut self, at: crate::lexer::Pos, stack: &[(String, crate::lexer::Pos)], vars: &dyn Fn() -> Vec<(String, crate::debug::Shown)>) -> bool;
     /// A concurrent task starts (`task` its id), or the program goes on after its
     /// tasks (""): under a debugger, tasks run one after another.
     fn task(&mut self, _task: &str) {}
@@ -990,6 +990,47 @@ fn scrub_text(secrets: &[String], text: &str) -> String {
         }
     }
     out
+}
+
+/// A value as the debugger shows it: data as it is, any secret value of the run in a
+/// text removed, a `Secret` by its variable's name only, and a capability as one,
+/// without its handle.
+fn debug_shown(v: &Value, secrets: &[String]) -> crate::debug::Shown {
+    use crate::debug::Shown;
+    let all = |items: &[Value]| items.iter().map(|i| debug_shown(i, secrets)).collect();
+    let fields = |fs: &[(String, Value)]| fs.iter().map(|(k, v)| (k.clone(), debug_shown(v, secrets))).collect();
+    match v {
+        Value::Unit | Value::Opt(None) => Shown::Null,
+        Value::Opt(Some(inner)) => debug_shown(inner, secrets),
+        Value::Text(t) => Shown::Text(scrub_text(secrets, t)),
+        Value::Int(n) => Shown::Int(*n),
+        Value::Bool(b) => Shown::Bool(*b),
+        Value::Money(m) => Shown::Money { amount: m.amount_string(), currency: m.currency.code.to_string() },
+        Value::Record { ty, fields: fs } => Shown::Record { ty: ty.clone(), fields: fields(fs) },
+        Value::Enum { ty, variant, fields: fs } => Shown::Enum { ty: ty.clone(), variant: variant.clone(), fields: fields(fs) },
+        Value::List(items) => Shown::List(all(items)),
+        Value::Tuple(items) => Shown::Tuple(all(items)),
+        Value::Set(items) => Shown::Set(all(items)),
+        Value::Map(entries) => Shown::Map(entries.iter().map(|(k, v)| (debug_shown(k, secrets), debug_shown(v, secrets))).collect()),
+        Value::Func { name, .. } => Shown::Function(name.clone()),
+        Value::Proposed { raw, .. } => {
+            let mut raw = raw.clone();
+            scrub_json(secrets, &mut raw);
+            Shown::Proposed(raw)
+        }
+        Value::Receipt(r) => Shown::Receipt { id: scrub_text(secrets, &r.id), capability: r.capability.clone(), method: r.method.clone() },
+        Value::Outcome { ok, error, .. } => Shown::Outcome { ok: *ok, error: scrub_text(secrets, error) },
+        Value::Done(items) => Shown::Done(all(items)),
+        Value::Cap(_) => Shown::Capability,
+        Value::Secret(s) => Shown::Secret { name: s.name.clone() },
+        Value::Header { name, value } => Shown::Header {
+            name: name.clone(),
+            value: Box::new(match value {
+                HeaderValue::Text(t) => Shown::Text(scrub_text(secrets, t)),
+                HeaderValue::Secret(s) => Shown::Secret { name: s.name.clone() },
+            }),
+        },
+    }
 }
 
 fn scrub_json(secrets: &[String], j: &mut Json) {
@@ -2079,15 +2120,12 @@ impl<'p> Interp<'p> {
             if let Some(top) = self.debug_stack.last_mut() {
                 top.1 = at;
             }
+            let secrets = &self.secrets;
             let vars = || {
                 let mut seen = std::collections::BTreeMap::new();
                 for scope in &frame.scopes {
                     for (k, v) in scope {
-                        let shown = match v {
-                            Value::Func { name, .. } => json!(format!("<function {name}>")),
-                            v => to_json(v, false).unwrap_or_else(|e| json!(format!("<{e}>"))),
-                        };
-                        seen.insert(k.clone(), shown);
+                        seen.insert(k.clone(), debug_shown(v, secrets));
                     }
                 }
                 seen.into_iter().collect()
