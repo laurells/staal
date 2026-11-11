@@ -15,6 +15,11 @@
 // directory, are flushed, and replace the target with one atomic rename, so a crash
 // never leaves half a file, and a hard link elsewhere keeps its own contents.
 //
+// The same traversal is offered from a directory the caller has already opened
+// (`Root`): every path beneath it is opened one directory at a time from that handle,
+// never resolved by path, and may not name `..`, `.` or an empty part, so nothing it
+// opens can lie outside that directory, wherever that directory is moved meanwhile.
+//
 // Unix only. On other platforms every operation is refused.
 
 #[cfg(unix)]
@@ -73,15 +78,13 @@ mod imp {
     }
     }
 
-    /// Opens the directory that holds the file at canonical `path`, without following
-    /// any link, and returns it with the file's name.
-    fn open_parent(path: &str) -> Result<(OwnedFd, CString, String), String> {
-        let rest = path.strip_prefix('/').ok_or_else(|| format!("'{path}' is not absolute"))?;
-        let parts: Vec<&str> = rest.split('/').collect();
-        let (leaf, dirs) = parts.split_last().ok_or_else(|| format!("'{path}' names no file"))?;
-        let mut cur = openat(libc::AT_FDCWD, &c("/")?, libc::O_RDONLY | libc::O_DIRECTORY, 0)
-            .map_err(|e| format!("cannot open /: {e}"))?;
-        let mut shown = String::new();
+    /// Opens each of `dirs` in turn, starting from the directory `start`, without
+    /// following any link; `base` is how `start` is shown in messages ("" for /). With
+    /// no `dirs`, a new handle on `start` itself.
+    fn open_dirs(start: RawFd, dirs: &[&str], base: &str) -> Result<OwnedFd, String> {
+        let shown_base = if base.is_empty() { "/" } else { base };
+        let mut cur = openat(start, &c(".")?, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(|e| format!("cannot open '{shown_base}': {e}"))?;
+        let mut shown = base.to_string();
         for d in dirs {
             shown.push('/');
             shown.push_str(d);
@@ -89,13 +92,200 @@ mod imp {
             cur = openat(cur.as_raw_fd(), &name, libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW, 0)
                 .map_err(|e| open_error(cur.as_raw_fd(), &name, &shown, e))?;
         }
+        Ok(cur)
+    }
+
+    /// Opens the directory that holds the file at canonical `path`, without following
+    /// any link, and returns it with the file's name.
+    fn open_parent(path: &str) -> Result<(OwnedFd, CString, String), String> {
+        let rest = path.strip_prefix('/').ok_or_else(|| format!("'{path}' is not absolute"))?;
+        let parts: Vec<&str> = rest.split('/').collect();
+        let (leaf, dirs) = parts.split_last().ok_or_else(|| format!("'{path}' names no file"))?;
+        let root = openat(libc::AT_FDCWD, &c("/")?, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(|e| format!("cannot open /: {e}"))?;
+        let cur = open_dirs(root.as_raw_fd(), dirs, "")?;
         Ok((cur, c(leaf)?, path.to_string()))
+    }
+
+    /// The parts of `rel`, a path beneath a root: not absolute, and no part empty, `.`
+    /// or `..`, so it can only name something beneath the root. "" is the root itself.
+    fn parts(rel: &str) -> Result<Vec<&str>, String> {
+        if rel.is_empty() {
+            return Ok(Vec::new());
+        }
+        if rel.starts_with('/') {
+            return Err(format!("'{rel}' is absolute; a path here is beneath the folder opened"));
+        }
+        let parts: Vec<&str> = rel.split('/').collect();
+        if parts.iter().any(|p| p.is_empty() || *p == "." || *p == "..") {
+            return Err(format!("'{rel}' has an empty, '.' or '..' part; a path here names only what is beneath the folder opened"));
+        }
+        Ok(parts)
+    }
+
+    /// A directory the caller opened, and everything beneath it.
+    #[derive(Debug)]
+    pub struct Root {
+        dir: OwnedFd,
+        shown: String,
+    }
+
+    /// What one entry of a directory is, its link never followed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Kind {
+        File,
+        Dir,
+        Link,
+        /// A FIFO, socket or device.
+        Other,
+    }
+
+    /// One entry of a directory.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Entry {
+        /// Its name; None when the name is not UTF-8, so no path here can name it.
+        pub name: Option<String>,
+        pub kind: Kind,
+    }
+
+    impl Root {
+        /// Opens the directory at `path`: the one place a path is resolved by the
+        /// system, as the caller names it (links in it followed, as any program opening
+        /// a folder it was given). Everything after goes through the handle.
+        pub fn open(path: &std::path::Path) -> Result<Root, String> {
+            let shown = path.display().to_string();
+            let p = c(path.to_str().ok_or_else(|| format!("'{shown}' is not UTF-8"))?)?;
+            let dir = openat(libc::AT_FDCWD, &p, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(|e| match e.raw_os_error() {
+                Some(libc::ENOENT) => format!("'{shown}' does not exist"),
+                Some(libc::ENOTDIR) => format!("'{shown}' is not a directory"),
+                _ => format!("cannot open '{shown}': {e}"),
+            })?;
+            Ok(Root { dir, shown })
+        }
+
+        /// A root from a directory the caller has already opened; `shown` is how it is
+        /// named in messages.
+        pub fn from_fd(dir: OwnedFd, shown: &str) -> Result<Root, String> {
+            // SAFETY: `st` is written by fstat before it is read, and only if it succeeds.
+            let st = unsafe {
+                let mut st: libc::stat = std::mem::zeroed();
+                if libc::fstat(dir.as_raw_fd(), &mut st) != 0 {
+                    return Err(format!("'{shown}': {}", errno()));
+                }
+                st
+            };
+            if st.st_mode & libc::S_IFMT != libc::S_IFDIR {
+                return Err(format!("'{shown}' is not a directory"));
+            }
+            Ok(Root { dir, shown: shown.to_string() })
+        }
+
+        /// The directory holding `rel`'s last part, that part, and how `rel` is shown.
+        fn parent(&self, rel: &str) -> Result<(OwnedFd, CString, String), String> {
+            let parts = parts(rel)?;
+            let (leaf, dirs) = parts.split_last().ok_or("a path naming a file is needed, not the folder opened itself")?;
+            let dir = open_dirs(self.dir.as_raw_fd(), dirs, &self.shown)?;
+            Ok((dir, c(leaf)?, format!("{}/{rel}", self.shown)))
+        }
+
+        /// Reads the UTF-8 text file at `rel`, at most `max` bytes: a regular file with
+        /// one name, as `read` reads.
+        pub fn read(&self, rel: &str, max: usize) -> Result<String, String> {
+            let (dir, name, shown) = self.parent(rel)?;
+            read_in(&dir, &name, &shown, max)
+        }
+
+        /// Replaces the file at `rel` with `content`, atomically, as `write` does.
+        pub fn write(&self, rel: &str, content: &[u8]) -> Result<(), String> {
+            let (dir, name, shown) = self.parent(rel)?;
+            write_in(&dir, &name, &shown, content)
+        }
+
+        /// The entries of the directory at `rel` ("" for the root), sorted by name, `.`
+        /// and `..` left out. No link is followed, in the path or in an entry.
+        pub fn list(&self, rel: &str) -> Result<Vec<Entry>, String> {
+            let parts = parts(rel)?;
+            let dir = open_dirs(self.dir.as_raw_fd(), &parts, &self.shown)?;
+            let shown = if rel.is_empty() { self.shown.clone() } else { format!("{}/{rel}", self.shown) };
+            list_in(dir, &shown)
+        }
+    }
+
+    /// Sets errno to 0, so a null from readdir can be told apart: the end, or an error.
+    fn clear_errno() {
+        // SAFETY: writing this thread's errno through the pointer libc gives for it.
+        unsafe {
+            #[cfg(target_os = "linux")]
+            {
+                *libc::__errno_location() = 0;
+            }
+            #[cfg(target_os = "macos")]
+            {
+                *libc::__error() = 0;
+            }
+        }
+    }
+
+    fn list_in(dir: OwnedFd, shown: &str) -> Result<Vec<Entry>, String> {
+        // A second handle for fstatat: fdopendir takes the first.
+        let at = openat(dir.as_raw_fd(), &c(".")?, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(|e| format!("'{shown}': {e}"))?;
+        let raw = std::os::fd::IntoRawFd::into_raw_fd(dir);
+        // SAFETY: `raw` is a directory descriptor we own; on success the DIR owns it.
+        let d = unsafe { libc::fdopendir(raw) };
+        if d.is_null() {
+            let e = errno();
+            // SAFETY: fdopendir failed, so `raw` is still ours to close.
+            unsafe { libc::close(raw) };
+            return Err(format!("'{shown}': {e}"));
+        }
+        struct Closed(*mut libc::DIR);
+        impl Drop for Closed {
+            fn drop(&mut self) {
+                // SAFETY: closing the DIR fdopendir returned, once.
+                unsafe { libc::closedir(self.0) };
+            }
+        }
+        let d = Closed(d);
+        let mut out = Vec::new();
+        loop {
+            clear_errno();
+            // SAFETY: reading the next entry of a DIR we own; the entry is copied out
+            // before the next call.
+            let ent = unsafe { libc::readdir(d.0) };
+            if ent.is_null() {
+                let e = errno();
+                if e.raw_os_error().unwrap_or(0) != 0 {
+                    return Err(format!("'{shown}': {e}"));
+                }
+                break;
+            }
+            // SAFETY: d_name is NUL-terminated within the entry readdir returned.
+            let bytes = unsafe { std::ffi::CStr::from_ptr((*ent).d_name.as_ptr()) }.to_bytes().to_vec();
+            if bytes == b"." || bytes == b".." {
+                continue;
+            }
+            let cname = CString::new(bytes.clone()).map_err(|_| format!("'{shown}': a name with a NUL"))?;
+            let kind = match stat_at(at.as_raw_fd(), &cname) {
+                Some(st) if is_link(&st) => Kind::Link,
+                Some(st) if is_reg(&st) => Kind::File,
+                Some(st) if st.st_mode & libc::S_IFMT == libc::S_IFDIR => Kind::Dir,
+                Some(_) => Kind::Other,
+                // Gone since it was listed.
+                None => continue,
+            };
+            out.push(Entry { name: String::from_utf8(bytes).ok(), kind });
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
     }
 
     pub fn read(path: &str, max: usize) -> Result<String, String> {
         let (dir, name, shown) = open_parent(path)?;
-        let fd = openat(dir.as_raw_fd(), &name, libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK, 0)
-            .map_err(|e| open_error(dir.as_raw_fd(), &name, &shown, e))?;
+        read_in(&dir, &name, &shown, max)
+    }
+
+    fn read_in(dir: &OwnedFd, name: &CString, shown: &str, max: usize) -> Result<String, String> {
+        let fd = openat(dir.as_raw_fd(), name, libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK, 0)
+            .map_err(|e| open_error(dir.as_raw_fd(), name, shown, e))?;
         // SAFETY: `st` is written by fstat before it is read, and only if it succeeds.
         let st = unsafe {
             let mut st: libc::stat = std::mem::zeroed();
@@ -165,9 +355,13 @@ mod imp {
 
     pub fn write(path: &str, content: &[u8]) -> Result<(), String> {
         let (dir, name, shown) = open_parent(path)?;
+        write_in(&dir, &name, &shown, content)
+    }
+
+    fn write_in(dir: &OwnedFd, name: &CString, shown: &str, content: &[u8]) -> Result<(), String> {
         let leaf = name.to_str().map_err(|_| format!("'{shown}' is not a valid name"))?.to_string();
         // An existing target must be a regular file; keep its permissions.
-        let mode = match stat_at(dir.as_raw_fd(), &name) {
+        let mode = match stat_at(dir.as_raw_fd(), name) {
             Some(st) if is_link(&st) => return Err(format!("'{shown}' is a symbolic link; links are never followed")),
             Some(st) if !is_reg(&st) => return Err(format!("'{shown}' exists and is not a regular file")),
             Some(st) => Some(st.st_mode & 0o7777),
@@ -187,7 +381,7 @@ mod imp {
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW,
             mode.map_or(0o644, |m| m as libc::c_uint),
         )
-        .map_err(|e| open_error(dir.as_raw_fd(), &tmp, &shown, e))?;
+        .map_err(|e| open_error(dir.as_raw_fd(), &tmp, shown, e))?;
         let remove_tmp = || {
             // SAFETY: unlinking a name we created, relative to a directory we hold open.
             unsafe { libc::unlinkat(dir.as_raw_fd(), tmp.as_ptr(), 0) };
@@ -225,6 +419,8 @@ mod imp {
 
 #[cfg(target_os = "linux")]
 pub use imp::database_check;
+#[cfg(unix)]
+pub use imp::{Entry, Kind, Root};
 
 #[cfg(not(unix))]
 mod imp {
@@ -408,4 +604,156 @@ mod tests {
         assert!(refused > 0, "no read met the link ({allowed} allowed)");
         println!("{rounds} swaps; {allowed} reads of the real folder, {refused} refused");
     }
+
+    fn root(d: &Path) -> Root {
+        Root::open(&d.join("allowed")).unwrap()
+    }
+
+    #[test]
+    fn a_root_reads_writes_and_lists_beneath_its_folder() {
+        use std::os::unix::ffi::OsStrExt;
+        let d = dir("root-basic");
+        let r = root(&d);
+        fs::create_dir_all(d.join("allowed/src/deep")).unwrap();
+        r.write("src/deep/a.staal", b"fn main() -> Int { return 1 }\n").unwrap();
+        assert_eq!(r.read("src/deep/a.staal", 100).unwrap(), "fn main() -> Int { return 1 }\n");
+        assert_eq!(fs::read_to_string(d.join("allowed/src/deep/a.staal")).unwrap(), "fn main() -> Int { return 1 }\n");
+        symlink(d.join("outside"), d.join("allowed/out")).unwrap();
+        // SAFETY: creating a FIFO at a test path.
+        assert_eq!(unsafe { libc::mkfifo(c_path(&d.join("allowed/pipe")).as_ptr(), 0o600) }, 0);
+        // A name that is not UTF-8 (macOS's file systems refuse to create one).
+        let odd = cfg!(target_os = "linux");
+        if odd {
+            fs::write(d.join("allowed").join(std::ffi::OsStr::from_bytes(b"bad\xffname")), "x").unwrap();
+        }
+        let got = r.list("").unwrap();
+        let unnamed: &[Entry] = if odd { &[Entry { name: None, kind: Kind::File }] } else { &[] };
+        assert_eq!(&got[..unnamed.len()], unnamed);
+        assert_eq!(
+            got[unnamed.len()..].to_vec(),
+            vec![
+                Entry { name: Some("out".into()), kind: Kind::Link },
+                Entry { name: Some("pipe".into()), kind: Kind::Other },
+                Entry { name: Some("src".into()), kind: Kind::Dir },
+            ]
+        );
+        assert_eq!(r.list("src/deep").unwrap(), vec![Entry { name: Some("a.staal".into()), kind: Kind::File }]);
+        assert!(r.read("missing", 100).unwrap_err().contains("does not exist"));
+        assert!(r.read("pipe", 100).unwrap_err().contains("not a regular file"));
+        assert!(r.list("src/deep/a.staal").unwrap_err().contains("not a directory"));
+    }
+
+    #[test]
+    fn a_root_refuses_every_path_that_could_name_something_outside() {
+        let d = dir("root-paths");
+        fs::create_dir_all(d.join("allowed/a")).unwrap();
+        fs::write(d.join("allowed/a/f"), "inside").unwrap();
+        let r = root(&d);
+        for bad in ["..", "../outside/secret", "a/../../outside/secret", "a/..", ".", "./a/f", "a/./f", "/etc/passwd", "a//f", "a/f/", "/"] {
+            let e = r.read(bad, 100).unwrap_err();
+            assert!(e.contains("absolute") || e.contains("'..'"), "{bad}: {e}");
+            assert!(r.write(bad, b"x").is_err(), "{bad}");
+            assert!(r.list(bad).is_err(), "{bad}");
+        }
+        assert!(r.read("", 100).unwrap_err().contains("not the folder opened itself"));
+        assert!(r.write("", b"x").is_err());
+        assert_eq!(fs::read_to_string(d.join("outside/secret")).unwrap(), "SECRET");
+        assert_eq!(r.read("a/f", 100).unwrap(), "inside");
+    }
+
+    #[test]
+    fn a_root_never_follows_a_link_out() {
+        let d = dir("root-links");
+        let r = root(&d);
+        symlink(d.join("outside"), d.join("allowed/dir")).unwrap();
+        symlink(d.join("outside/secret"), d.join("allowed/file")).unwrap();
+        assert!(r.read("dir/secret", 100).unwrap_err().contains("symbolic link"));
+        assert!(r.write("dir/new", b"x").unwrap_err().contains("symbolic link"));
+        assert!(r.list("dir").unwrap_err().contains("symbolic link"));
+        assert!(r.read("file", 100).unwrap_err().contains("symbolic link"));
+        assert!(r.write("file", b"overwrite").unwrap_err().contains("symbolic link"));
+        assert!(!d.join("outside/new").exists());
+        assert_eq!(fs::read_to_string(d.join("outside/secret")).unwrap(), "SECRET");
+        fs::hard_link(d.join("outside/secret"), d.join("allowed/hard")).unwrap();
+        assert!(r.read("hard", 100).unwrap_err().contains("hard links"));
+    }
+
+    #[test]
+    fn a_root_stays_its_folder_when_the_folder_is_moved_and_its_name_made_a_link() {
+        let d = dir("root-moved");
+        fs::write(d.join("allowed/f"), "INSIDE").unwrap();
+        fs::write(d.join("outside/f"), "OUTSIDE").unwrap();
+        let r = root(&d);
+        fs::rename(d.join("allowed"), d.join("moved")).unwrap();
+        symlink(d.join("outside"), d.join("allowed")).unwrap();
+        assert_eq!(r.read("f", 100).unwrap(), "INSIDE");
+        r.write("g", b"new").unwrap();
+        assert_eq!(fs::read_to_string(d.join("moved/g")).unwrap(), "new");
+        assert!(!d.join("outside/g").exists());
+        assert_eq!(r.list("").unwrap().iter().filter_map(|e| e.name.clone()).collect::<Vec<_>>(), vec!["f", "g"]);
+    }
+
+    #[test]
+    fn a_root_is_a_directory() {
+        let d = dir("root-kind");
+        assert!(Root::open(&d.join("outside/secret")).unwrap_err().contains("not a directory"));
+        assert!(Root::open(&d.join("absent")).unwrap_err().contains("does not exist"));
+        let f: std::os::fd::OwnedFd = fs::File::open(d.join("outside/secret")).unwrap().into();
+        assert!(Root::from_fd(f, "secret").unwrap_err().contains("not a directory"));
+        let dirfd: std::os::fd::OwnedFd = fs::File::open(d.join("allowed")).unwrap().into();
+        let r = Root::from_fd(dirfd, "the project").unwrap();
+        r.write("x", b"1").unwrap();
+        assert!(r.read("nope", 10).unwrap_err().contains("'the project/nope' does not exist"));
+    }
+
+    /// As `a_folder_swapped_for_a_link_mid_read_never_leaks`, through a root.
+    #[test]
+    fn a_folder_beneath_a_root_swapped_for_a_link_mid_read_never_leaks() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Arc;
+        let d = dir("root-race");
+        let store = d.join("allowed/.store");
+        fs::create_dir_all(&store).unwrap();
+        fs::write(store.join("secret"), "ALLOWED").unwrap();
+        let sw = d.join("allowed/sw");
+        let r = root(&d);
+        let stop = Arc::new(AtomicBool::new(false));
+        let rounds = Arc::new(AtomicU64::new(0));
+        let swapper = {
+            let (stop, rounds, d, sw, store) = (stop.clone(), rounds.clone(), d.clone(), sw.clone(), store.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    fs::rename(&store, &sw).unwrap();
+                    fs::rename(&sw, &store).unwrap();
+                    symlink(d.join("outside"), &sw).unwrap();
+                    fs::remove_file(&sw).unwrap();
+                    rounds.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+        };
+        let (mut allowed, mut refused, mut reads) = (0u64, 0u64, 0u64);
+        let started = std::time::Instant::now();
+        while reads < 20_000 || rounds.load(Ordering::SeqCst) <= 100 || refused == 0 || allowed == 0 {
+            if started.elapsed() > std::time::Duration::from_secs(60) {
+                break;
+            }
+            reads += 1;
+            match r.read("sw/secret", 100) {
+                Ok(text) => {
+                    assert_eq!(text, "ALLOWED", "a read through a swapped folder leaked");
+                    allowed += 1;
+                }
+                Err(_) => refused += 1,
+            }
+            match r.list("sw") {
+                Ok(entries) => assert!(entries.iter().all(|e| e.name.as_deref() == Some("secret")), "a listing leaked: {entries:?}"),
+                Err(_) => refused += 1,
+            }
+        }
+        stop.store(true, Ordering::SeqCst);
+        swapper.join().unwrap();
+        assert!(rounds.load(Ordering::SeqCst) > 100);
+        assert!(refused > 0 && allowed > 0, "{allowed} allowed, {refused} refused");
+    }
+
 }
