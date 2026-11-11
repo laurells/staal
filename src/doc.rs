@@ -220,7 +220,7 @@ pub fn document(files: &[crate::SourceFile]) -> Result<String, String> {
             ("Constants", &["const"][..]),
             ("Functions", &["fn"][..]),
             ("Capabilities", &["capability"][..]),
-            ("C libraries (unchecked)", &["foreign"][..]),
+            ("C libraries", &["foreign"][..]),
         ] {
             let these: Vec<&&Item> = items.iter().filter(|it| kinds.contains(&it.kind)).collect();
             if these.is_empty() {
@@ -229,8 +229,10 @@ pub fn document(files: &[crate::SourceFile]) -> Result<String, String> {
             out.push_str(&format!("\n## {title}\n"));
             if kinds == ["foreign"] {
                 out.push_str(
-                    "\nC code can do anything the process can, so the runtime cannot check these functions. \
-                     A run granted any of them is marked unchecked.\n",
+                    "\nBy default each library runs contained (Linux only): in a worker process the kernel \
+                     lets only compute, so nothing its C code does can reach outside it. Granted with \
+                     isolation \"separate\" or \"none\", C code can do anything its process can, the \
+                     runtime cannot check it, and a run granted it is marked unchecked.\n",
                 );
             }
             for it in these {

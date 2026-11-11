@@ -73,6 +73,11 @@ cranelift-native = { version = "=0.136.2", optional = true }
 # Object files for `staalc build` (ahead-of-time executables).
 cranelift-object = { version = "=0.136.2", optional = true }
 
+# The system-call filter of the C-function worker (src/interp/ffi_worker.rs): the
+# rust-vmm compiler Firecracker uses, turning rules into a seccomp BPF program.
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler = "=0.5.0"
+
 [features]
 default = ["native"]
 native = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-native", "dep:cranelift-object"]

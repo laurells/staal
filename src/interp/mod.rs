@@ -12,6 +12,7 @@ pub mod adapter;
 pub mod broker;
 pub mod db;
 pub mod ffi;
+pub mod ffi_worker;
 pub mod pg;
 pub mod fsx;
 pub mod http;
@@ -738,7 +739,7 @@ fn parse_grant(
     let postgres = want.starts_with("db.postgres.");
     for k in g.keys() {
         let known = ["cap", "max", "each", "uses", "only", "idempotency_key", "needs"].contains(&k.as_str())
-            || (c_function && ["library", "sha256", "repeatable"].contains(&k.as_str()))
+            || (c_function && ["library", "sha256", "repeatable", "isolation"].contains(&k.as_str()))
             || (postgres && k == "databases")
             || (want == "net.tcp.accept" && ["wait_ms", "on_bad_client"].contains(&k.as_str()))
             || (want == "net.tls.accept" && ["wait_ms", "on_bad_client", "certificate_chain", "private_key"].contains(&k.as_str()));
@@ -907,7 +908,8 @@ fn load_c_function(
         Some(Json::Bool(b)) => *b,
         Some(_) => return Err(format!("{at}.repeatable: expected true or false")),
     };
-    let lib = ffi::load(&path, sha, libraries).map_err(|e| format!("{at}: {e}"))?;
+    let isolation = ffi::Isolation::from_grant(g.get("isolation")).map_err(|e| format!("{at}.isolation: {e}"))?;
+    let lib = ffi::load(&path, sha, isolation, libraries).map_err(|e| format!("{at}: {e}"))?;
     let params: Vec<CType> = f.params.iter().map(|(_, t)| *t).collect();
     let func = ffi::function(&lib, &f.name, &params, f.ret, repeatable).map_err(|e| format!("{at}: {e}"))?;
     Ok(std::sync::Arc::new(func))
@@ -1586,12 +1588,23 @@ impl<'p> Interp<'p> {
                         self.postgres.insert(h, p.clone());
                     }
                     if let Some(f) = foreign {
-                        // C code the broker cannot check: the run says so, first.
-                        self.emit(
-                            "unchecked",
-                            json!({ "capability": path, "library": f.lib.path, "sha256": f.lib.sha256,
-                                    "why": "a C library can do anything the process can; the broker cannot check it" }),
-                        );
+                        if f.lib.isolation.unchecked() {
+                            // C code the broker cannot check: the run says so, first.
+                            let why = match f.lib.isolation {
+                                ffi::Isolation::Separate => "a C library run in a separate process can still do anything that process can; the broker cannot check it",
+                                _ => "a C library can do anything the process can; the broker cannot check it",
+                            };
+                            self.emit(
+                                "unchecked",
+                                json!({ "capability": path, "library": f.lib.path, "sha256": f.lib.sha256,
+                                        "isolation": f.lib.isolation.name(), "why": why }),
+                            );
+                        } else {
+                            self.emit(
+                                "contained",
+                                json!({ "capability": path, "library": f.lib.path, "sha256": f.lib.sha256 }),
+                            );
+                        }
                         self.foreign.insert(h, f.clone());
                     }
                     if *idempotency_key {
@@ -3091,7 +3104,7 @@ impl<'p> Interp<'p> {
         let what = format!("action {path}");
         // C code can change anything: every call counts as an effect.
         self.effects += 1;
-        let (answer, replayed) = self.external("action", jbody, f.repeatable, &what, |it, _key| {
+        let (answer, replayed) = self.external("action", jbody, f.may_repeat(), &what, |it, _key| {
             Answer::Done(f.call(&cargs).map(|v| {
                 json!({ "value": match v {
                     ffi::CValue::Int(n) => json!(n),

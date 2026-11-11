@@ -4,6 +4,35 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+This release changes how C functions run by default. A grant of `cap ffi.*` with no
+`isolation` now runs its library contained, which needs Linux on x86_64 or aarch64:
+on macOS such a grant is refused until it says `"isolation": "separate"` or `"none"`,
+and C code that opens files, sockets or programs fails when contained. Grant those
+`"isolation": "none"` to keep the old behaviour.
+
+### Added
+
+- C functions run contained by default (RUNTIME.md section 19, "Isolation"): each
+  library in a worker process of its own, started fresh, with an empty environment
+  and no inherited descriptors, under two seccomp filters. While the library loads,
+  its initialisers may read files but not write one, open a socket, start a program
+  or signal another process; after it has loaded, it may only compute. Anything else
+  stops the worker, and the call fails saying so. A run whose C code is all contained
+  is no longer marked unchecked, and a contained call cut short by a crash of the run
+  is made again on resume, since nothing it did can have left its worker.
+- `isolation` on an `ffi.*` grant: `contained` (the default), `separate` (a worker
+  with no limits: the run is unchecked) or `none` (the run's own process, as before).
+- `STAALC_FFI_WORKER`, and `staalc::interp::ffi_worker::use_executable`, name the
+  `staalc` to run as the worker where none is found: the Node.js package installs none.
+
+### Changed
+
+- A C function that crashes in a worker fails its call instead of ending the run's
+  process; every later call to its library in the run fails too.
+- `staalc doc` heads C declarations "C libraries" and says how they are run.
+
 ## 0.28.0 — 2026-11-10
 
 This release changes the journal format, to version 3. A run left unfinished by

@@ -85,6 +85,13 @@ fn usage_error(usage: &str, msg: &str) -> u8 {
 
 /// `staalc` with its arguments (without the program name). Returns the exit code.
 pub fn staalc_main(args: Vec<String>) -> u8 {
+    #[cfg(unix)]
+    {
+        crate::interp::ffi_worker::hosted_here();
+        if args.len() == 1 && args[0] == crate::interp::ffi_worker::WORKER_ARG {
+            return crate::interp::ffi_worker::serve();
+        }
+    }
     let u = |m: &str| usage_error(USAGE, m);
     let Some(cmd) = args.first() else { return u("no command given") };
     let rest = &args[1..];
@@ -704,6 +711,13 @@ pub unsafe extern "C" fn staal_aot_main(
 
 #[cfg(feature = "native")]
 fn app_main(args: Vec<String>, bundle: &[u8], fns: &[usize]) -> u8 {
+    #[cfg(unix)]
+    {
+        crate::interp::ffi_worker::hosted_here();
+        if args.len() == 1 && args[0] == crate::interp::ffi_worker::WORKER_ARG {
+            return crate::interp::ffi_worker::serve();
+        }
+    }
     let u = |m: &str| usage_error(APP_USAGE, m);
     let Some(cmd) = args.first() else { return u("no command given") };
     let rest = &args[1..];

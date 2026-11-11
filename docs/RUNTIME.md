@@ -1877,8 +1877,12 @@ nothing is done once per task but the call itself.
 ## 19. C libraries: `cap ffi.<library>.<function>`
 
 A program can call a function of a C library, only through a capability the
-operator grants, and every run granted one is marked unchecked: C code can do
-anything the process can, so the broker cannot check what it does.
+operator grants. By default the library runs contained: in a worker process the
+kernel lets do nothing but compute, so nothing its C code does can reach outside it
+(Isolation, below). Contained C needs Linux; elsewhere, and wherever the operator
+chooses, a grant says to run it in a separate process or in this one instead, and
+then the run is marked unchecked: C code run that way can do anything its process
+can, so the broker cannot check what it does.
 
 ### Declaring
 
@@ -1925,6 +1929,7 @@ and must list each function it uses as `"ffi.<name>.<function>": "any"` in its
     "crc": { "cap": "ffi.zlib.crc32",
              "library": "/usr/lib/x86_64-linux-gnu/libz.so.1.3",
              "sha256": "<64 lowercase hex digits>",
+             "isolation": "contained",
              "repeatable": true }
 
 `library` is the file's absolute path and `sha256` its SHA-256, both required. When
@@ -1939,10 +1944,69 @@ pinned: libraries it depends on are found by the system's loader as usual, and a
 library that finds others relative to its own location may not find them. Loading
 runs the library's initialisers. A library is never unloaded.
 
+### Isolation
+
+`isolation` says where the library's C code runs; it is optional, and absent means
+`contained`. One library is run one way in a run: granting it two ways is a config
+error.
+
+| `isolation` | Where | What its C code can do | The run |
+| --- | --- | --- | --- |
+| `contained` | a worker process, locked down by the kernel | compute only | checked |
+| `separate` | a worker process | anything that process can | unchecked |
+| `none` | this process | anything this process can | unchecked |
+
+`contained` needs Linux on x86_64 or aarch64; elsewhere a grant without `isolation`,
+or with `contained`, is a config error naming the other two. On macOS, use
+`separate` to keep C code out of the run's process, or `none`.
+
+A worker is started fresh for each library (never forked from the run's process),
+serves its calls over one socket and ends with the run. Its environment is empty but
+for `LD_LIBRARY_PATH` and `DYLD_LIBRARY_PATH`, so no secret the run's environment
+holds reaches C code; every descriptor but the socket and a standard error that goes
+nowhere is closed before the library is loaded, and again after. A contained worker
+then installs two seccomp filters, and anything either does not allow ends it at once
+(SIGSYS):
+
+1. Before the library is loaded, so that its initialisers run under it: files may be
+   opened only for reading (never created or truncated), read, mapped and closed,
+   and their metadata read. No socket, no new process or program, no signal to
+   another process, no file written, renamed or removed.
+2. After loading: computing only. Reading and writing the socket, allocating and
+   freeing memory, futexes, the clock, sleeping and yielding, a signal to itself
+   (abort), and exiting. Nothing can be opened at all.
+
+Filters can be added but never removed, and each one checks the machine's
+architecture, so 32-bit system calls are refused too. Under the first filter a
+library's initialisers can still read any file the run's user can read; they cannot
+write, send or keep anything outside the worker, but what they read could reach the
+program as a value the function returns, which is untrusted (E006).
+
+The run's process trusts nothing a worker says: a reply larger than 64 MiB, or that
+is not exactly `{"ok": value}` or `{"err": message}`, ends the worker, and every
+value returned is checked against the declared type again. A worker that crashes, is
+stopped by a filter or breaks the protocol ends; the call fails saying which
+(`the C code crashed (signal 6)`, `the C code made a system call that contained C
+code may not make, and was stopped`, `the C worker sent a malformed reply`), and so
+does every later call to that library in the run, since its C state is gone.
+
+The worker is the `staalc` a program embedding the runtime names (Rust:
+`staalc::interp::ffi_worker::use_executable`), or else the one the environment
+variable `STAALC_FFI_WORKER` names (an absolute path); otherwise `staalc`, and an
+executable `staalc build` made, run themselves as the worker, and libstaalc loaded by
+another program (the Python package) runs the `staalc` installed beside it. Its
+version must be this one. The Node.js package installs no `staalc`: set
+`STAALC_FFI_WORKER` to one of this version to call C from it.
+
+No time limit applies to a call yet: a C function that never returns holds its run,
+contained or not.
+
 ### Unchecked
 
-For each `ffi.*` grant, the run's log holds, before anything the program does, an
-event `{"event": "unchecked", "capability", "library", "sha256", "why"}`. `staalc run`
+For each `ffi.*` grant whose isolation is `separate` or `none`, the run's log holds,
+before anything the program does, an event `{"event": "unchecked", "capability",
+"library", "sha256", "isolation", "why"}`; for a contained one, an event
+`{"event": "contained", "capability", "library", "sha256"}` instead. `staalc run`
 and `resume` print `this run is unchecked: it loaded C code for ...` to standard
 error; the C interface's result carries `"unchecked": [capabilities]`; and
 `RunResult::unchecked()` lists them. `staalc doc` shows `foreign` declarations
@@ -1957,8 +2021,13 @@ without calling C. Calls into one library are made one at a time, whichever task
 make them, since whether its functions are safe to call from several threads is
 not known.
 
-A call cut short by a crash (including a crash inside the C function) is in doubt.
-It is made again on resume only when the grant says `"repeatable": true` (the
+A call cut short by a crash of the run is in doubt, unless the library is contained:
+nothing contained C code does can reach outside its worker, so making the call again
+cannot repeat an effect, and a contained call is made again on resume, in a new
+worker. A crash inside a C
+function run in this process ends the process, and its call too is in doubt; one
+inside a worker ends only the worker, and the call fails. A call in doubt is made
+again on resume only when the grant says `"repeatable": true` (the
 function changes nothing, or changing it twice is harmless). Otherwise resume stops,
 and `staalc resolve` accepts only `--failed <reason>` or `--retry`: the value a C
 function returned was seen by nobody outside the process, so it cannot be recorded

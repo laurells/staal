@@ -17,6 +17,11 @@ foreign ffi.staaltest {
     fn next() -> i64
     fn crash() -> i64
     fn missing() -> i64
+    fn open_socket() -> i64
+    fn run_program(cmd: text) -> i64
+    fn read_env(name: text) -> text
+    fn file_size(path: text) -> i64
+    fn write_fd(fd: i32, text: text) -> i64
 }
 
 type Numbers { sum: Int, neg: Int, i8: Int, u16: Int, low: Int, wrapped: Int, even: Bool, odd: Bool, len: Int, hello: Text, six: Int }
@@ -101,3 +106,31 @@ fn missing(m: cap ffi.staaltest.missing) -> Int {
 fn plain() -> Int {
     return 1
 }
+
+// Each tries to reach outside the C function's own process.
+fn socket(s: cap ffi.staaltest.open_socket) -> Int {
+    return s.open_socket()
+}
+
+fn program(r: cap ffi.staaltest.run_program, cmd: Text) -> Int {
+    return r.run_program(cmd)
+}
+
+fn env(e: cap ffi.staaltest.read_env, name: Text) -> Text {
+    return e.read_env(name)
+}
+
+fn size(f: cap ffi.staaltest.file_size, path: Text) -> Int {
+    return f.file_size(path)
+}
+
+fn to_fd(w: cap ffi.staaltest.write_fd, fd: Int, text: Text) -> Int {
+    return w.write_fd(fd, text)
+}
+
+// The function after a call that broke its worker: it has no worker to run in.
+fn after_break(w: cap ffi.staaltest.write_fd, l: cap ffi.staaltest.text_len) -> Int {
+    let broke = try w.write_fd(1, "AAAA")
+    return l.text_len("x")
+}
+

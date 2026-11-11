@@ -44,3 +44,23 @@ int64_t next(void) {
     return counter;
 }
 int64_t crash(void) { abort(); }
+
+/* Hostile functions: each tries to reach outside its process, which a contained
+   function must not be able to do (tests/ffi_test.rs, "contained_c_cannot_..."). */
+#include <fcntl.h>
+#include <sys/socket.h>
+int64_t open_socket(void) { return socket(AF_INET, SOCK_STREAM, 0); }
+int64_t run_program(const char *cmd) { return system(cmd); }
+/* A variable of the run's environment, or no text when there is none. */
+const char *read_env(const char *name) { return getenv(name); }
+int64_t file_size(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fclose(f);
+    return n;
+}
+/* Writes to a descriptor number: one inherited from the process, or the worker's own
+   channel to its parent. */
+int64_t write_fd(int32_t fd, const char *text) { return write(fd, text, strlen(text)); }

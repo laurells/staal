@@ -412,8 +412,11 @@ For the agent, and for each tool:
 - **Unchecked parts**: whether a tool's entry takes a C function capability (`cap
   ffi`), directly or through a library's needs, so that a run can call C; and
   whether it can reach console input. C code a tool cannot be granted cannot run, so
-  it does not count; C code a tool can be granted makes the tool unchecked, as its runs
-  are marked, and the agent cannot be Verified (section 7).
+  it does not count; C code a tool can be granted makes the tool unchecked, and the
+  agent cannot be Verified (section 7). This stays so although a run whose C code is
+  contained (RUNTIME.md section 19, the default on Linux) is not marked unchecked:
+  how C code runs is the operator's grant, which the description cannot know, and an
+  operator may grant `separate` or `none`.
 - **The form**: `docs/schemas/agent.described.schema.json` is its normative form,
   written by `staalc agent describe` (`src/agent/describe.rs`). For the agent:
   `described` (the specification version), `agent`, `version`, `staalc`, and

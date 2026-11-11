@@ -15,38 +15,107 @@
 // replacing the file between the two changes nothing. Elsewhere it is loaded by path
 // after hashing, and a file replaced in that moment would not be noticed.
 //
-// C code can do anything the process can, so the broker cannot check it: every run
-// granted one of these is marked unchecked. Only what the declaration states is
-// enforced at the boundary: argument values fit their C types, text has no NUL, a
-// returned integer fits Int, returned text is UTF-8. Types are integers, `bool` and
+// Where the C code runs is the grant's `isolation` (RUNTIME.md section 19,
+// "Isolation"). `contained`, the default, runs it in a worker process of its own
+// (src/interp/ffi_worker.rs) that the kernel stops from doing anything but compute:
+// it cannot open a file to write, open a socket, start a program or signal another
+// process, so nothing a contained C function does can reach outside its worker. Only
+// Linux on x86_64 and aarch64 can contain C code; elsewhere a grant must say how it
+// is run instead. `separate` runs it in a worker with no such limits, and `none` in
+// this process, as before: C code run either way can do anything the process can, so
+// the broker cannot check it, and every run granted one is marked unchecked. Only
+// what the declaration states is enforced at the boundary: argument values fit their
+// C types, text has no NUL, a returned integer fits Int and its type, returned text is
+// UTF-8 and at most 1 MiB. Types are integers, `bool` and
 // `text` (a NUL-terminated string the call may read only while it runs; returned text
 // is copied and never freed), at most six arguments, no floating point, structs or
 // variadic functions: with those, every argument is passed in an integer register,
 // extended to 64 bits as its type requires, which is what the C calling conventions
 // of x86_64 and aarch64 on Linux and macOS expect. Other machines are refused.
 
+#[cfg(unix)]
+use super::ffi_worker::Worker;
 use crate::ast::CType;
+use serde_json::Value as Json;
 use std::sync::{Arc, Mutex};
 
 /// The most arguments a C function may take here.
 pub const MAX_ARGS: usize = 6;
 /// The longest text a C function may return.
-const MAX_TEXT: usize = 1 << 20;
+pub(crate) const MAX_TEXT: usize = 1 << 20;
+
+/// Where a library's C code runs: the grant's `isolation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Isolation {
+    /// In a worker process the kernel lets do nothing but compute (Linux only).
+    Contained,
+    /// In a worker process of its own, with no limits on what it does.
+    Separate,
+    /// In this process.
+    None,
+}
+
+impl Isolation {
+    pub const NAMES: [&'static str; 3] = ["contained", "separate", "none"];
+
+    /// A grant's `isolation`: absent means `contained`.
+    pub fn from_grant(v: Option<&Json>) -> Result<Isolation, String> {
+        match v {
+            None => Ok(Isolation::Contained),
+            Some(Json::String(s)) => match s.as_str() {
+                "contained" => Ok(Isolation::Contained),
+                "separate" => Ok(Isolation::Separate),
+                "none" => Ok(Isolation::None),
+                _ => Err(format!("expected \"contained\", \"separate\" or \"none\", not {s:?}")),
+            },
+            Some(_) => Err("expected \"contained\", \"separate\" or \"none\"".into()),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Isolation::Contained => "contained",
+            Isolation::Separate => "separate",
+            Isolation::None => "none",
+        }
+    }
+
+    /// Whether C code run this way can act outside its own process, so that a run
+    /// granted it is unchecked.
+    pub fn unchecked(self) -> bool {
+        self != Isolation::Contained
+    }
+}
+
+/// Whether this build, on this machine, can contain C code.
+pub fn can_contain() -> bool {
+    cfg!(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))
+}
 
 /// A loaded C library. Calls into it are made one at a time: whether its functions
 /// are safe to call from several threads is not known.
 pub struct Library {
-    handle: usize,
+    exec: Exec,
     pub path: String,
     pub sha256: String,
+    pub isolation: Isolation,
     calls: Mutex<()>,
+}
+
+/// Where a library was loaded.
+enum Exec {
+    /// In this process: the handle dlopen returned.
+    Here { handle: usize },
+    /// In a worker process.
+    Worker(Worker),
 }
 
 /// One function of a library, with the signature the program declared for it.
 pub struct Function {
     pub lib: Arc<Library>,
     pub name: String,
-    addr: usize,
+    /// Its address, when the library is loaded in this process.
+    addr: Option<usize>,
     pub params: Vec<CType>,
     pub ret: CType,
     /// The grant says the function changes nothing, so a call cut short by a crash may
@@ -71,15 +140,25 @@ fn supported() -> Result<(), String> {
     }
 }
 
-/// Loads `path` if its SHA-256 is `sha256`. One library loaded twice in a run is
-/// loaded once (`loaded`, by path and hash).
-pub fn load(path: &str, sha256: &str, loaded: &mut Vec<Arc<Library>>) -> Result<Arc<Library>, String> {
+/// Loads `path`, run as `isolation` says, if its SHA-256 is `sha256`. One library
+/// loaded twice in a run is loaded once (`loaded`, by path and hash), and only ever
+/// one way.
+pub fn load(path: &str, sha256: &str, isolation: Isolation, loaded: &mut Vec<Arc<Library>>) -> Result<Arc<Library>, String> {
     supported()?;
     if let Some(l) = loaded.iter().find(|l| l.path == path && l.sha256 == sha256) {
+        if l.isolation != isolation {
+            return Err(format!("{path} is granted with isolation \"{}\" and \"{}\": one library runs one way", l.isolation.name(), isolation.name()));
+        }
         return Ok(l.clone());
     }
-    let lib = imp::open(path, sha256)?;
-    let lib = Arc::new(lib);
+    let exec = match isolation {
+        Isolation::None => Exec::Here { handle: load_here(path, sha256)? },
+        Isolation::Contained if !can_contain() => {
+            return Err("C code can be contained only on Linux (x86_64 and aarch64); grant it with \"isolation\": \"separate\" or \"none\", which mark the run unchecked".into())
+        }
+        Isolation::Contained | Isolation::Separate => Exec::Worker(Worker::start(path, sha256, isolation == Isolation::Contained)?),
+    };
+    let lib = Arc::new(Library { exec, path: path.to_string(), sha256: sha256.to_string(), isolation, calls: Mutex::new(()) });
     loaded.push(lib.clone());
     Ok(lib)
 }
@@ -89,8 +168,71 @@ pub fn function(lib: &Arc<Library>, name: &str, params: &[CType], ret: CType, re
     if params.len() > MAX_ARGS {
         return Err(format!("{name} takes more than {MAX_ARGS} arguments"));
     }
-    let addr = imp::symbol(lib.handle, name).ok_or(format!("{} has no function {name}", lib.path))?;
+    let addr = match &lib.exec {
+        Exec::Here { handle } => Some(imp::symbol(*handle, name).ok_or(format!("{} has no function {name}", lib.path))?),
+        Exec::Worker(w) => {
+            w.lookup(name).map_err(|e| format!("{}: {e}", lib.path))?;
+            None
+        }
+    };
     Ok(Function { lib: lib.clone(), name: name.to_string(), addr, params: params.to_vec(), ret, repeatable })
+}
+
+/// Loads a library into this process, if its SHA-256 is `sha256`: its dlopen handle.
+/// Used for `isolation: none`, and by the worker for the other two.
+pub(crate) fn load_here(path: &str, sha256: &str) -> Result<usize, String> {
+    supported()?;
+    imp::open(path, sha256)
+}
+
+/// The address of function `name` in a library loaded in this process.
+pub(crate) fn symbol_here(handle: usize, name: &str) -> Option<usize> {
+    imp::symbol(handle, name)
+}
+
+/// Calls the C function at `addr` in this process, with `args` checked against
+/// `params` first; the value it returns read as `ret`.
+///
+/// # Safety
+/// `addr` must be a function of a library loaded here. Whether it really takes
+/// `params` and returns `ret` nothing can check: that is the declaration's promise.
+pub(crate) unsafe fn call_here(addr: usize, params: &[CType], ret: CType, args: &[CValue]) -> Result<CValue, String> {
+    if args.len() != params.len() {
+        return Err(format!("takes {} arguments, given {}", params.len(), args.len()));
+    }
+    let mut texts = Vec::new();
+    let mut regs = Vec::with_capacity(args.len());
+    for (t, v) in params.iter().zip(args) {
+        regs.push(register(*t, v, &mut texts)?);
+    }
+    // SAFETY: the caller's contract. Each argument is in the register its declared
+    // type needs, and `texts` outlives the call.
+    let raw = unsafe { imp::call(addr, &regs) };
+    drop(texts);
+    value(ret, raw)
+}
+
+/// Whether `v`, returned by a C function in a worker, is a value of type `t`: the
+/// worker is not trusted to have read the register as declared.
+fn returned(t: CType, v: CValue) -> Result<CValue, String> {
+    let fits = match (t, &v) {
+        (CType::I8, CValue::Int(n)) => i8::try_from(*n).is_ok(),
+        (CType::I16, CValue::Int(n)) => i16::try_from(*n).is_ok(),
+        (CType::I32, CValue::Int(n)) => i32::try_from(*n).is_ok(),
+        (CType::I64, CValue::Int(_)) => true,
+        (CType::U8, CValue::Int(n)) => u8::try_from(*n).is_ok(),
+        (CType::U16, CValue::Int(n)) => u16::try_from(*n).is_ok(),
+        (CType::U32, CValue::Int(n)) => u32::try_from(*n).is_ok(),
+        (CType::U64, CValue::Int(n)) => *n >= 0,
+        (CType::Bool, CValue::Bool(_)) | (CType::Void, CValue::Unit) => true,
+        (CType::Text, CValue::Text(s)) => s.len() <= MAX_TEXT,
+        _ => false,
+    };
+    if fits {
+        Ok(v)
+    } else {
+        Err(format!("its worker returned {v:?}, which is not a C {}", t.name()))
+    }
 }
 
 /// Converts one argument to the 64-bit register value its C type expects: signed
@@ -164,38 +306,37 @@ impl Function {
         Ok(())
     }
 
+    /// Whether a call cut short by a crash may be made again: the grant says it changes
+    /// nothing, or it is contained, so nothing it did can have reached outside its
+    /// worker, which did not outlive the crash.
+    pub fn may_repeat(&self) -> bool {
+        self.repeatable || self.lib.isolation == Isolation::Contained
+    }
+
     /// Calls the function. Arguments are checked against the declaration first; a
     /// value that does not fit is refused before anything is called.
     pub fn call(&self, args: &[CValue]) -> Result<CValue, String> {
-        if args.len() != self.params.len() {
-            return Err(format!("{} takes {} arguments, given {}", self.name, self.params.len(), args.len()));
-        }
-        let mut texts = Vec::new();
-        let mut regs = Vec::with_capacity(args.len());
-        for (t, v) in self.params.iter().zip(args) {
-            regs.push(register(*t, v, &mut texts).map_err(|e| format!("{}: {e}", self.name))?);
-        }
-        let raw = {
-            let _one_at_a_time = self.lib.calls.lock().unwrap_or_else(|p| p.into_inner());
+        self.check(args)?;
+        let _one_at_a_time = self.lib.calls.lock().unwrap_or_else(|p| p.into_inner());
+        let got = match (&self.lib.exec, self.addr) {
             // SAFETY: none can be given. The function is called with the signature the
             // program declared, which nothing checks against the library; this is why
-            // a run that can call C is marked unchecked. Each argument is in the
-            // register its declared type needs, and `texts` outlives the call.
-            unsafe { imp::call(self.addr, &regs) }
+            // a run that calls C in this process is marked unchecked.
+            (Exec::Here { .. }, Some(addr)) => unsafe { call_here(addr, &self.params, self.ret, args) },
+            (Exec::Worker(w), _) => w.call(&self.name, &self.params, self.ret, args).and_then(|v| returned(self.ret, v)),
+            (Exec::Here { .. }, None) => Err("was looked up in no library".into()),
         };
-        drop(texts);
-        value(self.ret, raw).map_err(|e| format!("{}: {e}", self.name))
+        got.map_err(|e| format!("{}: {e}", self.name))
     }
 }
 
 #[cfg(unix)]
 mod imp {
-    use super::Library;
     use sha2::{Digest, Sha256};
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
 
-    pub fn open(path: &str, sha256: &str) -> Result<Library, String> {
+    pub fn open(path: &str, sha256: &str) -> Result<usize, String> {
         let mut file = std::fs::File::open(path).map_err(|e| format!("cannot open {path}: {e}"))?;
         let meta = file.metadata().map_err(|e| format!("{path}: {e}"))?;
         if !meta.is_file() {
@@ -231,7 +372,7 @@ mod imp {
             return Err(format!("cannot load {path}: {why}"));
         }
         // Never unloaded: unloading C code can leave the process pointing into it.
-        Ok(Library { handle: handle as usize, path: path.to_string(), sha256: sha256.to_string(), calls: std::sync::Mutex::new(()) })
+        Ok(handle as usize)
     }
 
     pub fn symbol(handle: usize, name: &str) -> Option<usize> {
@@ -270,8 +411,7 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use super::Library;
-    pub fn open(_: &str, _: &str) -> Result<Library, String> {
+    pub fn open(_: &str, _: &str) -> Result<usize, String> {
         Err("C libraries can be called only on x86_64 and aarch64, on Linux and macOS".into())
     }
     pub fn symbol(_: usize, _: &str) -> Option<usize> {
@@ -281,5 +421,22 @@ mod imp {
     /// Never reached: no library can be opened here, so there is no address to call.
     pub unsafe fn call(_: usize, _: &[u64]) -> u64 {
         unreachable!("no library can be loaded")
+    }
+}
+
+/// No worker can be started where C cannot be called at all.
+#[cfg(not(unix))]
+struct Worker;
+
+#[cfg(not(unix))]
+impl Worker {
+    fn start(_: &str, _: &str, _: bool) -> Result<Worker, String> {
+        Err("C libraries can be called only on x86_64 and aarch64, on Linux and macOS".into())
+    }
+    fn lookup(&self, _: &str) -> Result<(), String> {
+        Err("no worker".into())
+    }
+    fn call(&self, _: &str, _: &[CType], _: CType, _: &[CValue]) -> Result<CValue, String> {
+        Err("no worker".into())
     }
 }
