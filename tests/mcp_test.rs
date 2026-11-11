@@ -396,12 +396,11 @@ fn a_stopped_run_is_told_to_the_operator_and_finishes_once_resolved() {
     write(&dir, "doubt.staal", &format!("fn main(note: Text, post: cap net.http.post) -> Int {{\n    let r = post.post(\"{}\", note)\n    return r.status\n}}\n", s.url("/hang")));
     let notify = dir.join("notify.sh");
     // The first attempt fails; later ones record what the command saw.
-    std::fs::write(
+    common::files::write_executable(
         &notify,
-        "#!/bin/sh\nd=$(dirname \"$0\")\nif [ ! -e \"$d/failed-once\" ]; then touch \"$d/failed-once\"; exit 1; fi\nenv > \"$d/notify.env\"\ncat \"$1\" > \"$d/notify.record\"\nif [ -d /proc/$$/fd ]; then ls -l /proc/$$/fd > \"$d/notify.fds\"; fi\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&notify, std::fs::Permissions::from_mode(0o755)).unwrap();
+        "#!/bin/sh\nd=$(dirname \"$0\")\nif [ ! -e \"$d/failed-once\" ]; then touch \"$d/failed-once\"; exit 1; fi\nenv > \"$d/notify.env\"\ncat \"$1\" > \"$d/notify.record\"\nif [ -d /proc/$$/fd ]; then ls -l /proc/$$/fd > \"$d/notify.fds\"; fi\n"
+            .as_bytes(),
+    );
     let tool = json!({
         "name": "note", "description": "Send a note.", "program": "doubt.staal",
         "grants": { "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/hang")] } },
@@ -600,8 +599,7 @@ fn a_manifest_that_could_go_wrong_stops_the_server_before_it_answers() {
 fn a_notify_variable_may_not_hold_a_secret_a_tool_uses() {
     let dir = case_dir("notify-env");
     write(&dir, "s.staal", "fn main(key: Secret) -> Int {\n    return 1\n}\n");
-    std::fs::write(dir.join("n.sh"), "#!/bin/sh\n").unwrap();
-    std::fs::set_permissions(dir.join("n.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::files::write_executable(&dir.join("n.sh"), b"#!/bin/sh\n");
     let m = write_manifest(&dir, json!({ "server": { "name": "s", "notify": ["n.sh"], "notify_env": ["STAAL_MCP_TEST_KEY"] },
         "tools": [{ "name": "a", "description": "d", "program": "s.staal", "secrets": { "key": { "env": "STAAL_MCP_TEST_KEY" } } }] }));
     let (code, err) = start_and_stop(&m, &[("STAAL_MCP_TEST_KEY", KEY)]);

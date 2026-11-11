@@ -242,12 +242,7 @@ fn a_damaged_program_is_refused() {
     let at = bytes.windows(10).position(|w| w == b"QQMARKERQQ").expect("the program text is in the executable");
     bytes[at + 2] = b'N';
     let bad = work.join("bad");
-    fs::write(&bad, &bytes).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&bad, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    common::files::write_executable(&bad, &bytes);
     let r = cmd(&bad, &["run", "--config", c.to_str().unwrap()], None);
     assert_eq!(r.code, Some(2), "{}", r.stderr);
     assert!(r.stderr.contains("does not match the one it was built from"), "{}", r.stderr);

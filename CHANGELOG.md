@@ -64,10 +64,13 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   not assumed), each port given once and locked for the life of the test process, and
   never bound to check it: a port something listens on is found by connecting to it.
   CI prints each runner's ranges and listening sockets before the tests.
-- The C worker tests copy staalc to a private place with `cp` and a rename, so the test
-  process never holds the copy open for writing; a process another test started could
-  hold that handle a moment, and the copy could then not be run ("Text file busy",
-  seen on Linux on 2026-11-11).
+- Tests no longer write a file and then run it while holding it open for writing: a
+  process another test started could hold that handle a moment, and the file could then
+  not be run ("Text file busy", seen on Linux on 2026-11-11; 26 refusals in 2,000 runs
+  of files written that way while other threads started processes, none when written by
+  a separate process). The C worker tests copy staalc with `cp` and a rename, and the
+  scripts the MCP, native and install tests run are written by a shell started for
+  that alone (src/test_files.rs).
 
 ### Changed
 

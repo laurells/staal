@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
+#[path = "../src/test_files.rs"]
+mod test_files;
 #[path = "../src/test_ports.rs"]
 #[allow(dead_code)] // address() is not needed here
 mod test_ports;
@@ -103,9 +105,7 @@ fn fake_gh(dir: &Path, signed_in: bool, verifies: bool) -> PathBuf {
         if signed_in { 0 } else { 1 },
         if verifies { "exit 0" } else { "echo 'no attestations found' >&2; exit 1" },
     );
-    std::fs::write(&gh, script).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    test_files::write_executable(&gh, script.as_bytes());
     gh
 }
 
