@@ -30,6 +30,11 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   outside that directory, even when the directory is moved and a link put in its
   place. `list` reports links as links, without following them. For programs that
   embed staalc and must stay inside a folder, such as Staal Studio.
+- `staalc::testing`: what `staalc test` runs and reports, as a library: `Settings`
+  from a test config and the engines, `run` giving each case (a file's test, or the
+  file when it has check errors or no tests) with its outcome and, for check errors,
+  the diagnostics, and `files_under` for a folder. `staalc test` is built on it and
+  prints what it returns.
 - C functions run contained by default (RUNTIME.md section 19, "Isolation"): each
   library in a worker process of its own, started fresh, with an empty environment
   and no inherited descriptors, under two seccomp filters. While the library loads,
@@ -91,6 +96,12 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Changed
 
+- A test holds no authority by any route. A test config (`staalc test --config`)
+  may hold only `model`, `adapters` and `limits`, and its model must be scripted:
+  a test config naming a provider reached with a key (`anthropic`, or any other) is
+  refused, as are `net` and `fs`, which a run with no grant has no use for
+  (`net.extra_root_certificates` read files by path). Before, a test config could
+  hold anything a run config holds but `entry`, `inputs`, `grants` and `secrets`.
 - A request from `net.http.*`, `net.tcp.exchange` or `net.tls.exchange` to a private
   address, including loopback, is refused unless its grant lists that address in
   `private_addresses`. Grants that reach a local or internal service must now say so.

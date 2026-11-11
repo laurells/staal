@@ -791,10 +791,11 @@ fn divide(a: Int, b: Int) -> Int {
 
 Each test runs alone, as the entry of its own run, in both engines (`--engine`
 chooses one), and passes only if both give the same outcome and the same log. A
-run has no journal. Its model and adapters come from `--config`, which may hold
-everything a run config holds except `entry`, `inputs`, `grants` and `secrets`;
-without one the model is scripted with no replies, so a test that asks a model fails
-rather than reaching one. With a config, every test in every engine starts from the
+run has no journal. A test holds no authority: it takes no parameters, so it is
+given no capability and no secret, and `--config` may hold only `model`, `adapters`
+and `limits`, its model scripted (`"provider": "script"`), never a provider reached
+with a key. Without a config the model is scripted with no replies, so a test that
+asks a model fails rather than reaching one. With a config, every test in every engine starts from the
 config's first reply. A test that prints prints once for each engine. Functions of
 modules a test file imports are never its tests, whatever their names.
 

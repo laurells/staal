@@ -36,6 +36,7 @@ pub mod parser;
 pub mod pattern;
 pub mod semver;
 pub mod targets;
+pub mod testing;
 #[cfg(test)]
 pub(crate) mod test_ports;
 

@@ -160,7 +160,7 @@ fn problems_that_are_not_test_failures_are_exit_2() {
         (&["test", "--config", "entry.json", "a_test.staal"], "a test config cannot give \"entry\""),
         (&["test", "--config", "bad.json", "a_test.staal"], "bad.json is not valid JSON"),
         (&["test", "--config", "missing.json", "a_test.staal"], "cannot read missing.json"),
-        (&["test", "--config", "model.json", "a_test.staal"], "model.provider"),
+        (&["test", "--config", "model.json", "a_test.staal"], "a test's model is scripted"),
         (&["test", "missing_test.staal"], "missing_test.staal"),
     ] {
         let o = staalc(args, &d);
