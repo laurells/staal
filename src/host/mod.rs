@@ -638,6 +638,7 @@ impl Host {
                 "run {run} ended, but the server could not record it; it will be recorded when the server restarts"
             ));
         }
+        pause("after_settle");
         // The arguments are no longer needed, and a waiting record no longer applies.
         for p in [self.run_file(tool, run), self.waiting_path(run), self.notified_path(run)] {
             if let Err(e) = remove(&p) {
@@ -739,7 +740,10 @@ impl Host {
             s["status"] = json!("unknown");
             return s;
         };
-        if running {
+        // A run whose end is recorded is described by that end, even in the moment
+        // between recording it and its call returning, when it is still among the
+        // running: the status never says less than the ledger.
+        if running && r.settled().is_none() && !r.released() {
             s["status"] = json!("running");
             return s;
         }

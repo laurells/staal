@@ -56,6 +56,12 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Fixed
 
+- `staal_run_status` no longer says `running` for a run whose end the ledger has
+  recorded: between recording a run's end and answering its own call, the server
+  still counted it among its running runs, and a status asked in that moment said
+  `running` where the ledger said `done` (an intermittent CI failure of
+  `mcp_http_test` on macOS, on 2026-11-09 and 2026-11-11). A run's recorded end now
+  decides first.
 - A journal just let go is no longer refused as "in use by another staalc process"
   when another thread of the same process is starting a program at that moment (a C
   worker, `git`, or anything a program embedding the runtime starts). The starting

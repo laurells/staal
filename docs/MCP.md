@@ -638,7 +638,9 @@ What each side is told:
   `failure` when there is one. A result larger than a call's answer may be (1 MiB, section
   3) is not sent this way either: the snapshot gives `result_bytes` and a `reason`
   instead, and the operator reads the result from the journal. The status is `running` only for a run in progress in
-  this server process right now, which the server knows from memory; a run that was in
+  this server process right now, which the server knows from memory, and whose end the
+  ledger has not recorded (a run whose end is recorded is described by it, even in the
+  moment before its own call is answered); a run that was in
   progress when an earlier process died is resumed at start, before any status is
   answered, so `running` never describes a dead process. Otherwise the status comes
   from the ledger (`waiting_for_operator` for an unsettled run that stopped, with the

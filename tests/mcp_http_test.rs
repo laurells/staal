@@ -1373,6 +1373,34 @@ fn after_a_crash_one_principal_never_gets_or_repeats_anothers_refund() {
 
 #[test]
 #[cfg(feature = "failpoints")]
+fn a_run_whose_end_is_recorded_is_never_said_to_be_running() {
+    // The server holds the run for 3 s just after recording its end, while its call is
+    // still being answered; a status asked meanwhile says what the ledger says.
+    let case = refund_case("http-status-settled");
+    let token = case.c.token_for("oli");
+    let s = case.start(&[("STAALC_MCP_PAUSE", "after_settle:3000")]);
+    let (addr, call) = (case.c.addr.clone(), stripe_call(1, "refund"));
+    let caller = {
+        let token = token.clone();
+        std::thread::spawn(move || authed(&addr, &call, &token))
+    };
+    let start = Instant::now();
+    while case.settled().is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(20), "the run never settled: {:?}", case.ledger());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let run = case.settled()[0]["run"].as_str().unwrap().to_string();
+    let st = authed(&case.c.addr, &rpc(2, "tools/call", json!({ "name": "staal_run_status", "arguments": { "run": run } })), &token);
+    assert!(!caller.is_finished(), "the status must be asked while the call is held");
+    assert_eq!(st["result"]["structuredContent"]["status"], "done", "{st}");
+    let answered = caller.join().unwrap();
+    assert_eq!(answered["result"]["isError"], false, "{answered}");
+    assert_eq!(case.refunds(), 1);
+    s.stop();
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
 fn a_connection_closed_before_the_reservation_does_nothing_and_after_it_refunds_once() {
     // Before: the server holds the call for 1.5 s just before reserving; the client
     // closes its connection meanwhile.
