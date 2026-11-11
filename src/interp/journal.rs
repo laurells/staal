@@ -12,7 +12,9 @@
 //    appending after a half-written line would corrupt the middle of the file.
 //  - A journal is validated in full before anything runs. Only the last line may
 //    be torn (a crash during its write); any other damage is refused.
-//  - One process at a time: an OS lock, freed automatically if the process dies.
+//  - One holder at a time: in this process, a registry of the journals it holds, by
+//    the file's identity; between processes, an OS lock (`flock`), freed
+//    automatically if the process dies. See `lock`.
 
 use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
@@ -117,6 +119,9 @@ pub enum Resolution {
 pub struct Journal {
     /// None: an in-memory journal, for runs without durability.
     file: Option<File>,
+    /// This process's hold on the file, kept only to be released, after `file` is
+    /// closed (fields are dropped in order).
+    _held: Option<Held>,
     poisoned: bool,
     /// Each stream of operations: the program's own (task ""), and each concurrent
     /// task's, numbered from 1 by itself.
@@ -144,12 +149,12 @@ impl Default for Stream {
 impl Journal {
     /// A journal that keeps nothing: the run is not durable.
     pub fn memory() -> Result<Journal, String> {
-        Ok(Journal::with(None, new_run_id()?, BTreeMap::new(), None))
+        Ok(Journal::with(None, None, new_run_id()?, BTreeMap::new(), None))
     }
 
-    fn with(file: Option<File>, run_id: String, pending: BTreeMap<String, VecDeque<Json>>, recorded_end: Option<Json>) -> Journal {
+    fn with(file: Option<File>, held: Option<Held>, run_id: String, pending: BTreeMap<String, VecDeque<Json>>, recorded_end: Option<Json>) -> Journal {
         let streams = pending.into_iter().map(|(t, p)| (t, Stream { next_n: 1, pending: p })).collect();
-        Journal { file, poisoned: false, streams, recorded_end, run_id, failpoint: Failpoint::from_env(), writes: 0 }
+        Journal { file, _held: held, poisoned: false, streams, recorded_end, run_id, failpoint: Failpoint::from_env(), writes: 0 }
     }
 
     pub fn run_id(&self) -> &str {
@@ -184,9 +189,9 @@ impl Journal {
                 format!("cannot create journal {shown}: {e}")
             }
         })?;
-        lock(&file, path)?;
+        let held = lock(&file, path)?;
         let run_id = run_id.to_string();
-        let mut j = Journal::with(Some(file), run_id.clone(), BTreeMap::new(), None);
+        let mut j = Journal::with(Some(file), Some(held), run_id.clone(), BTreeMap::new(), None);
         j.write(&json!({
             "j": "start", "version": VERSION, "run_id": run_id,
             "program_sha256": binding.program_sha256, "config_sha256": binding.config_sha256,
@@ -203,7 +208,7 @@ impl Journal {
     /// `staalc` and which engine carry the run on. A run that has ended is only replayed,
     /// which changes nothing, and gets no record.
     pub fn resume(path: &Path, binding: &Binding) -> Result<Journal, String> {
-        let (file, records) = open_existing(path)?;
+        let (file, held, records) = open_existing(path)?;
         let start = records.first().ok_or_else(|| {
             format!(
                 "journal {} is empty: the run never started, so nothing was done; start a new run",
@@ -214,7 +219,7 @@ impl Journal {
         let run_id = start["run_id"].as_str().unwrap_or_default().to_string(); // checked by check_start
         let (pending, recorded_end) = check_body(&records[1..], &run_id, path)?;
         let ended = recorded_end.is_some();
-        let mut j = Journal::with(Some(file), run_id, pending, recorded_end);
+        let mut j = Journal::with(Some(file), Some(held), run_id, pending, recorded_end);
         if !ended {
             let at_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -233,7 +238,7 @@ impl Journal {
     /// Records an operator's answer for an action in doubt. When tasks leave several in
     /// doubt, `operation` names the one (`op_id`).
     pub fn resolve(path: &Path, resolution: Resolution, operation: Option<&str>) -> Result<String, String> {
-        let (file, records) = open_existing(path)?;
+        let (file, held, records) = open_existing(path)?;
         let start = records.first().ok_or_else(|| format!("journal {} is empty", path.display()))?;
         if start["j"] != "start" {
             return Err(format!("journal {}: first record is not a start record", path.display()));
@@ -303,7 +308,7 @@ impl Journal {
         }
         let http = intent["body"]["capability"].as_str().is_some_and(|c| c.starts_with("net.http."));
         let tcp = matches!(intent["body"]["capability"].as_str(), Some("net.tcp.exchange" | "net.tls.exchange"));
-        let mut j = Journal::with(Some(file), String::new(), BTreeMap::new(), None);
+        let mut j = Journal::with(Some(file), Some(held), String::new(), BTreeMap::new(), None);
         let shown = op_id(&task, n);
         let (result, summary) = match resolution {
             Resolution::Performed { .. } if http => {
@@ -455,13 +460,77 @@ impl Journal {
     }
 }
 
-fn lock(file: &File, path: &Path) -> Result<(), String> {
-    file.try_lock().map_err(|e| match e {
-        std::fs::TryLockError::WouldBlock => {
-            format!("journal {} is in use by another staalc process", path.display())
+/// The identity of an open file: its device and inode, so two paths to one file, or a
+/// path re-pointed at another, are never confused.
+#[cfg(unix)]
+type FileId = (u64, u64);
+#[cfg(not(unix))]
+type FileId = std::path::PathBuf;
+
+#[cfg(unix)]
+fn file_id(file: &File, _path: &Path) -> Result<FileId, String> {
+    use std::os::unix::fs::MetadataExt;
+    let m = file.metadata().map_err(|e| e.to_string())?;
+    Ok((m.dev(), m.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_id(_file: &File, path: &Path) -> Result<FileId, String> {
+    std::fs::canonicalize(path).map_err(|e| e.to_string())
+}
+
+/// The journals this process holds.
+static HELD: std::sync::Mutex<Vec<FileId>> = std::sync::Mutex::new(Vec::new());
+
+/// This process's hold on one journal; dropping it lets the journal go.
+#[derive(Debug)]
+struct Held(FileId);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        HELD.lock().unwrap_or_else(|p| p.into_inner()).retain(|id| *id != self.0);
+    }
+}
+
+/// How long `lock` waits for an OS lock that a child process briefly keeps (below).
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Takes the journal for this run alone, or refuses.
+///
+/// In this process, a registry of the journals it holds decides, at once: a journal
+/// another run here holds is refused. Between processes, the OS lock (`flock`) decides.
+/// That lock belongs to the open file, and a process another thread starts (a C worker,
+/// `git`, any child of a program that embeds the runtime) briefly has a copy of every
+/// open file, from its start until it runs its program and its copies close. A journal
+/// whose run has just let it go can therefore still be locked for that moment, though
+/// nothing holds it. So a lock this process does not hold is waited for, up to
+/// `LOCK_WAIT`, and only then refused: a child's copy goes within that time; a journal
+/// another process really holds is refused, as before, only later.
+fn lock(file: &File, path: &Path) -> Result<Held, String> {
+    let shown = path.display();
+    let id = file_id(file, path).map_err(|e| format!("cannot lock journal {shown}: {e}"))?;
+    {
+        let mut held = HELD.lock().unwrap_or_else(|p| p.into_inner());
+        if held.contains(&id) {
+            return Err(format!("journal {shown} is in use by another run in this process"));
         }
-        std::fs::TryLockError::Error(e) => format!("cannot lock journal {}: {e}", path.display()),
-    })
+        #[cfg_attr(unix, allow(clippy::clone_on_copy, reason = "a FileId is a path, not Copy, off Unix"))]
+        held.push(id.clone());
+    }
+    let hold = Held(id);
+    let deadline = std::time::Instant::now() + LOCK_WAIT;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(hold),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(format!("journal {shown} is in use by another staalc process"));
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(format!("cannot lock journal {shown}: {e}")),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -480,7 +549,7 @@ fn sync_parent_dir(_path: &Path) -> Result<(), String> {
 
 /// Opens, locks and reads an existing journal. A torn last line is cut off: its write
 /// was never acknowledged. Any other malformed line is refused as corruption.
-fn open_existing(path: &Path) -> Result<(File, Vec<Json>), String> {
+fn open_existing(path: &Path) -> Result<(File, Held, Vec<Json>), String> {
     let shown = path.display();
     let mut file = OpenOptions::new().read(true).append(true).open(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -489,7 +558,7 @@ fn open_existing(path: &Path) -> Result<(File, Vec<Json>), String> {
             format!("cannot open journal {shown}: {e}")
         }
     })?;
-    lock(&file, path)?;
+    let held = lock(&file, path)?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).map_err(|e| format!("cannot read journal {shown}: {e}"))?;
     let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
@@ -508,7 +577,7 @@ fn open_existing(path: &Path) -> Result<(File, Vec<Json>), String> {
         }
         records.push(rec);
     }
-    Ok((file, records))
+    Ok((file, held, records))
 }
 
 /// A journal's complete records, read without opening it for writing or locking it:
@@ -1023,13 +1092,48 @@ mod tests {
     }
 
     #[test]
-    fn only_one_process_may_hold_a_journal() {
+    fn only_one_run_may_hold_a_journal() {
         let p = tmp("lock");
         let held = Journal::create(&p, &bind("P", "C")).unwrap();
-        // The lock is per open file description, so a second open in this process is refused too.
-        assert!(Journal::resume(&p, &bind("P", "C")).unwrap_err().contains("in use"));
+        // A second run in this process is refused at once, not after waiting.
+        let started = std::time::Instant::now();
+        assert!(Journal::resume(&p, &bind("P", "C")).unwrap_err().contains("in use by another run in this process"));
+        assert!(started.elapsed() < LOCK_WAIT);
+        // So is resolving, and through another path to the same file.
+        let other = p.with_file_name("lock-link");
+        let _ = std::fs::remove_file(&other);
+        std::fs::hard_link(&p, &other).unwrap();
+        assert!(Journal::resume(&other, &bind("P", "C")).unwrap_err().contains("in this process"));
         drop(held);
         Journal::resume(&p, &bind("P", "C")).unwrap();
+    }
+
+    /// A process another thread starts briefly holds a copy of every open file, and so of
+    /// a journal's OS lock; a journal just let go must still be taken without a refusal.
+    #[test]
+    fn a_journal_let_go_while_another_thread_starts_programs_is_taken_again() {
+        let p = tmp("lock-spawn");
+        drop(Journal::create(&p, &bind("P", "C")).unwrap());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s = stop.clone();
+        let spawner = std::thread::spawn(move || {
+            let mut n = 0u32;
+            while !s.load(std::sync::atomic::Ordering::Relaxed) {
+                std::process::Command::new("true").status().unwrap();
+                n += 1;
+            }
+            n
+        });
+        let mut refused = Vec::new();
+        for i in 0..500 {
+            if let Err(e) = Journal::resume(&p, &bind("P", "C")) {
+                refused.push(format!("{i}: {e}"));
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let started = spawner.join().unwrap();
+        assert!(started > 0, "no program was started meanwhile");
+        assert!(refused.is_empty(), "{} of 500 refused while {started} programs started: {:?}", refused.len(), refused.first());
     }
 
     #[test]

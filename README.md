@@ -219,9 +219,15 @@ tools of the OpenAI Agents SDK, LangGraph, the Vercel AI SDK, the Claude Agent S
 
 **An explicit boundary with native code.** A program can call C libraries, granted
 by the library's SHA-256 and each function's exact signature. Staal cannot check what
-C code does, so every run granted a C function is marked unchecked: in its log, on
-the command line and in the C interface's result. The guarantees above end at that
-boundary, and Staal says so where it applies.
+C code does, so on Linux each library runs contained by default: in a worker process
+of its own, which the kernel lets only compute after the library has loaded, so it
+cannot act outside the worker. Contained, it still has limits Staal states: while the
+library loads, its initialisers can read files the run's user can read, and a call
+has no time limit (RUNTIME.md section 19). A library granted to run in a separate
+process or in the run's own (the only ways on macOS) can do anything that process
+can, and the run is marked unchecked: in its log, on the command line and in the C
+interface's result. The guarantees above end at that boundary, and Staal says so
+where it applies.
 
 ## Command line
 
@@ -332,7 +338,7 @@ journal, modules, HTTP, file, TCP, SQLite and PostgreSQL capabilities,
 capabilities declared by libraries, packages with versions and registries, an MCP
 server (`staalc mcp`, checked against the official Python and TypeScript SDKs),
 fetched from git and locked by hash, native code, executables, the C interface,
-and calling C libraries (runs that do are marked unchecked); enums and `match`, optional values, tuples, maps
+and calling C libraries (contained on Linux; runs that load one uncontained are marked unchecked); enums and `match`, optional values, tuples, maps
 and sets, typed errors, methods, generic functions, interfaces, function values and
 closures; and a standard library of text, number, list, hashing, encoding and date
 functions, with printing, the clock and random numbers journaled so a resumed run

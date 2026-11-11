@@ -43,6 +43,17 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   only with `"cloud_metadata": true`. agent.json declares both on a grant, and
   `staalc agent describe` reports them as each network grant's `addresses`.
 
+### Fixed
+
+- A journal just let go is no longer refused as "in use by another staalc process"
+  when another thread of the same process is starting a program at that moment (a C
+  worker, `git`, or anything a program embedding the runtime starts). The starting
+  process briefly held a copy of the journal's lock. Now a run in this process holding
+  a journal refuses another run at once, by the file's identity, and a lock no run here
+  holds is waited for up to two seconds before the journal is refused (RUNTIME.md
+  section 11). This caused a CI failure of `packages_test` on 2026-11-11, and is the
+  likely cause of its earlier intermittent one, whose message was not kept.
+
 ### Changed
 
 - A request from `net.http.*`, `net.tcp.exchange` or `net.tls.exchange` to a private

@@ -128,6 +128,3 @@ docs/security-review/), fuzzing with AddressSanitizer and in CI, fuzzing the net
 code, and load and long-running tests (many connections, hours of running, large
 journals).
 
-`packages_test` failed once under load (`run_config_durable` Resume unwrap at
-tests/packages_test.rs:452) and has not failed in 18+ runs since. Cause unknown:
-investigate if it fails again.

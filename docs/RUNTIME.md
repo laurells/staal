@@ -985,9 +985,17 @@ nothing. A crash can tear only the last line; a
 torn last line is discarded on resume (it was never acknowledged). Any other
 malformed line is corruption, and resume refuses. Resuming a journal that
 already has an `end` record replays it without contacting the world and
-reports the same result. Only one process may use a journal at a time: an
-operating-system lock, released automatically if the process dies, enforces
-this.
+reports the same result. Only one run may use a journal at a time. Within a
+process, a registry of the journals it holds, by the file itself (its device and
+inode, so two paths to one file are one journal), refuses a second run at once.
+Between processes, an operating-system lock (`flock`), released automatically if the
+process dies, refuses it. That lock belongs to the open file, and a process another
+thread starts briefly holds a copy of every open file, until it runs its program; so a
+journal whose run has just let it go can still look locked for that moment. A lock
+this process does not hold is therefore waited for, up to two seconds, before the
+journal is refused as in use by another process: a child's brief copy is outlasted,
+and a journal another process really holds is refused, two seconds later than it
+would be without the wait.
 
 The journal holds the data sent to models and to actions, and so may contain
 sensitive data. Like the log, it must never be given to a model as context.
@@ -1838,9 +1846,9 @@ as exit code 3 does on the command line. `invalid` carries `errors`, each with `
 `file`, `line`, `col` and `message`. `error` means nothing ran: a NULL or non-UTF-8
 argument, an unreadable file, invalid JSON, a bad config, journal or engine, or a
 panic inside the library, which is caught and never unwinds into the caller. Runs
-share no state and may be made from several threads. Never use one journal for two
-runs at once: the journal's lock is tested between processes (section 11), not
-between threads of one process.
+share no state and may be made from several threads. A journal is used by one run at
+a time: a second run given a journal another run in the process holds is refused at
+once (section 11).
 
 ## 17. Executables
 
