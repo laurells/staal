@@ -69,7 +69,14 @@ fn private_worker() -> PathBuf {
             let d = PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".staal-test").join("ffi-worker");
             std::fs::create_dir_all(&d).unwrap();
             let exe = d.join("staalc");
-            std::fs::copy(BIN, &exe).unwrap();
+            // Copied by another process, then renamed into place: this process never
+            // holds the file open for writing. A process another test starts meanwhile
+            // has a copy of every file open here until it runs its own program, and a
+            // file open for writing anywhere cannot be run ("Text file busy").
+            let part = d.join(format!("staalc.part-{}", std::process::id()));
+            let out = std::process::Command::new("cp").arg(BIN).arg(&part).output().expect("cp");
+            assert!(out.status.success(), "cp: {}", String::from_utf8_lossy(&out.stderr));
+            std::fs::rename(&part, &exe).unwrap();
             exe
         })
         .clone()

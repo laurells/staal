@@ -7,7 +7,8 @@
 //! Ports here come from 20000 up, skipping the ports this machine's kernel hands out
 //! for port 0 and for outgoing connections, read from the machine itself
 //! (`/proc/sys/net/ipv4/ip_local_port_range` on Linux, the `net.inet.ip.portrange`
-//! sysctls on macOS) rather than assumed. Within a process each port is given once. Across processes, a lock on a
+//! sysctls on macOS) rather than assumed. Within a process each port is given once.
+//! A port something already listens on, outside the tests, is passed over. Across processes, a lock on a
 //! file per port, held until the process ends, keeps two test processes running at
 //! the same time from taking the same port.
 //!
@@ -16,7 +17,6 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::ErrorKind;
-use std::net::TcpListener;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -30,14 +30,14 @@ struct Taken {
     next: Option<u16>,
     /// The lock files of the ports given, held until the process ends.
     held: Vec<File>,
-    /// Each port passed over because something was bound to it, and what: kept so a
+    /// Each port passed over because something listens on it, and what: kept so a
     /// test that fails can say why a port was not given.
     skipped: Vec<(u16, String)>,
 }
 
 static TAKEN: Mutex<Taken> = Mutex::new(Taken { next: Some(FIRST), held: Vec::new(), skipped: Vec::new() });
 
-/// A port on 127.0.0.1 that no other test takes, nothing bound to it when taken.
+/// A port on 127.0.0.1 that no other test takes, nothing listening on it when taken.
 pub fn port() -> u16 {
     static EPHEMERAL: OnceLock<Vec<Range>> = OnceLock::new();
     let skip = EPHEMERAL.get_or_init(ephemeral);
@@ -75,7 +75,7 @@ fn ephemeral() -> Vec<Range> {
 }
 
 /// The next port from `taken.next`, outside every range in `skip`, whose lock file in
-/// `dir` this process could lock and that nothing is bound to.
+/// `dir` this process could lock and that nothing listens on.
 fn take(dir: &Path, taken: &mut Taken, skip: &[Range]) -> u16 {
     std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     while let Some(p) = taken.next {
@@ -111,17 +111,26 @@ pub fn address() -> String {
     format!("127.0.0.1:{}", port())
 }
 
-/// What is bound to `p`, if anything: checked on 127.0.0.1, on every IPv4 address,
-/// and on ::1 and every IPv6 address where this machine has IPv6 (some servers under
-/// test bind both loopback addresses). Each check's socket is closed before the next.
+/// What listens on `p`, if anything, found by connecting to 127.0.0.1 and, where this
+/// machine has IPv6, to ::1 (a listener on every address answers there too).
+///
+/// Not by binding `p`: a process another test starts has a copy of every socket open
+/// here until it runs its own program, so a socket bound to check `p` could hold `p`
+/// after it is closed here, and the code under test could not bind it. A connection
+/// uses a port the kernel picks for it, never `p`. A socket another program bound to
+/// `p` without listening is not seen: the code under test then fails to bind `p`,
+/// saying so, rather than misbehaving.
 fn bound(p: u16) -> Option<String> {
-    for host in ["127.0.0.1", "0.0.0.0", "::1", "::"] {
-        let ipv6 = host.contains(':');
-        match TcpListener::bind((host, p)) {
-            Ok(listener) => drop(listener),
-            // No IPv6 on this machine: nothing can be bound there.
-            Err(e) if ipv6 && e.kind() != ErrorKind::AddrInUse => {}
-            Err(e) => return Some(format!("{host}: {e}")),
+    for host in [std::net::IpAddr::from([127, 0, 0, 1]), std::net::IpAddr::from(std::net::Ipv6Addr::LOCALHOST)] {
+        let addr = std::net::SocketAddr::new(host, p);
+        match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) {
+            Ok(_) => return Some(format!("{addr}: something listens")),
+            Err(e) if e.kind() == ErrorKind::ConnectionRefused => {}
+            // No IPv6 on this machine: nothing can listen there.
+            Err(e) if host.is_ipv6() && matches!(e.kind(), ErrorKind::AddrNotAvailable | ErrorKind::NetworkUnreachable | ErrorKind::Unsupported) => {}
+            Err(e) if host.is_ipv6() && e.raw_os_error() == Some(97) => {} // EAFNOSUPPORT on Linux
+            Err(e) if host.is_ipv6() && e.raw_os_error() == Some(47) => {} // EAFNOSUPPORT on macOS
+            Err(e) => return Some(format!("{addr}: {e}")),
         }
     }
     None
@@ -130,6 +139,7 @@ fn bound(p: u16) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
 
@@ -140,7 +150,7 @@ mod tests {
         (dir, Taken { next: Some(next), held: Vec::new(), skipped: Vec::new() })
     }
 
-    /// The first port from `from` nothing is bound to, by the same checks `take` makes.
+    /// The first port from `from` nothing listens on, by the same check `take` makes.
     fn free_from(from: u16) -> u16 {
         (from..=u16::MAX).find(|p| bound(*p).is_none()).unwrap()
     }
@@ -157,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn a_port_something_is_bound_to_is_skipped() {
+    fn a_port_something_listens_on_is_skipped() {
         let busy = free_from(29000);
         let _held = TcpListener::bind(("127.0.0.1", busy)).unwrap();
         let (dir, mut taken) = own("bound", busy);

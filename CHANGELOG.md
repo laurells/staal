@@ -56,11 +56,18 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 - Tests no longer find a local port by binding port 0 and closing the socket before
   the code under test binds it: the kernel could hand that port to another test
   meanwhile, and the code could then not listen ("Address already in use", seen on
-  macOS on 2026-11-11). Tests now take ports from 20000 up, skipping the ranges the
-  machine's kernel hands out unasked (read from the machine, not assumed), each port
-  given once, checked unbound on loopback and wildcard addresses, and locked for the
-  life of the test process. CI prints each runner's ranges and listening sockets
-  before the tests.
+  macOS on 2026-11-11). A process another test starts has a copy of every socket open
+  in the test process until it runs its own program, so a port just closed there can
+  still be held for that moment (36 refusals in 20,000 binds of a just-closed port while
+  other threads started processes, none without). Tests now take ports from 20000 up,
+  skipping the ranges the machine's kernel hands out unasked (read from the machine,
+  not assumed), each port given once and locked for the life of the test process, and
+  never bound to check it: a port something listens on is found by connecting to it.
+  CI prints each runner's ranges and listening sockets before the tests.
+- The C worker tests copy staalc to a private place with `cp` and a rename, so the test
+  process never holds the copy open for writing; a process another test started could
+  hold that handle a moment, and the copy could then not be run ("Text file busy",
+  seen on Linux on 2026-11-11).
 
 ### Changed
 
