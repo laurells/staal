@@ -432,7 +432,7 @@ fn schema_cmd(file: &str, entry: Option<&str>) -> u8 {
             return 1;
         }
     };
-    match schema_of(&checked, prog, entry) {
+    match crate::schema_of(&checked, prog, entry) {
         Ok(i) => {
             println!("{}", serde_json::to_string_pretty(&i).expect("serialisable"));
             0
@@ -459,20 +459,6 @@ fn agent_check(dir: &str, describe: bool) -> u8 {
             1
         }
     }
-}
-
-/// What `staalc schema` prints: the interface, and the consumers of every grant
-/// (`consumers`).
-pub fn schema_of(checked: &crate::Checked, prog: &crate::ast::Program, entry: Option<&str>) -> Result<serde_json::Value, String> {
-    let mut i = crate::runconfig::interface(prog, entry)?;
-    let packages = checked.packages.as_ref().ok_or("which package each file belongs to is not known for this program")?;
-    let name = i["entry"].as_str().ok_or("the interface names no entry")?.to_string();
-    let analysis = crate::consumers::analyse(prog, &name, packages)?;
-    let described = crate::consumers::describe(&analysis, &checked.files)?;
-    if let (Some(o), serde_json::Value::Object(d)) = (i.as_object_mut(), described) {
-        o.extend(d);
-    }
-    Ok(i)
 }
 
 fn config_cmd(file: &str, entry: Option<&str>) -> u8 {

@@ -19,6 +19,10 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- `staalc::schema_of(checked, program, entry)` in the library: what `staalc schema`
+  prints (an entry's inputs, result, grants and secrets as JSON Schemas, and the code
+  that consumes each grant), for programs that embed staalc, such as Staal Studio. It
+  was `staalc::cli::schema_of`, unchanged.
 - C functions run contained by default (RUNTIME.md section 19, "Isolation"): each
   library in a worker process of its own, started fresh, with an empty environment
   and no inherited descriptors, under two seccomp filters. While the library loads,

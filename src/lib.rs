@@ -92,6 +92,22 @@ pub fn check_path(path: &Path) -> Result<Checked, String> {
     check_path_recorded(path).map(|(c, _)| c)
 }
 
+/// What `staalc schema` prints for `entry` (or `main`): the entry's interface
+/// (`runconfig::interface`: its inputs, result, grants and secrets as JSON Schemas)
+/// and, for every grant, the code that consumes it (`consumers::describe`). `prog` is
+/// `checked.result`'s program; a program with check errors has no schema.
+pub fn schema_of(checked: &Checked, prog: &ast::Program, entry: Option<&str>) -> Result<serde_json::Value, String> {
+    let mut i = runconfig::interface(prog, entry)?;
+    let packages = checked.packages.as_ref().ok_or("which package each file belongs to is not known for this program")?;
+    let name = i["entry"].as_str().ok_or("the interface names no entry")?.to_string();
+    let analysis = consumers::analyse(prog, &name, packages)?;
+    let described = consumers::describe(&analysis, &checked.files)?;
+    if let (Some(o), serde_json::Value::Object(d)) = (i.as_object_mut(), described) {
+        o.extend(d);
+    }
+    Ok(i)
+}
+
 /// Everything a program was loaded from, so it can be loaded again without its files:
 /// what `staalc build` puts in an executable.
 #[derive(Debug, Clone, PartialEq)]

@@ -147,6 +147,29 @@ fn the_command_prints_the_interface_and_refuses_bad_programs() {
 }
 
 #[test]
+fn the_library_gives_exactly_what_the_command_prints() {
+    // Programs with modules, grants passed through them, and the consumers of each.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (file, entry) in [("examples/finops/refund.staal", None), ("examples/invoice/invoice.staal", Some("total")), ("examples/quickstart/refund.staal", None)] {
+        let path = root.join(file);
+        let checked = staalc::check_path(&path).unwrap();
+        let prog = checked.result.as_ref().unwrap_or_else(|e| panic!("{file}: {e:?}"));
+        let lib = staalc::schema_of(&checked, prog, entry).unwrap();
+        let mut args = vec!["schema", path.to_str().unwrap()];
+        args.extend(entry.iter().flat_map(|e| ["--entry", *e]));
+        let out = Command::new(BIN).args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{file}: {}", String::from_utf8_lossy(&out.stderr));
+        let printed: Json = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(lib, printed, "{file}");
+        assert!(lib["consumer_analysis"]["complete"].is_boolean() && lib["grants"].is_array(), "{file}: {lib}");
+    }
+    // The entry is named, and one that is not there is refused, by the library as by the command.
+    let checked = staalc::check_path(&root.join("examples/finops/refund.staal")).unwrap();
+    let prog = checked.result.as_ref().unwrap();
+    assert!(staalc::schema_of(&checked, prog, Some("no_such_function")).is_err());
+}
+
+#[test]
 fn a_program_that_can_read_the_console_says_so() {
     let reads = "fn ask() -> Text {\n    match read_line() {\n        some(l) => { return l }\n        none => { return \"\" }\n    }\n}\nfn main() -> Text { return ask() }";
     assert_eq!(interface(reads, None).unwrap()["reads_console"], true);

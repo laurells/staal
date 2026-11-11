@@ -178,7 +178,7 @@ fn expenditure(prog: &Program, entry: &str) -> Result<Json, String> {
 
 fn tool(def: &ToolDef, checked: &crate::Checked, authority: &BTreeMap<String, Json>) -> Result<Json, String> {
     let prog = checked.result.as_ref().map_err(|_| format!("{} has check errors", def.program))?;
-    let schema = crate::cli::schema_of(checked, prog, Some(&def.entry))?;
+    let schema = crate::schema_of(checked, prog, Some(&def.entry))?;
     let f = prog.fns.iter().find(|f| f.name == def.entry).ok_or_else(|| format!("no function '{}'", def.entry))?;
     let mut inputs: Vec<Json> = Vec::new();
     for p in &f.params {
