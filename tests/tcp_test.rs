@@ -51,7 +51,7 @@ fn config(dir: &Path, entry: &str, address: &str, only: &str) -> String {
     let cfg = json!({
         "entry": entry,
         "inputs": inputs,
-        "grants": { "conn": { "cap": "net.tcp.exchange", "only": [only] } },
+        "grants": { "conn": { "cap": "net.tcp.exchange", "private_addresses": ["127.0.0.1", "::1"], "only": [only] } },
         "model": { "provider": "script", "responses": [] },
         "net": { "timeout_ms": 300 },
     });

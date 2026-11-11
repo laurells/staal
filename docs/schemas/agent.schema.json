@@ -318,6 +318,21 @@
         "idempotency_key": {
           "type": "boolean"
         },
+        "private_addresses": {
+          "description": "For a capability that connects to addresses a program chooses (net.http.*, net.tcp.exchange, net.tls.exchange): the private addresses and networks it may reach besides public ones, each an IP address or address/prefix with no bits set past the prefix (RUNTIME.md section 12, Addresses). staalc refuses one written otherwise, or listed twice.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 43
+          },
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "cloud_metadata": {
+          "description": "For a capability that connects: whether it may reach cloud metadata services, which no private_addresses entry allows.",
+          "type": "boolean"
+        },
         "needs": {
           "type": "object",
           "propertyNames": {

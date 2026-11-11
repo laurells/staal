@@ -28,6 +28,10 @@
    "schema": false,
    "staalc": "'travel' is not one of"
   },
+  "cloud-metadata-not-bool": {
+   "schema": false,
+   "staalc": "expected true or false"
+  },
   "contact-credentials": {
    "schema": true,
    "staalc": "no user name or password"
@@ -151,6 +155,26 @@
   "only-on-runtime": {
    "schema": true,
    "staalc": "are its \"reach\""
+  },
+  "private-addresses-host-bits": {
+   "schema": true,
+   "staalc": "bits set past its prefix"
+  },
+  "private-addresses-not-ip": {
+   "schema": true,
+   "staalc": "not an IP address"
+  },
+  "private-addresses-on-library": {
+   "schema": true,
+   "staalc": "a library capability's addresses are its needs'"
+  },
+  "private-addresses-text": {
+   "schema": false,
+   "staalc": "expected a list"
+  },
+  "private-addresses-twice": {
+   "schema": false,
+   "staalc": "listed twice"
   },
   "program-absolute": {
    "schema": false,
@@ -328,6 +352,10 @@
    "schema": true,
    "staalc": null
   },
+  "valid-cloud-metadata": {
+   "schema": true,
+   "staalc": null
+  },
   "valid-empty-suggested": {
    "schema": true,
    "staalc": null
@@ -345,6 +373,10 @@
    "staalc": null
   },
   "valid-one-decimal": {
+   "schema": true,
+   "staalc": null
+  },
+  "valid-private-addresses": {
    "schema": true,
    "staalc": null
   },

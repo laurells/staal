@@ -144,7 +144,7 @@ fn a_program_with_modules_runs_as_an_executable() {
         "entry": "remind",
         "inputs": { "patients": [ { "name": "Ada", "phone": "+234 801 234 5678" }, { "name": "Bo", "phone": "2348098765432" } ] },
         "grants": { "texts": { "cap": "termii.sms.send", "only": ["2348012345678"], "needs": {
-            "http": { "cap": "net.http.post", "only": [s.url("/api/sms/send")] },
+            "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/api/sms/send")] },
             "key": { "env": "STAAL_AOT_KEY" }, "base": s.url(""), "sender": "Clinic" } } },
         "model": { "provider": "script", "responses": [] }
     });

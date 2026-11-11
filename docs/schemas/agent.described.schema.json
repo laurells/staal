@@ -606,7 +606,7 @@
               "redirects_followed",
               "tls",
               "dns_trusted",
-              "ip_isolation"
+              "addresses"
             ],
             "properties": {
               "grant": {
@@ -650,8 +650,37 @@
               "dns_trusted": {
                 "const": true
               },
-              "ip_isolation": {
-                "const": false
+              "addresses": {
+                "description": "For a capability that connects to addresses a program chooses, the addresses checked when it connects: public ones, the private ones declared (canonical), and whether cloud metadata services may be reached. Null for any other network capability.",
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "public",
+                      "private",
+                      "cloud_metadata"
+                    ],
+                    "properties": {
+                      "public": {
+                        "const": true
+                      },
+                      "private": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "uniqueItems": true
+                      },
+                      "cloud_metadata": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                ]
               }
             }
           }

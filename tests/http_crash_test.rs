@@ -63,9 +63,9 @@ fn go(key: Secret,
             "entry": "go",
             "secrets": { "key": { "env": "STAAL_CRASH_KEY" } },
             "grants": {
-                "quote": { "cap": "net.http.get" },
-                "pay": { "cap": "net.http.post", "idempotency_key": true },
-                "notify": { "cap": "net.http.post" },
+                "quote": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] },
+                "pay": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "idempotency_key": true },
+                "notify": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] },
                 "files": { "cap": "fs.write" }
             },
             "model": { "provider": "script", "responses": [] },

@@ -445,7 +445,7 @@ fn a_program_runs_through_a_fetched_package() {
         "entry": "remind",
         "inputs": { "phone": "+234 801 234 5678" },
         "grants": { "texts": { "cap": "sms.termii.send", "needs": {
-            "http": { "cap": "net.http.post" },
+            "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] },
             "key": { "env": "STAAL_PKG_KEY" },
             "sender": "Clinic" } } },
         "model": { "provider": "script", "responses": [] }
@@ -562,14 +562,14 @@ fn go(texts: cap sms.termii.send(uses: 1), refunds: cap payments.stripe.refund(m
     packages::fetch(&b.join("app")).unwrap();
     let checked = staalc::check_path(&main).unwrap();
     let prog = checked.result.unwrap_or_else(|d| panic!("{d:?}"));
-    let http = |p: &str| json!({ "cap": "net.http.post", "only": [s.url(p)] });
+    let http = |p: &str| json!({ "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url(p)] });
     let cfg = json!({
         "entry": "go",
         "grants": {
             "texts": { "cap": "sms.termii.send", "needs": { "http": http("/api/sms/send"), "key": { "env": "STAAL_PKG_KEY" }, "sender": "Clinic" } },
             "refunds": { "cap": "payments.stripe.refund", "needs": {
-                "get": { "cap": "net.http.get", "only": [s.url("/v1/payment_intents/*")] },
-                "post": { "cap": "net.http.post", "only": [s.url("/v1/refunds")], "idempotency_key": true },
+                "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/v1/payment_intents/*")] },
+                "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/v1/refunds")], "idempotency_key": true },
                 "key": { "env": "STAAL_PKG_KEY" } } },
             "mail": { "cap": "email.resend.send", "needs": { "http": http("/emails"), "key": { "env": "STAAL_PKG_KEY" }, "sender": "clinic@clinic.org" } },
             "channel": { "cap": "chat.slack.post", "needs": { "http": http("/api/chat.postMessage"), "token": { "env": "STAAL_PKG_KEY" } } }
@@ -646,12 +646,12 @@ fn go(ps: cap payments.paystack.refund(max: 50000 NGN), fw: cap payments.flutter
         "entry": "go",
         "grants": {
             "ps": { "cap": "payments.paystack.refund", "needs": {
-                "get": { "cap": "net.http.get", "only": [s.url("/transaction/verify/*")] },
-                "post": { "cap": "net.http.post", "only": [s.url("/refund")] },
+                "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/transaction/verify/*")] },
+                "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/refund")] },
                 "key": { "env": "STAAL_PKG_KEY" } } },
             "fw": { "cap": "payments.flutterwave.refund", "needs": {
-                "get": { "cap": "net.http.get", "only": [s.url("/v3/transactions/*/verify")] },
-                "post": { "cap": "net.http.post", "only": [s.url("/v3/transactions/*/refund")] },
+                "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/v3/transactions/*/verify")] },
+                "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/v3/transactions/*/refund")] },
                 "key": { "env": "STAAL_PKG_KEY" } } }
         },
         "model": { "provider": "script", "responses": [] }
@@ -967,9 +967,9 @@ fn library(p: cap bank.pay.send, url: Text) -> Receipt {
     let prog = checked.result.unwrap_or_else(|d| panic!("{}", d.iter().map(|x| x.msg.clone()).collect::<Vec<_>>().join("\n")));
     let run = |entry: &str, url: &str, engine: staalc::interp::Engine| {
         let grants = if entry == "library" {
-            json!({ "p": { "cap": "bank.pay.send", "needs": { "post": { "cap": "net.http.post" } } } })
+            json!({ "p": { "cap": "bank.pay.send", "needs": { "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } } } })
         } else {
-            json!({ "h": { "cap": "net.http.post" } })
+            json!({ "h": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } })
         };
         let cfg = json!({ "entry": entry, "inputs": { "url": url }, "grants": grants, "model": { "provider": "script", "responses": [] } });
         staalc::interp::run_config_engine(&prog, &fingerprint, &cfg, Durability::None, engine).unwrap()

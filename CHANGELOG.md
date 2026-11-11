@@ -6,7 +6,12 @@ the language or its file formats.
 
 ## Unreleased
 
-This release changes how C functions run by default. A grant of `cap ffi.*` with no
+This release refuses requests to private addresses unless a grant lists them, and
+changes how C functions run by default. A `net.http.*`, `net.tcp.exchange` or
+`net.tls.exchange` grant that reaches `localhost` or an internal service needs
+`"private_addresses"` listing its address (section "Changed").
+
+It also changes how C functions run by default. A grant of `cap ffi.*` with no
 `isolation` now runs its library contained, which needs Linux on x86_64 or aarch64:
 on macOS such a grant is refused until it says `"isolation": "separate"` or `"none"`,
 and C code that opens files, sockets or programs fails when contained. Grant those
@@ -26,9 +31,22 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   with no limits: the run is unchecked) or `none` (the run's own process, as before).
 - `STAALC_FFI_WORKER`, and `staalc::interp::ffi_worker::use_executable`, name the
   `staalc` to run as the worker where none is found: the Node.js package installs none.
+- The address a `net.http.*`, `net.tcp.exchange` or `net.tls.exchange` request
+  connects to is checked (RUNTIME.md section 12, "Addresses"): a name is looked up
+  once, each address it gives is checked, and only those that pass are connected to,
+  so DNS rebinding changes nothing. Public addresses are reached; private ones
+  (loopback, private networks, link-local and the rest) only when the grant lists
+  them, or a network holding them, in `private_addresses`; cloud metadata services
+  only with `"cloud_metadata": true`. agent.json declares both on a grant, and
+  `staalc agent describe` reports them as each network grant's `addresses`.
 
 ### Changed
 
+- A request from `net.http.*`, `net.tcp.exchange` or `net.tls.exchange` to a private
+  address, including loopback, is refused unless its grant lists that address in
+  `private_addresses`. Grants that reach a local or internal service must now say so.
+- In agent.described.json, a network grant's `ip_isolation: false` is replaced by
+  `addresses`.
 - A C function that crashes in a worker fails its call instead of ending the run's
   process; every later call to its library in the run fails too.
 - `staalc doc` heads C declarations "C libraries" and says how they are run.

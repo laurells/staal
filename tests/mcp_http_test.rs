@@ -519,7 +519,7 @@ fn a_stream_closed_after_the_run_began_leaves_the_run_to_finish() {
     let slow = format!("fn main(n: Int, get: cap net.http.get) -> Int {{\n    let a = get.get(\"{}/slow\")\n    let b = get.get(\"{}/slow\")\n    return n\n}}\n", fake.url(""), fake.url(""));
     std::fs::write(dir.join("slow.staal"), slow).unwrap();
     let tools = json!([{ "name": "slow", "description": "d", "program": "slow.staal",
-        "grants": { "get": { "cap": "net.http.get" } }, "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 } }]);
+        "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } }, "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 } }]);
     let m = write_manifest(&dir, json!({ "server": { "name": "s", "http": { "listen": addr, "resource": "https://mcp.shop.example/mcp", "auth": "none" } }, "tools": tools }));
     let s = Http::start(&m, &addr, &[]);
     let mut call = rpc(1, "tools/call", json!({ "name": "slow", "arguments": { "n": 5 } }));
@@ -567,7 +567,7 @@ fn sigterm_lets_the_call_in_progress_finish_and_be_answered() {
     let base = fake.url("");
     std::fs::write(dir.join("slow.staal"), format!("fn main(n: Int, get: cap net.http.get) -> Int {{\n    let a = get.get(\"{base}/slow\")\n    let b = get.get(\"{base}/slow\")\n    return n\n}}\n")).unwrap();
     let tools = json!([{ "name": "slow", "description": "d", "program": "slow.staal",
-        "grants": { "get": { "cap": "net.http.get" } }, "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 } }]);
+        "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } }, "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 } }]);
     let m = write_manifest(&dir, json!({ "server": { "name": "s", "http": { "listen": addr, "resource": "https://mcp.shop.example/mcp", "auth": "none" } }, "tools": tools }));
     let s = Http::start(&m, &addr, &[]);
     let call = rpc(1, "tools/call", json!({ "name": "slow", "arguments": { "n": 3 } }));
@@ -1111,7 +1111,7 @@ fn a_principal_at_its_run_limit_is_busy_while_another_runs() {
     edit_manifest(&c, |m| {
         m["server"]["http"]["per_principal"] = json!({ "max_concurrent_runs": 1 });
         m["tools"].as_array_mut().unwrap().push(json!({ "name": "slow", "description": "d", "program": "slow.staal",
-            "grants": { "get": { "cap": "net.http.get" } }, "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 } }));
+            "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } }, "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 } }));
     });
     let _s = Http::start(&c.manifest, &c.addr, &[]);
     let (gina, hal) = (c.token_for("gina"), c.token_for("hal"));
@@ -1216,8 +1216,8 @@ fn refund_case(name: &str) -> RefundCase {
         let mut t = json!({
             "name": name, "description": "Refund a payment.", "program": "stripe_refund.staal",
             "grants": { "refunds": { "cap": "stripe.refunds.create", "each": usd("30.00"), "uses": 1, "only": ["pi_usd"], "needs": {
-                "get": { "cap": "net.http.get", "only": [s("/v1/payment_intents/*")] },
-                "post": { "cap": "net.http.post", "only": [s("/v1/refunds")], "idempotency_key": true },
+                "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s("/v1/payment_intents/*")] },
+                "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s("/v1/refunds")], "idempotency_key": true },
                 "key": { "env": "STAAL_MCP_HTTP_CRASH_KEY" },
                 "base": s("")
             } } },

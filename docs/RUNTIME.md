@@ -1117,6 +1117,48 @@ target that cannot be is refused (`capability`) before anything is sent.
   (E101 in source, a config error in a grant), and in a URL pattern the `*` must
   come after `scheme://host/`, so it can never match another server.
 
+### Addresses
+
+`only` checks a target's host as text. For the capabilities that connect to an
+address a program chooses (`net.http.*`, `net.tcp.exchange` and `net.tls.exchange`)
+the address actually connected to is checked too: a host name is looked up once,
+every address it gives is checked, and only the addresses that pass are connected
+to. Nothing looks the name up again in between, so a name whose answer changes (DNS
+rebinding) changes nothing, and a name that leads to an address the grant may not
+reach is refused like the address itself.
+
+A grant reaches public addresses. Any other (loopback, the private networks,
+carrier-grade NAT, link-local, multicast, documentation and reserved blocks, and
+IPv6's unique-local, link-local, site-local, multicast, 6to4, Teredo and other
+special blocks) only when its grant lists it, or a network holding it:
+
+    "http": { "cap": "net.http.get", "only": ["http://127.0.0.1:8080/*"],
+              "private_addresses": ["127.0.0.1", "10.20.0.0/16"] }
+
+Each entry is an IP address or `address/prefix`, the network's first address, with
+an IPv4 one written as IPv4 (not mapped into IPv6); an entry written otherwise, or
+listed twice, is a config error. The addresses of cloud metadata services, which hand
+out the machine's credentials (`169.254.169.254`, `169.254.170.2`,
+`169.254.170.23`, `100.100.100.200`, `fd00:ec2::254` and `fd00:ec2::23`), are
+refused even when a listed network holds them, and reached only when the grant also
+says `"cloud_metadata": true`, which allows those addresses and nothing more. An IPv6
+address that carries an IPv4 one (mapped, `::ffff:a.b.c.d`, or behind the NAT64
+prefix `64:ff9b::/96`) is judged as that IPv4 address. A request refused this way
+certainly sent nothing: it fails `not sent: <host>: <address> is not a public
+address, and is not in this grant's private_addresses`. So does a name that cannot be
+looked up.
+
+A grant given to a library's need carries its own addresses, and a capability
+narrowed from a grant keeps them. Each set of addresses has its own connections: one
+kept open is used again only by a grant that may reach its address.
+
+Through a proxy (`net.proxy`), the proxy looks a name up, so this side checks only a
+target written as an address; where a name leads is then the proxy's to check. The
+proxy's own address is the operator's choice and is not checked. Other connections,
+whose hosts the operator configures and no program chooses (a model provider's
+`base_url`, a PostgreSQL server, an MCP server's key issuer), are not checked
+either.
+
 ### Files
 
 Every path is opened one directory at a time, each relative to the one before, and

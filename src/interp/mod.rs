@@ -9,6 +9,7 @@
 //    compiler is caught here rather than trusted.
 
 pub mod adapter;
+pub mod addresses;
 pub mod broker;
 pub mod db;
 pub mod ffi;
@@ -629,6 +630,7 @@ enum Arg {
         path: String,
         limits: broker::Limits,
         idempotency_key: bool,
+        addresses: Option<addresses::Policy>,
         needs: Vec<NeedArg>,
         foreign: Option<std::sync::Arc<ffi::Function>>,
         postgres: Option<std::sync::Arc<pg::Grant>>,
@@ -644,6 +646,7 @@ enum NeedArg {
         path: String,
         limits: broker::Limits,
         idempotency_key: bool,
+        addresses: Option<addresses::Policy>,
         declared: CapLimits,
         postgres: Option<std::sync::Arc<pg::Grant>>,
         listen: Option<tcp::Listen>,
@@ -655,6 +658,8 @@ enum NeedArg {
 struct ParsedGrant {
     limits: broker::Limits,
     idempotency_key: bool,
+    /// For capabilities that connect: the addresses the grant may reach.
+    addresses: Option<addresses::Policy>,
     needs: Vec<NeedArg>,
     /// For `ffi.*`: the C function the grant loads.
     foreign: Option<std::sync::Arc<ffi::Function>>,
@@ -741,6 +746,7 @@ fn parse_grant(
         let known = ["cap", "max", "each", "uses", "only", "idempotency_key", "needs"].contains(&k.as_str())
             || (c_function && ["library", "sha256", "repeatable", "isolation"].contains(&k.as_str()))
             || (postgres && k == "databases")
+            || (connects(want) && ["private_addresses", "cloud_metadata"].contains(&k.as_str()))
             || (want == "net.tcp.accept" && ["wait_ms", "on_bad_client"].contains(&k.as_str()))
             || (want == "net.tls.accept" && ["wait_ms", "on_bad_client", "certificate_chain", "private_key"].contains(&k.as_str()));
         if !known {
@@ -763,6 +769,11 @@ fn parse_grant(
         Some(_) => return Err(format!("{at}.idempotency_key: expected true or false")),
     };
     check_runtime_grant(want, &limits, idempotency_key, at, "only")?;
+    let addresses = if connects(want) {
+        Some(addresses::Policy::from_grant(g.get("private_addresses"), g.get("cloud_metadata"), at)?)
+    } else {
+        None
+    };
     // The slot's own limits narrow the grant when the run starts. Money limits in
     // different currencies could never both be met: refuse now.
     let d = runtime_limits(declared)?;
@@ -801,6 +812,7 @@ fn parse_grant(
                             path: np,
                             limits: inner.limits,
                             idempotency_key: inner.idempotency_key,
+                            addresses: inner.addresses,
                             declared: nd.clone(),
                             postgres: inner.postgres,
                             listen: inner.listen,
@@ -822,7 +834,7 @@ fn parse_grant(
     }
     let foreign = if c_function { Some(load_c_function(g, at, want, prog, &mut runtime.libraries)?) } else { None };
     let postgres = if postgres { Some(std::sync::Arc::new(postgres_grant(g, at, runtime)?)) } else { None };
-    Ok(ParsedGrant { limits, idempotency_key, needs, foreign, postgres, listen })
+    Ok(ParsedGrant { limits, idempotency_key, addresses, needs, foreign, postgres, listen })
 }
 
 /// `"databases"` of a `db.postgres.*` grant: each database it reaches, by the name
@@ -913,6 +925,12 @@ fn load_c_function(
     let params: Vec<CType> = f.params.iter().map(|(_, t)| *t).collect();
     let func = ffi::function(&lib, &f.name, &params, f.ret, repeatable).map_err(|e| format!("{at}: {e}"))?;
     Ok(std::sync::Arc::new(func))
+}
+
+/// Whether capability `want` connects to addresses a program chooses, so that its grant
+/// says which it may reach (RUNTIME.md section 12, "Addresses").
+pub(crate) fn connects(want: &str) -> bool {
+    want.starts_with("net.http.") || want == "net.tcp.exchange" || want == "net.tls.exchange"
 }
 
 /// The rules a grant of `want` must follow beyond its limits' own form: a runtime
@@ -1201,6 +1219,7 @@ impl Setup {
                         path: want,
                         limits: pg.limits,
                         idempotency_key: pg.idempotency_key,
+                        addresses: pg.addresses,
                         needs: pg.needs,
                         foreign: pg.foreign,
                         postgres: pg.postgres,
@@ -1578,7 +1597,7 @@ impl<'p> Interp<'p> {
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
-                Arg::Grant { name, path, limits, idempotency_key, needs, foreign, postgres, listen } => {
+                Arg::Grant { name, path, limits, idempotency_key, addresses, needs, foreign, postgres, listen } => {
                     let h = self.broker().grant(path, limits.clone());
                     self.granted.push((name.clone(), h));
                     if let Some(l) = listen {
@@ -1610,11 +1629,14 @@ impl<'p> Interp<'p> {
                     if *idempotency_key {
                         self.broker().set_idempotency_key(h).unwrap_or_default();
                     }
+                    if let Some(a) = addresses {
+                        self.broker().set_addresses(h, a.clone()).unwrap_or_default();
+                    }
                     let mut given = Vec::with_capacity(needs.len());
                     for n in needs {
                         match n {
                             NeedArg::Data(v) => given.push(v.clone()),
-                            NeedArg::Cap { path: ip, limits: il, idempotency_key: ik, declared, postgres, listen } => {
+                            NeedArg::Cap { path: ip, limits: il, idempotency_key: ik, addresses: ia, declared, postgres, listen } => {
                                 let ih = self.broker().grant(ip, il.clone());
                                 if let Some(p) = postgres {
                                     self.postgres.insert(ih, p.clone());
@@ -1624,6 +1646,9 @@ impl<'p> Interp<'p> {
                                 }
                                 if *ik {
                                     self.broker().set_idempotency_key(ih).unwrap_or_default();
+                                }
+                                if let Some(a) = ia {
+                                    self.broker().set_addresses(ih, a.clone()).unwrap_or_default();
                                 }
                                 self.emit(
                                     "grant",
@@ -2848,6 +2873,7 @@ impl<'p> Interp<'p> {
         // GET is safe to repeat by definition; the others only when the operator has said
         // the service deduplicates by Idempotency-Key, which the runtime then sends.
         let keyed = method != "get" && self.broker().idempotency_key(h).or_else(internal)?;
+        let reach = self.broker().addresses(h).or_else(internal)?;
         let retryable = method == "get" || keyed;
         self.broker().count_use(h).or_else(internal)?;
         let shown: Vec<Json> = headers
@@ -2873,7 +2899,7 @@ impl<'p> Interp<'p> {
                 send.push(("Idempotency-Key".into(), key.to_string()));
             }
             let req = http::Request { method, target: &target, headers: &send, body: body.as_deref() };
-            match it.http.send(&req) {
+            match it.http.send(&req, &reach) {
                 http::Outcome::Response { status, headers, body, complete } => {
                     let headers: Vec<Json> = headers
                         .iter()
@@ -3032,11 +3058,12 @@ impl<'p> Interp<'p> {
             return self.refuse(path, method, FailKind::Capability, why);
         }
         self.broker().count_use(h).or_else(internal)?;
+        let reach = self.broker().addresses(h).or_else(internal)?;
         let jbody = json!({ "capability": path, "method": method, "target": address,
                             "data_sha256": journal::sha256_hex(data.as_bytes()), "until": until });
         let what = format!("action {path} {address}");
         let (answer, replayed) = self.external("action", jbody, false, &what, |it, _key| {
-            match tcp::exchange(&address, data.as_bytes(), until.as_deref(), &it.tcp, path == "net.tls.exchange") {
+            match tcp::exchange(&address, data.as_bytes(), until.as_deref(), &it.tcp, path == "net.tls.exchange", &reach) {
                 tcp::Outcome::Reply(t) => Answer::Done(Ok(json!({ "text": scrub_text(&it.secrets, &t) }))),
                 tcp::Outcome::NotSent(e) => Answer::Done(Err(format!("{NOT_SENT}{e}"))),
                 tcp::Outcome::Unusable(e) => Answer::Done(Err(e)),

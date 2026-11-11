@@ -64,12 +64,21 @@ pub enum Outcome {
     Unusable(String),
 }
 
-/// One exchange, over TLS when `tls`.
-pub fn exchange(address: &str, data: &[u8], until: Option<&str>, s: &Settings, tls: bool) -> Outcome {
+/// One exchange, over TLS when `tls`, with an address `reach` permits (RUNTIME.md
+/// section 12, "Addresses"): the name is looked up once, and only the addresses that
+/// pass are connected to.
+pub fn exchange(address: &str, data: &[u8], until: Option<&str>, s: &Settings, tls: bool, reach: &super::addresses::Policy) -> Outcome {
     let deadline = Instant::now() + s.timeout;
-    let addrs: Vec<_> = match address.to_socket_addrs() {
+    let found: Vec<_> = match address.to_socket_addrs() {
         Ok(a) => a.collect(),
         Err(e) => return Outcome::NotSent(format!("cannot resolve {address}: {e}")),
+    };
+    if found.is_empty() {
+        return Outcome::NotSent(format!("{address} resolves to no address"));
+    }
+    let addrs = match reach.check(found) {
+        Ok(a) => a,
+        Err(why) => return Outcome::NotSent(format!("{address}: {why}")),
     };
     let mut stream = None;
     let mut last = format!("{address} resolves to no address");
@@ -588,6 +597,23 @@ pub fn reply(server: &std::sync::Mutex<Server>, id: &str, data: &[u8], s: &Setti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the tests' local servers need: the loopback addresses, and no others.
+    fn local() -> super::super::addresses::Policy {
+        super::super::addresses::Policy::from_grant(Some(&serde_json::json!(["127.0.0.1", "::1"])), None, "test").unwrap()
+    }
+
+    #[test]
+    fn an_address_the_grant_may_not_reach_is_not_connected_to() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        match exchange(&addr, b"x", None, &settings(2000), false, &Default::default()) {
+            Outcome::NotSent(m) => assert!(m.contains("not a public address"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        l.set_nonblocking(true).unwrap();
+        assert!(l.accept().is_err(), "nothing connected");
+    }
     use std::net::TcpListener;
 
     fn settings(ms: u64) -> Settings {
@@ -623,7 +649,7 @@ mod tests {
     #[test]
     fn a_request_is_sent_whole_and_the_reply_read_to_the_end() {
         let (addr, h) = server(None, b"pong\n", true);
-        assert_eq!(exchange(&addr, b"ping", None, &settings(2000), false), Outcome::Reply("pong\n".into()));
+        assert_eq!(exchange(&addr, b"ping", None, &settings(2000), false, &local()), Outcome::Reply("pong\n".into()));
         assert_eq!(h.join().unwrap(), b"ping");
     }
 
@@ -631,7 +657,7 @@ mod tests {
     fn a_delimiter_ends_the_reply_on_a_connection_left_open() {
         let (addr, h) = server(Some(6), b"+OK\r\n", false);
         let start = Instant::now();
-        assert_eq!(exchange(&addr, b"PING\r\n", Some("\r\n"), &settings(2000), false), Outcome::Reply("+OK\r\n".into()));
+        assert_eq!(exchange(&addr, b"PING\r\n", Some("\r\n"), &settings(2000), false, &local()), Outcome::Reply("+OK\r\n".into()));
         assert!(start.elapsed() < Duration::from_millis(300), "it waited for the close");
         h.join().unwrap();
     }
@@ -640,17 +666,17 @@ mod tests {
     fn what_is_known_is_reported_exactly() {
         // Nobody listening: certainly not sent.
         let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
-        assert!(matches!(exchange(&free, b"x", None, &settings(2000), false), Outcome::NotSent(_)));
-        assert!(matches!(exchange("no-such-host.invalid:80", b"x", None, &settings(2000), false), Outcome::NotSent(_)));
+        assert!(matches!(exchange(&free, b"x", None, &settings(2000), false, &local()), Outcome::NotSent(_)));
+        assert!(matches!(exchange("no-such-host.invalid:80", b"x", None, &settings(2000), false, &local()), Outcome::NotSent(_)));
         // A peer that never answers: it may have acted on the data.
         let (addr, h) = server(Some(1), b"", false);
-        assert!(matches!(exchange(&addr, b"x", Some("\n"), &settings(150), false), Outcome::Unknown(m) if m.contains("no reply")));
+        assert!(matches!(exchange(&addr, b"x", Some("\n"), &settings(150), false, &local()), Outcome::Unknown(m) if m.contains("no reply")));
         h.join().unwrap();
         // It answered, but the answer cannot be used.
         let (addr, _) = server(None, &[0xff, 0xfe], true);
-        assert!(matches!(exchange(&addr, b"x", None, &settings(2000), false), Outcome::Unusable(m) if m.contains("UTF-8")));
+        assert!(matches!(exchange(&addr, b"x", None, &settings(2000), false, &local()), Outcome::Unusable(m) if m.contains("UTF-8")));
         let (addr, _) = server(None, &[b'a'; 65], true);
-        assert!(matches!(exchange(&addr, b"x", None, &settings(2000), false), Outcome::Unusable(m) if m.contains("longer than 64")));
+        assert!(matches!(exchange(&addr, b"x", None, &settings(2000), false, &local()), Outcome::Unusable(m) if m.contains("longer than 64")));
     }
 
     #[test]

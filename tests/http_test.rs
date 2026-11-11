@@ -53,7 +53,7 @@ fn a_secret_reaches_only_the_header_and_never_the_log() {
         s.url("/echo-auth"),
         s.url("/echo-auth")
     );
-    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
+    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } },
                       "secrets": { "key": { "env": "STAAL_TEST_KEY" } },
                       "model": { "provider": "script", "responses": [] } });
     let out = run(&src, cfg);
@@ -84,7 +84,7 @@ fn f(key: Secret, http: cap net.http.post(only: ["{0}"])) -> Int {{
         s.url("/ok")
     );
     init();
-    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
+    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } },
                       "secrets": { "key": { "env": "STAAL_TEST_KEY" } },
                       "model": { "provider": "script", "responses": [] } });
     let p = prog(&src);
@@ -124,14 +124,14 @@ fn only_and_traversal_are_refused_before_anything_is_sent() {
         ("http://example.com/api/x".to_string(), "only https"),
         (format!("http://user:pw@127.0.0.1:{}/api/x", s.port), "user name"),
     ] {
-        let out = run(&src, with(with(base("f"), "inputs", json!({ "url": url })), "grants", json!({ "http": { "cap": "net.http.get" } })));
+        let out = run(&src, with(with(base("f"), "inputs", json!({ "url": url })), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } })));
         let f = out.result.unwrap_err();
         assert_eq!(f.kind, FailKind::Capability, "{url}: {}", f.message);
         assert!(f.message.contains(why), "{url}: {}", f.message);
     }
     assert!(s.requests().is_empty(), "a refused request reached the server: {:?}", s.requests());
     // The same URL written differently is the same target, and allowed.
-    let out = run(&src, with(with(base("f"), "inputs", json!({ "url": s.url("/api/x/../ok") })), "grants", json!({ "http": { "cap": "net.http.get" } })));
+    let out = run(&src, with(with(base("f"), "inputs", json!({ "url": s.url("/api/x/../ok") })), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } })));
     assert_eq!(out.result.unwrap(), json!(404)); // /api/ok is not a route; it was sent
     assert_eq!(s.requests()[0].path, "/api/ok");
 }
@@ -147,7 +147,7 @@ fn responses_are_data_whatever_their_status() {
         s.url("")
     );
     let get = |path: &str| {
-        run(&src, with(with(base("f"), "inputs", json!({ "path": path })), "grants", json!({ "http": { "cap": "net.http.get" } })))
+        run(&src, with(with(base("f"), "inputs", json!({ "path": path })), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } })))
             .result
             .unwrap()
     };
@@ -169,10 +169,10 @@ fn a_body_over_the_limit_is_marked_incomplete() {
 }}"#,
         s.url("/big")
     );
-    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.get" } })), "net", json!({ "max_response_bytes": 1000 }));
+    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } })), "net", json!({ "max_response_bytes": 1000 }));
     let fields = json!([{ "name": "connection", "value": "close" }, { "name": "content-length", "value": "4096" }]);
     assert_eq!(run(&src, cfg).result.unwrap(), json!({ "status": 200, "headers": fields, "body": "", "complete": false }));
-    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.get" } })), "net", json!({ "max_response_bytes": 5000 }));
+    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } })), "net", json!({ "max_response_bytes": 5000 }));
     assert_eq!(run(&src, cfg).result.unwrap()["body"].as_str().unwrap().len(), 4096);
 }
 
@@ -188,7 +188,7 @@ fn uses_limits_count_requests() {
 }}"#,
         s.url("/ok")
     );
-    let f = run(&src, with(base("f"), "grants", json!({ "http": { "cap": "net.http.get" } }))).result.unwrap_err();
+    let f = run(&src, with(base("f"), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } }))).result.unwrap_err();
     assert_eq!(f.kind, FailKind::Capability);
     assert_eq!(s.requests().len(), 2);
 }
@@ -202,7 +202,7 @@ fn nothing_listening_is_an_ordinary_failure() {
     return r.ok
 }}"#
     );
-    let out = run(&src, with(base("f"), "grants", json!({ "http": { "cap": "net.http.post" } })));
+    let out = run(&src, with(base("f"), "grants", json!({ "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } })));
     assert_eq!(out.result.unwrap(), json!(false), "not sent: caught by try");
 }
 
@@ -224,7 +224,7 @@ fn a_post_without_an_answer_stops_the_run_in_doubt() {
         s.url("/hang")
     );
     init();
-    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.post" } })), "net", json!({ "timeout_ms": 300 }));
+    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } })), "net", json!({ "timeout_ms": 300 }));
     let p = prog(&src);
     let out = run_config_durable(&p, &src, &cfg, Durability::Create(&journal)).unwrap();
     // Not a failure `try` may catch: the request may have been acted on.
@@ -254,7 +254,7 @@ fn a_get_without_an_answer_is_safe_to_report_as_failed() {
 }}"#,
         s.url("/hang")
     );
-    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.get" } })), "net", json!({ "timeout_ms": 300 }));
+    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } })), "net", json!({ "timeout_ms": 300 }));
     assert_eq!(run(&src, cfg).result.unwrap(), json!(false));
 }
 
@@ -268,8 +268,8 @@ fn an_idempotency_key_is_sent_only_when_the_operator_says_so() {
 }}"#,
         s.url("/send")
     );
-    run(&src, with(base("f"), "grants", json!({ "http": { "cap": "net.http.post" } })));
-    run(&src, with(base("f"), "grants", json!({ "http": { "cap": "net.http.post", "idempotency_key": true } })));
+    run(&src, with(base("f"), "grants", json!({ "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } })));
+    run(&src, with(base("f"), "grants", json!({ "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "idempotency_key": true } })));
     let reqs = s.requests();
     assert!(!reqs[0].headers.contains_key("idempotency-key"));
     let key = &reqs[1].headers["idempotency-key"];
@@ -292,7 +292,7 @@ fn a_keyed_post_without_an_answer_stops_and_resumes_with_the_same_key() {
 }}"#,
         s.url("/hang-once")
     );
-    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.post", "idempotency_key": true } })), "net", json!({ "timeout_ms": 300 }));
+    let cfg = with(with(base("f"), "grants", json!({ "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "idempotency_key": true } })), "net", json!({ "timeout_ms": 300 }));
     let p = prog(&src);
     let journal = std::env::temp_dir().join(format!("staal-keyed-lost-{}.journal", std::process::id()));
     let _ = std::fs::remove_file(&journal);
@@ -325,7 +325,7 @@ fn headers_cannot_smuggle_or_override() {
         ("Content-Length", "0", "set by the runtime"),
         ("Idempotency-Key", "mine", "set by the runtime"),
     ] {
-        let cfg = with(with(base("f"), "inputs", json!({ "name": name, "value": value })), "grants", json!({ "http": { "cap": "net.http.get" } }));
+        let cfg = with(with(base("f"), "inputs", json!({ "name": name, "value": value })), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } }));
         let f = run(&src, cfg).result.unwrap_err();
         assert_eq!(f.kind, FailKind::Value, "{name}");
         assert!(f.message.contains(why), "{name}: {}", f.message);
@@ -346,7 +346,7 @@ fn f(path: Text, http: cap net.http.get(only: ["{}"])) -> Text {{
         s.url("/*"),
         s.url("")
     );
-    let go = |path: &str| run(&src, with(with(base("f"), "inputs", json!({ "path": path })), "grants", json!({ "http": { "cap": "net.http.get" } }))).result;
+    let go = |path: &str| run(&src, with(with(base("f"), "inputs", json!({ "path": path })), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } }))).result;
     assert_eq!(go("/ok").unwrap(), json!("m-1"));
     let f = go("/error").unwrap_err();
     assert_eq!(f.kind, FailKind::Validation, "{}", f.message);
@@ -380,11 +380,11 @@ fn grants_for_runtime_capabilities_are_checked() {
         Ok(_) => panic!("expected a config error"),
         Err(e) => e,
     };
-    assert!(err(json!({ "cap": "net.http.post", "only": ["https://API.x.org/*"] })).contains("canonical"));
-    assert!(err(json!({ "cap": "net.http.post", "only": ["https://x.org*"] })).contains("host"));
-    assert!(err(json!({ "cap": "net.http.post", "max": { "amount": "1.00", "currency": "USD" } })).contains("no money"));
+    assert!(err(json!({ "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": ["https://API.x.org/*"] })).contains("canonical"));
+    assert!(err(json!({ "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": ["https://x.org*"] })).contains("host"));
+    assert!(err(json!({ "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "max": { "amount": "1.00", "currency": "USD" } })).contains("no money"));
     let get = prog("fn f(http: cap net.http.get) -> Int {\n    return 1\n}");
-    let e = run_config(&get, &with(base("f"), "grants", json!({ "http": { "cap": "net.http.get", "idempotency_key": true } }))).err().unwrap();
+    let e = run_config(&get, &with(base("f"), "grants", json!({ "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "idempotency_key": true } }))).err().unwrap();
     assert!(e.contains("only for net.http.post"), "{e}");
 }
 
@@ -435,7 +435,7 @@ fn f(to: Text, text: Text, key: Secret, http: cap net.http.post(only: ["{0}"])) 
     );
     let cfg = |text: &str| {
         json!({ "entry": "f", "inputs": { "to": "+2348000000000", "text": text },
-                "grants": { "http": { "cap": "net.http.post" } },
+                "grants": { "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } },
                 "secrets": { "key": { "env": "STAAL_TEST_KEY" } },
                 "model": { "provider": "script", "responses": [] } })
     };
@@ -463,7 +463,7 @@ const HEADERS_SRC: &str = r#"fn f(key: Secret, http: cap net.http.get(only: ["UR
 }"#;
 
 fn headers_cfg() -> Json {
-    json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get" } },
+    json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } },
             "secrets": { "key": { "env": "STAAL_TEST_KEY" } },
             "model": { "provider": "script", "responses": [] } })
 }
@@ -514,7 +514,7 @@ fn a_journal_from_before_headers_replays_none() {
     return r.status
 }"#
     .replace("URL", &s.url("/fixed"));
-    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get" } }, "model": { "provider": "script", "responses": [] } });
+    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } }, "model": { "provider": "script", "responses": [] } });
     let dir = std::env::temp_dir().join(format!("staal-oldjournal-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -618,7 +618,7 @@ fn a_proxy_in_the_environment_is_not_used_unless_the_config_asks() {
     std::fs::create_dir_all(&dir).unwrap();
     let url = s.url("/ok");
     std::fs::write(dir.join("p.staal"), format!("fn f(http: cap net.http.get) -> Int {{\n    let r = http.get(\"{url}\")\n    return r.status\n}}\n")).unwrap();
-    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get" } } });
+    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } } });
     std::fs::write(dir.join("c.json"), cfg.to_string()).unwrap();
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_staalc"));
     cmd.args(["run", dir.join("p.staal").to_str().unwrap(), "--config", dir.join("c.json").to_str().unwrap()]);
@@ -658,7 +658,7 @@ fn f(name: Text, pay: cap bank.pay.fetch) -> Receipt {{
     );
     for name in ["Host", "host", ":authority", "Proxy-Authorization"] {
         let cfg = json!({ "entry": "f", "inputs": { "name": name },
-                          "grants": { "pay": { "cap": "bank.pay.fetch", "needs": { "get": { "cap": "net.http.get", "only": [s.url("/ok")] } } } },
+                          "grants": { "pay": { "cap": "bank.pay.fetch", "needs": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/ok")] } } } },
                           "model": { "provider": "script", "responses": [] } });
         let f = run(&src, cfg).result.unwrap_err();
         assert_eq!(f.kind, FailKind::Value, "{name}: {}", f.message);
@@ -666,7 +666,7 @@ fn f(name: Text, pay: cap bank.pay.fetch) -> Receipt {{
     assert!(s.requests().is_empty(), "a request with a forbidden header reached the server");
     // Any other header is sent, so the library does reach the server.
     let cfg = json!({ "entry": "f", "inputs": { "name": "X-Note" },
-                      "grants": { "pay": { "cap": "bank.pay.fetch", "needs": { "get": { "cap": "net.http.get", "only": [s.url("/ok")] } } } },
+                      "grants": { "pay": { "cap": "bank.pay.fetch", "needs": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/ok")] } } } },
                       "model": { "provider": "script", "responses": [] } });
     assert!(run(&src, cfg).result.is_ok());
     let reqs = s.requests();

@@ -50,8 +50,8 @@ impl Case {
             let mut t = json!({
                 "name": name, "description": "Refund a payment.", "program": "refund.staal",
                 "grants": { "refunds": { "cap": "stripe.refunds.create", "each": usd("30.00"), "uses": 1, "only": ["pi_usd"], "needs": {
-                    "get": { "cap": "net.http.get", "only": [s("/v1/payment_intents/*")] },
-                    "post": { "cap": "net.http.post", "only": [s("/v1/refunds")], "idempotency_key": true },
+                    "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s("/v1/payment_intents/*")] },
+                    "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s("/v1/refunds")], "idempotency_key": true },
                     "key": { "env": "STAAL_MCP_CRASH_KEY" },
                     "base": s("")
                 } } },
@@ -65,7 +65,7 @@ impl Case {
         };
         let doubt = json!({
             "name": "note", "description": "Send a note.", "program": "doubt.staal",
-            "grants": { "post": { "cap": "net.http.post", "only": [s("/hang")] } },
+            "grants": { "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s("/hang")] } },
             "net": { "connect_timeout_ms": 2000, "timeout_ms": 300 }
         });
         let manifest = write_manifest(&dir, json!({ "server": { "name": "shop" }, "tools": [tool("refund", true), tool("refund_any", false), doubt] }));

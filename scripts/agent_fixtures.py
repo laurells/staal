@@ -176,6 +176,15 @@ CASES = {
     "suggestion-other-currency": (setter(G + ["suggested", "max"], usd("100.00", "EUR")), True, "suggested in EUR"),
     "suggestion-currencies-differ": (setter(G + ["suggested"], {"max": usd("100.00"), "each": usd("10.00", "EUR")}), True, "different currencies"),
     "idempotency-on-library": (setter(G + ["idempotency_key"], True), True, "idempotency_key: only for"),
+    # Private addresses (RUNTIME.md section 12, "Addresses"), on a need that connects.
+    "valid-private-addresses": (setter(N + ["private_addresses"], ["10.1.0.0/16", "fd00::/8"]), True, None),
+    "valid-cloud-metadata": (setter(N + ["cloud_metadata"], True), True, None),
+    "private-addresses-host-bits": (setter(N + ["private_addresses"], ["10.1.0.1/16"]), True, "bits set past its prefix"),
+    "private-addresses-not-ip": (setter(N + ["private_addresses"], ["bank.internal"]), True, "not an IP address"),
+    "private-addresses-twice": (setter(N + ["private_addresses"], ["10.0.0.1", "10.0.0.1"]), False, "listed twice"),
+    "private-addresses-text": (setter(N + ["private_addresses"], "10.0.0.0/8"), False, "expected a list"),
+    "private-addresses-on-library": (setter(G + ["private_addresses"], ["10.0.0.0/8"]), True, "a library capability's addresses are its needs'"),
+    "cloud-metadata-not-bool": (setter(N + ["cloud_metadata"], "yes"), False, "expected true or false"),
     "uses-zero": (setter(G + ["suggested", "uses"], 0), False, "at least 1"),
 }
 

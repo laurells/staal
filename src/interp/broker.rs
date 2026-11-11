@@ -46,6 +46,10 @@ struct CapState {
     /// by an `Idempotency-Key` header, so one left in doubt may be retried. Set only by
     /// a grant, and inherited by every capability narrowed from it.
     idempotency_key: bool,
+    /// For capabilities that connect (`net.http.*`, `net.tcp.exchange`,
+    /// `net.tls.exchange`): the addresses they may reach. Set only by a grant, and
+    /// inherited by every capability narrowed from it.
+    addresses: std::sync::Arc<super::addresses::Policy>,
 }
 
 #[derive(Debug, Default)]
@@ -64,6 +68,7 @@ impl Broker {
             charged: Vec::new(),
             parent: None,
             idempotency_key: false,
+            addresses: Default::default(),
         });
         self.caps.len() - 1
     }
@@ -75,6 +80,18 @@ impl Broker {
         Ok(())
     }
 
+    /// Sets the addresses a granted capability may reach (see CapState).
+    pub fn set_addresses(&mut self, h: usize, p: super::addresses::Policy) -> Result<(), String> {
+        let c = self.caps.get_mut(h).ok_or("unknown capability handle")?;
+        c.addresses = std::sync::Arc::new(p);
+        Ok(())
+    }
+
+    /// The addresses capability `h` may reach.
+    pub fn addresses(&self, h: usize) -> Result<std::sync::Arc<super::addresses::Policy>, String> {
+        self.caps.get(h).map(|c| c.addresses.clone()).ok_or_else(|| "unknown capability handle".into())
+    }
+
     pub fn idempotency_key(&self, h: usize) -> Result<bool, String> {
         self.caps.get(h).map(|c| c.idempotency_key).ok_or_else(|| "unknown capability handle".into())
     }
@@ -83,8 +100,8 @@ impl Broker {
     /// every ancestor, so the child can never do more than they allow.
     pub fn narrow(&mut self, parent: usize, limits: Limits) -> Result<usize, String> {
         let p = self.caps.get(parent).ok_or("unknown capability handle")?;
-        let (path, idempotency_key) = (p.path.clone(), p.idempotency_key);
-        self.caps.push(CapState { path, limits, spent: 0, used: 0, charged: Vec::new(), parent: Some(parent), idempotency_key });
+        let (path, idempotency_key, addresses) = (p.path.clone(), p.idempotency_key, p.addresses.clone());
+        self.caps.push(CapState { path, limits, spent: 0, used: 0, charged: Vec::new(), parent: Some(parent), idempotency_key, addresses });
         Ok(self.caps.len() - 1)
     }
 

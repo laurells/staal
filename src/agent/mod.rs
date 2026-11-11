@@ -67,6 +67,9 @@ pub struct GrantNode {
     pub suggested: Suggested,
     pub reach: Option<Vec<String>>,
     pub idempotency_key: Option<bool>,
+    /// The private addresses (and cloud metadata services) a capability that connects
+    /// may reach, if agent.json declares any (RUNTIME.md section 12, "Addresses").
+    pub addresses: Option<crate::interp::addresses::Policy>,
     pub needs: BTreeMap<String, GrantNode>,
 }
 
@@ -189,7 +192,7 @@ fn suggested(v: &Json, at: &str) -> Result<Suggested, String> {
 
 fn grant_node(v: &Json, at: &str) -> Result<GrantNode, String> {
     let o = object(v, at)?;
-    keys(o, at, &[], &["suggested", "reach", "idempotency_key", "needs"])?;
+    keys(o, at, &[], &["suggested", "reach", "idempotency_key", "private_addresses", "cloud_metadata", "needs"])?;
     let mut needs = BTreeMap::new();
     if let Some(n) = o.get("needs") {
         for (k, x) in object(n, &format!("{at}.needs"))? {
@@ -206,6 +209,11 @@ fn grant_node(v: &Json, at: &str) -> Result<GrantNode, String> {
             None => None,
             Some(Json::Bool(b)) => Some(*b),
             Some(_) => return Err(format!("{at}.idempotency_key: expected true or false")),
+        },
+        addresses: if o.contains_key("private_addresses") || o.contains_key("cloud_metadata") {
+            Some(crate::interp::addresses::Policy::from_grant(o.get("private_addresses"), o.get("cloud_metadata"), at)?)
+        } else {
+            None
         },
         needs,
     })
@@ -491,6 +499,9 @@ fn check_node(prog: &Program, node: &GrantNode, cap: &str, limits: &CapLimits, a
         if !takes_reach(cap) && node.reach.is_some() {
             return Err(format!("{at}.reach: `{cap}` takes no target patterns"));
         }
+        if !crate::interp::connects(cap) && node.addresses.is_some() {
+            return Err(format!("{at}: `{cap}` connects to no address a program chooses, so it takes no private_addresses or cloud_metadata"));
+        }
         if !node.needs.is_empty() {
             return Err(format!("{at}.needs: `{cap}` has no needs"));
         }
@@ -511,6 +522,9 @@ fn check_node(prog: &Program, node: &GrantNode, cap: &str, limits: &CapLimits, a
         return Ok(());
     }
     // A library capability.
+    if node.addresses.is_some() {
+        return Err(format!("{at}: a library capability's addresses are its needs' (private_addresses and cloud_metadata go on each need)"));
+    }
     if node.reach.is_some() {
         return Err(format!("{at}.reach: a library capability's targets are suggested in \"suggested.only\""));
     }

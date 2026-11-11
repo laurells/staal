@@ -58,13 +58,13 @@ impl Case {
             "inputs": { "payment": "pi_usd", "amount": { "amount": "25.00", "currency": "USD" }, "phone": "+234 801 234 5678" },
             "grants": {
                 "refunds": { "cap": "stripe.refunds.create", "only": ["pi_usd"], "needs": {
-                    "get": { "cap": "net.http.get", "only": [s("/v1/payment_intents/*")] },
-                    "post": { "cap": "net.http.post", "only": [s("/v1/refunds")], "idempotency_key": true },
+                    "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s("/v1/payment_intents/*")] },
+                    "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s("/v1/refunds")], "idempotency_key": true },
                     "key": { "env": "STAAL_CRASH_LIB_KEY" },
                     "base": s("")
                 } },
                 "texts": { "cap": "termii.sms.send", "only": ["2348012345678"], "needs": {
-                    "http": { "cap": "net.http.post", "only": [s("/api/sms/send")] },
+                    "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s("/api/sms/send")] },
                     "key": { "env": "STAAL_CRASH_LIB_KEY" },
                     "base": s(""),
                     "sender": "Shop"

@@ -250,7 +250,12 @@ review before the format is frozen.
   must lie within the type's `only`, so a placeholder cannot be used where the program
   names the host *(chosen)*. A tool that takes `net.tcp.accept` or `net.tls.accept` is
   refused, since agent.json cannot give the `wait_ms` the tool host requires.
-  `idempotency_key` only where the runtime accepts it.
+  `idempotency_key` only where the runtime accepts it. `private_addresses` (a list of
+  IP addresses and `address/prefix` networks, each the network's first address, none
+  twice) and `cloud_metadata` (true or false) only on a capability that connects to
+  an address a program chooses (`net.http.*`, `net.tcp.exchange`, `net.tls.exchange`),
+  checked as the runtime checks a grant's (RUNTIME.md section 12, "Addresses"); a
+  library capability's go on each need *(chosen)*.
 - **Identity** *(chosen)*: `agent` is lowercase letters and digits in parts joined by
   single `-`, at most 64 characters. `publisher.id` is `github:` and a GitHub account
   name (1 to 39 letters, digits and single inner hyphens). `security_contact` is an
@@ -402,13 +407,16 @@ For the agent, and for each tool:
 - **Network reach, precisely**: a grant's `only` is checked against the canonical URL
   of every request; no redirect is followed (RUNTIME.md, HTTP); outgoing TLS is
   verified against the host name. Staal enforces the canonical host name and the TLS
-  boundary. It does not enforce where that name resolves: a request goes to whatever
-  address the machine's DNS gives, and DNS is part of the machine, which is trusted
-  (GUARANTEES.md section 2). A grant of `https://api.example.com/*` therefore does not
-  mean the service is on the public internet; on a machine whose DNS points that name
-  at an internal address, the request goes there. Host-based reach is not IP-level
-  network isolation; DNS integrity and network isolation are the deployment's
-  responsibility, and the install page says so beside every network grant.
+  boundary, and, for a capability that connects to an address a program chooses, the
+  address connected to (RUNTIME.md section 12, "Addresses"): a public one, or a
+  private address or network the grant declares in `private_addresses`; a cloud
+  metadata service only with `cloud_metadata: true`. The name is looked up once and
+  only checked addresses are connected to, so a name an attacker points at an internal
+  address is refused, not followed. Which public address a name resolves to is still
+  the machine's DNS, which is trusted (GUARANTEES.md section 2); through a proxy, where
+  a name leads is the proxy's to check. This is address checking, not network
+  isolation of the process: that is the deployment's, and the install page says so
+  beside every network grant.
 - **Unchecked parts**: whether a tool's entry takes a C function capability (`cap
   ffi`), directly or through a library's needs, so that a run can call C; and
   whether it can reach console input. C code a tool cannot be granted cannot run, so
@@ -436,9 +444,12 @@ For the agent, and for each tool:
   made again, and one recorded as not sent is a failure the program saw); `network`,
   for each runtime capability that leaves the machine, its declared `reach`, the `only`
   its type writes, and what is enforced: the canonical target of every request
-  (`checked`), no redirect followed, when TLS verifies the host (`tls`), and, always,
-  `dns_trusted: true` and `ip_isolation: false`, so a host-name reach is never shown as
-  network isolation; and `package_boundaries`, for each package of the project, its
+  (`checked`), no redirect followed, when TLS verifies the host (`tls`), `dns_trusted:
+  true` (a public address a name resolves to is the machine's DNS's answer), and
+  `addresses`: for a capability that connects to an address a program chooses, the
+  addresses checked when it connects (`public: true`, the `private` addresses and
+  networks agent.json declares on that grant, canonical, and `cloud_metadata`), null for
+  any other; and `package_boundaries`, for each package of the project, its
   declared authority and what the tool can hand it (`receives`: each grant, the
   package's function and parameter, and the limits that slot imposes), so the agent's
   own grant is never read as what a package can exercise.
@@ -805,7 +816,7 @@ possible within a host (`https://bank.example.com/*` for a declared
 | Runtime compatibility | Five things that must agree; compiler and runtime are one binary; the description recomputed and compared at install | 6, 9 |
 | C code | Only C a tool can be granted counts | 5 |
 | Deterministic description | RFC 8785 serialization, sorted lists, fingerprint inputs, byte comparison | 5 |
-| Network reach | No redirects followed; TLS verified against the host; DNS trusted as part of the machine | 5 |
+| Network reach | No redirects followed; TLS verified against the host; the address connected to checked (public, or private ones declared; cloud metadata only on request); which public address a name has is DNS's, trusted | 5 |
 | External expenditure with several actions or currencies | The host's reservation formula; currencies never added; unbounded stated | 5 |
 | Verified sandbox | Loopback only, fetch separate, no real credentials, resource limits, evidence written outside | 7 |
 | Revocation while offline | No remote switch, by design; `audit` on a schedule; install refuses revoked versions | 8 |

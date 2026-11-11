@@ -653,7 +653,7 @@ fn a_tcp_exchange_is_never_made_twice_whatever_the_crash() {
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = serde_json::json!({
             "entry": "ask", "inputs": { "address": addr, "word": "hello" },
-            "grants": { "conn": { "cap": "net.tcp.exchange", "only": ["127.0.0.1:*"] } },
+            "grants": { "conn": { "cap": "net.tcp.exchange", "private_addresses": ["127.0.0.1", "::1"], "only": ["127.0.0.1:*"] } },
             "model": { "provider": "script", "responses": [] },
         });
         std::fs::write(dir.join("cfg.json"), cfg.to_string()).unwrap();

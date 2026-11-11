@@ -181,11 +181,15 @@
       "name": "refund_order",
       "network": [
         {
+          "addresses": {
+            "cloud_metadata": false,
+            "private": [],
+            "public": true
+          },
           "cap": "net.http.post",
           "checked": "canonical_target",
           "dns_trusted": true,
           "grant": "pay.post",
-          "ip_isolation": false,
           "program_only": null,
           "reach": [
             "https://{{BANK}}/refunds"

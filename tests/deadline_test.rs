@@ -36,7 +36,7 @@ fn two_gets(s: &Server) -> String {
 }
 
 fn cfg(deadline_ms: u64) -> Json {
-    json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get" } },
+    json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } },
             "limits": { "deadline_ms": deadline_ms }, "net": { "timeout_ms": 5000 },
             "model": { "provider": "script", "responses": [] } })
 }

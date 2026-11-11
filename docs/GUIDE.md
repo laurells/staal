@@ -1033,6 +1033,12 @@ the journal. Libraries for real services are written on top of these (see
   encoded slashes) and paths are normalised before `only` is checked, so
   `/api/../admin` and `/api/%2e%2e/admin` cannot slip past `"https://x.org/api/*"`.
   Patterns must be canonical, and a `*` cannot sit in the host.
+- **Public addresses unless granted.** The address a request connects to is checked
+  after the name is looked up, once: a public address is reached; loopback, a private
+  network or any other non-public address only when the grant lists it, as
+  `"private_addresses": ["127.0.0.1", "10.20.0.0/16"]`; a cloud metadata service only
+  with `"cloud_metadata": true`. A name that leads somewhere it may not is refused like
+  the address itself.
 - **No surprises from HTTP.** Redirects are returned, never followed. Error
   statuses are responses. The runtime owns `Host`, `Content-Length`,
   `Idempotency-Key` and similar headers, and no header can smuggle in another.
@@ -1120,7 +1126,8 @@ fn ping(conn: cap net.tcp.exchange, address: Text) -> Text {
 ```
 
 One exchange connects to a `host:port` the grant's `only` allows (`"127.0.0.1:*"`,
-`"cache.internal:6379"`), sends the data, and reads the reply: to the end when the
+`"cache.internal:6379"`), at an address the grant may reach (a private one, such as
+those two, only when listed in its `"private_addresses"`), sends the data, and reads the reply: to the end when the
 peer closes, or to a delimiter given as the third argument. The reply is untrusted
 text. An exchange is never repeated after a crash: if it may have reached the peer,
 the run stops until an operator records the reply (`staalc resolve --reply`).

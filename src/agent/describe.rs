@@ -74,6 +74,10 @@ struct RuntimeGrant {
     program_only: Option<Vec<String>>,
     /// The `reach` agent.json declares, if any, placeholders kept.
     reach: Option<Vec<String>>,
+    /// The private addresses agent.json declares for it, in canonical text, and whether
+    /// it may reach cloud metadata services.
+    private: Vec<String>,
+    cloud_metadata: bool,
 }
 
 /// Every runtime capability among a tool's grants and their needs, from the program's
@@ -86,6 +90,8 @@ fn runtime_grants(prog: &Program, grant: &str, cap: &str, only: &Option<Vec<Stri
             idempotency_key: node.idempotency_key == Some(true),
             program_only: only.clone(),
             reach: node.reach.clone(),
+            private: node.addresses.iter().flat_map(|p| p.private.iter().map(|n| n.text())).collect(),
+            cloud_metadata: node.addresses.as_ref().is_some_and(|p| p.cloud_metadata),
         });
         return;
     }
@@ -99,6 +105,16 @@ fn runtime_grants(prog: &Program, grant: &str, cap: &str, only: &Option<Vec<Stri
 
 /// Whether requests through `cap` leave the machine: the network, and databases on
 /// other machines.
+/// The addresses a network grant reaches: for a capability that connects to addresses a
+/// program chooses, public ones and the private ones declared, checked when it
+/// connects; for any other (a listener, a database the operator configures), null.
+fn addresses(g: &RuntimeGrant) -> Json {
+    if !crate::interp::connects(&g.cap) {
+        return Json::Null;
+    }
+    json!({ "public": true, "private": g.private, "cloud_metadata": g.cloud_metadata })
+}
+
 fn networked(cap: &str) -> bool {
     cap.starts_with("net.") || cap.starts_with("db.postgres.")
 }
@@ -196,15 +212,17 @@ fn tool(def: &ToolDef, checked: &crate::Checked, authority: &BTreeMap<String, Js
         .collect();
     // What a network grant's reach means: the canonical target of every request is
     // checked against it (host, port, path and query; no redirect followed), TLS as
-    // `tls` says; where the host name resolves is the machine's DNS, trusted, so a
-    // reach is never IP-level isolation (AGENT_MANIFEST.md section 5, "Network reach").
+    // `tls` says; where a host name resolves is the machine's DNS, trusted for public
+    // addresses. For a capability that connects to addresses a program chooses, the
+    // address connected to is checked too: public ones, and the private ones declared
+    // (AGENT_MANIFEST.md section 5, "Network reach"; RUNTIME.md section 12, "Addresses").
     let network: Vec<Json> = runtime
         .iter()
         .filter(|g| networked(&g.cap))
         .map(|g| {
             json!({ "grant": g.grant, "cap": g.cap, "reach": g.reach, "program_only": g.program_only,
                     "checked": "canonical_target", "redirects_followed": false, "tls": tls(&g.cap),
-                    "dns_trusted": true, "ip_isolation": false })
+                    "dns_trusted": true, "addresses": addresses(g) })
         })
         .collect();
     // For each package of the project, its declared authority and what this tool can

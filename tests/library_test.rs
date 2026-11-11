@@ -65,7 +65,7 @@ fn patients(phones: &[&str]) -> Json {
 
 fn termii_needs(s: &Server) -> Json {
     json!({
-        "http": { "cap": "net.http.post", "only": [s.url("/api/sms/send")] },
+        "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/api/sms/send")] },
         "key": { "env": "STAAL_LIB_KEY" },
         "base": s.url(""),
         "sender": "Clinic"
@@ -186,7 +186,7 @@ fn go(p: cap once.ping.send) -> Int {
     let cfg = json!({
         "entry": "go",
         "grants": { "p": { "cap": "once.ping.send", "needs": {
-            "http": { "cap": "net.http.post", "uses": 5 }, "base": s.url("") } } },
+            "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "uses": 5 }, "base": s.url("") } } },
         "model": { "provider": "script", "responses": [] }
     });
     let r = run(&prog, &cfg);
@@ -219,7 +219,7 @@ fn an_action_that_makes_no_request_gets_no_receipt() {
     let prog = load(&dir.join("main.staal"));
     let cfg = json!({
         "entry": "go",
-        "grants": { "p": { "cap": "fake.sms.send", "needs": { "http": { "cap": "net.http.post" } } } },
+        "grants": { "p": { "cap": "fake.sms.send", "needs": { "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } } } },
         "model": { "provider": "script", "responses": [] }
     });
     let f = run(&prog, &cfg).result.unwrap_err();
@@ -251,8 +251,8 @@ fn refund_cfg(s: &Server, payment: &str, a: &str, b: &str, limits: Json) -> Json
     let mut g = limits;
     g["cap"] = json!("stripe.refunds.create");
     g["needs"] = json!({
-        "get": { "cap": "net.http.get", "only": [s.url("/v1/payment_intents/*")] },
-        "post": { "cap": "net.http.post", "only": [s.url("/v1/refunds")], "idempotency_key": true },
+        "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/v1/payment_intents/*")] },
+        "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/v1/refunds")], "idempotency_key": true },
         "key": { "env": "STAAL_LIB_KEY" },
         "base": s.url("")
     });
@@ -352,7 +352,7 @@ fn go(r: cap flaky.refunds.create(max: 15 USD)) -> Int {
     let cfg = json!({
         "entry": "go",
         "grants": { "r": { "cap": "flaky.refunds.create", "needs": {
-            "post": { "cap": "net.http.post" }, "base": s.url("") } } },
+            "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] }, "base": s.url("") } } },
         "model": { "provider": "script", "responses": [] }
     });
     let r = run(&prog, &cfg);
@@ -391,7 +391,7 @@ fn needs_are_checked_when_the_run_starts() {
     assert!(config_error(&prog, &cfg).contains("needs: missing"));
     // `needs` on a capability that is not a library's.
     let plain = staalc::check_program("fn f(h: cap net.http.get) -> Int {\n    return 1\n}").unwrap();
-    let cfg = json!({ "entry": "f", "grants": { "h": { "cap": "net.http.get", "needs": {} } },
+    let cfg = json!({ "entry": "f", "grants": { "h": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "needs": {} } },
                       "model": { "provider": "script", "responses": [] } });
     assert!(config_error(&plain, &cfg).contains("not a library capability"));
 }

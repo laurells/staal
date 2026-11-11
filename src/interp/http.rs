@@ -19,7 +19,18 @@
 // gets the 3xx response), HTTP error statuses are responses, not errors, and no
 // proxy is used unless the run config asks for one; then the proxy is the one
 // `proxy::of_setting` chose and the journal recorded, never one read again.
+//
+// Every address connected to is checked against the grant's address policy
+// (src/interp/addresses.rs) by the client's resolver, which looks a name up once and
+// gives the client only the addresses that pass: there is no second lookup to
+// answer differently. Each policy has a client of its own, so a connection kept open
+// is reused only by grants that may reach its address. Through a proxy, the proxy
+// looks a name up: a target that is an address is checked here first, and a name is
+// the proxy's to resolve. The proxy's own address is the operator's choice and is not
+// checked.
 
+use super::addresses::{Policy, Refused};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -74,10 +85,50 @@ pub enum Outcome {
 
 #[derive(Clone)]
 pub struct Client {
-    agent: ureq::Agent,
+    config: ureq::config::Config,
     max: u64,
     /// The proxy requests go through, if the run config asked for one.
     proxy: Option<ureq::Proxy>,
+    /// A client for each address policy a request has used, made when first needed;
+    /// shared by every copy of this one, as a client's connections are.
+    agents: Agents,
+}
+
+/// The client for each address policy: one list, shared.
+type Agents = Arc<Mutex<Vec<(Arc<Policy>, ureq::Agent)>>>;
+
+/// The resolver of one policy's client: the system's lookup, then the policy.
+#[derive(Debug)]
+struct Checked {
+    policy: Arc<Policy>,
+    /// The proxy's address, which is not checked.
+    proxy: Option<ureq::http::Uri>,
+}
+
+impl ureq::unversioned::resolver::Resolver for Checked {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        use ureq::unversioned::resolver::DefaultResolver;
+        if self.proxy.as_ref() == Some(uri) {
+            return DefaultResolver::default().resolve(uri, config, timeout);
+        }
+        let host = uri.host().unwrap_or("the host");
+        let not_sent = |why: String| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, Refused(why)));
+        // A lookup that fails, or finds nothing, certainly sent nothing.
+        let found = DefaultResolver::default()
+            .resolve(uri, config, timeout)
+            .map_err(|e| not_sent(format!("cannot look up {host}: {e}")))?;
+        let ok = self.policy.check(found.iter().copied()).map_err(|why| not_sent(format!("{host}: {why}")))?;
+        let mut out = self.empty();
+        for a in ok {
+            out.push(a);
+        }
+        Ok(out)
+    }
 }
 
 impl Client {
@@ -96,22 +147,35 @@ impl Client {
             .proxy(s.proxy.as_ref().map(|c| c.proxy.clone()))
             .user_agent(concat!("staalc/", env!("CARGO_PKG_VERSION")))
             .build();
-        Client { agent: ureq::Agent::new_with_config(config), max: s.max_response_bytes, proxy: s.proxy.as_ref().map(|c| c.proxy.clone()) }
+        Client { config, max: s.max_response_bytes, proxy: s.proxy.as_ref().map(|c| c.proxy.clone()), agents: Arc::new(Mutex::new(Vec::new())) }
     }
 
-    pub fn send(&self, r: &Request) -> Outcome {
-        let shown = r.target.as_str();
-        // Resolve the host first: a name that cannot be looked up is certain not to have
-        // received anything, and the client below reports that only as a general error.
-        // An address literal needs no lookup, and nor does a host reached through a
-        // proxy: the proxy looks it up, and this side may not be able to.
+    /// The client for requests under `policy`.
+    fn agent(&self, policy: &Arc<Policy>) -> ureq::Agent {
+        let mut agents = self.agents.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((_, a)) = agents.iter().find(|(p, _)| **p == **policy) {
+            return a.clone();
+        }
+        let resolver = Checked { policy: policy.clone(), proxy: self.proxy.as_ref().map(|p| p.uri().clone()) };
+        let a = ureq::Agent::with_parts(self.config.clone(), ureq::unversioned::transport::DefaultConnector::default(), resolver);
+        agents.push((policy.clone(), a.clone()));
+        a
+    }
+
+    pub fn send(&self, r: &Request, policy: &Arc<Policy>) -> Outcome {
+        // Through a proxy the proxy resolves the host, so this side checks only a target
+        // that is itself an address. Directly, the client's resolver checks what it finds.
         let proxied = self.proxy.as_ref().is_some_and(|p| !p.is_no_proxy(r.target.uri()));
-        if let (url::Host::Domain(d), false) = (r.target.host(), proxied) {
-            use std::net::ToSocketAddrs;
-            match (d.as_str(), r.target.port()).to_socket_addrs().map(|mut a| a.next().is_some()) {
-                Ok(true) => {}
-                Ok(false) => return Outcome::NotSent(format!("{shown} has no address")),
-                Err(e) => return Outcome::NotSent(format!("cannot look up the host of {shown}: {e}")),
+        if proxied {
+            let ip = match r.target.host() {
+                url::Host::Ipv4(a) => Some(std::net::IpAddr::V4(*a)),
+                url::Host::Ipv6(a) => Some(std::net::IpAddr::V6(*a)),
+                url::Host::Domain(_) => None,
+            };
+            if let Some(ip) = ip
+                && let Err(why) = policy.permits(ip)
+            {
+                return Outcome::NotSent(why);
             }
         }
         use ureq::http::Method;
@@ -129,11 +193,11 @@ impl Client {
         }
         let result = match r.method {
             "post" | "put" | "patch" => match builder.body(r.body.unwrap_or("")) {
-                Ok(req) => self.agent.run(req),
+                Ok(req) => self.agent(policy).run(req),
                 Err(e) => return Outcome::NotSent(format!("the request cannot be made: {e}")),
             },
             _ => match builder.body(()) {
-                Ok(req) => self.agent.run(req),
+                Ok(req) => self.agent(policy).run(req),
                 Err(e) => return Outcome::NotSent(format!("the request cannot be made: {e}")),
             },
         };
@@ -211,6 +275,12 @@ pub(super) fn classify(e: ureq::Error) -> Outcome {
     use ureq::Error as E;
     use ureq::Timeout as T;
     let text = e.to_string();
+    // An address the grant may not reach: refused before anything was sent, saying why.
+    if let E::Io(io) = &e
+        && let Some(r) = io.get_ref().and_then(|e| e.downcast_ref::<Refused>())
+    {
+        return Outcome::NotSent(r.0.clone());
+    }
     match e {
         E::HostNotFound
         | E::ConnectionFailed
@@ -283,6 +353,33 @@ pub fn check_header(name: &str, value: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// What the tests' local servers need: the loopback addresses, and no others.
+    fn local() -> std::sync::Arc<super::super::addresses::Policy> {
+        std::sync::Arc::new(
+            super::super::addresses::Policy::from_grant(Some(&serde_json::json!(["127.0.0.1", "::1"])), None, "test").unwrap(),
+        )
+    }
+
+    #[test]
+    fn an_address_the_grant_may_not_reach_is_not_sent_to() {
+        // A server that would answer, on an address the default policy refuses.
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let t = crate::targets::target(&format!("http://127.0.0.1:{}/", l.local_addr().unwrap().port())).unwrap();
+        let c = Client::new(&Settings::default());
+        match c.send(&Request { method: "get", target: &t, headers: &[], body: None }, &Default::default()) {
+            Outcome::NotSent(m) => assert!(m.contains("127.0.0.1") && m.contains("not a public address"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        // A name that resolves to it is refused the same way.
+        let t = crate::targets::target(&format!("http://localhost:{}/", l.local_addr().unwrap().port())).unwrap();
+        match c.send(&Request { method: "get", target: &t, headers: &[], body: None }, &Default::default()) {
+            Outcome::NotSent(m) => assert!(m.contains("localhost") && m.contains("not a public address"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        l.set_nonblocking(true).unwrap();
+        assert!(l.accept().is_err(), "nothing connected");
+    }
+
     #[test]
     fn extra_roots_are_added_to_mozillas_never_instead() {
         let mozilla = webpki_root_certs::TLS_SERVER_ROOT_CERTS.len();
@@ -313,7 +410,7 @@ mod tests {
         // `.invalid` never resolves (RFC 6761).
         let c = Client::new(&Settings::default());
         let t = crate::targets::target("https://no-such-host.invalid/x").unwrap();
-        match c.send(&Request { method: "post", target: &t, headers: &[], body: Some("x") }) {
+        match c.send(&Request { method: "post", target: &t, headers: &[], body: Some("x") }, &local()) {
             Outcome::NotSent(_) => {}
             other => panic!("expected NotSent, got {other:?}"),
         }
@@ -326,7 +423,7 @@ mod tests {
         let c = Client::new(&Settings::default());
         let url = format!("http://127.0.0.1:{port}/x");
         let t = crate::targets::target(&url).unwrap();
-        match c.send(&Request { method: "post", target: &t, headers: &[], body: Some("x") }) {
+        match c.send(&Request { method: "post", target: &t, headers: &[], body: Some("x") }, &local()) {
             Outcome::NotSent(_) => {}
             other => panic!("expected NotSent, got {other:?}"),
         }
@@ -417,7 +514,7 @@ mod tests {
         for (i, (given, host, path)) in cases.iter().enumerate() {
             let t = crate::targets::target(given).unwrap();
             assert_eq!(&authority(&t), host, "{given}");
-            match c.send(&Request { method: "get", target: &t, headers: &[], body: None }) {
+            match c.send(&Request { method: "get", target: &t, headers: &[], body: None }, &local()) {
                 Outcome::Response { status: 200, .. } => {}
                 other => panic!("{given}: {other:?}"),
             }
@@ -429,7 +526,7 @@ mod tests {
             let p6 = l6.local_addr().unwrap().port();
             let seen6 = recorder(l6);
             let t = crate::targets::target(&format!("http://[0:0:0:0:0:0:0:1]:{p6}/six")).unwrap();
-            assert!(matches!(c.send(&Request { method: "get", target: &t, headers: &[], body: None }), Outcome::Response { status: 200, .. }));
+            assert!(matches!(c.send(&Request { method: "get", target: &t, headers: &[], body: None }, &local()), Outcome::Response { status: 200, .. }));
             let got = seen6.lock().unwrap()[0].clone();
             assert_eq!((got.line.as_str(), got.host.as_str()), ("GET /six HTTP/1.1", format!("[::1]:{p6}").as_str()));
         }
@@ -450,7 +547,7 @@ mod tests {
         let ip = crate::targets::target(&format!("http://127.0.0.1:{port}/1")).unwrap();
         let name = crate::targets::target(&format!("http://localhost:{port}/2")).unwrap();
         for t in [&ip, &ip, &name, &ip] {
-            assert!(matches!(c.send(&Request { method: "get", target: t, headers: &[], body: None }), Outcome::Response { status: 200, .. }));
+            assert!(matches!(c.send(&Request { method: "get", target: t, headers: &[], body: None }, &local()), Outcome::Response { status: 200, .. }));
         }
         let got = seen.lock().unwrap().clone();
         assert_eq!(got.len(), 4);
@@ -506,7 +603,7 @@ mod tests {
         ];
         for (i, (given, dest)) in cases.iter().enumerate() {
             let t = crate::targets::target(given).unwrap();
-            match c.send(&Request { method: "post", target: &t, headers: &[], body: Some("x") }) {
+            match c.send(&Request { method: "post", target: &t, headers: &[], body: Some("x") }, &local()) {
                 Outcome::NotSent(_) => {}
                 other => panic!("{given}: a refused tunnel is not sent: {other:?}"),
             }

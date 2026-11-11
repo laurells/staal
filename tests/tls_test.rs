@@ -52,7 +52,7 @@ fn exchange(address: &str, roots: Option<&str>, until: bool) -> staalc::interp::
     let src = format!("fn f(conn: cap net.tls.exchange, address: Text) -> Text {{\n    let r = try {call}\n    if r.ok {{\n        return \"ok\"\n    }}\n    return r.error\n}}\n");
     let prog = staalc::check_program(&src).unwrap();
     let mut cfg = json!({ "entry": "f", "inputs": { "address": address },
-                          "grants": { "conn": { "cap": "net.tls.exchange", "only": ["localhost:*"] } },
+                          "grants": { "conn": { "cap": "net.tls.exchange", "private_addresses": ["127.0.0.1", "::1"], "only": ["localhost:*"] } },
                           "model": { "provider": "script", "responses": [] }, "net": { "timeout_ms": 3000 } });
     if let Some(r) = roots {
         cfg["net"]["extra_root_certificates"] = json!([r]);

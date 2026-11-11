@@ -170,8 +170,8 @@ fn each_outcome_becomes_the_result_the_design_says() {
     let stripe = json!({
         "name": "stripe_refund", "description": "Refund a payment through Stripe.", "program": "stripe_refund.staal",
         "grants": { "refunds": { "cap": "stripe.refunds.create", "each": usd("30.00"), "only": ["pi_usd"], "needs": {
-            "get": { "cap": "net.http.get", "only": [s.url("/v1/payment_intents/*")] },
-            "post": { "cap": "net.http.post", "only": [s.url("/v1/refunds")], "idempotency_key": true },
+            "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/v1/payment_intents/*")] },
+            "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/v1/refunds")], "idempotency_key": true },
             "key": { "env": "STAAL_MCP_TEST_KEY" },
             "base": s.url("")
         } } },
@@ -179,7 +179,7 @@ fn each_outcome_becomes_the_result_the_design_says() {
     });
     let doubt = json!({
         "name": "note", "description": "Send a note.", "program": "doubt.staal",
-        "grants": { "post": { "cap": "net.http.post", "only": [s.url("/hang")] } },
+        "grants": { "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/hang")] } },
         "net": { "connect_timeout_ms": 2000, "timeout_ms": 300 }
     });
     let big = json!({ "name": "big", "description": "A large result.", "program": "big.staal" });
@@ -286,7 +286,7 @@ fn once_makes_a_call_one_operation_however_often_it_is_sent() {
     write(&dir, "slow.staal", &slow_program(&s.url(""), 2));
     let slow = json!({
         "name": "slow", "description": "Slow.", "program": "slow.staal",
-        "grants": { "get": { "cap": "net.http.get", "only": [s.url("/slow")] } }, "net": net(),
+        "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/slow")] } }, "net": net(),
         "once": { "by": ["n"], "keep": "1h" }
     });
     let m = write_manifest(&dir, json!({ "server": { "name": "shop" }, "tools": [refund_tool(json!({ "once": { "by": ["order"] } })), slow] }));
@@ -330,7 +330,7 @@ fn concurrency_is_bounded_and_refused_calls_reserve_nothing() {
     write(&dir, "slow.staal", &slow_program(&s.url(""), 3));
     let slow = json!({
         "name": "slow", "description": "Slow.", "program": "slow.staal",
-        "grants": { "get": { "cap": "net.http.get", "only": [s.url("/slow")] } }, "net": net(),
+        "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/slow")] } }, "net": net(),
         "max_concurrent_runs": 2, "quota": { "window": "1h", "calls": 10 }
     });
     let m = write_manifest(&dir, json!({ "server": { "name": "shop", "max_concurrent_runs": 4 }, "tools": [slow] }));
@@ -404,7 +404,7 @@ fn a_stopped_run_is_told_to_the_operator_and_finishes_once_resolved() {
     std::fs::set_permissions(&notify, std::fs::Permissions::from_mode(0o755)).unwrap();
     let tool = json!({
         "name": "note", "description": "Send a note.", "program": "doubt.staal",
-        "grants": { "post": { "cap": "net.http.post", "only": [s.url("/hang")] } },
+        "grants": { "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/hang")] } },
         "net": { "connect_timeout_ms": 2000, "timeout_ms": 300 },
         "secrets": {}
     });
@@ -555,7 +555,7 @@ fn a_manifest_that_could_go_wrong_stops_the_server_before_it_answers() {
         }
     }
     refuse("timeouts", json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "get.staal",
-        "grants": { "get": { "cap": "net.http.get" } } }] }), "net.connect_timeout_ms: required");
+        "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } } }] }), "net.connect_timeout_ms: required");
     refuse("checks", json!({ "server": { "name": "s" }, "tools": [{ "name": "a", "description": "d", "program": "bad.staal" }] }), "check errors");
     refuse("unknown", json!({ "server": { "name": "s" }, "tools": [tool(json!({ "colour": 1 }))] }), "unknown key 'colour'");
     refuse("inputs", json!({ "server": { "name": "s" }, "tools": [tool(json!({ "inputs": {} }))] }), "inputs: not allowed");
@@ -620,10 +620,10 @@ fn annotations_never_claim_more_than_the_broker_enforces() {
     write(&dir, "refund.staal", REFUND);
     let tools = json!([
         { "name": "pure", "description": "d", "program": "pure.staal", "entry": "plus" },
-        { "name": "get", "description": "d", "program": "get.staal", "grants": { "get": { "cap": "net.http.get", "only": [s.url("/slow")] } }, "net": net() },
+        { "name": "get", "description": "d", "program": "get.staal", "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/slow")] } }, "net": net() },
         { "name": "read", "description": "d", "program": "read.staal", "grants": { "files": { "cap": "fs.read", "only": ["/tmp/*"] } } },
         { "name": "post", "description": "d", "program": "post.staal", "net": net(),
-          "grants": { "get": { "cap": "net.http.get" }, "post": { "cap": "net.http.post", "idempotency_key": true } } },
+          "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] }, "post": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"], "idempotency_key": true } } },
         refund_tool(json!({})),
         refund_tool(json!({ "name": "refund_once", "once": { "by": ["order"] } }))
     ]);
@@ -662,7 +662,7 @@ fn a_deadline_stops_a_run_before_its_next_action_on_both_engines() {
     write(&dir, "slow.staal", &slow_program(&s.url(""), 5));
     let tool = |name: &str, engine: &str| json!({
         "name": name, "description": "Slow.", "program": "slow.staal", "engine": engine, "deadline": "1s",
-        "grants": { "get": { "cap": "net.http.get", "only": [s.url("/slow")] } }, "net": net()
+        "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/slow")] } }, "net": net()
     });
     let mut tools = vec![tool("i", "interpreter")];
     if cfg!(feature = "native") {
@@ -690,7 +690,7 @@ fn a_call_cancelled_after_its_run_started_gets_no_answer_and_its_run_ends() {
     let dir = case_dir("cancel");
     write(&dir, "slow.staal", &slow_program(&s.url(""), 2));
     let m = write_manifest(&dir, json!({ "server": { "name": "s" }, "tools": [{ "name": "slow", "description": "Slow.", "program": "slow.staal",
-        "grants": { "get": { "cap": "net.http.get", "only": [s.url("/slow")] } }, "net": net() }] }));
+        "grants": { "get": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"], "only": [s.url("/slow")] } }, "net": net() }] }));
     let mut c = Mcp::start(&m, &[]);
     let mut params = json!({ "name": "slow", "arguments": { "n": 7 } });
     params["_meta"] = meta();

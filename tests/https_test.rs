@@ -34,7 +34,7 @@ fn post(server: &Server, roots: Option<&str>) -> RunResult {
         server.url("/ok")
     );
     let prog = staalc::check_program(&src).unwrap();
-    let mut cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
+    let mut cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } },
                           "model": { "provider": "script", "responses": [] } });
     if let Some(r) = roots {
         cfg["net"] = json!({ "extra_root_certificates": [r] });
@@ -114,7 +114,7 @@ fn root_certificate_files_are_checked() {
     let src = "fn f(http: cap net.http.get) -> Int {\n    return 1\n}";
     let prog = staalc::check_program(src).unwrap();
     let err = |roots: Json| -> String {
-        let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get" } },
+        let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.get", "private_addresses": ["127.0.0.1", "::1"] } },
                           "model": { "provider": "script", "responses": [] },
                           "net": { "extra_root_certificates": roots } });
         match run_config(&prog, &cfg) {
@@ -146,7 +146,7 @@ fn a_failed_handshake_is_never_in_doubt_even_without_try() {
         s.url("/ok")
     );
     let prog = staalc::check_program(&src).unwrap();
-    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
+    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } },
                       "model": { "provider": "script", "responses": [] } });
     let f = run_config(&prog, &cfg).unwrap().result.unwrap_err();
     assert_eq!(f.kind, FailKind::Action, "{}", f.message);
@@ -168,7 +168,7 @@ fn after_the_handshake_a_lost_answer_is_still_in_doubt() {
         s.url("/hang")
     );
     let prog = staalc::check_program(&src).unwrap();
-    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
+    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } },
                       "model": { "provider": "script", "responses": [] },
                       "net": { "extra_root_certificates": [roots], "timeout_ms": 500 } });
     let f = run_config(&prog, &cfg).unwrap().result.unwrap_err();
@@ -193,7 +193,7 @@ fn a_tls_error_after_the_request_was_sent_is_in_doubt() {
         s.url("/garbage")
     );
     let prog = staalc::check_program(&src).unwrap();
-    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post" } },
+    let cfg = json!({ "entry": "f", "grants": { "http": { "cap": "net.http.post", "private_addresses": ["127.0.0.1", "::1"] } },
                       "model": { "provider": "script", "responses": [] },
                       "net": { "extra_root_certificates": [roots], "timeout_ms": 2000 } });
     let f = run_config(&prog, &cfg).unwrap().result.unwrap_err();

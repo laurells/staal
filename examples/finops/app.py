@@ -85,7 +85,9 @@ class App:
 
     def _sms(self, phone):
         return {"cap": "sms.messages.send", "uses": 1, "only": [phone],
-                "needs": {"post": {"cap": "net.http.post", "only": [self.sms + "/messages"], "idempotency_key": True},
+                # The example's services run on this machine: their address is granted.
+                "needs": {"post": {"cap": "net.http.post", "only": [self.sms + "/messages"], "idempotency_key": True,
+                                   "private_addresses": ["127.0.0.1"]},
                           "base": self.sms}}
 
     def refund_grants(self, context):
@@ -95,7 +97,8 @@ class App:
             "book": {"cap": "db.sqlite.execute", "only": [self.database], "uses": 1, "idempotency_key": True},
             "pay": {"cap": "bank.payments.refund", "uses": 1, "only": c["payments"],
                     "each": {"amount": self.limits[c["tier"]], "currency": "USD"},
-                    "needs": {"post": {"cap": "net.http.post", "only": [self.bank + "/refunds"], "idempotency_key": True},
+                    "needs": {"post": {"cap": "net.http.post", "only": [self.bank + "/refunds"], "idempotency_key": True,
+                                       "private_addresses": ["127.0.0.1"]},
                               "base": self.bank}},
             "text": self._sms(c["phone"]),
         }
