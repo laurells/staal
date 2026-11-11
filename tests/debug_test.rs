@@ -169,9 +169,12 @@ fn same_session(program: &str, breaks: &[&str], go: &[&str]) {
     for g in go {
         input.push_str(&format!("locals\n{g}\n"));
     }
+    // Both given the program by the same path, so both name its files alike.
     let mut child = Command::new(BIN)
-        .args(["debug", program, "--config", "run.json"])
-        .current_dir(&dir)
+        .arg("debug")
+        .arg(dir.join(program))
+        .arg("--config")
+        .arg(dir.join("run.json"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -199,8 +202,7 @@ fn same_session(program: &str, breaks: &[&str], go: &[&str]) {
     let (mut stops, mut locals, mut answers) = (Vec::new(), Vec::new(), Vec::new());
     let mut commands = go.iter();
     let mut first = true;
-    loop {
-        let Event::Stopped(stop) = s.next().unwrap() else { break };
+    while let Event::Stopped(stop) = s.wait().unwrap() {
         let f = &stop.frames[0];
         let task = if stop.task.is_empty() { String::new() } else { format!(" (task {})", stop.task) };
         stops.push(format!("stopped at {}:{} in {}{task}", f.file, f.line, f.function));
@@ -215,7 +217,7 @@ fn same_session(program: &str, breaks: &[&str], go: &[&str]) {
             }
         }
         // The text form's input ends here: it shows nothing more.
-        let next = match commands.next().map(|c| *c) {
+        let next = match commands.next().copied() {
             Some("continue") => C::Continue,
             Some("step") => C::Step,
             Some("next") => C::Next,
@@ -255,13 +257,13 @@ fn a_session_takes_commands_only_while_stopped_and_quit_ends_the_run() {
     let config = serde_json::json!({ "entry": "main", "model": { "provider": "script", "responses": [] } });
     let mut s = Session::start(prog, files, config);
     assert!(s.command(C::Step).unwrap_err().contains("not stopped"), "before the first stop");
-    assert!(matches!(s.next().unwrap(), Event::Stopped(_)));
-    assert!(s.next().unwrap_err().contains("is stopped"));
+    assert!(matches!(s.wait().unwrap(), Event::Stopped(_)));
+    assert!(s.wait().unwrap_err().contains("is stopped"));
     assert_eq!(s.command(C::Break { file: Some("nowhere.staal".into()), line: 1 }), Err("no file named nowhere.staal in this program".into()));
-    assert_eq!(s.command(C::Delete { file: None, line: 16 }), Err("no breakpoint at main.staal:16".into()));
+    assert_eq!(s.command(C::Delete { file: None, line: 16 }), Err(format!("no breakpoint at {}:16", dir.join("main.staal").display())));
     s.command(C::Quit).unwrap();
-    let Event::Ended(Ok(r)) = s.next().unwrap() else { panic!("the run did not end") };
+    let Event::Ended(Ok(r)) = s.wait().unwrap() else { panic!("the run did not end") };
     assert_eq!(r.result.unwrap_err().message, staalc::interp::STOPPED_IN_DEBUGGER);
-    assert!(s.next().unwrap_err().contains("has ended"));
+    assert!(s.wait().unwrap_err().contains("has ended"));
     assert!(s.command(C::Continue).unwrap_err().contains("has ended"));
 }

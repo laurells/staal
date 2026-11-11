@@ -890,8 +890,15 @@ where no statement starts; FILE is a module's file or the end of its path),
 them), `finish` (to the next statement shallower than this one), `print NAME`
 (`p`, as JSON), `locals`, `where` (`bt`), `list`, `quit` (`q`) and `help`. A
 breakpoint stops once on entering its line, not again for each statement on it. A
-secret is shown by name only, as in the log. When the input ends the run goes on to
-its end; `quit` stops it (exit 1).
+secret is shown by its variable's name only (`{"secret": "STRIPE_KEY"}`), a
+capability as `"<capability>"`, and any secret value of the run that a text holds is
+removed. When the input ends the run goes on to its end; `quit` stops it (exit 1).
+
+A program embedding staalc drives the same session as data with
+`staalc::debug::Session`: each stop gives the calls that led to it, the line, the
+task and every variable as a typed value (`Shown`, with `describe` spelling out each
+kind), shown under the same rules. It takes commands only while the run is stopped,
+and dropping the session stops the run rather than letting it go on unobserved.
 
 ## In an editor: `staalc lsp`
 

@@ -44,6 +44,12 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   without a lock, so what it shows was written, not established as durable. It uses
   the same validation as `resume`, and `resolve` now shares its rules for which
   operations are open and who settles them, rather than each keeping its own.
+- `staalc::debug::Session`: `staalc debug`'s session as data, for programs that embed
+  staalc, such as Staal Studio. The run goes on a thread of its own and stops before
+  its first statement; commands (`Continue`, `Step`, `Next`, `Finish`, `Quit`,
+  `Break`, `Delete`) are taken only while it is stopped; each stop gives its frames,
+  line, task and every variable as a typed value (`Shown`). It and the text form
+  share where to stop and how a value is shown. Dropping a session stops its run.
 - C functions run contained by default (RUNTIME.md section 19, "Isolation"): each
   library in a worker process of its own, started fresh, with an empty environment
   and no inherited descriptors, under two seccomp filters. While the library loads,
@@ -114,6 +120,9 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Changed
 
+- `staalc debug` shows a capability as `"<capability>"` rather than its internal
+  handle number, and a secret as `{"secret": NAME}`, and removes any secret value of
+  the run from a text it shows. Other values are shown as before.
 - A test holds no authority by any route. A test config (`staalc test --config`)
   may hold only `model`, `adapters` and `limits`, and its model must be scripted:
   a test config naming a provider reached with a key (`anthropic`, or any other) is

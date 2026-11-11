@@ -503,7 +503,7 @@ impl DebugHook for Remote {
                 Command::Next => Mode::Next(depth),
                 Command::Finish => Mode::Finish(depth),
                 Command::Quit => return false,
-                Command::Break { file, line } | Command::Delete { file, line } => {
+                Command::Break { ref file, line } | Command::Delete { ref file, line } => {
                     let place = self.core.file(file.as_deref()).map(|f| (f, line));
                     let said = if matches!(c, Command::Break { .. }) {
                         place.and_then(|p| self.core.set_break(p))
@@ -548,7 +548,7 @@ impl Session {
 
     /// The next stop, or the end of the run; waits for it. While the run is stopped,
     /// it is that stop's place to answer commands, and this is refused.
-    pub fn next(&mut self) -> Result<Event, String> {
+    pub fn wait(&mut self) -> Result<Event, String> {
         if self.ended {
             return Err("the run has ended".into());
         }
@@ -574,7 +574,7 @@ impl Session {
     }
 
     /// Gives the stopped run a command. `Break` and `Delete` are answered, and the run
-    /// stays stopped; any other command lets it go on, and `next` gives what follows.
+    /// stays stopped; any other command lets it go on, and `wait` gives what follows.
     /// Refused unless the run is stopped.
     pub fn command(&mut self, c: Command) -> Result<String, String> {
         if self.ended {

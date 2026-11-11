@@ -32,10 +32,10 @@ fn a_session_shows_no_secret_value_and_no_capability() {
         "model": { "provider": "script", "responses": [{ "output": { "name": format!("leak {KEY} here") }, "output_tokens": 3 }] }
     });
     let mut s = Session::start(prog, files, config);
-    assert!(matches!(s.next().unwrap(), Event::Stopped(_)));
+    assert!(matches!(s.wait().unwrap(), Event::Stopped(_)));
     s.command(Command::Break { file: None, line: 5 }).unwrap();
     s.command(Command::Continue).unwrap();
-    let Event::Stopped(stop) = s.next().unwrap() else { panic!("no stop at line 5") };
+    let Event::Stopped(stop) = s.wait().unwrap() else { panic!("no stop at line 5") };
     assert_eq!((stop.frames[0].line, stop.source.as_str()), (5, "return 1"));
     let locals: std::collections::BTreeMap<&str, &Shown> = stop.locals.iter().map(|(n, v)| (n.as_str(), v)).collect();
     assert_eq!(locals["key"], &Shown::Secret { name: "STAAL_DEBUG_SESSION_TEST_KEY".into() });
@@ -50,6 +50,6 @@ fn a_session_shows_no_secret_value_and_no_capability() {
     let everything = format!("{stop:?} {}", stop.locals.iter().map(|(_, v)| format!("{} {}", v.to_json(), v.describe())).collect::<String>());
     assert!(!everything.contains(KEY), "{everything}");
     s.command(Command::Continue).unwrap();
-    let Event::Ended(Ok(r)) = s.next().unwrap() else { panic!("the run did not end") };
+    let Event::Ended(Ok(r)) = s.wait().unwrap() else { panic!("the run did not end") };
     assert_eq!(r.result.unwrap(), json!(1));
 }
