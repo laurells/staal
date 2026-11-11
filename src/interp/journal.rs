@@ -249,22 +249,9 @@ impl Journal {
         if recorded_end.is_some() {
             return Err("this run has already finished; nothing is in doubt".into());
         }
-        // Each stream whose last record leaves an operation open.
-        let mut open: Vec<(String, &Json)> = Vec::new();
-        for (t, recs) in &pending {
-            match recs.back().and_then(|r| r["j"].as_str()) {
-                Some("intent" | "attempt") => {
-                    let intent = recs.iter().rev().find(|r| r["j"] == "intent").ok_or("no operation is in doubt in this journal")?;
-                    open.push((t.clone(), intent));
-                }
-                Some("retry") => {
-                    let n = recs.back().and_then(|r| r["n"].as_u64()).unwrap_or_default();
-                    if operation.is_none_or(|o| o == op_id(t, n)) {
-                        return Err(format!("a retry is already authorized for operation {}; resume the run", op_id(t, n)));
-                    }
-                }
-                _ => {}
-            }
+        let (mut open, authorized) = open_operations(&pending);
+        if let Some(id) = authorized.iter().find(|id| operation.is_none_or(|o| o == id.as_str())) {
+            return Err(format!("a retry is already authorized for operation {id}; resume the run"));
         }
         let ids: Vec<String> = open.iter().map(|(t, r)| op_id(t, r["n"].as_u64().unwrap_or_default())).collect();
         let (task, intent) = match (operation, open.len()) {
@@ -278,22 +265,8 @@ impl Journal {
                 None => return Err(format!("operation {o} is not in doubt; in doubt: {}", ids.join(", "))),
             },
         };
-        if intent["op"] != "action" {
-            return Err(format!(
-                "operation {} in doubt is a {}, which resume retries by itself; nothing to resolve",
-                op_id(&task, intent["n"].as_u64().unwrap_or_default()),
-                intent["op"]
-            ));
-        }
+        operator_settles(&task, intent)?;
         let n = intent["n"].as_u64().unwrap_or_default(); // checked by check_body
-        // Actions always safe to make again: resume makes them again, and a result
-        // recorded here could not take the form the program reads.
-        if let Some(c @ ("fs.read" | "fs.write" | "db.sqlite.query" | "db.postgres.query" | "net.tcp.accept" | "net.tcp.reply" | "net.tls.accept"
-            | "net.tls.reply")) =
-            intent["body"]["capability"].as_str()
-        {
-            return Err(format!("operation {} in doubt is {c}, which resume makes again by itself; nothing to resolve", op_id(&task, n)));
-        }
         let what = format!(
             "{}.{}",
             intent["body"]["capability"].as_str().unwrap_or("?"),
@@ -585,6 +558,50 @@ fn open_existing(path: &Path) -> Result<(File, Held, Vec<Json>), String> {
 /// out, as resuming would cut it off; any other damage is an error. A file with no
 /// complete record gives an empty list.
 pub fn read_records(path: &Path) -> Result<Vec<Json>, String> {
+    read_complete(path).map(|(records, _, _)| records)
+}
+
+/// Each operation left open in `pending` (check_body's streams), in task order, as
+/// its task and its intent: a stream whose last record is an intent or an attempt.
+/// And each operation a retry is authorized for (its last record a `retry`), by id.
+fn open_operations(pending: &Streams) -> (Vec<(String, &Json)>, Vec<String>) {
+    let (mut open, mut authorized) = (Vec::new(), Vec::new());
+    for (t, recs) in pending {
+        match recs.back().and_then(|r| r["j"].as_str()) {
+            // check_body guarantees an open operation's intent is in its stream.
+            Some("intent" | "attempt") => {
+                if let Some(intent) = recs.iter().rev().find(|r| r["j"] == "intent") {
+                    open.push((t.clone(), intent));
+                }
+            }
+            Some("retry") => authorized.push(op_id(t, recs.back().and_then(|r| r["n"].as_u64()).unwrap_or_default())),
+            _ => {}
+        }
+    }
+    (open, authorized)
+}
+
+/// Whether an operator settles the open operation `intent` of `task` (`resolve`), or
+/// `resume` does by making it again, and then why: only an action can be in doubt to
+/// an operator, and some actions are always made again.
+fn operator_settles(task: &str, intent: &Json) -> Result<(), String> {
+    let n = intent["n"].as_u64().unwrap_or_default(); // checked by check_body
+    if intent["op"] != "action" {
+        return Err(format!("operation {} in doubt is a {}, which resume retries by itself; nothing to resolve", op_id(task, n), intent["op"]));
+    }
+    // Actions always safe to make again: resume makes them again, and a result
+    // recorded here could not take the form the program reads.
+    if let Some(c @ ("fs.read" | "fs.write" | "db.sqlite.query" | "db.postgres.query" | "net.tcp.accept" | "net.tcp.reply" | "net.tls.accept"
+        | "net.tls.reply")) = intent["body"]["capability"].as_str()
+    {
+        return Err(format!("operation {} in doubt is {c}, which resume makes again by itself; nothing to resolve", op_id(task, n)));
+    }
+    Ok(())
+}
+
+/// A journal's complete records, how many bytes they take, and how many bytes follow
+/// them: the start of a line whose write had not finished when it was read.
+fn read_complete(path: &Path) -> Result<(Vec<Json>, u64, u64), String> {
     let shown = path.display();
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read journal {shown}: {e}"))?;
     let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
@@ -597,7 +614,167 @@ pub fn read_records(path: &Path) -> Result<Vec<Json>, String> {
         }
         records.push(rec);
     }
-    Ok(records)
+    Ok((records, complete as u64, (bytes.len() - complete) as u64))
+}
+
+/// A journal read without changing it: what `resume` and `resolve` would make of it,
+/// from the same validation (`check_body`) and the same rules for what is open and who
+/// settles it. The file is read without a lock: what it holds is what its writer had
+/// written, not established as durable (a writer flushes each record before going
+/// on, but a reader can see a record before its flush returns).
+#[derive(Debug, Clone, PartialEq)]
+pub struct View {
+    pub run_id: String,
+    /// The start record, as written.
+    pub start: Json,
+    /// Who carried the run on: the start, then each resume, in order.
+    pub sessions: Vec<Session>,
+    /// Every operation, each task's in its order; the program's own (task "") first,
+    /// then each task's by name.
+    pub operations: Vec<Operation>,
+    /// The end record, once the run has ended.
+    pub end: Option<Json>,
+    /// What was read: complete records, their bytes, and the bytes after them.
+    pub read: Extent,
+}
+
+/// One session of a run: its start, or a resume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Session {
+    pub staalc: String,
+    pub engine: String,
+    /// When a resume began (milliseconds since 1970); None for the start, which records
+    /// no time.
+    pub at_ms: Option<u64>,
+}
+
+/// What a read covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Extent {
+    /// Complete records read, the start record included.
+    pub records: usize,
+    /// The bytes those records take: the length of the journal this view describes.
+    pub bytes: u64,
+    /// Bytes after the last complete record: a record being written, or one torn by a
+    /// crash, which `resume` would cut off. Not part of this view.
+    pub unfinished_bytes: u64,
+}
+
+/// One operation of a run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Operation {
+    /// Its id in messages and in `resolve --operation`: `n`, or `task:n`.
+    pub id: String,
+    /// "" for the program's own.
+    pub task: String,
+    pub n: u64,
+    /// "action", "model", "count", "print", "clock", "random" or "input".
+    pub op: String,
+    /// What its intent recorded.
+    pub body: Json,
+    /// The session (index into `View::sessions`) that recorded its intent.
+    pub session: usize,
+    /// Whether a later session replayed it: every session after the one that recorded
+    /// its result served that result instead of making the operation again.
+    pub replayed: bool,
+    pub state: OpState,
+}
+
+/// Where an operation stands.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OpState {
+    /// It has a result.
+    Done(Json),
+    /// It has a failure as its result.
+    Failed(String),
+    /// Its intent has no result: it may or may not have happened. `attempts` counts the
+    /// attempts operators authorized; `settle` says who settles it.
+    InDoubt { attempts: u64, settle: Settle },
+    /// An operator authorized one more attempt, which the next resume makes.
+    RetryAuthorized { attempts: u64 },
+}
+
+/// Who settles an operation in doubt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Settle {
+    /// An operator, with `staalc resolve`.
+    Operator,
+    /// `resume`, by making it again; why, as `resolve` would refuse it.
+    Resume(String),
+}
+
+/// Reads the journal at `path` as `resume` and `resolve` interpret it, changing
+/// nothing. A journal with no complete record, or one `resume` would refuse as corrupt
+/// or of another version, is an error with the message they would give.
+pub fn view(path: &Path) -> Result<View, String> {
+    let (records, bytes, unfinished_bytes) = read_complete(path)?;
+    let start = records.first().ok_or_else(|| format!("journal {} is empty: the run never started", path.display()))?;
+    if start["j"] != "start" {
+        return Err(format!("journal {}: first record is not a start record", path.display()));
+    }
+    check_version(start, path)?;
+    let run_id = start["run_id"].as_str().filter(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())).ok_or_else(|| format!("journal {}: start record has no valid run id", path.display()))?;
+    let (pending, end) = check_body(&records[1..], run_id, path)?;
+    let text = |r: &Json, k: &str| r[k].as_str().unwrap_or_default().to_string();
+    // Which session wrote each record (validated above): 0 for the start's, k for the
+    // k-th resume's.
+    let mut sessions = vec![Session { staalc: text(start, "staalc"), engine: text(start, "engine"), at_ms: None }];
+    let mut written: BTreeMap<(String, u64, &str), usize> = BTreeMap::new();
+    for rec in &records[1..] {
+        match rec["j"].as_str() {
+            Some("resume") => sessions.push(Session { staalc: text(rec, "staalc"), engine: text(rec, "engine"), at_ms: rec["at_ms"].as_u64() }),
+            Some(j @ ("intent" | "result")) => {
+                written.insert((text(rec, "t"), rec["n"].as_u64().unwrap_or_default(), j), sessions.len() - 1);
+            }
+            _ => {}
+        }
+    }
+    let last_session = sessions.len() - 1;
+    let (open, authorized) = open_operations(&pending);
+    let mut operations = Vec::new();
+    for (task, recs) in &pending {
+        for rec in recs {
+            let n = rec["n"].as_u64().unwrap_or_default();
+            match rec["j"].as_str() {
+                Some("intent") => {
+                    let id = op_id(task, n);
+                    let state = if authorized.contains(&id) {
+                        OpState::RetryAuthorized { attempts: 0 }
+                    } else if let Some((_, intent)) = open.iter().find(|(t, i)| t == task && i["n"] == n) {
+                        OpState::InDoubt { attempts: 0, settle: operator_settles(task, intent).map_or_else(Settle::Resume, |()| Settle::Operator) }
+                    } else {
+                        OpState::Failed(String::new()) // replaced by its result below
+                    };
+                    operations.push(Operation {
+                        id,
+                        task: task.clone(),
+                        n,
+                        op: text(rec, "op"),
+                        body: rec["body"].clone(),
+                        session: written.get(&(task.clone(), n, "intent")).copied().unwrap_or_default(),
+                        replayed: false,
+                        state,
+                    });
+                }
+                Some("attempt") => {
+                    if let Some(Operation { state: OpState::InDoubt { attempts, .. } | OpState::RetryAuthorized { attempts }, .. }) = operations.last_mut() {
+                        *attempts += 1;
+                    }
+                }
+                Some("result") => {
+                    if let Some(o) = operations.last_mut() {
+                        o.state = match (rec.get("ok"), rec.get("err")) {
+                            (Some(v), _) => OpState::Done(v.clone()),
+                            (_, e) => OpState::Failed(e.and_then(Json::as_str).unwrap_or_default().to_string()),
+                        };
+                        o.replayed = written.get(&(task.clone(), n, "result")).is_some_and(|s| *s < last_session);
+                    }
+                }
+                _ => {} // a retry: its operation's state is decided above
+            }
+        }
+    }
+    Ok(View { run_id: run_id.to_string(), start: start.clone(), sessions, operations, end, read: Extent { records: records.len(), bytes, unfinished_bytes } })
 }
 
 /// Whether a run could be resumed from the journal whose first record is `start`:
@@ -1346,4 +1523,122 @@ mod tests {
         assert_eq!(ba.config_sha256, sha256_hex(br#"{"entry":"main","inputs":{"a":2.5,"b":1}}"#));
         assert!(Binding::of("F", &json!({ "n": 9007199254740993u64 }), "interpreter", p).is_err());
     }
+
+    #[test]
+    fn a_view_shows_each_operation_who_carried_the_run_and_what_was_read() {
+        let p = tmp("view-basic");
+        let action = json!({ "capability": "payments.refund", "method": "refund", "amount": "10.00 USD", "target": "o1" });
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+        let Step::Perform { n, .. } = j.begin("", "model", json!({ "q": 1 })).unwrap() else { panic!() };
+        j.finish("", n, Ok(json!({ "a": 1 }))).unwrap();
+        let Step::Perform { n, .. } = j.begin("", "action", action.clone()).unwrap() else { panic!() };
+        j.finish("", n, Err("declined".into())).unwrap();
+        j.begin("", "action", action.clone()).unwrap();
+        drop(j); // crash: the second action is in doubt
+        // A resume replays the first two operations and finds the third in doubt.
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
+        assert!(matches!(r.begin("", "model", json!({ "q": 1 })).unwrap(), Step::Replay(_)));
+        drop(r);
+        let v = view(&p).unwrap();
+        assert_eq!(v.sessions.len(), 2);
+        assert_eq!((v.sessions[0].at_ms, v.sessions[1].at_ms.is_some()), (None, true));
+        let states: Vec<(&str, &OpState, usize, bool)> = v.operations.iter().map(|o| (o.id.as_str(), &o.state, o.session, o.replayed)).collect();
+        assert_eq!(
+            states,
+            vec![
+                ("1", &OpState::Done(json!({ "a": 1 })), 0, true),
+                ("2", &OpState::Failed("declined".into()), 0, true),
+                ("3", &OpState::InDoubt { attempts: 0, settle: Settle::Operator }, 0, false),
+            ]
+        );
+        assert_eq!(v.operations[2].body, action);
+        assert_eq!(v.end, None);
+        let len = std::fs::metadata(&p).unwrap().len();
+        // start, three intents, two results, the resume
+        assert_eq!(v.read, Extent { records: 7, bytes: len, unfinished_bytes: 0 });
+        // Settled and ended: nothing in doubt, nothing replayed after.
+        Journal::resolve(&p, Resolution::Performed { receipt: "R1".into() }, None).unwrap();
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
+        for (op, body) in [("model", json!({ "q": 1 })), ("action", action.clone()), ("action", action)] {
+            assert!(matches!(r.begin("", op, body).unwrap(), Step::Replay(_)));
+        }
+        r.end(json!({ "ok": true })).unwrap();
+        drop(r);
+        let v = view(&p).unwrap();
+        assert_eq!(v.sessions.len(), 3);
+        assert_eq!(v.operations[2].state, OpState::Done(json!({ "receipt": "R1" })));
+        // The operator's answer was recorded between sessions; the last session replayed it.
+        assert!(v.operations.iter().all(|o| o.replayed), "{:?}", v.operations);
+        assert_eq!(v.end, Some(json!({ "j": "end", "ok": true })));
+    }
+
+    /// For each operation of a journal with several tasks, the view says an operator
+    /// settles it exactly when `resolve` accepts it, and otherwise gives `resolve`'s
+    /// own reason.
+    #[test]
+    fn a_view_agrees_with_resolve_on_every_operation() {
+        let p = tmp("view-resolve");
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+        j.begin("a", "action", json!({ "capability": "email.send", "method": "send", "target": "x" })).unwrap();
+        j.begin("b", "action", json!({ "capability": "fs.write", "method": "write", "target": "/f" })).unwrap();
+        j.begin("c", "model", json!({ "q": 2 })).unwrap();
+        j.begin("d", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap();
+        let Step::Perform { n, .. } = j.begin("e", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap() else { panic!() };
+        j.finish("e", n, Ok(json!({ "receipt": "R" }))).unwrap();
+        drop(j);
+        Journal::resolve(&p, Resolution::Retry, Some("d:1")).unwrap();
+        let v = view(&p).unwrap();
+        assert_eq!(v.operations.iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), ["a:1", "b:1", "c:1", "d:1", "e:1"]);
+        for o in &v.operations {
+            let copy = tmp(&format!("view-resolve-{}", o.task));
+            std::fs::copy(&p, &copy).unwrap();
+            let got = Journal::resolve(&copy, Resolution::Failed { message: "m".into() }, Some(&o.id));
+            match &o.state {
+                OpState::InDoubt { settle: Settle::Operator, .. } => assert!(got.is_ok(), "{}: {got:?}", o.id),
+                OpState::InDoubt { settle: Settle::Resume(why), .. } => assert_eq!(got.unwrap_err(), *why, "{}", o.id),
+                OpState::RetryAuthorized { .. } => assert!(got.unwrap_err().contains("a retry is already authorized"), "{}", o.id),
+                OpState::Done(_) | OpState::Failed(_) => assert!(got.unwrap_err().contains("is not in doubt"), "{}", o.id),
+            }
+        }
+        let settles: Vec<_> = v.operations.iter().map(|o| matches!(o.state, OpState::InDoubt { settle: Settle::Operator, .. })).collect();
+        assert_eq!(settles, [true, false, false, false, false]);
+        // Done in the only session: nothing has replayed it.
+        assert_eq!(v.operations.iter().find(|o| o.id == "e:1").map(|o| (&o.state, o.replayed)), Some((&OpState::Done(json!({ "receipt": "R" })), false)));
+    }
+
+    #[test]
+    fn a_view_changes_nothing_reads_a_journal_another_holds_and_refuses_what_resume_refuses() {
+        let p = tmp("view-held");
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+        j.begin("", "model", json!({ "q": 1 })).unwrap();
+        // Held by a run: still read, without a lock.
+        let before = std::fs::read(&p).unwrap();
+        let v = view(&p).unwrap();
+        assert!(matches!(v.operations[0].state, OpState::InDoubt { settle: Settle::Resume(_), .. }));
+        // A line being written is not part of the view, and is left as it is.
+        use std::io::Write as _;
+        std::fs::OpenOptions::new().append(true).open(&p).unwrap().write_all(b"{\"j\":\"res").unwrap();
+        let v2 = view(&p).unwrap();
+        assert_eq!(v2.operations, v.operations);
+        let part = br#"{"j":"res"#.len();
+        assert_eq!((v2.read.bytes, v2.read.unfinished_bytes), (before.len() as u64, part as u64));
+        assert_eq!(std::fs::read(&p).unwrap().len(), before.len() + part);
+        drop(j);
+        // What resume refuses, the view refuses with the same message.
+        for (name, text) in [
+            ("view-corrupt", start_line("P", "C") + "{\"j\":\"result\",\"n\":1,\"ok\":1}\n"),
+            ("view-version", start_line("P", "C").replace(&format!("\"version\":{VERSION}"), "\"version\":2")),
+            ("view-not-start", "{\"j\":\"intent\"}\n".to_string()),
+        ] {
+            let q = tmp(name);
+            std::fs::write(&q, &text).unwrap();
+            let resumed = Journal::resume(&q, &bind("P", "C")).unwrap_err();
+            std::fs::write(&q, &text).unwrap();
+            assert_eq!(view(&q).unwrap_err(), resumed, "{name}");
+        }
+        let empty = tmp("view-empty");
+        std::fs::write(&empty, "").unwrap();
+        assert!(view(&empty).unwrap_err().contains("is empty"));
+    }
+
 }

@@ -35,6 +35,15 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   file when it has check errors or no tests) with its outcome and, for check errors,
   the diagnostics, and `files_under` for a folder. `staalc test` is built on it and
   prints what it returns.
+- `staalc::interp::journal::view`: a journal read without changing it, as `resume`
+  and `resolve` interpret it: each operation with its kind, what its intent recorded,
+  its result or failure, whether it is in doubt and whether an operator or `resume`
+  settles it (with `resolve`'s own reason), whether a later session replayed it, who
+  carried the run on (the start and each resume), and how much was read (complete
+  records, their bytes, and the bytes of a record not yet complete). It is read
+  without a lock, so what it shows was written, not established as durable. It uses
+  the same validation as `resume`, and `resolve` now shares its rules for which
+  operations are open and who settles them, rather than each keeping its own.
 - C functions run contained by default (RUNTIME.md section 19, "Isolation"): each
   library in a worker process of its own, started fresh, with an empty environment
   and no inherited descriptors, under two seccomp filters. While the library loads,
