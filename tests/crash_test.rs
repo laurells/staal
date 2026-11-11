@@ -708,7 +708,7 @@ fn served_whatever_the_crash(tls: bool) {
     use std::io::{Read, Write};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let kind = if tls { "tls" } else { "tcp" };
-    let addr = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let addr = common::ports::address();
     let answered = std::sync::Arc::new(AtomicUsize::new(0));
     // Over TLS: a test authority, the server's certificate and key in files, and a
     // client configuration trusting only that authority.

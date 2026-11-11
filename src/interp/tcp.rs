@@ -665,7 +665,7 @@ mod tests {
     #[test]
     fn what_is_known_is_reported_exactly() {
         // Nobody listening: certainly not sent.
-        let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+        let free = crate::test_ports::address();
         assert!(matches!(exchange(&free, b"x", None, &settings(2000), false, &local()), Outcome::NotSent(_)));
         assert!(matches!(exchange("no-such-host.invalid:80", b"x", None, &settings(2000), false, &local()), Outcome::NotSent(_)));
         // A peer that never answers: it may have acted on the data.
@@ -684,7 +684,7 @@ mod tests {
         // Ten clients already queued, each sending nothing, so each is dropped only when
         // its read passes net.timeout_ms (50 ms). Without the limit checked before every
         // attempt, the accept would drop all ten (500 ms or more) before it ended.
-        let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+        let free = crate::test_ports::address();
         let server = std::sync::Mutex::new(Server::default());
         listener(&server, &free, &None).unwrap();
         let clients: Vec<TcpStream> = (0..10).map(|_| TcpStream::connect(&free).unwrap()).collect();
@@ -838,7 +838,7 @@ mod tests {
             let (chain, key) = pki.leaf(None);
             let (c, k) = pki.files(&chain, &key, 0o600);
             let cfg = server_config(&c, &k, std::time::SystemTime::now()).unwrap();
-            let addr = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+            let addr = crate::test_ports::address();
             let server = std::sync::Mutex::new(Server::default());
             listener(&server, &addr, &Some(cfg.clone())).unwrap();
             (addr, Listen { wait: Some(Duration::from_secs(10)), on_bad_client: OnBadClient::Skip, tls: Some(cfg) }, server)
@@ -967,7 +967,7 @@ mod tests {
             let e = listener(&server, &addr, &Some(other)).unwrap_err();
             assert!(e.contains("another grant's certificate"), "{e}");
             assert!(listener(&server, &addr, &listen.tls).is_ok());
-            let plain = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+            let plain = crate::test_ports::address();
             listener(&server, &plain, &None).unwrap();
             let e = listener(&server, &plain, &listen.tls).unwrap_err();
             assert!(e.contains("already listened on with plain TCP"), "{e}");

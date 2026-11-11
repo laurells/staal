@@ -79,7 +79,7 @@ fn the_official_clients_sign_in_and_call_tools_over_http() {
         for mode in ["auto", "2026-07-28"] {
             let name = format!("sdk-http-{lang}-{mode}");
             let dir = case_dir(&name);
-            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let port = common::ports::port();
             let resource = format!("https://localhost:{port}/mcp");
             // What the authorization server answers: its metadata, its keys, and a token for
             // this server signed by its key.

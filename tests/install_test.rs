@@ -8,6 +8,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
+#[path = "../src/test_ports.rs"]
+#[allow(dead_code)] // address() is not needed here
+mod test_ports;
+
 const BIN: &str = env!("CARGO_BIN_EXE_staalc");
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const NAME: &str = "staalc-9.8.7-x86_64-unknown-linux-gnu";
@@ -45,7 +49,7 @@ fn release(dir: &Path, version: &str, good_hash: bool) {
 
 /// Serves `dir`/www over HTTP on a free port.
 fn serve(dir: &Path) -> Mirror {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = test_ports::port();
     let child = Command::new("python3")
         .args(["-m", "http.server", &port.to_string(), "--bind", "127.0.0.1", "--directory"])
         .arg(dir.join("www"))

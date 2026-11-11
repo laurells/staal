@@ -8,6 +8,8 @@ pub mod http;
 pub mod journal_fixtures;
 pub mod mcp;
 pub mod package_case;
+#[path = "../../src/test_ports.rs"]
+pub mod ports;
 pub mod postgres;
 pub mod server;
 pub mod tls;

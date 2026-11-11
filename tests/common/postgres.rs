@@ -90,7 +90,7 @@ impl Server {
             .output()
             .unwrap();
         assert!(o.status.success(), "initdb: {}", String::from_utf8_lossy(&o.stderr));
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = super::ports::port();
         let mut args = vec![
             "-D".to_string(),
             data.to_str().unwrap().to_string(),

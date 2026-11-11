@@ -418,8 +418,8 @@ mod tests {
 
     #[test]
     fn nothing_listening_means_not_sent() {
-        // Bind and close a port so nothing listens there.
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // A port no other test binds, so nothing listens there.
+        let port = crate::test_ports::port();
         let c = Client::new(&Settings::default());
         let url = format!("http://127.0.0.1:{port}/x");
         let t = crate::targets::target(&url).unwrap();

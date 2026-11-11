@@ -10,6 +10,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+#[path = "../src/test_ports.rs"]
+mod test_ports;
+
 const BIN: &str = env!("CARGO_BIN_EXE_staalc");
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -96,7 +99,7 @@ fn an_exchange_reaches_only_what_the_grant_allows() {
 
 #[test]
 fn nothing_listening_is_a_failure_the_program_can_catch() {
-    let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let free = test_ports::address();
     let dir = scratch("refused");
     let cfg = config(&dir, "try_ask", &free, "127.0.0.1:*");
     let (code, out, err) = staalc(&["run", PROGRAM, "--config", &cfg]);

@@ -195,7 +195,7 @@ fn uses_limits_count_requests() {
 
 #[test]
 fn nothing_listening_is_an_ordinary_failure() {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = common::ports::port();
     let src = format!(
         r#"fn f(http: cap net.http.post) -> Bool {{
     let r = try http.post("http://127.0.0.1:{port}/x", "x")

@@ -36,6 +36,8 @@ pub mod parser;
 pub mod pattern;
 pub mod semver;
 pub mod targets;
+#[cfg(test)]
+pub(crate) mod test_ports;
 
 use checker::Diagnostic;
 pub use modules::SourceFile;

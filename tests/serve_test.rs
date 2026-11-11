@@ -24,9 +24,9 @@ fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// A free local address (bound, then released for the program to bind).
+/// A local address no other test binds, for the program to bind.
 fn free_address() -> String {
-    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string()
+    common::ports::address()
 }
 
 /// A client sending `line` once the program listens, and reading the answer to EOF.

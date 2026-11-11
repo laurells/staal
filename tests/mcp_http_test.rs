@@ -36,7 +36,7 @@ const PRINCIPAL_KEY_VAR: &str = "MCP_TEST_PRINCIPAL_KEY";
 const PRINCIPAL_KEY: &str = "test-principal-key-of-at-least-32-bytes";
 
 fn free_address() -> String {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string()
+    common::ports::address()
 }
 
 /// A server over HTTP, stopped with SIGTERM when dropped.
