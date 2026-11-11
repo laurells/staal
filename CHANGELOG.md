@@ -27,6 +27,9 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   stops the worker, and the call fails saying so. A run whose C code is all contained
   is no longer marked unchecked, and a contained call cut short by a crash of the run
   is made again on resume, since nothing it did can have left its worker.
+- A C worker other than the running executable itself is started only from a path
+  no other user can change: its real path, with the file and every directory above
+  it owned by root or the run's user and writable by neither group nor others.
 - `isolation` on an `ffi.*` grant: `contained` (the default), `separate` (a worker
   with no limits: the run is unchecked) or `none` (the run's own process, as before).
 - `STAALC_FFI_WORKER`, and `staalc::interp::ffi_worker::use_executable`, name the

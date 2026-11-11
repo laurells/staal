@@ -228,14 +228,33 @@ fn executable() -> Result<PathBuf, String> {
     checked_file(me.with_file_name("staalc")).map_err(|e| format!("{e} (the staalc installed beside libstaalc; set {WORKER_VAR} to use another)"))
 }
 
-/// `exe`, if it is a regular file that only its owner can change.
+/// `exe` as the path to start, if no one but root and this process's user can change
+/// what it names: its real path (no symbolic link left in it), a regular file, and the
+/// file and every directory above it owned by root or this user and writable by
+/// neither group nor others. The worker is started by that path; since no other user
+/// can replace the file or any directory on the way to it, what was checked is what
+/// starts.
 fn checked_file(exe: PathBuf) -> Result<PathBuf, String> {
-    use std::os::unix::fs::PermissionsExt;
-    let meta = std::fs::metadata(&exe).map_err(|e| format!("cannot use {} as the C worker: {e}", exe.display()))?;
-    if !meta.is_file() || meta.permissions().mode() & 0o002 != 0 {
-        return Err(format!("{} is not a file only its owner can change, so it cannot be the C worker", exe.display()));
+    let real = std::fs::canonicalize(&exe).map_err(|e| format!("cannot use {} as the C worker: {e}", exe.display()))?;
+    let meta = std::fs::metadata(&real).map_err(|e| format!("cannot use {} as the C worker: {e}", real.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{} is not a regular file, so it cannot be the C worker", real.display()));
     }
-    Ok(exe)
+    // SAFETY: geteuid cannot fail.
+    let me = unsafe { libc::geteuid() };
+    let mut at = Some(real.as_path());
+    while let Some(p) = at {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(p).map_err(|e| format!("cannot use {} as the C worker: {}: {e}", real.display(), p.display()))?;
+        if m.uid() != 0 && m.uid() != me {
+            return Err(format!("{} cannot be the C worker: {} belongs to another user", real.display(), p.display()));
+        }
+        if m.mode() & 0o022 != 0 {
+            return Err(format!("{} cannot be the C worker: other users can change {}", real.display(), p.display()));
+        }
+        at = p.parent();
+    }
+    Ok(real)
 }
 
 #[cfg(target_os = "macos")]
@@ -474,21 +493,29 @@ fn close_from(low: u32) -> Result<(), String> {
             return Err(format!("cannot close the worker's descriptors: {e}"));
         }
     }
-    // Without close_range (Linux before 5.9, and macOS): every descriptor up to the
-    // process's limit.
+    close_each(low).map(|_| ())
+}
+
+/// Closes every descriptor from `low` below the process's limit on descriptors, which
+/// no open descriptor can reach: without close_range (Linux before 5.9, and macOS).
+/// Returns the limit. A limit too high to walk (above 2^20) is refused rather than
+/// partly walked, so no descriptor is ever left open.
+fn close_each(low: u32) -> Result<i32, String> {
     // SAFETY: getrlimit fills the struct given.
     let mut lim: libc::rlimit = unsafe { std::mem::zeroed() };
     // SAFETY: as above.
     if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
         return Err(format!("cannot read the worker's descriptor limit: {}", io::Error::last_os_error()));
     }
-    let high = if lim.rlim_cur == libc::RLIM_INFINITY { i32::MAX as u64 } else { lim.rlim_cur as u64 };
-    let high = high.min(1 << 20) as i32;
+    if lim.rlim_cur == libc::RLIM_INFINITY || lim.rlim_cur > 1 << 20 {
+        return Err(format!("the descriptor limit ({}) is too high to close every descriptor below it", lim.rlim_cur));
+    }
+    let high = lim.rlim_cur as i32;
     for fd in low as i32..high {
         // SAFETY: closing a descriptor number, open or not.
         unsafe { libc::close(fd) };
     }
-    Ok(())
+    Ok(high)
 }
 
 #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -523,8 +550,8 @@ mod lockdown {
 
     /// What loading a library adds: opening files to read (only to read: see
     /// `install`), reading their metadata (each of the calls glibc versions use for
-    /// it), reading and mapping them, closing descriptors, and installing the second
-    /// filter.
+    /// it), reading and mapping them, and closing descriptors. Installing the second
+    /// filter is allowed too, and nothing else of the two calls that takes (`install`).
     const LOAD: &[libc::c_long] = &[
         libc::SYS_close,
         libc::SYS_close_range,
@@ -534,8 +561,6 @@ mod lockdown {
         libc::SYS_faccessat,
         libc::SYS_lseek,
         libc::SYS_pread64,
-        libc::SYS_prctl,
-        libc::SYS_seccomp,
     ];
 
     fn install(names: &[&[libc::c_long]], read_only_open: bool) -> Result<(), String> {
@@ -561,6 +586,23 @@ mod lockdown {
                 asks.push(SeccompRule::new(vec![c]).map_err(|e| format!("cannot build the worker's filter: {e}"))?);
             }
             rules.insert(libc::SYS_fcntl, asks);
+            // Installing the second filter, exactly as `computing` does: prctl only to
+            // set no_new_privs, and seccomp only to add a filter to every thread. Nothing
+            // else either call can do (a process another may trace, a listener for the
+            // filter's notifications, a filter on one thread only) is allowed.
+            let c = |arg: u8, v: u64| SeccompCondition::new(arg, SeccompCmpArgLen::Qword, SeccompCmpOp::Eq, v).map_err(|e| format!("cannot build the worker's filter: {e}"));
+            rules.insert(
+                libc::SYS_prctl,
+                vec![SeccompRule::new(vec![c(0, libc::PR_SET_NO_NEW_PRIVS as u64)?, c(1, 1)?]).map_err(|e| format!("cannot build the worker's filter: {e}"))?],
+            );
+            rules.insert(
+                libc::SYS_seccomp,
+                vec![SeccompRule::new(vec![
+                    c(0, libc::SECCOMP_SET_MODE_FILTER as u64)?,
+                    c(1, libc::SECCOMP_FILTER_FLAG_TSYNC)?,
+                ])
+                .map_err(|e| format!("cannot build the worker's filter: {e}"))?],
+            );
         }
         // A signal only to this process itself (abort raises SIGABRT this way), so a C
         // function that aborts is reported as crashed, and no other process is reached.
@@ -595,3 +637,85 @@ mod lockdown {
         Err("C code can be contained only on Linux (x86_64 and aarch64)".into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A directory for these tests in this user's home, which only this user (and root)
+    /// can change on the way to it: neither /tmp nor a checkout in another user's
+    /// directory would be.
+    fn private_dir(name: &str) -> PathBuf {
+        let d = PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".staal-test").join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_worker_is_a_file_no_other_user_can_change_on_its_way() {
+        let d = private_dir("secure-path");
+        let exe = d.join("staalc");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(checked_file(exe.clone()).unwrap(), std::fs::canonicalize(&exe).unwrap());
+        // A link is followed to the real file, which is what is checked and started.
+        let link = d.join("link");
+        std::os::unix::fs::symlink(&exe, &link).unwrap();
+        assert_eq!(checked_file(link).unwrap(), std::fs::canonicalize(&exe).unwrap());
+        // The file writable by its group, or by anyone.
+        for mode in [0o775, 0o757] {
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(checked_file(exe.clone()).unwrap_err().contains("other users can change"), "{mode:o}");
+        }
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A directory on the way that others can change: its entries could be swapped.
+        let open = d.join("open");
+        std::fs::create_dir(&open).unwrap();
+        let inner = open.join("staalc");
+        std::fs::copy(&exe, &inner).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let e = checked_file(inner.clone()).unwrap_err();
+        assert!(e.contains("other users can change") && e.contains("open"), "{e}");
+        // A directory, and a file that is not there.
+        assert!(checked_file(d.clone()).unwrap_err().contains("not a regular file"));
+        assert!(checked_file(d.join("absent")).unwrap_err().contains("cannot use"));
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// The variable that makes a run of this test the child that checks closing.
+    const CHILD: &str = "STAAL_TEST_CLOSE_EACH_CHILD";
+
+    #[test]
+    fn closing_every_descriptor_without_close_range() {
+        if std::env::var_os(CHILD).is_some() {
+            // The child: open descriptors, close every one from 3 up the way kernels
+            // before close_range are served, and check none is left open.
+            let files: Vec<std::fs::File> = (0..5).map(|_| std::fs::File::open(env!("CARGO_MANIFEST_DIR")).unwrap()).collect();
+            let fds: Vec<i32> = files.iter().map(|f| f.as_raw_fd()).collect();
+            std::mem::forget(files);
+            let code = match close_each(3) {
+                Ok(high) => {
+                    let open = (3..high)
+                        // SAFETY: asking whether a descriptor number is open.
+                        .filter(|fd| unsafe { libc::fcntl(*fd, libc::F_GETFD) } != -1)
+                        .count();
+                    if fds.iter().all(|fd| *fd < high) && open == 0 { 0 } else { 1 }
+                }
+                Err(_) => 2,
+            };
+            // SAFETY: ending the child here, before the test harness touches anything it closed.
+            unsafe { libc::_exit(code) };
+        }
+        // The parent: run this test alone, as the child, in a process of its own.
+        let o = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "interp::ffi_worker::tests::closing_every_descriptor_without_close_range", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+}
+

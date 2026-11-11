@@ -30,7 +30,11 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 # HTTP client for `net.http`, TLS through rustls with the ring provider and the
 # Mozilla root certificates (webpki-roots). No compression, cookies or proxies.
-ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
+# Exact: the address checks (src/interp/http.rs) use its `unversioned` resolver
+# interface, which any release may change, and rely on it resolving every address it
+# connects to directly; a new version is taken only after reading that it still does,
+# and the address tests (tests/addresses_test.rs, http.rs's own) passing.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 url = "2.5.8"
 # The TLS library ureq uses, named directly to recognise handshake errors
 # (src/interp/http.rs) and for `net.tls` (src/interp/tcp.rs); the same version and

@@ -59,6 +59,22 @@ fn grant_as(f: &str, isolation: &str) -> Json {
     g
 }
 
+/// The staalc these tests run, copied to where no other user can change it on its way
+/// (this user's home): a worker is started only from such a place, and the checkout
+/// may not be one.
+fn private_worker() -> PathBuf {
+    static COPIED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    COPIED
+        .get_or_init(|| {
+            let d = PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".staal-test").join("ffi-worker");
+            std::fs::create_dir_all(&d).unwrap();
+            let exe = d.join("staalc");
+            std::fs::copy(BIN, &exe).unwrap();
+            exe
+        })
+        .clone()
+}
+
 /// Every isolation this machine can run C code with.
 fn isolations() -> Vec<&'static str> {
     if staalc::interp::ffi::can_contain() { vec!["contained", "separate", "none"] } else { vec!["separate", "none"] }
@@ -139,7 +155,7 @@ fn a_run_is_unchecked_unless_its_c_is_contained() {
         let prog = checked.result.unwrap();
         // The library API and the C interface, in this process: their worker is the
         // staalc these tests run.
-        staalc::interp::ffi_worker::use_executable(PathBuf::from(BIN));
+        staalc::interp::ffi_worker::use_executable(private_worker());
         let r = staalc::interp::run_config(&prog, &cfg_json).unwrap();
         let prog_c = std::ffi::CString::new(Path::new(ROOT).join(PROGRAM).to_str().unwrap()).unwrap();
         let cfg_c = std::ffi::CString::new(cfg_json.to_string()).unwrap();
@@ -521,34 +537,41 @@ fn a_worker_that_breaks_its_channel_is_ended() {
 }
 
 #[test]
-fn a_contained_librarys_initialiser_cannot_write() {
+fn a_contained_librarys_initialiser_can_do_nothing_but_load() {
     if !where_contained() {
         return;
     }
     let dir = scratch("initialiser");
     let mark = dir.join("initialiser.txt");
-    let lib = dir.join("libhostile.so");
-    let o = Command::new("cc")
-        .args(["-shared", "-fPIC", "-O1", &format!("-DMARK=\"{}\"", mark.display()), "-o"])
-        .arg(&lib)
-        .arg(Path::new(ROOT).join("tests/ffi/hostile_init.c"))
-        .output()
-        .unwrap();
-    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let sha = staalc::packages::sha256_hex(&std::fs::read(&lib).unwrap());
     let src = dir.join("init.staal");
     std::fs::write(&src, "foreign ffi.hostile {\n    fn initialiser_wrote() -> i64\n}\n\nfn main(h: cap ffi.hostile.initialiser_wrote) -> Int {\n    return h.initialiser_wrote()\n}\n").unwrap();
-    let run = |isolation: &str| {
-        let g = json!({ "cap": "ffi.hostile.initialiser_wrote", "library": lib.to_str().unwrap(), "sha256": sha, "isolation": isolation });
-        let cfg = config(&dir, "main", json!({ "h": g }), json!({}));
-        staalc(&["run", src.to_str().unwrap(), "--config", &cfg], None)
-    };
-    let (code, _, err) = run("contained");
-    assert_eq!(code, Some(2), "loading fails: {err}");
-    assert!(err.contains(STOPPED), "{err}");
-    assert!(!mark.exists(), "a contained library's initialiser wrote a file");
-    // Loaded in this process, the initialiser has the process's authority.
-    let (code, out, err) = run("none");
-    assert_eq!((code, out.as_str()), (Some(0), "1"), "{err}");
-    assert!(mark.exists());
+    // Each attempt in an initialiser of its own: creating a file; prctl for anything but
+    // the worker's own setup; a seccomp filter installed otherwise than the worker does.
+    for (what, define) in [("write", format!("-DMARK=\"{}\"", mark.display())), ("prctl", "-DPRCTL".to_string()), ("seccomp", "-DSECCOMP".to_string())] {
+        let lib = dir.join(format!("libhostile-{what}.so"));
+        let o = Command::new("cc")
+            .args(["-shared", "-fPIC", "-O1", &define, "-o"])
+            .arg(&lib)
+            .arg(Path::new(ROOT).join("tests/ffi/hostile_init.c"))
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{what}: {}", String::from_utf8_lossy(&o.stderr));
+        let sha = staalc::packages::sha256_hex(&std::fs::read(&lib).unwrap());
+        let run = |isolation: &str| {
+            let g = json!({ "cap": "ffi.hostile.initialiser_wrote", "library": lib.to_str().unwrap(), "sha256": sha, "isolation": isolation });
+            let cfg = config(&dir, "main", json!({ "h": g }), json!({}));
+            staalc(&["run", src.to_str().unwrap(), "--config", &cfg], None)
+        };
+        let (code, _, err) = run("contained");
+        assert_eq!(code, Some(2), "{what}: loading fails: {err}");
+        assert!(err.contains(STOPPED), "{what}: {err}");
+        // Loaded in this process, the initialiser has the process's authority.
+        let (code, out, err) = run("none");
+        assert_eq!(code, Some(0), "{what}: {err}");
+        if what == "write" {
+            assert_eq!(out, "1");
+        }
+    }
+    // The contained attempt to write left nothing; the one in this process did.
+    assert_eq!(std::fs::read_to_string(&mark).unwrap(), "an initialiser wrote this\n");
 }

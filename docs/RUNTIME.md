@@ -2012,8 +2012,11 @@ then installs two seccomp filters, and anything either does not allow ends it at
 
 1. Before the library is loaded, so that its initialisers run under it: files may be
    opened only for reading (never created or truncated), read, mapped and closed,
-   and their metadata read. No socket, no new process or program, no signal to
-   another process, no file written, renamed or removed.
+   and their metadata read; and the second filter installed, exactly as the worker
+   installs it (`prctl` only to set no_new_privs, `seccomp` only to add a filter to
+   every thread). No socket, no new process or program, no signal to another
+   process, no file written, renamed or removed, and nothing else of `prctl` or
+   `seccomp`, such as letting another process trace the worker.
 2. After loading: computing only. Reading and writing the socket, allocating and
    freeing memory, futexes, the clock, sleeping and yielding, a signal to itself
    (abort), and exiting. Nothing can be opened at all.
@@ -2037,7 +2040,11 @@ The worker is the `staalc` a program embedding the runtime names (Rust:
 variable `STAALC_FFI_WORKER` names (an absolute path); otherwise `staalc`, and an
 executable `staalc build` made, run themselves as the worker, and libstaalc loaded by
 another program (the Python package) runs the `staalc` installed beside it. Its
-version must be this one. The Node.js package installs no `staalc`: set
+version must be this one. Except for the executable a process runs as itself, it is
+started by its real path, and only if no one but root and the run's user can change
+it on the way: the file and every directory above it must be owned by one of them and
+writable by neither group nor others. A worker in `/tmp`, or in a directory another
+user owns, is refused, saying which directory. The Node.js package installs no `staalc`: set
 `STAALC_FFI_WORKER` to one of this version to call C from it.
 
 No time limit applies to a call yet: a C function that never returns holds its run,
