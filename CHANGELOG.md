@@ -23,6 +23,13 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   prints (an entry's inputs, result, grants and secrets as JSON Schemas, and the code
   that consumes each grant), for programs that embed staalc, such as Staal Studio. It
   was `staalc::cli::schema_of`, unchanged.
+- `staalc::interp::fsx::Root`: the traversal every `fs` path goes through, from a
+  directory the caller opened rather than from `/`. `read`, `write` and `list` beneath
+  it open one directory at a time from that handle, follow no link, and refuse an
+  absolute path or one with an empty, `.` or `..` part, so nothing they open lies
+  outside that directory, even when the directory is moved and a link put in its
+  place. `list` reports links as links, without following them. For programs that
+  embed staalc and must stay inside a folder, such as Staal Studio.
 - C functions run contained by default (RUNTIME.md section 19, "Isolation"): each
   library in a worker process of its own, started fresh, with an empty environment
   and no inherited descriptors, under two seccomp filters. While the library loads,
