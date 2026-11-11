@@ -53,6 +53,12 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   holds is waited for up to two seconds before the journal is refused (RUNTIME.md
   section 11). This caused a CI failure of `packages_test` on 2026-11-11, and is the
   likely cause of its earlier intermittent one, whose message was not kept.
+- Tests no longer find a local port by binding port 0 and closing the socket before
+  the code under test binds it: the kernel could hand that port to another test
+  meanwhile, and the code could then not listen ("Address already in use", seen on
+  macOS on 2026-11-11). Tests now take ports from 20000 to 29999, which neither Linux
+  nor macOS hands out for port 0, each given once and locked for the life of the test
+  process.
 
 ### Changed
 
