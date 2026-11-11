@@ -13,8 +13,10 @@ Prints each attack, what the runtime answered, and what the services recorded;
 exits non-zero if any guarantee did not hold.
 """
 
+import collections
 import json
 import os
+import re
 import shutil
 import signal
 import sqlite3
@@ -182,7 +184,12 @@ threads = [threading.Thread(target=lambda i=i: results.append(s.app.refund({"ord
 [t.start() for t in threads]
 [t.join() for t in threads]
 done = sum(r.status == "done" for r in results)
-print(f"   {done} done, {30 - done} refused: {next((r.text for r in results if r.status != 'done'), '')[:110]}...")
+print(f"   {done} done, {30 - done} not, the bank refunded {s.bank.total_cents()} cents")
+# Every reason a call was not done, with how many had it, so a count that is off says
+# why. Times are masked, so one reason given at different moments is counted once.
+reasons = collections.Counter((r.status, re.sub(r"\d{4}-\d\d-\d\dT[\d:.]+Z", "<time>", r.text)[:110]) for r in results if r.status != "done")
+for (status, text), n in sorted(reasons.items()):
+    print(f"   {n} {status}: {text}...")
 holds(done == 20 and s.bank.total_cents() == 20000, "the bank refunded 20 x 10.00 = 200.00 USD, within both limits")
 s.close()
 

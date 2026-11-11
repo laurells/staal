@@ -30,9 +30,12 @@ struct Taken {
     next: Option<u16>,
     /// The lock files of the ports given, held until the process ends.
     held: Vec<File>,
+    /// Each port passed over because something was bound to it, and what: kept so a
+    /// test that fails can say why a port was not given.
+    skipped: Vec<(u16, String)>,
 }
 
-static TAKEN: Mutex<Taken> = Mutex::new(Taken { next: Some(FIRST), held: Vec::new() });
+static TAKEN: Mutex<Taken> = Mutex::new(Taken { next: Some(FIRST), held: Vec::new(), skipped: Vec::new() });
 
 /// A port on 127.0.0.1 that no other test takes, nothing bound to it when taken.
 pub fn port() -> u16 {
@@ -92,12 +95,15 @@ fn take(dir: &Path, taken: &mut Taken, skip: &[Range]) -> u16 {
             Err(TryLockError::WouldBlock) => continue,
             Err(TryLockError::Error(e)) => panic!("{}: {e}", path.display()),
         }
-        if unbound(p) {
-            taken.held.push(file);
-            return p;
+        match bound(p) {
+            None => {
+                taken.held.push(file);
+                return p;
+            }
+            Some(why) => taken.skipped.push((p, why)),
         }
     }
-    panic!("no test port free from {FIRST}, outside {skip:?}");
+    panic!("no test port free from {FIRST}, outside {skip:?}; bound: {:?}", taken.skipped);
 }
 
 /// `127.0.0.1:` and a port from [`port`].
@@ -105,17 +111,20 @@ pub fn address() -> String {
     format!("127.0.0.1:{}", port())
 }
 
-/// Whether nothing is bound to `p`: on 127.0.0.1, on every IPv4 address, and on ::1
-/// and every IPv6 address where this machine has IPv6 (some servers under test bind
-/// both loopback addresses).
-fn unbound(p: u16) -> bool {
-    if TcpListener::bind(("127.0.0.1", p)).is_err() || TcpListener::bind(("0.0.0.0", p)).is_err() {
-        return false;
+/// What is bound to `p`, if anything: checked on 127.0.0.1, on every IPv4 address,
+/// and on ::1 and every IPv6 address where this machine has IPv6 (some servers under
+/// test bind both loopback addresses). Each check's socket is closed before the next.
+fn bound(p: u16) -> Option<String> {
+    for host in ["127.0.0.1", "0.0.0.0", "::1", "::"] {
+        let ipv6 = host.contains(':');
+        match TcpListener::bind((host, p)) {
+            Ok(listener) => drop(listener),
+            // No IPv6 on this machine: nothing can be bound there.
+            Err(e) if ipv6 && e.kind() != ErrorKind::AddrInUse => {}
+            Err(e) => return Some(format!("{host}: {e}")),
+        }
     }
-    [("::1", p), ("::", p)].iter().all(|a| match TcpListener::bind(a) {
-        Ok(_) => true,
-        Err(e) => e.kind() != ErrorKind::AddrInUse,
-    })
+    None
 }
 
 #[cfg(test)]
@@ -128,12 +137,12 @@ mod tests {
     fn own(name: &str, next: u16) -> (std::path::PathBuf, Taken) {
         let dir = std::env::temp_dir().join(format!("staalc-test-ports-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        (dir, Taken { next: Some(next), held: Vec::new() })
+        (dir, Taken { next: Some(next), held: Vec::new(), skipped: Vec::new() })
     }
 
-    /// The first port from `from` nothing is bound to, held bound.
-    fn bound_from(from: u16) -> (u16, TcpListener) {
-        (from..=u16::MAX).find_map(|p| TcpListener::bind(("127.0.0.1", p)).ok().map(|l| (p, l))).unwrap()
+    /// The first port from `from` nothing is bound to, by the same checks `take` makes.
+    fn free_from(from: u16) -> u16 {
+        (from..=u16::MAX).find(|p| bound(*p).is_none()).unwrap()
     }
 
     #[test]
@@ -149,17 +158,18 @@ mod tests {
 
     #[test]
     fn a_port_something_is_bound_to_is_skipped() {
-        let (busy, _held) = bound_from(29000);
+        let busy = free_from(29000);
+        let _held = TcpListener::bind(("127.0.0.1", busy)).unwrap();
         let (dir, mut taken) = own("bound", busy);
         let got = take(&dir, &mut taken, &[]);
         assert!(got > busy, "{got} after {busy}");
+        assert_eq!(taken.skipped.first().map(|s| s.0), Some(busy), "{:?}", taken.skipped);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_port_locked_by_another_process_is_skipped() {
-        let (free, listener) = bound_from(29500);
-        drop(listener);
+        let free = free_from(29500);
         let (dir, mut taken) = own("locked", free);
         std::fs::create_dir_all(&dir).unwrap();
         // Another process holds the lock on that port's file while `take` runs.
@@ -181,19 +191,17 @@ mod tests {
 
     #[test]
     fn a_port_given_is_not_given_again_by_another_state_in_this_process() {
-        let (free, listener) = bound_from(28500);
-        drop(listener);
+        let free = free_from(28500);
         let (dir, mut first) = own("twice", free);
-        assert_eq!(take(&dir, &mut first, &[]), free);
-        let mut second = Taken { next: Some(free), held: Vec::new() };
+        assert_eq!(take(&dir, &mut first, &[]), free, "passed over: {:?}", first.skipped);
+        let mut second = Taken { next: Some(free), held: Vec::new(), skipped: Vec::new() };
         assert!(take(&dir, &mut second, &[]) > free);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn ports_in_a_range_to_skip_are_never_given() {
-        let (free, listener) = bound_from(28000);
-        drop(listener);
+        let free = free_from(28000);
         let (dir, mut taken) = own("skip", free);
         let got = take(&dir, &mut taken, &[(free, free.saturating_add(99))]);
         assert!(got > free.saturating_add(99), "{got} within {free}..={}", free.saturating_add(99));
