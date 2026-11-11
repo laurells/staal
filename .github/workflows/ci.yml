@@ -47,6 +47,17 @@ jobs:
           node-version: "22"
       - name: Versions
         run: rustc --version && cargo --version && git --version && python3 --version && node --version
+      # The ports the kernel hands out unasked, which the tests' own ports
+      # (src/test_ports.rs) skip, and what already listens before the tests start.
+      - name: Ephemeral port ranges and listening sockets
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            sysctl net.inet.ip.portrange.first net.inet.ip.portrange.last net.inet.ip.portrange.hifirst net.inet.ip.portrange.hilast
+            netstat -anp tcp | grep LISTEN || true
+          else
+            cat /proc/sys/net/ipv4/ip_local_port_range
+            ss -ltn
+          fi
       - name: Tests, with crash injection
         env:
           STAAL_REQUIRE_EVERY_LICENCE_TARGET: "1"

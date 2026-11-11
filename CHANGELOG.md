@@ -56,9 +56,11 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 - Tests no longer find a local port by binding port 0 and closing the socket before
   the code under test binds it: the kernel could hand that port to another test
   meanwhile, and the code could then not listen ("Address already in use", seen on
-  macOS on 2026-11-11). Tests now take ports from 20000 to 29999, which neither Linux
-  nor macOS hands out for port 0, each given once and locked for the life of the test
-  process.
+  macOS on 2026-11-11). Tests now take ports from 20000 up, skipping the ranges the
+  machine's kernel hands out unasked (read from the machine, not assumed), each port
+  given once, checked unbound on loopback and wildcard addresses, and locked for the
+  life of the test process. CI prints each runner's ranges and listening sockets
+  before the tests.
 
 ### Changed
 
