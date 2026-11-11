@@ -163,7 +163,9 @@ what must happen:
 
 `service` is the base URL the package reaches; the test replaces it with the fake's
 address, in the package's code and manifest alike, and `{service}` in the grants
-stands for it. Every secret is granted as `{"env": "STAAL_PACKAGE_KEY"}`, and `{key}`
+stands for it. The fake listens on the loopback address, so each grant of a
+capability that connects is given `"private_addresses": ["127.0.0.1"]` by the test,
+not the case (RUNTIME.md section 12, "Addresses"). Every secret is granted as `{"env": "STAAL_PACKAGE_KEY"}`, and `{key}`
 in an expected header stands for its value. `{n}` in an answer is the request's
 number, so two emails that were really sent are told apart. `requests` lists every
 request the service received, in order.

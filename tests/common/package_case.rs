@@ -18,7 +18,9 @@
 // The package is copied with `service` replaced by the fake's address in its code and
 // manifest, committed to a git repository and fetched with `staalc fetch`, so the
 // compiler holds it to its manifest's authority as it would for a user. In `grants`,
-// "{service}" stands for the fake's address; every secret is {"env":
+// "{service}" stands for the fake's address, and every grant of a capability that
+// connects is given the fake's loopback address (`private_addresses`), which the real
+// service's public one would not need; every secret is {"env":
 // "STAAL_PACKAGE_KEY"}, whose value is KEY, and "{key}" in an expected header stands
 // for it. `requests`, when given, is every request the service received, in order:
 // `[]` says the run was refused before any request.
@@ -111,6 +113,22 @@ fn load(path: &Path) -> Result<Case, String> {
         failure,
         requests,
     })
+}
+
+/// `grants` with each grant of a capability that connects (at any depth of `needs`)
+/// allowed the loopback address the fake service listens on.
+fn local(grants: &Json) -> Json {
+    match grants {
+        Json::Object(o) => {
+            let mut o: serde_json::Map<String, Json> = o.iter().map(|(k, x)| (k.clone(), local(x))).collect();
+            let connects = o.get("cap").and_then(Json::as_str).is_some_and(|c| c.starts_with("net.http.") || c == "net.tcp.exchange" || c == "net.tls.exchange");
+            if connects && !o.contains_key("private_addresses") {
+                o.insert("private_addresses".into(), serde_json::json!(["127.0.0.1"]));
+            }
+            Json::Object(o)
+        }
+        other => other.clone(),
+    }
 }
 
 /// `v` with every "{service}" in its strings replaced.
@@ -309,7 +327,7 @@ fn run_on(pkg: &Path, c: &Case, dir: &Path, engine: Engine) -> Result<(), String
         }
     };
     let cfg = json!({
-        "entry": c.entry, "inputs": c.inputs, "grants": fill(&c.grants, &base),
+        "entry": c.entry, "inputs": c.inputs, "grants": local(&fill(&c.grants, &base)),
         "model": { "provider": "script", "responses": [] },
         "net": { "connect_timeout_ms": 2000, "timeout_ms": 5000 }
     });
