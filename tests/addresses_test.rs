@@ -63,7 +63,7 @@ fn a_grant_reaches_no_private_address_unless_it_lists_it() {
         let m = failure(&r);
         assert!(m.contains("not sent") && m.contains("not a public address") && m.contains(host), "{host}: {m}");
         // Listing another private network does not reach this one.
-        let r = run(GET, "fetch", json!({ "http": { "cap": "net.http.get", "private_addresses": ["10.0.0.0/8", "::1"] } }), json!({ "url": url }));
+        let r = run(GET, "fetch", json!({ "http": { "cap": "net.http.get", "private_addresses": ["10.0.0.0/8", "fd00::/8"] } }), json!({ "url": url }));
         assert!(failure(&r).contains("not in this grant's private_addresses"), "{host}");
     }
     assert_eq!(seen.load(Ordering::SeqCst), 0, "a refused request reached the listener");
