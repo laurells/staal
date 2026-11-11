@@ -76,6 +76,50 @@ The CI badge was taken off the top of README.md on 2026-10-27, because it showed
 failing runs. CI now passes on all four platforms; put it back if wanted:
 `[![ci](https://github.com/laurells/staal/actions/workflows/ci.yml/badge.svg)](https://github.com/laurells/staal/actions/workflows/ci.yml)`
 
+## Isolation
+
+Deferred on 2026-11-11, when contained C functions and address checks shipped
+(RUNTIME.md sections 12 and 19).
+
+### The run behind a broker
+
+Contained C closes the way around the broker that a program can choose. What is left
+is a bug in staalc itself: the run's process parses what it does not control (HTTP
+responses, TLS, JSON, PostgreSQL replies, model output), runs the native code staalc
+generates (`src/native.rs`, most of the `unsafe` code) and embeds C of its own
+(SQLite, parts of ring), and it holds the secrets, the journal and every grant. A
+memory bug there, triggered by crafted input, would have all of that. The remedy is
+the split: the program and everything that reads untrusted input in a child with no
+authority of its own, and a small broker holding secrets, journal and connections,
+checking every request it is sent (docs: the effect boundary design, version 1).
+
+It is defence in depth against a bug not yet found, not a fix for a known hole, and
+it changes how every runtime capability is called. Decided: the independent security
+review and the fuzzing below come first. If they find bugs in parsing or native code,
+the split is next, built around what they found; if not, it waits for deployments
+that need it. Done when: the program runs in a child that cannot open a file or a
+connection itself; every effect, model call and journal write goes through the
+broker; the broker checks each request against the grants itself and trusts nothing
+the child says; and the crash tests pass with the child, the broker and both killed
+at every journal transition.
+
+### Smaller gaps, each stated in RUNTIME.md
+
+- **A time limit on a C call.** A C function that never returns holds its run,
+  contained or not. A contained one could be stopped by ending its worker. Done when:
+  a grant can set one, the call fails when it passes, and a test shows it.
+- **Reading files while a library loads.** A contained library's initialisers can
+  read any file the run's user can. Landlock can limit reads to the library's own
+  files where the kernel has it. Done when: reads are limited where Landlock exists,
+  the run says when it does not, and a test reads outside them and is stopped.
+- **macOS.** C cannot be contained there; a grant must say `separate` or `none`.
+  Apple's sandbox interface is deprecated, so containment on macOS needs its own
+  study before any claim.
+- **The Node.js package** installs no `staalc` to run as the C worker: set
+  `STAALC_FFI_WORKER`. Done when: the npm package carries one, or says it never will.
+- **Through a proxy**, where a host name leads is the proxy's to check. Nothing to fix
+  in staalc; an operator who needs address checks uses no proxy, or one that checks.
+
 ## Reliability, to do before more features
 
 CI tests on four platforms, and six fuzz targets exist (fuzz/README.md). Not yet
