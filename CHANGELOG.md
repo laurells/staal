@@ -27,7 +27,9 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   said an operator settles an in-doubt GET, a keyed request or statement, a repeatable or
   contained C call and an idempotent adapter's action, all of which resume makes again
   by itself. `journal::Settle` gains `NotRecorded`, for an intent written before the
-  field. What `resolve` accepts is unchanged. Tested against real crashes
+  field. What `resolve` accepts is unchanged. `Journal::begin` takes the rule as a
+  fourth argument (`Some("operator")`, or `None` only for an operation not an action).
+  Tested against real crashes
   (tests/view_test.rs): for each kind of action, what the view says is what resume does.
 
 - `staalc::check_in(root, root_path, entry, text)`: checks a program as `check_path` does,
