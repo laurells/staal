@@ -1198,16 +1198,30 @@ mod tests {
 
     /// The OS lock alone, without this process's registry, refuses a second open file
     /// in the same process (`flock` locks an open file, not a process): checked here on
-    /// each platform CI runs.
+    /// each platform CI runs. Taking a lock waits up to `LOCK_WAIT`, as `lock` does: a
+    /// process another test starts meanwhile briefly holds a copy of every open file,
+    /// and with it the lock (seen on macOS, 2026-11-12). The refusal itself is at once.
     #[test]
     fn the_os_lock_refuses_a_second_open_file_in_the_same_process() {
+        fn take(f: &File) {
+            let deadline = std::time::Instant::now() + LOCK_WAIT;
+            loop {
+                match f.try_lock() {
+                    Ok(()) => return,
+                    Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(5))
+                    }
+                    Err(e) => panic!("{e:?}"),
+                }
+            }
+        }
         let p = in_doubt("flock");
         let a = File::open(&p).unwrap();
         let b = File::open(&p).unwrap();
-        a.try_lock().unwrap();
+        take(&a);
         assert!(matches!(b.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
         drop(a);
-        b.try_lock().unwrap();
+        take(&b);
     }
 
     /// A binding whose hashes are the SHA-256 of `program` and `config`, on the
