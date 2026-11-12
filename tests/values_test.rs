@@ -54,17 +54,19 @@ fn a_run_reads_only_the_values_it_is_given() {
 
     // Two runs at once, one name, two values: each removes its own, and only its own.
     for engine in engines() {
-        let runs: Vec<_> = [a, b]
-            .into_iter()
-            .map(|v| {
-                let (prog, text) = (prog.clone(), text.clone());
-                std::thread::spawn(move || {
-                    let values = given(&[("STAAL_VALUES_TEST_KEY", v)]);
-                    run_config_attached(&prog, ECHO, &echo_config(&text), Durability::None, engine, Attached { values: Some(values), ..Attached::default() }).unwrap()
+        let results: Vec<_> = std::thread::scope(|sc| {
+            let runs: Vec<_> = [a, b]
+                .into_iter()
+                .map(|v| {
+                    let (prog, text) = (&prog, &text);
+                    sc.spawn(move || {
+                        let values = given(&[("STAAL_VALUES_TEST_KEY", v)]);
+                        run_config_attached(prog, ECHO, &echo_config(text), Durability::None, engine, Attached { values: Some(values), ..Attached::default() }).unwrap()
+                    })
                 })
-            })
-            .collect();
-        let results: Vec<_> = runs.into_iter().map(|h| h.join().unwrap()).collect();
+                .collect();
+            runs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
         let shown = |r: &staalc::interp::RunResult| json!(r.log).to_string();
         let (ra, rb) = (shown(&results[0]), shown(&results[1]));
         assert!(!ra.contains(a) && ra.contains(b) && ra.contains(PROCESS_KEY), "{engine:?}: run a: {ra}");
@@ -142,7 +144,8 @@ fn values_are_dropped_when_the_run_ends(prog: &staalc::ast::Program) {
     let pf = staalc::check_program(fails).unwrap();
     let cfg = json!({ "entry": "main", "secrets": { "key": { "env": "STAAL_VALUES_TEST_KEY" } }, "grants": { "mail": { "cap": "email.send" } } });
     let cfg_f = json!({ "entry": "main", "secrets": { "key": { "env": "STAAL_VALUES_TEST_KEY" } } });
-    let cases: Vec<(&str, Box<dyn Fn(Arc<dyn Values>) -> Result<(), String>>)> = vec![
+    type Ends<'a> = Box<dyn Fn(Arc<dyn Values>) -> Result<(), String> + 'a>;
+    let cases: Vec<(&str, Ends)> = vec![
         ("a result", Box::new(|v| {
             let r = run_config_attached(&ps, send, &cfg, Durability::None, Engine::Interpreter, Attached { values: Some(v), ..Attached::default() })?;
             assert!(r.result.is_ok());

@@ -60,7 +60,8 @@ impl Default for Settings {
 pub struct Request<'a> {
     pub method: &'a str,
     pub target: &'a crate::targets::Target,
-    pub headers: &'a [(String, String)],
+    /// Values may hold a secret: each is overwritten when dropped.
+    pub headers: &'a [(String, super::values::Value)],
     pub body: Option<&'a str>,
 }
 

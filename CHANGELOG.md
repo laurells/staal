@@ -19,6 +19,16 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- A run's values given to it alone (RUNTIME.md section 21): `interp::run_config_attached`
+  and `run_attached` take an `Attached` with an observer, a `values::Values` source, or
+  both. A run given `values::Given` reads its secrets, model API key and proxy variables
+  from them and never from the process's environment; two runs given different values
+  for one name each see only their own. `plan_with` and `binding_for_values` take the same.
+  Without values given, the process's environment, as before. Every copy staalc keeps of
+  a secret or key is overwritten when dropped, and a run's values are dropped when it
+  ends, however it ends; copies inside libraries, and ones the allocator moved, are
+  outside staalc's control, as section 21 states.
+
 - The run observer (RUNTIME.md section 20): `interp::run_config_observed` runs as
   `run_config_engine` does with an `observe::Observer` offered a copy of each event as it
   happens, on a thread of its own through a bounded buffer the run never waits on. A full

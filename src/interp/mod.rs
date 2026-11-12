@@ -2985,9 +2985,9 @@ impl<'p> Interp<'p> {
         let mut it = args.into_iter();
         let Some(Value::Text(raw_url)) = it.next() else { return internal("net.http without a URL") };
         // A body is Text, or a Secret (a template filled by `fill_secret`).
-        let (body, body_shown): (Option<String>, Json) = if has_body {
+        let (body, body_shown): (Option<values::Value>, Json) = if has_body {
             match it.next() {
-                Some(Value::Text(b)) => (Some(b.clone()), json!(b)),
+                Some(Value::Text(b)) => (Some(values::Value::new(b.clone())), json!(b)),
                 Some(Value::Secret(s)) => (Some(s.value), json!({ "secret": s.name, "shown": s.shown })),
                 _ => return internal("net.http without a body"),
             }
@@ -3044,18 +3044,19 @@ impl<'p> Interp<'p> {
         let jbody = json!({ "capability": path, "method": method, "target": url, "headers": shown,
                             "body": body_shown, "idempotency_key": keyed });
         let what = format!("action {path} {url}");
-        let mut send: Vec<(String, String)> = headers
+        // Header values may hold a secret: each is overwritten when dropped.
+        let mut send: Vec<(String, values::Value)> = headers
             .into_iter()
             .map(|(n, v)| match v {
-                HeaderValue::Text(t) => (n, t),
+                HeaderValue::Text(t) => (n, values::Value::new(t)),
                 HeaderValue::Secret(s) => (n, s.value),
             })
             .collect();
         let (answer, replayed) = self.external("action", jbody, retryable, &what, |it, key| {
             if keyed {
-                send.push(("Idempotency-Key".into(), key.to_string()));
+                send.push(("Idempotency-Key".into(), values::Value::new(key.to_string())));
             }
-            let req = http::Request { method, target: &target, headers: &send, body: body.as_deref() };
+            let req = http::Request { method, target: &target, headers: &send, body: body.as_ref().map(|b| b.as_str()) };
             match it.http.send(&req, &reach) {
                 http::Outcome::Response { status, headers, body, complete } => {
                     let headers: Vec<Json> = headers
@@ -3942,7 +3943,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             let placeholder = format!("{{secret {}}}", key.name);
             Ok(Value::Secret(Secret {
                 name: key.name.clone(),
-                value: template.replace("{secret}", &key.value),
+                value: values::Value::new(template.replace("{secret}", &key.value)),
                 shown: template.replace("{secret}", &key.shown.replace("{secret}", &placeholder)),
             }))
         }

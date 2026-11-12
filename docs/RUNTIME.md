@@ -2166,3 +2166,28 @@ thread cannot be started, starts nothing: no observer, no journal.
 What an observer sees is when events were seen. The run's log is the record: it is
 assembled in task order when the run ends, and its `seq` numbers are its own, which the
 observed events do not carry.
+
+## 21. A run's values
+
+The values a run config names with `{"env": NAME}` (its secrets, a database's password, a
+library capability's secret needs, the model's `api_key`), and the proxy variables that
+`"proxy": "environment"` reads, come from one place for each run. The command line reads
+them from the process's environment. A program that starts runs for others (Staal Studio)
+gives each run its own, with `interp::run_config_attached` (or `run_attached`, with a
+provider and adapter of its own) and `Attached { values: Some(...) }`, a
+`values::Given` holding each value by its name. A run given values reads those and nothing
+else: a name it does not hold is refused, saying it is not a "value given to this run",
+even when the process's environment has it. Two runs given different values for one name
+each see only their own, and each removes only its own from its log. `plan_with` and
+`binding_for_values` check a config and a journal's binding with the same values.
+
+Every copy staalc keeps of a secret or key (the secret itself, the list a run removes from
+what it records, a filled template, an HTTP request's headers and body, a database's
+password, the model's key) is held in a buffer overwritten when it is dropped
+(`zeroize::Zeroizing`), and a run's values are dropped when the run ends, however it ends:
+with a result, a failure, a refused config or a panic (tests/values_test.rs). What this
+does not reach: copies a library makes inside itself (the HTTP client's header buffers,
+TLS records, the PostgreSQL client's connection settings) and copies the allocator left
+behind when a buffer grew or moved are outside staalc's control. Clearing narrows how long
+a value stays in memory; it does not prove it has gone.
+

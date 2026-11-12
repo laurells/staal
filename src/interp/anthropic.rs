@@ -168,7 +168,7 @@ impl AnthropicProvider {
         let mut attempt = 0u32;
         loop {
             let request = ureq::http::Request::post(target.uri().clone())
-                .header("x-api-key", &self.key)
+                .header("x-api-key", self.key.as_str())
                 .header("anthropic-version", API_VERSION)
                 .header("content-type", "application/json")
                 .body(text.as_str());
@@ -219,7 +219,7 @@ impl AnthropicProvider {
 
     /// Removes the key from text that may be shown or recorded.
     fn scrub(&self, s: &str) -> String {
-        s.replace(&self.key, "[api key]")
+        s.replace(self.key.as_str(), "[api key]")
     }
 }
 

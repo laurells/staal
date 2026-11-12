@@ -36,7 +36,8 @@ pub struct Database {
     pub port: u16,
     pub dbname: String,
     pub user: String,
-    pub password: Option<String>,
+    /// Overwritten when dropped.
+    pub password: Option<super::values::Value>,
     /// TLS, the server's certificate verified; false only for a server on this machine.
     pub tls: bool,
 }
@@ -75,7 +76,7 @@ fn connect(name: &str, d: &Database, s: &Settings) -> Result<postgres::Client, S
     let mut c = postgres::Config::new();
     c.host(&d.host).port(d.port).dbname(&d.dbname).user(&d.user).application_name("staalc").connect_timeout(s.connect_timeout);
     if let Some(p) = &d.password {
-        c.password(p);
+        c.password(p.as_bytes());
     }
     // A statement that runs longer than the run's time limit is cancelled by the server.
     c.options(&format!("-c statement_timeout={}", s.timeout.as_millis().max(1)));
