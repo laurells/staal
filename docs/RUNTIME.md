@@ -942,6 +942,11 @@ doubt**: it may or may not have happened.
   `net.tls.accept`, `net.tls.reply`) is never resolved: resume
   makes it again, and `staalc resolve` refuses it.
 
+  Which of these applies to an action is one rule, `interp::runtime_recovery` for the
+  runtime's own capabilities and `interp::adapter_recovery` for an adapter's, which
+  every action decides with and which a plan reports for each grant
+  (`GrantPlan::runtime_grants`, `GrantPlan::recovery`) before a run starts.
+
   A program that records who decided, such as Staal Studio, resolves through
   `Journal::resolve_decision` with a **decision**: an id of 128 random bits, the run id,
   and the evidence the operator gave (what was checked, and where). The decision is
@@ -2044,6 +2049,9 @@ replaced while the process runs"), since the loader would give back the old one.
 file, its SHA-256, the isolation it may run with) without loading it, so no C code runs:
 for a plan shown before a run is confirmed. That the library has the function the
 program declares is checked when the run starts. `interp::plan` loads, as a run does.
+Either way, each `GrantPlan` states what a resumed run does with a C call cut short by a
+crash: made again when the library is contained or the grant says `"repeatable": true`,
+otherwise an operator's to resolve (section 11).
 
 ### Isolation
 

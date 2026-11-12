@@ -123,6 +123,12 @@ pub struct Function {
     pub repeatable: bool,
 }
 
+/// Whether a call cut short by a crash may be made again, for a grant that says
+/// `repeatable` and runs its library with `isolation`.
+pub fn may_repeat(repeatable: bool, isolation: Isolation) -> bool {
+    repeatable || isolation == Isolation::Contained
+}
+
 /// A value passed to or returned by a C function.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CValue {
@@ -330,7 +336,7 @@ impl Function {
     /// nothing, or it is contained, so nothing it did can have reached outside its
     /// worker, which did not outlive the crash.
     pub fn may_repeat(&self) -> bool {
-        self.repeatable || self.lib.isolation == Isolation::Contained
+        may_repeat(self.repeatable, self.lib.isolation)
     }
 
     /// Calls the function. Arguments are checked against the declaration first; a

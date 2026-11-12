@@ -24,6 +24,18 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   runtime's own capability (`runtime`, live: no simulated form) and, for a C function,
   its `isolation`. `plan` still loads, as before.
 
+- Each `GrantPlan` states what is enforced on it, for a plan shown before a run is
+  confirmed: `runtime_grants`, for each runtime capability it gives (itself, or a
+  library's need), the `only` the grant gives and the one the program writes (a target
+  must match both), the addresses it may connect to, how its connections are verified
+  (`interp::tls_of`), and what a resumed run does with a request through it left in
+  doubt by a crash; and `recovery`, that rule for an adapter's capability. The rule is
+  now one function every action decides with (`interp::runtime_recovery`,
+  `interp::adapter_recovery`, `interp::Recovery`), which the agent description uses
+  too; behaviour is unchanged. AGENT_MANIFEST.md now says that a C function is
+  described as an operator's to resolve, since agent.json cannot say how its library
+  will be installed.
+
 - Cancelling a run (RUNTIME.md section 22): `interp::cancel::Cancel`, given in `Attached`,
   stops a run at its next step (on the interpreter and in native code, which reads the
   flag atomically) or before its next operation, in every concurrent task, with a new

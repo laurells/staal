@@ -610,6 +610,22 @@ fn a_plan_checks_a_c_grant_without_loading_its_library() {
     assert!(!mark.exists(), "planning ran the library's initialiser");
     let g = &plan.grants[0];
     assert_eq!((g.path.as_str(), g.runtime, g.isolation), ("ffi.hostile.initialiser_wrote", true, Some("none")));
+    // How it runs decides what a resumed run does with a call cut short by a crash: made
+    // again when it is contained or its grant says `repeatable`; otherwise an operator's.
+    use staalc::interp::Recovery;
+    assert_eq!(g.runtime_grants[0].recovery, Recovery::Operator);
+    let with = |key: &str, v: Json| {
+        let mut c = cfg(&sha);
+        c["grants"]["h"][key] = v;
+        check(&c).unwrap().grants[0].runtime_grants[0].recovery
+    };
+    assert_eq!(with("repeatable", json!(true)), Recovery::Repeat);
+    assert_eq!(with("repeatable", json!(false)), Recovery::Operator);
+    assert_eq!(with("isolation", json!("separate")), Recovery::Operator);
+    if cfg!(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))) {
+        assert_eq!(with("isolation", json!("contained")), Recovery::Repeat);
+    }
+    assert!(!mark.exists(), "planning ran the library's initialiser");
     // A file whose SHA-256 is not the grant's: refused by the plan as by the run.
     let wrong = "0".repeat(64);
     let planned = check(&cfg(&wrong)).unwrap_err();
@@ -634,8 +650,13 @@ fn a_plan_checks_a_c_grant_without_loading_its_library() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let other_sha = staalc::packages::sha256_hex(&std::fs::read(&other).unwrap());
     let loads = json!({ "entry": "main", "grants": { "h": { "cap": "ffi.hostile.initialiser_wrote", "library": other.to_str().unwrap(), "sha256": other_sha, "isolation": "none" } } });
-    staalc::interp::plan(&prog, &loads).unwrap();
+    let loaded = staalc::interp::plan(&prog, &loads).unwrap();
     assert!(other_mark.exists(), "plan loads, as it always has");
+    // Loaded, the rule is the loaded function's own, and the same.
+    assert_eq!(loaded.grants[0].runtime_grants[0].recovery, Recovery::Operator);
+    let mut repeatable = loads.clone();
+    repeatable["grants"]["h"]["repeatable"] = json!(true);
+    assert_eq!(staalc::interp::plan(&prog, &repeatable).unwrap().grants[0].runtime_grants[0].recovery, Recovery::Repeat);
 }
 
 /// Whether a grant's actions are the runtime's own (live) or go to the run's adapter.

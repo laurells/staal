@@ -401,6 +401,77 @@ pub struct GrantPlan {
     /// For a C function (`ffi.*`): how its library runs, `contained`, `separate` or
     /// `none` (RUNTIME.md section 19).
     pub isolation: Option<&'static str>,
+    /// For a capability the run's adapter performs: what a resumed run does with an
+    /// action through it left in doubt by a crash, by the run config's simulated
+    /// adapter (`adapters.simulated.idempotent`). None for a runtime capability or a
+    /// library's, whose actions are those of `runtime_grants`.
+    pub recovery: Option<Recovery>,
+    /// The runtime capabilities it gives: itself, if it is one; for a library
+    /// capability, each of its needs that is one.
+    pub runtime_grants: Vec<RuntimeGrantPlan>,
+}
+
+/// A runtime capability a grant gives, with what is enforced on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeGrantPlan {
+    /// The grant's name, or `name.need` for a library capability's need.
+    pub grant: String,
+    /// The capability, e.g. `net.http.get`.
+    pub path: String,
+    /// The `only` the grant gives, if any.
+    pub granted_only: Option<Vec<String>>,
+    /// The `only` the program's type writes for it (the entry's parameter, or the
+    /// library's declaration of its need), if any. The grant is narrowed to it when the
+    /// run starts: a target must match a pattern of each list there is.
+    pub declared_only: Option<Vec<String>>,
+    /// For a capability that connects to addresses a program chooses (`net.http.*`,
+    /// `net.tcp.exchange`, `net.tls.exchange`): the addresses checked when it connects.
+    /// None for any other.
+    pub addresses: Option<AddressPlan>,
+    /// For one that leaves the machine (`net.*`, `db.postgres.*`): how its connections
+    /// are verified (`tls_of`). None for any other.
+    pub tls: Option<&'static str>,
+    /// What a resumed run does with a request through it left in doubt by a crash.
+    pub recovery: Recovery,
+}
+
+/// The addresses a connecting grant may reach: every public address, the private
+/// networks it names, and cloud metadata services if it says so (RUNTIME.md section 12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressPlan {
+    /// The private networks, in canonical text (`addresses::Net::text`).
+    pub private: Vec<String>,
+    pub cloud_metadata: bool,
+}
+
+/// How the connections of capability `cap` are verified, if it leaves the machine:
+/// `https_targets` (net.http: every https URL; only loopback hosts may use plain http),
+/// `always` (net.tls.*), `per_grant` (db.postgres: as each database of the grant says),
+/// or `never` (net.tcp.*). None for one that does not leave the machine.
+pub fn tls_of(cap: &str) -> Option<&'static str> {
+    if cap.starts_with("net.http.") {
+        Some("https_targets")
+    } else if cap.starts_with("net.tls.") {
+        Some("always")
+    } else if cap.starts_with("db.postgres.") {
+        Some("per_grant")
+    } else if cap.starts_with("net.") {
+        Some("never")
+    } else {
+        None
+    }
+}
+
+fn runtime_grant_plan(grant: String, path: &str, granted: &broker::Limits, declared_only: &Option<Vec<String>>, addresses: &Option<addresses::Policy>, keyed: bool, c_may_repeat: bool) -> RuntimeGrantPlan {
+    RuntimeGrantPlan {
+        grant,
+        path: path.to_string(),
+        granted_only: granted.only.clone(),
+        declared_only: declared_only.clone(),
+        addresses: addresses.as_ref().map(|a| AddressPlan { private: a.private.iter().map(|n| n.text()).collect(), cloud_metadata: a.cloud_metadata }),
+        tls: tls_of(path),
+        recovery: runtime_recovery(path, keyed, c_may_repeat),
+    }
 }
 
 /// What a plan does with the C libraries a config grants.
@@ -429,7 +500,7 @@ pub fn plan_with(prog: &Program, config: &Json, values: std::sync::Arc<dyn value
     let setup = Setup::from_config(prog, config, values.clone(), c == CLibraries::Load)?;
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
     provider::of_run(cfg.get("model"), values.as_ref())?;
-    SimulatedAdapter::from_config(cfg.get("adapters"))?;
+    let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     let f = prog
         .fns
         .iter()
@@ -443,10 +514,21 @@ pub fn plan_with(prog: &Program, config: &Json, values: std::sync::Arc<dyn value
             Arg::Data(v) => {
                 inputs.insert(p.name.clone(), to_json(v, false)?);
             }
-            Arg::Grant { name, path, limits, idempotency_key, needs, listen, .. } => {
+            Arg::Grant { name, path, limits, idempotency_key, addresses, needs, c_may_repeat, listen, .. } => {
                 let Ty::Cap { limits: declared, .. } = &p.ty else {
                     return Err(format!("grants.{name}: is not a capability parameter; this is a bug in staalc"));
                 };
+                let mut runtime_grants = Vec::new();
+                if is_runtime_cap(path) {
+                    runtime_grants.push(runtime_grant_plan(name.clone(), path, limits, &declared.only, addresses, *idempotency_key, *c_may_repeat));
+                }
+                for n in needs {
+                    if let NeedArg::Cap { name: need, path: np, limits: nl, idempotency_key: nk, addresses: na, c_may_repeat: nc, declared: nd, .. } = n
+                        && is_runtime_cap(np)
+                    {
+                        runtime_grants.push(runtime_grant_plan(format!("{name}.{need}"), np, nl, &nd.only, na, *nk, *nc));
+                    }
+                }
                 let declared = runtime_limits(declared)?;
                 let lib = prog.caps.iter().find_map(|c| c.actions.iter().find(|a| c.action_path(&a.name) == *path));
                 let need_caps: Vec<(&String, bool)> = needs
@@ -507,6 +589,8 @@ pub fn plan_with(prog: &Program, config: &Json, values: std::sync::Arc<dyn value
                     waits_unbounded,
                     runtime: is_runtime_cap(path) || need_caps.iter().any(|(p, _)| is_runtime_cap(p)),
                     isolation,
+                    recovery: (!is_runtime_cap(path) && lib.is_none()).then(|| adapter_recovery(adapter.is_idempotent())),
+                    runtime_grants,
                 });
             }
         }
@@ -774,6 +858,8 @@ enum Arg {
         addresses: Option<addresses::Policy>,
         needs: Vec<NeedArg>,
         foreign: Option<std::sync::Arc<ffi::Function>>,
+        /// For `ffi.*`: whether a call cut short by a crash may be made again.
+        c_may_repeat: bool,
         postgres: Option<std::sync::Arc<pg::Grant>>,
         listen: Option<tcp::Listen>,
     },
@@ -784,10 +870,13 @@ enum NeedArg {
     /// A runtime capability, granted by the operator and then narrowed to the limits
     /// the library declared for it.
     Cap {
+        /// The need's name, as the library declares it.
+        name: String,
         path: String,
         limits: broker::Limits,
         idempotency_key: bool,
         addresses: Option<addresses::Policy>,
+        c_may_repeat: bool,
         declared: CapLimits,
         postgres: Option<std::sync::Arc<pg::Grant>>,
         listen: Option<tcp::Listen>,
@@ -804,6 +893,8 @@ struct ParsedGrant {
     needs: Vec<NeedArg>,
     /// For `ffi.*`: the C function the grant loads.
     foreign: Option<std::sync::Arc<ffi::Function>>,
+    /// For `ffi.*`: whether a call cut short by a crash may be made again.
+    c_may_repeat: bool,
     /// For `db.postgres.*`: the databases the grant reaches.
     postgres: Option<std::sync::Arc<pg::Grant>>,
     /// For `net.tcp.accept`: how long to wait for a client, and what a bad one does.
@@ -951,10 +1042,12 @@ fn parse_grant(
                         let np = path.join(".");
                         let inner = parse_grant(v, &nat, &np, nd, types, prog, runtime)?;
                         needs.push(NeedArg::Cap {
+                            name: n.clone(),
                             path: np,
                             limits: inner.limits,
                             idempotency_key: inner.idempotency_key,
                             addresses: inner.addresses,
+                            c_may_repeat: inner.c_may_repeat,
                             declared: nd.clone(),
                             postgres: inner.postgres,
                             listen: inner.listen,
@@ -974,9 +1067,9 @@ fn parse_grant(
             }
         }
     }
-    let foreign = if c_function { load_c_function(g, at, want, prog, runtime)? } else { None };
+    let (foreign, c_may_repeat) = if c_function { load_c_function(g, at, want, prog, runtime)? } else { (None, false) };
     let postgres = if postgres { Some(std::sync::Arc::new(postgres_grant(g, at, runtime)?)) } else { None };
-    Ok(ParsedGrant { limits, idempotency_key, addresses, needs, foreign, postgres, listen })
+    Ok(ParsedGrant { limits, idempotency_key, addresses, needs, foreign, c_may_repeat, postgres, listen })
 }
 
 /// `"databases"` of a `db.postgres.*` grant: each database it reaches, by the name
@@ -1040,8 +1133,9 @@ fn postgres_grant(g: &Map<String, Json>, at: &str, runtime: &mut RuntimeSettings
 /// The C function an `ffi.*` grant names: its library file, pinned by SHA-256, loaded,
 /// and the function found in it with the signature the program declares.
 /// The C function a grant names, loaded; or, when `runtime.load_c` is off (a plan), checked
-/// as loading would check it, without loading it, and None.
-fn load_c_function(g: &Map<String, Json>, at: &str, want: &str, prog: &Program, runtime: &mut RuntimeSettings) -> Result<Option<std::sync::Arc<ffi::Function>>, String> {
+/// as loading would check it, without loading it, and None. With it, whether a call cut
+/// short by a crash may be made again (`ffi::may_repeat`).
+fn load_c_function(g: &Map<String, Json>, at: &str, want: &str, prog: &Program, runtime: &mut RuntimeSettings) -> Result<(Option<std::sync::Arc<ffi::Function>>, bool), String> {
     let f = prog
         .foreign
         .iter()
@@ -1061,12 +1155,13 @@ fn load_c_function(g: &Map<String, Json>, at: &str, want: &str, prog: &Program, 
     let isolation = ffi::Isolation::from_grant(g.get("isolation")).map_err(|e| format!("{at}.isolation: {e}"))?;
     if !runtime.load_c {
         ffi::check(&path, sha, isolation, &mut runtime.checked_c).map_err(|e| format!("{at}: {e}"))?;
-        return Ok(None);
+        return Ok((None, ffi::may_repeat(repeatable, isolation)));
     }
     let lib = ffi::load(&path, sha, isolation, &mut runtime.libraries).map_err(|e| format!("{at}: {e}"))?;
     let params: Vec<CType> = f.params.iter().map(|(_, t)| *t).collect();
     let func = ffi::function(&lib, &f.name, &params, f.ret, repeatable).map_err(|e| format!("{at}: {e}"))?;
-    Ok(Some(std::sync::Arc::new(func)))
+    let may_repeat = func.may_repeat();
+    Ok((Some(std::sync::Arc::new(func)), may_repeat))
 }
 
 /// Whether capability `want` connects to addresses a program chooses, so that its grant
@@ -1119,6 +1214,77 @@ pub(crate) fn check_runtime_grant(want: &str, limits: &broker::Limits, idempoten
 const MIN_SECRET_BYTES: usize = 8;
 
 /// Whether `path` is one of the runtime's own capabilities (`net.http.*`, `fs.*`).
+/// What a resumed run does with an operation left in doubt by a crash (RUNTIME.md
+/// section 11): the one rule every action decides with, and that a plan reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recovery {
+    /// Made again: it is safe to repeat.
+    Repeat,
+    /// Made again with the same idempotency key, which tells whether it happened: the
+    /// service deduplicates by it (an adapter's action, an HTTP request), or the
+    /// database holds it with the statement (`_staal_keys`).
+    ResendWithKey,
+    /// The run stops until an operator records what happened (`staalc resolve`): until
+    /// then its outcome is unknown.
+    Operator,
+}
+
+impl Recovery {
+    /// The name the agent description and plans give it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Recovery::Repeat => "repeat",
+            Recovery::ResendWithKey => "resend_with_key",
+            Recovery::Operator => "operator",
+        }
+    }
+
+    /// Whether a resumed run makes the operation again on its own.
+    pub fn retries(self) -> bool {
+        self != Recovery::Operator
+    }
+
+    /// Whether a crash can leave its outcome unknown until an operator answers.
+    pub fn outcome_can_be_unknown(self) -> bool {
+        self == Recovery::Operator
+    }
+}
+
+/// The runtime's own capabilities that are always safe to make again.
+const REPEATABLE: [&str; 9] = [
+    "net.http.get",
+    "fs.read",
+    "fs.write",
+    "db.sqlite.query",
+    "db.postgres.query",
+    "net.tcp.accept",
+    "net.tcp.reply",
+    "net.tls.accept",
+    "net.tls.reply",
+];
+
+/// The rule for a runtime capability `cap` whose grant has `idempotency_key` as
+/// `keyed`; for a C function, `c_may_repeat` is whether its grant makes a call cut short
+/// safe to make again (`ffi::may_repeat`: contained, or `"repeatable": true`).
+pub fn runtime_recovery(cap: &str, keyed: bool, c_may_repeat: bool) -> Recovery {
+    if cap.starts_with("ffi.") {
+        return if c_may_repeat { Recovery::Repeat } else { Recovery::Operator };
+    }
+    if REPEATABLE.contains(&cap) {
+        Recovery::Repeat
+    } else if keyed {
+        Recovery::ResendWithKey
+    } else {
+        Recovery::Operator
+    }
+}
+
+/// The rule for an adapter's action: the adapter says whether the service
+/// deduplicates by the key.
+pub fn adapter_recovery(idempotent: bool) -> Recovery {
+    if idempotent { Recovery::ResendWithKey } else { Recovery::Operator }
+}
+
 pub(crate) fn is_runtime_cap(path: &str) -> bool {
     path.starts_with("net.") || path.starts_with("fs.") || path.starts_with("db.") || path.starts_with("ffi.")
 }
@@ -1406,6 +1572,7 @@ impl Setup {
                         addresses: pg.addresses,
                         needs: pg.needs,
                         foreign: pg.foreign,
+                        c_may_repeat: pg.c_may_repeat,
                         postgres: pg.postgres,
                         listen: pg.listen,
                     });
@@ -1806,7 +1973,8 @@ impl<'p> Interp<'p> {
         for a in &setup.args {
             match a {
                 Arg::Data(v) => args.push(v.clone()),
-                Arg::Grant { name, path, limits, idempotency_key, addresses, needs, foreign, postgres, listen } => {
+                // A C function's repeat rule is its loaded function's own (`ffi::Function::may_repeat`).
+                Arg::Grant { name, path, limits, idempotency_key, addresses, needs, foreign, c_may_repeat: _, postgres, listen } => {
                     let h = self.broker().grant(path, limits.clone());
                     self.granted.push((name.clone(), h));
                     if let Some(l) = listen {
@@ -1845,7 +2013,7 @@ impl<'p> Interp<'p> {
                     for n in needs {
                         match n {
                             NeedArg::Data(v) => given.push(v.clone()),
-                            NeedArg::Cap { path: ip, limits: il, idempotency_key: ik, addresses: ia, declared, postgres, listen } => {
+                            NeedArg::Cap { name: _, path: ip, limits: il, idempotency_key: ik, addresses: ia, c_may_repeat: _, declared, postgres, listen } => {
                                 let ih = self.broker().grant(ip, il.clone());
                                 if let Some(p) = postgres {
                                     self.postgres.insert(ih, p.clone());
@@ -2925,9 +3093,9 @@ impl<'p> Interp<'p> {
         self.broker().count_use(h).or_else(internal)?;
         let body =
             json!({ "capability": path, "method": method, "args": args_json, "amount": amount_text, "target": target });
-        let idempotent = self.adapter.idempotent(&path, method);
+        let retries = adapter_recovery(self.adapter.idempotent(&path, method)).retries();
         let what = format!("action {path}.{method}");
-        let (answer, replayed) = self.external("action", body, idempotent, &what, |it, key| {
+        let (answer, replayed) = self.external("action", body, retries, &what, |it, key| {
             Answer::Done(it.adapter.perform(key, &path, method, &args_json).map(|id| json!({ "receipt": id })))
         })?;
         match answer {
@@ -3091,7 +3259,7 @@ impl<'p> Interp<'p> {
         // the service deduplicates by Idempotency-Key, which the runtime then sends.
         let keyed = method != "get" && self.broker().idempotency_key(h).or_else(internal)?;
         let reach = self.broker().addresses(h).or_else(internal)?;
-        let retryable = method == "get" || keyed;
+        let retryable = runtime_recovery(path, keyed, false).retries();
         self.broker().count_use(h).or_else(internal)?;
         let shown: Vec<Json> = headers
             .iter()
@@ -3208,12 +3376,13 @@ impl<'p> Interp<'p> {
         }
         self.broker().count_use(h).or_else(internal)?;
         let what = format!("action {path} {file}");
+        // Reading changes nothing, and writing the same content again leaves the same
+        // file, so both are safe to retry after a crash.
+        let retries = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false).retries();
         let (answer, replayed) = match method {
-            // Reading changes nothing, and writing the same content again leaves the same
-            // file, so both are safe to retry after a crash.
             "read" => {
                 let jbody = json!({ "capability": path, "method": method, "target": file });
-                self.external("action", jbody, true, &what, |it, _key| {
+                self.external("action", jbody, retries, &what, |it, _key| {
                     Answer::Done(fsx::read(&file, it.fs_max_read_bytes).map(|t| json!({ "text": scrub_text(&it.secrets, &t) })))
                 })?
             }
@@ -3225,7 +3394,7 @@ impl<'p> Interp<'p> {
                 let jbody = json!({ "capability": path, "method": method, "target": file,
                                     "bytes": content.len(), "sha256": sha });
                 let id = format!("write:{}", &sha[..16]);
-                self.external("action", jbody, true, &what, |_it, _key| {
+                self.external("action", jbody, retries, &what, |_it, _key| {
                     Answer::Done(fsx::write(&file, content.as_bytes()).map(|()| json!({ "receipt": id })))
                 })?
             }
@@ -3280,7 +3449,8 @@ impl<'p> Interp<'p> {
         let jbody = json!({ "capability": path, "method": method, "target": address,
                             "data_sha256": journal::sha256_hex(data.as_bytes()), "until": until });
         let what = format!("action {path} {address}");
-        let (answer, replayed) = self.external("action", jbody, false, &what, |it, _key| {
+        let retries = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false).retries();
+        let (answer, replayed) = self.external("action", jbody, retries, &what, |it, _key| {
             match tcp::exchange(&address, data.as_bytes(), until.as_deref(), &it.tcp, path == "net.tls.exchange", &reach) {
                 tcp::Outcome::Reply(t) => Answer::Done(Ok(json!({ "text": scrub_text(&it.secrets, &t) }))),
                 tcp::Outcome::NotSent(e) => Answer::Done(Err(format!("{NOT_SENT}{e}"))),
@@ -3349,7 +3519,7 @@ impl<'p> Interp<'p> {
         let what = format!("action {path}");
         // C code can change anything: every call counts as an effect.
         self.effects += 1;
-        let (answer, replayed) = self.external("action", jbody, f.may_repeat(), &what, |it, _key| {
+        let (answer, replayed) = self.external("action", jbody, runtime_recovery(path, false, f.may_repeat()).retries(), &what, |it, _key| {
             Answer::Done(f.call(&cargs).map(|v| {
                 json!({ "value": match v {
                     ffi::CValue::Int(n) => json!(n),
@@ -3414,7 +3584,8 @@ impl<'p> Interp<'p> {
             what = format!("action {path} {address}");
             let root = self.broker().root(h).or_else(internal)?;
             let Some(listen) = self.listen.get(&root).cloned() else { return internal("an accept grant without its listening settings") };
-            let (a, r) = self.external("action", jbody, true, &what, |it, key| {
+            let retries = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false).retries();
+            let (a, r) = self.external("action", jbody, retries, &what, |it, key| {
                 let got = tcp::accept(&it.server, &address, until.as_deref(), &listen, &it.tcp, key);
                 // Each client dropped as unusable, with why: never what it sent.
                 for why in &got.dropped {
@@ -3436,7 +3607,8 @@ impl<'p> Interp<'p> {
             let jbody = json!({ "capability": path, "method": method, "target": id,
                                 "data_sha256": journal::sha256_hex(data.as_bytes()) });
             what = format!("action {path} {id}");
-            let (a, r) = self.external("action", jbody, true, &what, |it, _key| {
+            let retries = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false).retries();
+            let (a, r) = self.external("action", jbody, retries, &what, |it, _key| {
                 Answer::Done(
                     tcp::reply(&it.server, id, data.as_bytes(), &it.tcp, path == "net.tls.reply").map(|()| json!({ "receipt": format!("reply:{id}") })),
                 )
@@ -3505,13 +3677,14 @@ impl<'p> Interp<'p> {
                             "sql_sha256": journal::sha256_hex(sql.as_bytes()),
                             "params_sha256": journal::sha256_hex(params_json.as_bytes()) });
         let keyed = self.broker().idempotency_key(h).or_else(internal)?;
+        let retries = runtime_recovery(path, keyed, false).retries();
         let (answer, replayed) = match method {
-            "query" => self.external("action", jbody, true, &what, |it, _key| {
+            "query" => self.external("action", jbody, retries, &what, |it, _key| {
                 Answer::Done(db::query(&file, sql, &params, it.fs_max_read_bytes, it.tcp.timeout).map(|rows| json!({ "text": scrub_text(&it.secrets, &rows.to_string()) })))
             })?,
             "execute" => {
                 self.effects += 1;
-                self.external("action", jbody, keyed, &what, |it, key| {
+                self.external("action", jbody, retries, &what, |it, key| {
                     let changed = db::execute(&file, sql, &params, keyed.then_some(key), it.tcp.timeout);
                     Answer::Done(changed.map(|n| json!({ "receipt": format!("sqlite:{n}") })))
                 })?
@@ -3579,14 +3752,15 @@ impl<'p> Interp<'p> {
                             "params_sha256": journal::sha256_hex(params_json.as_bytes()) });
         let keyed = self.broker().idempotency_key(h).or_else(internal)?;
         let settings = pg::Settings { connect_timeout: self.tcp.connect_timeout, timeout: self.tcp.timeout, tls: self.tcp.tls.clone() };
+        let retries = runtime_recovery(path, keyed, false).retries();
         let (answer, replayed) = match method {
-            "query" => self.external("action", jbody, true, &what, |it, _key| {
+            "query" => self.external("action", jbody, retries, &what, |it, _key| {
                 let rows = pg::query(&grant, name, sql, &params, it.fs_max_read_bytes, &settings);
                 Answer::Done(rows.map(|rows| json!({ "text": scrub_text(&it.secrets, &rows.to_string()) })).map_err(|e| scrub_text(&it.secrets, &e)))
             })?,
             "execute" => {
                 self.effects += 1;
-                self.external("action", jbody, keyed, &what, |it, key| match pg::execute(&grant, name, sql, &params, keyed.then_some(key), &settings) {
+                self.external("action", jbody, retries, &what, |it, key| match pg::execute(&grant, name, sql, &params, keyed.then_some(key), &settings) {
                     pg::Executed::Done(n) => Answer::Done(Ok(json!({ "receipt": format!("postgres:{n}") }))),
                     // Nothing from the server is trusted to leave the password out.
                     pg::Executed::Failed(e) => Answer::Done(Err(scrub_text(&it.secrets, &e))),

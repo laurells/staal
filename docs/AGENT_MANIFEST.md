@@ -441,7 +441,10 @@ For the agent, and for each tool:
   `unchecked` (`c_functions`, `console`). Three more, so no consumer reconstructs them:
   in `failure`, `outcome_can_be_unknown`, true where a request left in doubt stops the
   run until an operator answers (a request whose result was recorded is replayed, never
-  made again, and one recorded as not sent is a failure the program saw); `network`,
+  made again, and one recorded as not sent is a failure the program saw; a C function is
+  described as `operator`, since how its library will be installed is not in agent.json,
+  and a run whose grant makes it contained or `"repeatable": true` repeats it instead);
+  `network`,
   for each runtime capability that leaves the machine, its declared `reach`, the `only`
   its type writes, and what is enforced: the canonical target of every request
   (`checked`), no redirect followed, when TLS verifies the host (`tls`), `dns_trusted:

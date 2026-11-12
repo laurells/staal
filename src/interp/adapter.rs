@@ -59,6 +59,13 @@ struct World {
 }
 
 impl SimulatedAdapter {
+    /// Whether it treats every action as deduplicated by its idempotency key (the
+    /// config's `idempotent`, true unless set false): what `Adapter::idempotent` answers
+    /// for every action.
+    pub fn is_idempotent(&self) -> bool {
+        self.idempotent
+    }
+
     pub fn from_config(cfg: Option<&Json>) -> Result<SimulatedAdapter, String> {
         let mut adapter = SimulatedAdapter { fail_rules: Vec::new(), idempotent: true, world: Default::default() };
         let Some(cfg) = cfg else { return Ok(adapter) };
@@ -164,7 +171,7 @@ impl Adapter for SimulatedAdapter {
     }
 
     fn idempotent(&self, _capability: &str, _method: &str) -> bool {
-        self.idempotent
+        self.is_idempotent()
     }
 
     fn perform(&mut self, key: &str, capability: &str, method: &str, args: &[Json]) -> Result<String, String> {

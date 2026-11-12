@@ -40,28 +40,13 @@ fn bound(b: crate::budget::Bound) -> Json {
 }
 
 /// What a run does with a request through a runtime capability left in doubt by a
-/// crash (RUNTIME.md section 11): `repeat` it (safe to repeat), `resend_with_key` it
-/// (the service deduplicates by the idempotency key the runtime sends), or stop for an
-/// `operator` to answer.
-fn recovery(cap: &str, idempotency_key: bool) -> &'static str {
-    const REPEATABLE: [&str; 9] = [
-        "net.http.get",
-        "fs.read",
-        "fs.write",
-        "db.sqlite.query",
-        "db.postgres.query",
-        "net.tcp.accept",
-        "net.tcp.reply",
-        "net.tls.accept",
-        "net.tls.reply",
-    ];
-    if REPEATABLE.contains(&cap) {
-        "repeat"
-    } else if idempotency_key {
-        "resend_with_key"
-    } else {
-        "operator"
-    }
+/// crash (RUNTIME.md section 11): the rule every action decides with
+/// (`interp::runtime_recovery`). agent.json cannot say how a C library will be
+/// installed, so a C function is described as an operator's to resolve, as it is
+/// unless its run config's grant is contained or `"repeatable": true`, which then
+/// repeat it: the description states the most a run can need of an operator.
+fn recovery(cap: &str, idempotency_key: bool) -> crate::interp::Recovery {
+    crate::interp::runtime_recovery(cap, idempotency_key, false)
 }
 
 /// A runtime capability among a tool's grants and their needs.
@@ -120,19 +105,9 @@ fn networked(cap: &str) -> bool {
 }
 
 /// When a network capability's connections are verified with TLS against the host
-/// name: `https_targets` (net.http: every https URL, and only loopback hosts may use
-/// plain http), `always` (net.tls.*; db.postgres verifies when its grant asks for TLS,
-/// which the business sets at install, so `per_grant`), or `never` (net.tcp.*).
+/// name (`interp::tls_of`).
 fn tls(cap: &str) -> &'static str {
-    if cap.starts_with("net.http.") {
-        "https_targets"
-    } else if cap.starts_with("net.tls.") {
-        "always"
-    } else if cap.starts_with("db.postgres.") {
-        "per_grant"
-    } else {
-        "never"
-    }
+    crate::interp::tls_of(cap).unwrap_or("never")
 }
 
 /// The external expenditure ceiling of one run, per currency: over the entry's
@@ -206,8 +181,8 @@ fn tool(def: &ToolDef, checked: &crate::Checked, authority: &BTreeMap<String, Js
         .iter()
         .map(|g| {
             let r = recovery(&g.cap, g.idempotency_key);
-            json!({ "grant": g.grant, "cap": g.cap, "recovery": r, "relies_on_service": r == "resend_with_key",
-                    "outcome_can_be_unknown": r == "operator" })
+            json!({ "grant": g.grant, "cap": g.cap, "recovery": r.name(), "relies_on_service": r == crate::interp::Recovery::ResendWithKey,
+                    "outcome_can_be_unknown": r.outcome_can_be_unknown() })
         })
         .collect();
     // What a network grant's reach means: the canonical target of every request is

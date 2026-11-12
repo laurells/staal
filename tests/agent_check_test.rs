@@ -237,6 +237,34 @@ fn member_order_does_not_change_the_description() {
     assert_eq!(code, Some(0), "{err}");
 }
 
+/// A request a crash can leave in doubt with nothing to tell whether it happened: without
+/// `idempotency_key`, the refund's POST is an operator's to resolve, and the description
+/// says its outcome can be unknown, as the rule every action decides with gives it.
+#[test]
+fn the_description_says_when_an_outcome_can_be_unknown() {
+    let valid = Path::new(ROOT).join("tests/fixtures/agent/valid/refunds");
+    let mut m: Json = serde_json::from_str(&std::fs::read_to_string(valid.join("agent.json")).unwrap()).unwrap();
+    let mut found = 0;
+    for t in m["tools"].as_array_mut().unwrap() {
+        for g in t["grants"].as_object_mut().unwrap().values_mut() {
+            if let Some(post) = g.pointer_mut("/needs/post").and_then(Json::as_object_mut) {
+                found += usize::from(post.remove("idempotency_key").is_some());
+            }
+        }
+    }
+    assert_eq!(found, 1, "the fixture's keyed POST was not where this test expects it");
+    let file = Path::new(env!("CARGO_TARGET_TMPDIR")).join("agent-no-key.json");
+    std::fs::write(&file, m.to_string()).unwrap();
+    let d = agent_dir("no-key", &file);
+    let (code, err) = staalc_agent("describe", &d);
+    assert_eq!(code, Some(0), "{err}");
+    let described: Json = serde_json::from_str(&std::fs::read_to_string(d.join("agent.described.json")).unwrap()).unwrap();
+    assert_eq!(
+        described["tools"][0]["failure"],
+        serde_json::json!([{ "cap": "net.http.post", "grant": "pay.post", "outcome_can_be_unknown": true, "recovery": "operator", "relies_on_service": false }])
+    );
+}
+
 /// A tool's program must be a file in the agent's folder after every link is resolved:
 /// a link to a file outside is refused; a link to a file inside is that file.
 #[cfg(unix)]
