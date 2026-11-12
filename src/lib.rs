@@ -3,6 +3,10 @@
 // CI runs clippy with warnings as errors (docs/security-review/UNSAFE.md).
 #![warn(clippy::undocumented_unsafe_blocks, clippy::missing_safety_doc)]
 
+/// This staalc's version, as `staalc --version` prints it: for a program that links
+/// staalc and records which one it ran (Staal Studio records it in every audit record).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod agent;
 pub mod aliases;
 pub mod ast;

@@ -27,6 +27,8 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   carries the same identity and durability; `read_records` too. `resume` and `resolve`
   now sync a journal once when they open it, so every record they read is durable even
   if its writer stopped between writing and syncing it.
+- `staalc::VERSION`: this staalc's version, for a program that links it and records which
+  one it ran.
 
 - `Journal::resolve_decision`: a resolution recorded with the operator's decision (an
   id of 128 random bits, the run, the operation, the resolution, the evidence and the
