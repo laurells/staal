@@ -1127,8 +1127,16 @@ fn check_in_reads_no_link_no_second_name_and_nothing_outside() {
         // SAFETY: mkfifo with a NUL-terminated path.
         assert_eq!(unsafe { libc::mkfifo(p.as_ptr(), 0o600) }, 0);
     }, "not a regular file");
-    // A module that is not there at all.
-    refused("missing", &|a| std::fs::remove_file(a.join("util/greet.staal")).unwrap(), "there is no such file");
+    // A module that is not there at all, or whose folder is not: said as the command line
+    // says it, reading by path.
+    for (name, gone) in [("missing", "util/greet.staal"), ("missing-folder", "util")] {
+        let (app, e) = refused(name, &|a| {
+            let p = a.join(gone);
+            if p.is_dir() { std::fs::remove_dir_all(p).unwrap() } else { std::fs::remove_file(p).unwrap() }
+        }, "No such file or directory");
+        let by_path = staalc::check_path(&app.join("main.staal")).unwrap().result.unwrap_err();
+        assert_eq!(e, by_path.iter().map(|d| d.msg.clone()).collect::<Vec<_>>().join("\n"), "{name}");
+    }
     // A path out of the folder opened.
     let app = b.join("plain");
     let root = staalc::interp::fsx::Root::open(&app).unwrap();

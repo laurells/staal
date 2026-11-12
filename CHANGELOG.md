@@ -187,6 +187,10 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Fixed
 
+- A program checked through a `Root` (`check_in`) is told of a module that is not
+  there, or whose folder is not, in the words `check_path` uses (the system's own for a
+  missing file), where it said "there is no such file" or that the folder "does not
+  exist".
 - A library loaded into the process (`"isolation": "none"`) after another one could be
   given the other's code: it was loaded through `/proc/self/fd/N` and the descriptor
   closed, so the next library's descriptor reused N, and the dynamic loader, asked for a

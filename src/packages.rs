@@ -537,16 +537,28 @@ impl<'a> RootFiles<'a> {
 impl ProjectFiles for RootFiles<'_> {
     fn read(&self, rel: &str) -> Result<String, ReadError> {
         let full = self.full(rel);
-        let (dir, name) = full.rsplit_once('/').unwrap_or(("", full.as_str()));
-        // Whether it is there at all: a listing of its folder, which follows no link.
-        let present = match self.root.list(dir) {
-            Ok(entries) => entries.iter().any(|e| e.name.as_deref() == Some(name)),
-            Err(e) => return Err(ReadError::Other(format!("cannot read {}: {e}", self.shown(rel)))),
+        // Not there, said as reading it by path says it (the system's own words for
+        // ENOENT), so a program checked through a root is told what `staalc check` tells.
+        let not_found = || ReadError::NotFound(format!("cannot read {}: {}", self.shown(rel), std::io::Error::from_raw_os_error(libc::ENOENT)));
+        let e = match self.root.read(&full, MAX_PROJECT_FILE_BYTES as usize) {
+            Ok(text) => return Ok(text),
+            Err(e) => e,
         };
-        if !present {
-            return Err(ReadError::NotFound(format!("cannot read {}: there is no such file", self.shown(rel))));
+        // Refused: if it is because something on the way is not there, said as such. A
+        // path the root refuses for its form ('..', '.', an empty part, an absolute path)
+        // keeps the root's own words. Each folder on the way, then the file, is looked
+        // for in a listing of the folder holding it, which follows no link.
+        let parts: Vec<&str> = full.split('/').collect();
+        if parts.iter().all(|p| !p.is_empty() && *p != "." && *p != "..") && !full.starts_with('/') {
+            for k in 0..parts.len() {
+                match self.root.list(&parts[..k].join("/")) {
+                    Ok(entries) if entries.iter().any(|x| x.name.as_deref() == Some(parts[k])) => {}
+                    Ok(_) => return Err(not_found()),
+                    Err(_) => break,
+                }
+            }
         }
-        self.root.read(&full, MAX_PROJECT_FILE_BYTES as usize).map_err(|e| ReadError::Other(format!("cannot read {}: {e}", self.shown(rel))))
+        Err(ReadError::Other(format!("cannot read {}: {e}", self.shown(rel))))
     }
     fn has(&self, name: &str) -> bool {
         self.root.list(&self.base).is_ok_and(|entries| entries.iter().any(|e| e.name.as_deref() == Some(name)))
