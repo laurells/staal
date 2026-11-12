@@ -133,17 +133,17 @@ path, including exceptions.
 | `src/cli.rs:688` | `staal_aot_main` | block | see above. |
 | `src/host/ledger.rs:116` | `boot_ms` | block | `ts` is a valid timespec to write; the clock id is supported here. |
 | `src/host/tool.rs:322` | `private_dir` | block | geteuid has no preconditions and cannot fail. |
-| `src/interp/ffi.rs:199` | `call_here` | fn | `addr` must be a function of a library loaded here. Whether it really takes `params` and returns `ret` nothing can check: that is the declaration's promise. |
-| `src/interp/ffi.rs:210` | `call_here` | block | the caller's contract. Each argument is in the register its declared type needs, and `texts` outlives the call. |
-| `src/interp/ffi.rs:285` | `value` | block | the declaration says the function returns a NUL-terminated string; at most MAX_TEXT + 1 bytes are read looking for its end. |
-| `src/interp/ffi.rs:290` | `value` | block | `n` bytes from `p` were just found to precede a NUL. |
-| `src/interp/ffi.rs:325` | `call` | block | none can be given. The function is called with the signature the program declared, which nothing checks against the library; this is why a run that calls C in this process is marked unchecked. |
-| `src/interp/ffi.rs:364` | `open` | block | loading a library runs its initialisers, which nothing can check; the run is marked unchecked for it. |
-| `src/interp/ffi.rs:368` | `open` | block | dlerror returns a NUL-terminated message, or null. |
-| `src/interp/ffi.rs:381` | `symbol` | block | `handle` came from dlopen and is never closed. |
-| `src/interp/ffi.rs:387` | `call` | fn | `addr` must be a C function taking `regs.len()` integer-class arguments. |
-| `src/interp/ffi.rs:397` | `call` | block | the caller's contract; each transmute turns a code address into the function pointer type of its arity. |
-| `src/interp/ffi.rs:422` | `call` | fn | Never reached: no library can be opened here, so there is no address to call. |
+| `src/interp/ffi.rs:219` | `call_here` | fn | `addr` must be a function of a library loaded here. Whether it really takes `params` and returns `ret` nothing can check: that is the declaration's promise. |
+| `src/interp/ffi.rs:230` | `call_here` | block | the caller's contract. Each argument is in the register its declared type needs, and `texts` outlives the call. |
+| `src/interp/ffi.rs:305` | `value` | block | the declaration says the function returns a NUL-terminated string; at most MAX_TEXT + 1 bytes are read looking for its end. |
+| `src/interp/ffi.rs:310` | `value` | block | `n` bytes from `p` were just found to precede a NUL. |
+| `src/interp/ffi.rs:345` | `call` | block | none can be given. The function is called with the signature the program declared, which nothing checks against the library; this is why a run that calls C in this process is marked unchecked. |
+| `src/interp/ffi.rs:415` | `open` | block | loading a library runs its initialisers, which nothing can check; the run is marked unchecked for it. |
+| `src/interp/ffi.rs:418` | `open` | block | dlerror returns a NUL-terminated message, or null. |
+| `src/interp/ffi.rs:442` | `symbol` | block | `handle` came from dlopen and is never closed. |
+| `src/interp/ffi.rs:448` | `call` | fn | `addr` must be a C function taking `regs.len()` integer-class arguments. |
+| `src/interp/ffi.rs:458` | `call` | block | the caller's contract; each transmute turns a code address into the function pointer type of its arity. |
+| `src/interp/ffi.rs:486` | `call` | fn | Never reached: no library can be opened here, so there is no address to call. |
 | `src/interp/ffi_worker.rs:220` | `executable` | block | an all-zero Dl_info is a valid value to be filled in. |
 | `src/interp/ffi_worker.rs:222` | `executable` | block | dladdr reads the address of a function of this library and fills `info`. |
 | `src/interp/ffi_worker.rs:227` | `executable` | block | dladdr filled `dli_fname` with a NUL-terminated path. |
@@ -285,6 +285,8 @@ path, including exceptions.
 | `src/native.rs:1000` | `rt_fail` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
 | `src/native.rs:1638` | `callable` | block | `ptr` is a finalized wrapper with signature (ctx, argv) -> i64, generated above; `argv` holds exactly as many i64 as the function takes; the module that owns the code lives as long as `self`. |
 | `src/native.rs:1945` | `drop` | block | no pointer into the module's code outlives `self`; `entries` is dropped with it and `call` cannot run concurrently with drop. |
+
+189 lines, 189 `unsafe` items; 0 without a written justification.
 
 189 lines, 189 `unsafe` items; 0 without a written justification.
 

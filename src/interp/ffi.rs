@@ -163,6 +163,26 @@ pub fn load(path: &str, sha256: &str, isolation: Isolation, loaded: &mut Vec<Arc
     Ok(lib)
 }
 
+/// What `load` checks before it loads anything, without loading it, so no C code runs: for
+/// a plan (`interp::plan`), shown before a run is confirmed. That the library has the
+/// function the program declares can be checked only by loading it, so a run checks it
+/// when it starts. `checked` holds what was checked before, as `loaded` does for `load`.
+pub fn check(path: &str, sha256: &str, isolation: Isolation, checked: &mut Vec<(String, String, Isolation)>) -> Result<(), String> {
+    supported()?;
+    if let Some((_, _, was)) = checked.iter().find(|(p, s, _)| p == path && s == sha256) {
+        if *was != isolation {
+            return Err(format!("{path} is granted with isolation \"{}\" and \"{}\": one library runs one way", was.name(), isolation.name()));
+        }
+        return Ok(());
+    }
+    if isolation == Isolation::Contained && !can_contain() {
+        return Err("C code can be contained only on Linux (x86_64 and aarch64); grant it with \"isolation\": \"separate\" or \"none\", which mark the run unchecked".into());
+    }
+    imp::checked_file(path, sha256)?;
+    checked.push((path.to_string(), sha256.to_string(), isolation));
+    Ok(())
+}
+
 /// The function `name` of `lib`, with its declared signature.
 pub fn function(lib: &Arc<Library>, name: &str, params: &[CType], ret: CType, repeatable: bool) -> Result<Function, String> {
     if params.len() > MAX_ARGS {
@@ -336,7 +356,9 @@ mod imp {
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
 
-    pub fn open(path: &str, sha256: &str) -> Result<usize, String> {
+    /// The library file at `path`, checked: a regular file no other user can change,
+    /// whose SHA-256 is `sha256`. Opened and read, never loaded.
+    pub fn checked_file(path: &str, sha256: &str) -> Result<std::fs::File, String> {
         let mut file = std::fs::File::open(path).map_err(|e| format!("cannot open {path}: {e}"))?;
         let meta = file.metadata().map_err(|e| format!("{path}: {e}"))?;
         if !meta.is_file() {
@@ -351,6 +373,35 @@ mod imp {
         if have != sha256 {
             return Err(format!("{path} has SHA-256 {have}, not the {sha256} the grant names"));
         }
+        Ok(file)
+    }
+
+    /// Every library this process has loaded, by the SHA-256 of the file it was loaded
+    /// from, with its handle and, on Linux, the descriptor it was loaded through. Nothing
+    /// is ever unloaded, so nothing leaves this list.
+    ///
+    /// The dynamic loader returns a library it already has when asked for one by a name it
+    /// has loaded before. Loading through /proc/self/fd/N, a descriptor closed afterwards
+    /// lets the next library's descriptor take the same number N, and the loader would give
+    /// back the first library for the second: so each descriptor stays open as long as its
+    /// library is loaded, and no name is ever reused. On macOS, which loads by path, a file
+    /// replaced at a path already loaded gives back the old library: so a handle the loader
+    /// returns that is already this list's, for another SHA-256, is refused.
+    struct Loaded {
+        sha256: String,
+        handle: usize,
+        _through: Option<std::fs::File>,
+    }
+
+    static LOADED: std::sync::Mutex<Vec<Loaded>> = std::sync::Mutex::new(Vec::new());
+
+    pub fn open(path: &str, sha256: &str) -> Result<usize, String> {
+        let file = checked_file(path, sha256)?;
+        let mut loaded = LOADED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The same bytes loaded before: the same library, already initialised.
+        if let Some(l) = loaded.iter().find(|l| l.sha256 == sha256) {
+            return Ok(l.handle);
+        }
         // Load the file that was hashed: on Linux through this descriptor.
         let target = if cfg!(target_os = "linux") {
             use std::os::fd::AsRawFd;
@@ -362,7 +413,6 @@ mod imp {
         // SAFETY: loading a library runs its initialisers, which nothing can check;
         // the run is marked unchecked for it.
         let handle = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
-        drop(file);
         if handle.is_null() {
             // SAFETY: dlerror returns a NUL-terminated message, or null.
             let why = unsafe {
@@ -371,8 +421,19 @@ mod imp {
             };
             return Err(format!("cannot load {path}: {why}"));
         }
-        // Never unloaded: unloading C code can leave the process pointing into it.
-        Ok(handle as usize)
+        let handle = handle as usize;
+        if let Some(other) = loaded.iter().find(|l| l.handle == handle) {
+            return Err(format!(
+                "{path}: the dynamic loader gave back a library this process already loaded from another file (SHA-256 \
+                 {}), not the one with SHA-256 {sha256}; a library cannot be replaced while the process runs, so start \
+                 it again to load this one",
+                other.sha256
+            ));
+        }
+        // Never unloaded: unloading C code can leave the process pointing into it. The
+        // descriptor stays open as long, so its /proc/self/fd name is never reused.
+        loaded.push(Loaded { sha256: sha256.to_string(), handle, _through: cfg!(target_os = "linux").then_some(file) });
+        Ok(handle)
     }
 
     pub fn symbol(handle: usize, name: &str) -> Option<usize> {
@@ -411,6 +472,9 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
+    pub fn checked_file(_: &str, _: &str) -> Result<std::fs::File, String> {
+        Err("C libraries can be called only on x86_64 and aarch64, on Linux and macOS".into())
+    }
     pub fn open(_: &str, _: &str) -> Result<usize, String> {
         Err("C libraries can be called only on x86_64 and aarch64, on Linux and macOS".into())
     }

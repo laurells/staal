@@ -582,3 +582,124 @@ fn a_contained_librarys_initialiser_can_do_nothing_but_load() {
     // The contained attempt to write left nothing; the one in this process did.
     assert_eq!(std::fs::read_to_string(&mark).unwrap(), "an initialiser wrote this\n");
 }
+
+/// A plan that checks C libraries (`CLibraries::Check`), as one shown before a run is
+/// confirmed does, checks a C grant as loading would and runs no C code: a library whose
+/// initialiser writes a file the moment it is loaded writes nothing, and the plan says how
+/// it runs. The run, and a plan that loads, load it.
+#[test]
+fn a_plan_checks_a_c_grant_without_loading_its_library() {
+    let dir = scratch("plan-no-load");
+    let mark = dir.join("initialiser.txt");
+    let lib = dir.join("libhostile-plan.so");
+    let o = Command::new("cc")
+        .args(["-shared", "-fPIC", "-O1", &format!("-DMARK=\"{}\"", mark.display()), "-o"])
+        .arg(&lib)
+        .arg(Path::new(ROOT).join("tests/ffi/hostile_init.c"))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let sha = staalc::packages::sha256_hex(&std::fs::read(&lib).unwrap());
+    let src = "foreign ffi.hostile {\n    fn initialiser_wrote() -> i64\n}\n\nfn main(h: cap ffi.hostile.initialiser_wrote) -> Int {\n    return h.initialiser_wrote()\n}\n";
+    let prog = staalc::check_program(src).unwrap();
+    let cfg = |sha: &str| {
+        json!({ "entry": "main", "grants": { "h": { "cap": "ffi.hostile.initialiser_wrote", "library": lib.to_str().unwrap(), "sha256": sha, "isolation": "none" } } })
+    };
+    let check = |c: &Json| staalc::interp::plan_with(&prog, c, std::sync::Arc::new(staalc::interp::values::ProcessEnvironment), staalc::interp::CLibraries::Check);
+    let plan = check(&cfg(&sha)).unwrap();
+    assert!(!mark.exists(), "planning ran the library's initialiser");
+    let g = &plan.grants[0];
+    assert_eq!((g.path.as_str(), g.runtime, g.isolation), ("ffi.hostile.initialiser_wrote", true, Some("none")));
+    // A file whose SHA-256 is not the grant's: refused by the plan as by the run.
+    let wrong = "0".repeat(64);
+    let planned = check(&cfg(&wrong)).unwrap_err();
+    let ran = staalc::interp::run_config(&prog, &cfg(&wrong)).unwrap_err();
+    assert_eq!(planned, ran);
+    assert!(planned.contains("not the 0000"), "{planned}");
+    assert!(!mark.exists());
+    // The run loads it: the initialiser runs. So does a plan that loads, as `plan` does.
+    let r = staalc::interp::run_config(&prog, &cfg(&sha)).unwrap();
+    assert_eq!(r.result.unwrap(), json!(1));
+    assert!(mark.exists());
+    // A library already in this process is not initialised again, so a plan that loads is
+    // shown with another library, which its own initialiser marks.
+    let other_mark = dir.join("other.txt");
+    let other = dir.join("libhostile-plan-other.so");
+    let o = Command::new("cc")
+        .args(["-shared", "-fPIC", "-O1", &format!("-DMARK=\"{}\"", other_mark.display()), "-o"])
+        .arg(&other)
+        .arg(Path::new(ROOT).join("tests/ffi/hostile_init.c"))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let other_sha = staalc::packages::sha256_hex(&std::fs::read(&other).unwrap());
+    let loads = json!({ "entry": "main", "grants": { "h": { "cap": "ffi.hostile.initialiser_wrote", "library": other.to_str().unwrap(), "sha256": other_sha, "isolation": "none" } } });
+    staalc::interp::plan(&prog, &loads).unwrap();
+    assert!(other_mark.exists(), "plan loads, as it always has");
+}
+
+/// Whether a grant's actions are the runtime's own (live) or go to the run's adapter.
+#[test]
+fn a_plan_says_which_grants_are_the_runtimes_own() {
+    let src = "fn main(get: cap net.http.get, mail: cap email.send) -> Int {\n    return 1\n}\n";
+    let prog = staalc::check_program(src).unwrap();
+    let cfg = json!({ "entry": "main", "grants": {
+        "get": { "cap": "net.http.get", "only": ["https://example.com/*"] },
+        "mail": { "cap": "email.send" } } });
+    let plan = staalc::interp::plan(&prog, &cfg).unwrap();
+    let by: std::collections::HashMap<&str, (bool, Option<&str>)> = plan.grants.iter().map(|g| (g.name.as_str(), (g.runtime, g.isolation))).collect();
+    assert_eq!(by["get"], (true, None));
+    assert_eq!(by["mail"], (false, None));
+}
+
+/// Two libraries loaded one after the other into one process (`isolation: none`) are each
+/// themselves: each one's initialiser runs and its own code answers. A library file
+/// replaced at a path already loaded is loaded anew on Linux, which loads through the
+/// file's descriptor, and refused on macOS, which loads by path and would give back the
+/// old one: never the old code under the new file's SHA-256.
+#[test]
+fn each_library_loaded_into_this_process_is_the_one_its_grant_names() {
+    let dir = scratch("two-libraries");
+    let src = "foreign ffi.hostile {\n    fn initialiser_wrote() -> i64\n}\n\nfn main(h: cap ffi.hostile.initialiser_wrote) -> Int {\n    return h.initialiser_wrote()\n}\n";
+    let prog = staalc::check_program(src).unwrap();
+    let build = |lib: &Path, mark: &Path| {
+        let o = Command::new("cc")
+            .args(["-shared", "-fPIC", "-O1", &format!("-DMARK=\"{}\"", mark.display()), "-o"])
+            .arg(lib)
+            .arg(Path::new(ROOT).join("tests/ffi/hostile_init.c"))
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        staalc::packages::sha256_hex(&std::fs::read(lib).unwrap())
+    };
+    let run = |lib: &Path, sha: &str| {
+        let cfg = json!({ "entry": "main", "grants": { "h": { "cap": "ffi.hostile.initialiser_wrote", "library": lib.to_str().unwrap(), "sha256": sha, "isolation": "none" } } });
+        staalc::interp::run_config(&prog, &cfg)
+    };
+    for name in ["a", "b", "c"] {
+        let (lib, mark) = (dir.join(format!("lib{name}.so")), dir.join(format!("{name}.txt")));
+        let sha = build(&lib, &mark);
+        assert_eq!(run(&lib, &sha).unwrap().result.unwrap(), json!(1), "{name}");
+        assert!(mark.exists(), "library {name} was never loaded: another library answered for it");
+        // Again: the same library, already loaded, answers; nothing is loaded twice.
+        std::fs::remove_file(&mark).unwrap();
+        assert_eq!(run(&lib, &sha).unwrap().result.unwrap(), json!(1), "{name} again");
+        assert!(!mark.exists(), "{name} was initialised twice");
+    }
+    // Replaced at the same path by another library.
+    let (lib, first, second) = (dir.join("libreplaced.so"), dir.join("first.txt"), dir.join("second.txt"));
+    let sha1 = build(&lib, &first);
+    run(&lib, &sha1).unwrap().result.unwrap();
+    std::fs::remove_file(&lib).unwrap();
+    let sha2 = build(&lib, &second);
+    assert_ne!(sha1, sha2);
+    let r = run(&lib, &sha2);
+    if cfg!(target_os = "linux") {
+        assert_eq!(r.unwrap().result.unwrap(), json!(1));
+        assert!(second.exists(), "the replacing library was never loaded");
+    } else {
+        let e = r.map(|r| r.result).unwrap_err();
+        assert!(e.contains("cannot be replaced while the process runs"), "{e}");
+        assert!(!second.exists());
+    }
+}

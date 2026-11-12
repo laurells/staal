@@ -19,6 +19,11 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- `interp::plan_with` takes `CLibraries::Check`: a C grant checked as loading would check
+  it, without loading it, so no C code runs; and each `GrantPlan` says whether it is the
+  runtime's own capability (`runtime`, live: no simulated form) and, for a C function,
+  its `isolation`. `plan` still loads, as before.
+
 - Cancelling a run (RUNTIME.md section 22): `interp::cancel::Cancel`, given in `Attached`,
   stops a run at its next step (on the interpreter and in native code, which reads the
   flag atomically) or before its next operation, in every concurrent task, with a new
@@ -131,6 +136,15 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   `staalc agent describe` reports them as each network grant's `addresses`.
 
 ### Fixed
+
+- A library loaded into the process (`"isolation": "none"`) after another one could be
+  given the other's code: it was loaded through `/proc/self/fd/N` and the descriptor
+  closed, so the next library's descriptor reused N, and the dynamic loader, asked for a
+  name it had loaded, returned the first library. Its SHA-256 had been checked; its
+  code never ran. Each descriptor now stays open while its library is loaded (always),
+  a library whose bytes were loaded before is reused by SHA-256, and a handle the loader
+  gives back for another SHA-256 is refused (on macOS, a file replaced at a path already
+  loaded). The C worker's isolations were not affected: a worker loads one library.
 
 - `staal_run_status` no longer says `running` for a run whose end the ledger has
   recorded: between recording a run's end and answering its own call, the server

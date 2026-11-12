@@ -2031,6 +2031,20 @@ pinned: libraries it depends on are found by the system's loader as usual, and a
 library that finds others relative to its own location may not find them. Loading
 runs the library's initialisers. A library is never unloaded.
 
+A process can load many libraries over its life (the MCP server's runs, a program that
+embeds staalc). Each is the one its grant names: a library whose bytes this process has
+loaded before (by SHA-256) is that library, already initialised; any other is loaded
+anew. The dynamic loader gives back a library it already has when asked for one by a name
+it has loaded, so on Linux each library's descriptor stays open as long as the process
+runs, and its `/proc/self/fd` name is never given to another file; on macOS, a file
+replaced at a path this process has already loaded is refused ("a library cannot be
+replaced while the process runs"), since the loader would give back the old one.
+
+`interp::plan_with` with `CLibraries::Check` checks a C grant as loading would (the
+file, its SHA-256, the isolation it may run with) without loading it, so no C code runs:
+for a plan shown before a run is confirmed. That the library has the function the
+program declares is checked when the run starts. `interp::plan` loads, as a run does.
+
 ### Isolation
 
 `isolation` says where the library's C code runs; it is optional, and absent means

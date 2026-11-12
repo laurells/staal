@@ -393,17 +393,40 @@ pub struct GrantPlan {
     /// Whether it (or, for a library capability, any of its needs) is a
     /// `net.tcp.accept` with no `wait_ms`, whose accept can wait for ever.
     pub waits_unbounded: bool,
+    /// Whether it (or, for a library capability, any of its needs) is one of the
+    /// runtime's own capabilities (`net.*`, `fs.*`, `db.*`, `ffi.*`), which have no
+    /// simulated form: what it does is done. Otherwise its actions go to the run's
+    /// adapter (the simulated adapter, for a run config's).
+    pub runtime: bool,
+    /// For a C function (`ffi.*`): how its library runs, `contained`, `separate` or
+    /// `none` (RUNTIME.md section 19).
+    pub isolation: Option<&'static str>,
 }
 
-/// Checks `config` for `prog` as a run would, without running anything, and says what
-/// it grants. The model and adapter settings are checked too.
+/// What a plan does with the C libraries a config grants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CLibraries {
+    /// Loads them, as a run does, which runs their initialisers: then that the library has
+    /// the function the program declares is checked too.
+    Load,
+    /// Checks them as loading would (the file, its SHA-256, how it may run) without
+    /// loading them, so no C code runs: for a plan shown before a run is confirmed. The
+    /// function's presence is checked when the run starts.
+    Check,
+}
+
+/// Checks `config` for `prog` as a run would, without starting it, and says what it
+/// grants. The model and adapter settings are checked too. The C libraries the config
+/// grants are loaded, which runs their initialisers (`CLibraries::Load`); `plan_with` can
+/// check them without loading them.
 pub fn plan(prog: &Program, config: &Json) -> Result<Plan, String> {
-    plan_with(prog, config, std::sync::Arc::new(values::ProcessEnvironment))
+    plan_with(prog, config, std::sync::Arc::new(values::ProcessEnvironment), CLibraries::Load)
 }
 
-/// As `plan`, with the run's values from `values` instead of the process's environment.
-pub fn plan_with(prog: &Program, config: &Json, values: std::sync::Arc<dyn values::Values>) -> Result<Plan, String> {
-    let setup = Setup::from_config(prog, config, values.clone())?;
+/// As `plan`, with the run's values from `values` instead of the process's environment, and
+/// the C libraries loaded or only checked as `c` says.
+pub fn plan_with(prog: &Program, config: &Json, values: std::sync::Arc<dyn values::Values>, c: CLibraries) -> Result<Plan, String> {
+    let setup = Setup::from_config(prog, config, values.clone(), c == CLibraries::Load)?;
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
     provider::of_run(cfg.get("model"), values.as_ref())?;
     SimulatedAdapter::from_config(cfg.get("adapters"))?;
@@ -467,6 +490,12 @@ pub fn plan_with(prog: &Program, config: &Json, values: std::sync::Arc<dyn value
                     return Err(format!("grants.{name}: its limits are in {} and {}, so no action could satisfy both", m.currency.code, p.currency.code));
                 }
                 let worst = smaller(max, per_use);
+                let isolation = if path.starts_with("ffi.") {
+                    let g = cfg.get("grants").and_then(|g| g.get(name.as_str()));
+                    Some(ffi::Isolation::from_grant(g.and_then(|g| g.get("isolation")))?.name())
+                } else {
+                    None
+                };
                 grants.push(GrantPlan {
                     name: name.clone(),
                     path: path.clone(),
@@ -476,6 +505,8 @@ pub fn plan_with(prog: &Program, config: &Json, values: std::sync::Arc<dyn value
                     spends,
                     worst,
                     waits_unbounded,
+                    runtime: is_runtime_cap(path) || need_caps.iter().any(|(p, _)| is_runtime_cap(p)),
+                    isolation,
                 });
             }
         }
@@ -617,7 +648,7 @@ fn run_impl(
 ) -> Result<RunResult, String> {
     // Validate everything first: a bad config must not even create a journal.
     let values = hooks.values.take().unwrap_or_else(|| std::sync::Arc::new(values::ProcessEnvironment));
-    let setup = Setup::from_config(prog, config, values)?;
+    let setup = Setup::from_config(prog, config, values, true)?;
     // After the config is checked, before the journal: a run whose observer cannot be
     // started does not start.
     let feed = hooks.observe.take().map(observe::Feed::start).transpose()?;
@@ -726,6 +757,10 @@ struct RuntimeSettings {
     values: std::sync::Arc<dyn values::Values>,
     /// The C libraries the run's grants load, each once.
     libraries: Vec<std::sync::Arc<ffi::Library>>,
+    /// Whether C libraries are loaded (a run) or only checked without loading, so that no
+    /// C code runs (a plan): what `ffi::check` checked.
+    load_c: bool,
+    checked_c: Vec<(String, String, ffi::Isolation)>,
 }
 
 enum Arg {
@@ -939,7 +974,7 @@ fn parse_grant(
             }
         }
     }
-    let foreign = if c_function { Some(load_c_function(g, at, want, prog, &mut runtime.libraries)?) } else { None };
+    let foreign = if c_function { load_c_function(g, at, want, prog, runtime)? } else { None };
     let postgres = if postgres { Some(std::sync::Arc::new(postgres_grant(g, at, runtime)?)) } else { None };
     Ok(ParsedGrant { limits, idempotency_key, addresses, needs, foreign, postgres, listen })
 }
@@ -1004,13 +1039,9 @@ fn postgres_grant(g: &Map<String, Json>, at: &str, runtime: &mut RuntimeSettings
 
 /// The C function an `ffi.*` grant names: its library file, pinned by SHA-256, loaded,
 /// and the function found in it with the signature the program declares.
-fn load_c_function(
-    g: &Map<String, Json>,
-    at: &str,
-    want: &str,
-    prog: &Program,
-    libraries: &mut Vec<std::sync::Arc<ffi::Library>>,
-) -> Result<std::sync::Arc<ffi::Function>, String> {
+/// The C function a grant names, loaded; or, when `runtime.load_c` is off (a plan), checked
+/// as loading would check it, without loading it, and None.
+fn load_c_function(g: &Map<String, Json>, at: &str, want: &str, prog: &Program, runtime: &mut RuntimeSettings) -> Result<Option<std::sync::Arc<ffi::Function>>, String> {
     let f = prog
         .foreign
         .iter()
@@ -1028,10 +1059,14 @@ fn load_c_function(
         Some(_) => return Err(format!("{at}.repeatable: expected true or false")),
     };
     let isolation = ffi::Isolation::from_grant(g.get("isolation")).map_err(|e| format!("{at}.isolation: {e}"))?;
-    let lib = ffi::load(&path, sha, isolation, libraries).map_err(|e| format!("{at}: {e}"))?;
+    if !runtime.load_c {
+        ffi::check(&path, sha, isolation, &mut runtime.checked_c).map_err(|e| format!("{at}: {e}"))?;
+        return Ok(None);
+    }
+    let lib = ffi::load(&path, sha, isolation, &mut runtime.libraries).map_err(|e| format!("{at}: {e}"))?;
     let params: Vec<CType> = f.params.iter().map(|(_, t)| *t).collect();
     let func = ffi::function(&lib, &f.name, &params, f.ret, repeatable).map_err(|e| format!("{at}: {e}"))?;
-    Ok(std::sync::Arc::new(func))
+    Ok(Some(std::sync::Arc::new(func)))
 }
 
 /// Whether capability `want` connects to addresses a program chooses, so that its grant
@@ -1159,7 +1194,7 @@ fn positive(v: &Json, at: &str) -> Result<u64, String> {
 
 /// `"net": {"timeout_ms", "connect_timeout_ms", "max_response_bytes", "proxy"}` and
 /// `"fs": {"max_read_bytes"}`.
-fn runtime_settings(cfg: &Map<String, Json>, values: std::sync::Arc<dyn values::Values>) -> Result<RuntimeSettings, String> {
+fn runtime_settings(cfg: &Map<String, Json>, values: std::sync::Arc<dyn values::Values>, load_c: bool) -> Result<RuntimeSettings, String> {
     let mut net = http::Settings::default();
     if let Some(n) = cfg.get("net") {
         let n = n.as_object().ok_or("net: expected an object")?;
@@ -1204,7 +1239,7 @@ fn runtime_settings(cfg: &Map<String, Json>, values: std::sync::Arc<dyn values::
         }
     }
     let tls = tcp::tls_config(&net.extra_roots)?;
-    Ok(RuntimeSettings { net, fs_max_read_bytes, secrets: Vec::new(), values, tls, libraries: Vec::new() })
+    Ok(RuntimeSettings { net, fs_max_read_bytes, secrets: Vec::new(), values, tls, libraries: Vec::new(), load_c, checked_c: Vec::new() })
 }
 
 /// Converts a limit written in source (`max: 500 USD`) to money.
@@ -1274,7 +1309,8 @@ pub(crate) fn check_currencies(limits: &broker::Limits, at: &str) -> Result<(), 
 }
 
 impl Setup {
-    fn from_config(prog: &Program, config: &Json, values: std::sync::Arc<dyn values::Values>) -> Result<Setup, String> {
+    /// `load_c`: load the C libraries the grants name (a run), or only check them (a plan).
+    fn from_config(prog: &Program, config: &Json, values: std::sync::Arc<dyn values::Values>, load_c: bool) -> Result<Setup, String> {
         let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
         for k in cfg.keys() {
             if !["entry", "inputs", "grants", "secrets", "model", "adapters", "limits", "net", "fs"].contains(&k.as_str()) {
@@ -1322,7 +1358,7 @@ impl Setup {
                 }
             }
         }
-        let mut runtime = runtime_settings(cfg, values)?;
+        let mut runtime = runtime_settings(cfg, values, load_c)?;
         for k in inputs.keys() {
             match f.params.iter().find(|p| &p.name == k) {
                 None => {
