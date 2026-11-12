@@ -19,6 +19,13 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- Cancelling a run (RUNTIME.md section 22): `interp::cancel::Cancel`, given in `Attached`,
+  stops a run at its next step (on the interpreter and in native code, which reads the
+  flag atomically) or before its next operation, in every concurrent task, with a new
+  failure kind, `cancelled`, which `try` cannot catch and which comes before a task's
+  ordinary failure. An operation under way is never interrupted: it finishes or times
+  out, and is journaled. A cancelled run records no end, so it can be resumed.
+
 - A run's values given to it alone (RUNTIME.md section 21): `interp::run_config_attached`
   and `run_attached` take an `Attached` with an observer, a `values::Values` source, or
   both. A run given `values::Given` reads its secrets, model API key and proxy variables

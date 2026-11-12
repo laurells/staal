@@ -166,12 +166,23 @@ const TWO: &str = "fn main(mail: cap email.send) -> Int {
 }
 ";
 
+/// Two actions in one statement: no step comes between them, so only the check before an
+/// operation stops the second.
+const ONE_STATEMENT: &str = "fn both(a: Receipt, b: Receipt) -> Int {
+    return 2
+}
+
+fn main(mail: cap email.send) -> Int {
+    return both(mail.send(\"+2348000000001\"), mail.send(\"+2348000000002\"))
+}
+";
+
 #[test]
 fn an_action_under_way_finishes_and_is_journaled_then_the_run_stops_and_resumes() {
-    let prog = staalc::check_program(TWO).unwrap();
     let cfg = json!({ "entry": "main", "grants": { "mail": { "cap": "email.send" } } });
-    for engine in engines() {
-        let j = tmp(&format!("two-{engine:?}.journal"));
+    for (src, engine) in [TWO, ONE_STATEMENT].into_iter().flat_map(|s| engines().into_iter().map(move |e| (s, e))) {
+        let prog = staalc::check_program(src).unwrap();
+        let j = tmp(&format!("two-{engine:?}-{}.journal", src.len()));
         let performed = Arc::new(AtomicUsize::new(0));
         let (started_tx, started_rx) = channel();
         let (release_tx, release_rx) = channel();
@@ -182,7 +193,7 @@ fn an_action_under_way_finishes_and_is_journaled_then_the_run_stops_and_resumes(
             let (prog, cfg, j, gate) = (&prog, &cfg, &j, gate.clone());
             let h = s.spawn(move || {
                 let provider = of_run(None, &ProcessEnvironment).unwrap();
-                run_attached(prog, TWO, cfg, Durability::Create(j), provider, Box::new(gate), engine, Attached { cancel: Some(c), ..Attached::default() }).unwrap()
+                run_attached(prog, src, cfg, Durability::Create(j), provider, Box::new(gate), engine, Attached { cancel: Some(c), ..Attached::default() }).unwrap()
             });
             started_rx.recv_timeout(Duration::from_secs(30)).unwrap();
             // Cancelled while the first action is under way; then it is let finish.
@@ -198,7 +209,7 @@ fn an_action_under_way_finishes_and_is_journaled_then_the_run_stops_and_resumes(
         // Resumed: the first action is replayed, not made again; the second is made.
         let provider = of_run(None, &ProcessEnvironment).unwrap();
         let again = Gate { performed: performed.clone(), started: Arc::new(Mutex::new(None)), release: Arc::new(Mutex::new(None)) };
-        let r = run_attached(&prog, TWO, &cfg, Durability::Resume(&j), provider, Box::new(again), engine, Attached::default()).unwrap();
+        let r = run_attached(&prog, src, &cfg, Durability::Resume(&j), provider, Box::new(again), engine, Attached::default()).unwrap();
         assert_eq!(r.result.unwrap(), json!(2), "{engine:?}");
         assert_eq!(performed.load(Ordering::SeqCst), 2, "{engine:?}");
         assert_eq!(records(&j).last().unwrap()["j"], "end");

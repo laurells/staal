@@ -2049,7 +2049,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
         // The run's cancel flag, read atomically: another thread may set it at any time.
         let flag = self.b.ins().load(types::I64, flags, self.ctx, OFF_CANCEL);
         let set = self.b.ins().atomic_load(types::I8, MemFlagsData::trusted(), flag);
-        let cancelled = self.b.ins().icmp_imm(IntCC::NotEqual, set, 0);
+        let cancelled = self.b.ins().icmp_imm_u(IntCC::NotEqual, set, 0);
         self.fail_if(cancelled, self.h.cancel, &[]);
     }
 

@@ -1502,6 +1502,7 @@ dependencies = [
  "url",
  "webpki-root-certs",
  "x509-cert",
+ "zeroize",
 ]
 
 [[package]]

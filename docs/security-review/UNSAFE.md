@@ -13,15 +13,16 @@ an `unsafe` block without a `// SAFETY:` comment, or an `unsafe fn` without a
 
 ## 1. Summary
 
-162 items: 107 `unsafe` blocks and 55 `unsafe fn`s, every one with a written
+189 items: 132 `unsafe` blocks (2 of them in tests) and 57 `unsafe fn`s, every one with a written
 justification.
 
 | File | Items | Why `unsafe` is needed |
 | --- | ---: | --- |
-| `src/native.rs` | 101 | The native engine: generated machine code calls back into Rust through `extern "C"` helpers that receive raw pointers |
+| `src/native.rs` | 103 | The native engine: generated machine code calls back into Rust through `extern "C"` helpers that receive raw pointers |
 | `src/capi.rs` | 26 | The C interface: C callers pass `char *` |
-| `src/interp/fsx.rs` | 10 | `openat`, `fstat`, `renameat` and friends: the only way to open each path component without following links (T14) |
-| `src/interp/ffi.rs` | 9 | `cap ffi`: loading a C library and calling it (unchecked by design, T55) |
+| `src/interp/fsx.rs` | 18 | `openat`, `fstat`, `renameat` and friends: the only way to open each path component without following links (T14) |
+| `src/interp/ffi.rs` | 11 | `cap ffi`: loading a C library and calling it (unchecked by design, T55) |
+| `src/interp/ffi_worker.rs` | 15 | The contained C worker: finding its own executable (`dladdr`), framing on its socket, calling the loaded function, and closing every inherited descriptor (RUNTIME.md section 19) |
 | `src/cli.rs` | 5 | The entry point of a `staalc build` executable, called by its generated `main` |
 | `node/src/lib.rs` | 4 | The Node.js addon calling the C interface |
 | `src/interp/tcp.rs` | 2 | `geteuid` (key file owner), `poll` (accept with a deadline) |
@@ -125,137 +126,166 @@ path, including exceptions.
 | `src/capi.rs:573` | `staal_run_status` | block | forwarded from the caller's promise. |
 | `src/capi.rs:585` | `staal_free` | fn | `s` must be NULL or a string returned by a `staal_*` function, freed only once. |
 | `src/capi.rs:588` | `staal_free` | block | `s` came from CString::into_raw in `out`, per the caller's promise. |
-| `src/cli.rs:630` | `staal_aot_main` | fn | `argv` holds `argc` NUL-terminated strings; `bundle` points to `len` bytes; `table` to `n` function addresses. The generated `main` passes exactly these. |
-| `src/cli.rs:641` | `staal_aot_main` | block | see above. |
-| `src/cli.rs:643` | `staal_aot_main` | block | see above. |
-| `src/cli.rs:647` | `staal_aot_main` | block | see above. |
-| `src/cli.rs:649` | `staal_aot_main` | block | see above. |
+| `src/cli.rs:669` | `staal_aot_main` | fn | `argv` holds `argc` NUL-terminated strings; `bundle` points to `len` bytes; `table` to `n` function addresses. The generated `main` passes exactly these. |
+| `src/cli.rs:680` | `staal_aot_main` | block | see above. |
+| `src/cli.rs:682` | `staal_aot_main` | block | see above. |
+| `src/cli.rs:686` | `staal_aot_main` | block | see above. |
+| `src/cli.rs:688` | `staal_aot_main` | block | see above. |
 | `src/host/ledger.rs:116` | `boot_ms` | block | `ts` is a valid timespec to write; the clock id is supported here. |
-| `src/host/tool.rs:320` | `private_dir` | block | geteuid has no preconditions and cannot fail. |
-| `src/interp/ffi.rs:143` | `value` | block | the declaration says the function returns a NUL-terminated string; at most MAX_TEXT + 1 bytes are read looking for its end. |
-| `src/interp/ffi.rs:148` | `value` | block | `n` bytes from `p` were just found to precede a NUL. |
-| `src/interp/ffi.rs:184` | `call` | block | none can be given. The function is called with the signature the program declared, which nothing checks against the library; this is why a run that can call C is marked unchecked. Each argument is in the register its declared type needs, and `texts` outlives the call. |
-| `src/interp/ffi.rs:223` | `open` | block | loading a library runs its initialisers, which nothing can check; the run is marked unchecked for it. |
-| `src/interp/ffi.rs:227` | `open` | block | dlerror returns a NUL-terminated message, or null. |
-| `src/interp/ffi.rs:240` | `symbol` | block | `handle` came from dlopen and is never closed. |
-| `src/interp/ffi.rs:246` | `call` | fn | `addr` must be a C function taking `regs.len()` integer-class arguments. |
-| `src/interp/ffi.rs:256` | `call` | block | the caller's contract; each transmute turns a code address into the function pointer type of its arity. |
-| `src/interp/ffi.rs:282` | `call` | fn | Never reached: no library can be opened here, so there is no address to call. |
-| `src/interp/fsx.rs:37` | `stat_at` | block | `st` is written by fstatat before it is read, and only if it succeeds. |
-| `src/interp/fsx.rs:67` | `openat` | block | `name` is a valid NUL-terminated string; on success the returned descriptor is new and owned by nobody else. |
-| `src/interp/fsx.rs:72` | `openat` | block | `fd` is the new descriptor openat just returned, owned by nobody else. |
-| `src/interp/fsx.rs:100` | `read` | block | `st` is written by fstat before it is read, and only if it succeeds. |
-| `src/interp/fsx.rs:121` | `read` | block | plain fcntl calls on a descriptor we own. |
-| `src/interp/fsx.rs:193` | `write` | block | unlinking a name we created, relative to a directory we hold open. |
-| `src/interp/fsx.rs:199` | `write` | block | fchmod on a descriptor we own; keeps the old file's permissions. |
-| `src/interp/fsx.rs:212` | `write` | block | renaming within one directory we hold open; both names are valid. |
-| `src/interp/fsx.rs:219` | `write` | block | fsync on a directory descriptor we own. |
-| `src/interp/fsx.rs:326` | `refuses_special_files_without_blocking` | block | creating a FIFO at a test path. |
-| `src/interp/tcp.rs:317` | `check_key_file` | block | geteuid has no preconditions and cannot fail. |
-| `src/interp/tcp.rs:443` | `readable` | block | one valid pollfd, for a descriptor that stays open while `listener` lives. |
+| `src/host/tool.rs:322` | `private_dir` | block | geteuid has no preconditions and cannot fail. |
+| `src/interp/ffi.rs:199` | `call_here` | fn | `addr` must be a function of a library loaded here. Whether it really takes `params` and returns `ret` nothing can check: that is the declaration's promise. |
+| `src/interp/ffi.rs:210` | `call_here` | block | the caller's contract. Each argument is in the register its declared type needs, and `texts` outlives the call. |
+| `src/interp/ffi.rs:285` | `value` | block | the declaration says the function returns a NUL-terminated string; at most MAX_TEXT + 1 bytes are read looking for its end. |
+| `src/interp/ffi.rs:290` | `value` | block | `n` bytes from `p` were just found to precede a NUL. |
+| `src/interp/ffi.rs:325` | `call` | block | none can be given. The function is called with the signature the program declared, which nothing checks against the library; this is why a run that calls C in this process is marked unchecked. |
+| `src/interp/ffi.rs:364` | `open` | block | loading a library runs its initialisers, which nothing can check; the run is marked unchecked for it. |
+| `src/interp/ffi.rs:368` | `open` | block | dlerror returns a NUL-terminated message, or null. |
+| `src/interp/ffi.rs:381` | `symbol` | block | `handle` came from dlopen and is never closed. |
+| `src/interp/ffi.rs:387` | `call` | fn | `addr` must be a C function taking `regs.len()` integer-class arguments. |
+| `src/interp/ffi.rs:397` | `call` | block | the caller's contract; each transmute turns a code address into the function pointer type of its arity. |
+| `src/interp/ffi.rs:422` | `call` | fn | Never reached: no library can be opened here, so there is no address to call. |
+| `src/interp/ffi_worker.rs:220` | `executable` | block | an all-zero Dl_info is a valid value to be filled in. |
+| `src/interp/ffi_worker.rs:222` | `executable` | block | dladdr reads the address of a function of this library and fills `info`. |
+| `src/interp/ffi_worker.rs:227` | `executable` | block | dladdr filled `dli_fname` with a NUL-terminated path. |
+| `src/interp/ffi_worker.rs:244` | `checked_file` | block | geteuid cannot fail. |
+| `src/interp/ffi_worker.rs:264` | `no_sigpipe` | block | a valid socket and option of the size given. |
+| `src/interp/ffi_worker.rs:292` | `write_frame` | block | `rest` is valid for its length; the descriptor is a socket. |
+| `src/interp/ffi_worker.rs:361` | `read` | block | `buf` is valid for its length. |
+| `src/interp/ffi_worker.rs:475` | `handle_request` | block | `addr` is a function of the library this worker loaded; that it takes `params` and returns `ret` is the declaration's promise, which is why this runs here and not in the run's own process. |
+| `src/interp/ffi_worker.rs:487` | `close_from` | block | close_range takes plain integers; closing descriptors this worker does not use is the point. |
+| `src/interp/ffi_worker.rs:505` | `close_each` | block | getrlimit fills the struct given. |
+| `src/interp/ffi_worker.rs:507` | `close_each` | block | as above. |
+| `src/interp/ffi_worker.rs:516` | `close_each` | block | closing a descriptor number, open or not. |
+| `src/interp/ffi_worker.rs:610` | `install` | block | getpid cannot fail. |
+| `src/interp/ffi_worker.rs:703` | `closing_every_descriptor_without_close_range` | block (test) | asking whether a descriptor number is open. |
+| `src/interp/ffi_worker.rs:710` | `closing_every_descriptor_without_close_range` | block (test) | ending the child here, before the test harness touches anything it closed. |
+| `src/interp/fsx.rs:42` | `stat_at` | block | `st` is written by fstatat before it is read, and only if it succeeds. |
+| `src/interp/fsx.rs:72` | `openat` | block | `name` is a valid NUL-terminated string; on success the returned descriptor is new and owned by nobody else. |
+| `src/interp/fsx.rs:77` | `openat` | block | `fd` is the new descriptor openat just returned, owned by nobody else. |
+| `src/interp/fsx.rs:169` | `from_fd` | block | `st` is written by fstat before it is read, and only if it succeeds. |
+| `src/interp/fsx.rs:216` | `clear_errno` | block | writing this thread's errno through the pointer libc gives for it. |
+| `src/interp/fsx.rs:233` | `list_in` | block | `raw` is a directory descriptor we own; on success the DIR owns it. |
+| `src/interp/fsx.rs:237` | `list_in` | block | fdopendir failed, so `raw` is still ours to close. |
+| `src/interp/fsx.rs:244` | `drop` | block | closing the DIR fdopendir returned, once. |
+| `src/interp/fsx.rs:253` | `drop` | block | reading the next entry of a DIR we own; the entry is copied out before the next call. |
+| `src/interp/fsx.rs:262` | `drop` | block | d_name is NUL-terminated within the entry readdir returned. |
+| `src/interp/fsx.rs:290` | `read_in` | block | `st` is written by fstat before it is read, and only if it succeeds. |
+| `src/interp/fsx.rs:311` | `read_in` | block | plain fcntl calls on a descriptor we own. |
+| `src/interp/fsx.rs:387` | `write_in` | block | unlinking a name we created, relative to a directory we hold open. |
+| `src/interp/fsx.rs:393` | `write_in` | block | fchmod on a descriptor we own; keeps the old file's permissions. |
+| `src/interp/fsx.rs:406` | `write_in` | block | renaming within one directory we hold open; both names are valid. |
+| `src/interp/fsx.rs:413` | `write_in` | block | fsync on a directory descriptor we own. |
+| `src/interp/fsx.rs:522` | `refuses_special_files_without_blocking` | block | creating a FIFO at a test path. |
+| `src/interp/fsx.rs:623` | `a_root_reads_writes_and_lists_beneath_its_folder` | block | creating a FIFO at a test path. |
+| `src/interp/tcp.rs:326` | `check_key_file` | block | geteuid has no preconditions and cannot fail. |
+| `src/interp/tcp.rs:452` | `readable` | block | one valid pollfd, for a descriptor that stays open while `listener` lives. |
 | `src/mcp/http.rs:631` | `block_stop_signals` | block | a sigset_t is plain data, initialised by sigemptyset before use; the calls only read and write it and the calling thread's mask. |
 | `src/mcp/http.rs:649` | `wait_for_stop_signal` | block | `set` is a valid, initialised signal set; `sig` is written by sigwait. |
 | `src/mcp/proto.rs:58` | `take_stdio` | block | plain descriptor calls on descriptors this process owns; each result is checked before use, and each new descriptor is owned by exactly one File. |
-| `src/native.rs:179` | `ctx` | fn | `c` must be the `Ctx` that `Native::call` (or a `staalc build` executable's `staal_aot_main`) passed to the native code now running: it keeps that Ctx alive and exclusively borrowed for the whole call, and native code holds no other reference to it. Every `rt_*` helper below is an `unsafe extern "C" fn` for this reason: its only callers are generated code, which passes that pointer, and each turns it into a reference here, once. |
-| `src/native.rs:181` | `ctx` | block | the caller's contract, above. |
-| `src/native.rs:206` | `tables` | block | `Native::call` points `tables` at the `Tables` it owns before running any code, and they outlive the call. |
-| `src/native.rs:215` | `rt_step_limit` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:217` | `rt_step_limit` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:228` | `rt_depth_limit` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:230` | `rt_depth_limit` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:241` | `rt_arith` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:247` | `rt_arith` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:256` | `rt_neg` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:262` | `rt_neg` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:271` | `rt_no_return` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:273` | `rt_no_return` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:282` | `rt_const` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:284` | `rt_const` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:297` | `rt_clone` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:299` | `rt_clone` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:311` | `rt_drop` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:313` | `rt_drop` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:322` | `rt_box` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:324` | `rt_box` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:333` | `rt_unbox` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:335` | `rt_unbox` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:348` | `rt_arith_val` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:350` | `rt_arith_val` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:364` | `rt_cmp` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:366` | `rt_cmp` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:380` | `rt_closure` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
-| `src/native.rs:382` | `rt_closure` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:388` | `rt_closure` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
-| `src/native.rs:401` | `rt_call_value` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
-| `src/native.rs:404` | `rt_call_value` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:428` | `rt_call_value` | block | generated code passes a stack array of exactly `n` i64 values. |
-| `src/native.rs:435` | `rt_call_value` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:442` | `rt_call_value` | block | `ptr` is the entry wrapper of a compiled function, with signature (ctx, argv) -> i64, from the tables of the code running now; `all` holds exactly as many i64 as it takes. No reference to the Ctx is held here. |
-| `src/native.rs:455` | `call_function` | fn | `c` must be the Ctx of the native code now running, as for `ctx`. |
-| `src/native.rs:461` | `call_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:475` | `call_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:489` | `call_function` | block | `ptr` is the entry wrapper of a compiled function, with signature (ctx, argv) -> i64, from the tables of the code running now; `all` holds exactly as many i64 as it takes. No reference to the Ctx is held across the call. |
-| `src/native.rs:492` | `call_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:512` | `rt_with_function` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
-| `src/native.rs:517` | `rt_with_function` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
-| `src/native.rs:531` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:539` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:549` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:559` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:569` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:578` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:581` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:595` | `take_args` | fn | `argv` must point to `n` readable i64 values: generated code passes a stack array of exactly the count it gives. |
-| `src/native.rs:600` | `take_args` | block | the caller's contract: `argv` holds `n` values. |
-| `src/native.rs:612` | `rt_builtin` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
-| `src/native.rs:614` | `rt_builtin` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:618` | `rt_builtin` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
-| `src/native.rs:630` | `rt_record` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
-| `src/native.rs:632` | `rt_record` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:637` | `rt_record` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
-| `src/native.rs:652` | `rt_field` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:654` | `rt_field` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:680` | `rt_field_ref` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:682` | `rt_field_ref` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:705` | `rt_variant` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
-| `src/native.rs:707` | `rt_variant` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:712` | `rt_variant` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
-| `src/native.rs:729` | `rt_variant_index` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:731` | `rt_variant_index` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:750` | `rt_no_arm` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:752` | `rt_no_arm` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:767` | `rt_none` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:769` | `rt_none` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:778` | `rt_some` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:780` | `rt_some` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:793` | `rt_opt_has` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:795` | `rt_opt_has` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:808` | `rt_opt_get_ref` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:810` | `rt_opt_get_ref` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:826` | `rt_opt_no_arm` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:828` | `rt_opt_no_arm` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:838` | `rt_index_ref` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:840` | `rt_index_ref` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:855` | `rt_list` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
-| `src/native.rs:857` | `rt_list` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:859` | `rt_list` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
-| `src/native.rs:870` | `rt_tuple` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
-| `src/native.rs:872` | `rt_tuple` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:874` | `rt_tuple` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
-| `src/native.rs:886` | `rt_empty` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:888` | `rt_empty` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:905` | `rt_map` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
-| `src/native.rs:907` | `rt_map` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:909` | `rt_map` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
-| `src/native.rs:921` | `rt_index` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:923` | `rt_index` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:939` | `rt_list_len` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:941` | `rt_list_len` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:954` | `rt_list_get` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:956` | `rt_list_get` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:972` | `rt_fail` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
-| `src/native.rs:974` | `rt_fail` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
-| `src/native.rs:1611` | `callable` | block | `ptr` is a finalized wrapper with signature (ctx, argv) -> i64, generated above; `argv` holds exactly as many i64 as the function takes; the module that owns the code lives as long as `self`. |
-| `src/native.rs:1916` | `drop` | block | no pointer into the module's code outlives `self`; `entries` is dropped with it and `call` cannot run concurrently with drop. |
+| `src/native.rs:193` | `ctx` | fn | `c` must be the `Ctx` that `Native::call` (or a `staalc build` executable's `staal_aot_main`) passed to the native code now running: it keeps that Ctx alive and exclusively borrowed for the whole call, and native code holds no other reference to it. Every `rt_*` helper below is an `unsafe extern "C" fn` for this reason: its only callers are generated code, which passes that pointer, and each turns it into a reference here, once. |
+| `src/native.rs:195` | `ctx` | block | the caller's contract, above. |
+| `src/native.rs:220` | `tables` | block | `Native::call` points `tables` at the `Tables` it owns before running any code, and they outlive the call. |
+| `src/native.rs:229` | `rt_step_limit` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:231` | `rt_step_limit` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:242` | `rt_cancelled` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:244` | `rt_cancelled` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:254` | `rt_depth_limit` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:256` | `rt_depth_limit` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:267` | `rt_arith` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:273` | `rt_arith` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:282` | `rt_neg` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:288` | `rt_neg` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:297` | `rt_no_return` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:299` | `rt_no_return` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:308` | `rt_const` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:310` | `rt_const` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:323` | `rt_clone` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:325` | `rt_clone` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:337` | `rt_drop` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:339` | `rt_drop` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:348` | `rt_box` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:350` | `rt_box` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:359` | `rt_unbox` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:361` | `rt_unbox` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:374` | `rt_arith_val` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:376` | `rt_arith_val` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:390` | `rt_cmp` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:392` | `rt_cmp` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:406` | `rt_closure` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
+| `src/native.rs:408` | `rt_closure` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:414` | `rt_closure` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
+| `src/native.rs:427` | `rt_call_value` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
+| `src/native.rs:430` | `rt_call_value` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:454` | `rt_call_value` | block | generated code passes a stack array of exactly `n` i64 values. |
+| `src/native.rs:461` | `rt_call_value` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:468` | `rt_call_value` | block | `ptr` is the entry wrapper of a compiled function, with signature (ctx, argv) -> i64, from the tables of the code running now; `all` holds exactly as many i64 as it takes. No reference to the Ctx is held here. |
+| `src/native.rs:481` | `call_function` | fn | `c` must be the Ctx of the native code now running, as for `ctx`. |
+| `src/native.rs:487` | `call_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:501` | `call_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:515` | `call_function` | block | `ptr` is the entry wrapper of a compiled function, with signature (ctx, argv) -> i64, from the tables of the code running now; `all` holds exactly as many i64 as it takes. No reference to the Ctx is held across the call. |
+| `src/native.rs:518` | `call_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:538` | `rt_with_function` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
+| `src/native.rs:543` | `rt_with_function` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
+| `src/native.rs:557` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:565` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:575` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:585` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:595` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:604` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:607` | `rt_with_function` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:621` | `take_args` | fn | `argv` must point to `n` readable i64 values: generated code passes a stack array of exactly the count it gives. |
+| `src/native.rs:626` | `take_args` | block | the caller's contract: `argv` holds `n` values. |
+| `src/native.rs:638` | `rt_builtin` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
+| `src/native.rs:640` | `rt_builtin` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:644` | `rt_builtin` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
+| `src/native.rs:656` | `rt_record` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
+| `src/native.rs:658` | `rt_record` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:663` | `rt_record` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
+| `src/native.rs:678` | `rt_field` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:680` | `rt_field` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:706` | `rt_field_ref` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:708` | `rt_field_ref` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:731` | `rt_variant` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
+| `src/native.rs:733` | `rt_variant` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:738` | `rt_variant` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
+| `src/native.rs:755` | `rt_variant_index` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:757` | `rt_variant_index` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:776` | `rt_no_arm` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:778` | `rt_no_arm` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:793` | `rt_none` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:795` | `rt_none` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:804` | `rt_some` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:806` | `rt_some` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:819` | `rt_opt_has` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:821` | `rt_opt_has` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:834` | `rt_opt_get_ref` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:836` | `rt_opt_get_ref` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:852` | `rt_opt_no_arm` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:854` | `rt_opt_no_arm` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:864` | `rt_index_ref` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:866` | `rt_index_ref` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:881` | `rt_list` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
+| `src/native.rs:883` | `rt_list` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:885` | `rt_list` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
+| `src/native.rs:896` | `rt_tuple` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
+| `src/native.rs:898` | `rt_tuple` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:900` | `rt_tuple` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
+| `src/native.rs:912` | `rt_empty` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:914` | `rt_empty` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:931` | `rt_map` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this, and `argv` must point to `n` readable i64 values. |
+| `src/native.rs:933` | `rt_map` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:935` | `rt_map` | block | `argv` and `n` are the array and count generated code passed (this helper's contract). |
+| `src/native.rs:947` | `rt_index` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:949` | `rt_index` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:965` | `rt_list_len` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:967` | `rt_list_len` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:980` | `rt_list_get` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:982` | `rt_list_get` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:998` | `rt_fail` | fn | `c` must be the Ctx of the native code now running (see `ctx`); only generated code calls this. |
+| `src/native.rs:1000` | `rt_fail` | block | `c` is the Ctx generated code passed (this helper's contract; see `ctx`). |
+| `src/native.rs:1638` | `callable` | block | `ptr` is a finalized wrapper with signature (ctx, argv) -> i64, generated above; `argv` holds exactly as many i64 as the function takes; the module that owns the code lives as long as `self`. |
+| `src/native.rs:1945` | `drop` | block | no pointer into the module's code outlives `self`; `entries` is dropped with it and `call` cannot run concurrently with drop. |
+
+189 lines, 189 `unsafe` items; 0 without a written justification.
 
 162 lines, 162 `unsafe` items; 0 without a written justification.

@@ -25,11 +25,12 @@ impl Cancel {
         self.flag.store(1, Ordering::SeqCst);
     }
 
+    /// Read through the same flag native code reads, so both engines see one value.
     pub fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst) != 0
+        self.flag().load(Ordering::SeqCst) != 0
     }
 
-    /// The flag itself, for native code, which reads it at each step.
+    /// The flag itself: the interpreter reads it here, native code at each step.
     pub(crate) fn flag(&self) -> &AtomicU8 {
         &self.flag
     }
