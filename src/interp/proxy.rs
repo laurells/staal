@@ -40,21 +40,21 @@ impl std::fmt::Debug for Choice {
 
 /// The proxy `"proxy": "environment"` means now, reading variables through `get`
 /// (`std::env::var` in a run; a table in tests). None when no proxy variable is set.
-pub fn from_environment(get: impl Fn(&str) -> Option<String>) -> Result<Option<Choice>, String> {
+pub fn from_environment(get: impl Fn(&str) -> Option<String>, noun: &str) -> Result<Option<Choice>, String> {
     let Some((from, value)) = PROXY_VARIABLES.iter().find_map(|v| get(v).filter(|x| !x.is_empty()).map(|x| (*v, x))) else {
         return Ok(None);
     };
-    let parsed = ureq::Proxy::new(&value).map_err(|_| format!("the environment variable {from} is not a proxy URL"))?;
+    let parsed = ureq::Proxy::new(&value).map_err(|_| format!("the {noun} {from} is not a proxy URL"))?;
     if parsed.username().is_some() || parsed.password().is_some() {
         return Err(format!(
-            "the environment variable {from} names a proxy with a user name or password, which would be written to \
+            "the {noun} {from} names a proxy with a user name or password, which would be written to \
              the run's journal; give a proxy without credentials"
         ));
     }
     let scheme = match parsed.protocol() {
         ureq::ProxyProtocol::Http => "http",
         ureq::ProxyProtocol::Https => "https",
-        _ => return Err(format!("the environment variable {from} names a SOCKS proxy, which this staalc cannot use")),
+        _ => return Err(format!("the {noun} {from} names a SOCKS proxy, which this staalc cannot use")),
     };
     let no_proxy: Vec<String> = NO_PROXY_VARIABLES
         .iter()
@@ -67,17 +67,18 @@ pub fn from_environment(get: impl Fn(&str) -> Option<String>) -> Result<Option<C
     for e in &no_proxy {
         builder = builder.no_proxy(e);
     }
-    let proxy = builder.build().map_err(|e| format!("the environment variable {from}: the proxy cannot be used: {e}"))?;
+    let proxy = builder.build().map_err(|e| format!("the {noun} {from}: the proxy cannot be used: {e}"))?;
     let record = json!({ "from": from, "scheme": scheme, "host": proxy.host(), "port": proxy.port(), "no_proxy": no_proxy });
     Ok(Some(Choice { proxy, record }))
 }
 
 /// A `"proxy"` setting of a run config (`"none"` or `"environment"`), resolved against
 /// the process's environment. `at` names the setting in messages.
-pub fn of_setting(v: Option<&Json>, at: &str) -> Result<Option<Choice>, String> {
+pub fn of_setting(v: Option<&Json>, at: &str, values: &dyn super::values::Values) -> Result<Option<Choice>, String> {
     match v.map(Json::as_str) {
         None | Some(Some("none")) => Ok(None),
-        Some(Some("environment")) => from_environment(|k| std::env::var(k).ok()).map_err(|e| format!("{at}: {e}")),
+        // A proxy URL holds no credentials (refused above), so it needs no clearing.
+        Some(Some("environment")) => from_environment(|k| values.get(k).map(|v| v.to_string()), values.noun()).map_err(|e| format!("{at}: {e}")),
         _ => Err(format!("{at}: expected \"none\" or \"environment\"")),
     }
 }
@@ -99,39 +100,39 @@ mod tests {
 
     #[test]
     fn no_variable_means_no_proxy() {
-        assert!(from_environment(env(&[])).unwrap().is_none());
+        assert!(from_environment(env(&[]), "environment variable").unwrap().is_none());
         // Set but empty is unset, and NO_PROXY alone chooses nothing.
-        assert!(from_environment(env(&[("HTTPS_PROXY", ""), ("NO_PROXY", "x")])).unwrap().is_none());
+        assert!(from_environment(env(&[("HTTPS_PROXY", ""), ("NO_PROXY", "x")]), "environment variable").unwrap().is_none());
     }
 
     #[test]
     fn the_first_variable_set_wins_in_ureqs_order() {
-        let c = from_environment(env(&[("HTTPS_PROXY", "http://b.example:2"), ("ALL_PROXY", "http://a.example:1")])).unwrap().unwrap();
+        let c = from_environment(env(&[("HTTPS_PROXY", "http://b.example:2"), ("ALL_PROXY", "http://a.example:1")]), "environment variable").unwrap().unwrap();
         assert_eq!(c.record["from"], "ALL_PROXY");
         assert_eq!((c.record["host"].as_str(), c.record["port"].as_u64()), (Some("a.example"), Some(1)));
-        let c = from_environment(env(&[("http_proxy", "http://c.example:3"), ("HTTPS_PROXY", "https://b.example")])).unwrap().unwrap();
+        let c = from_environment(env(&[("http_proxy", "http://c.example:3"), ("HTTPS_PROXY", "https://b.example")]), "environment variable").unwrap().unwrap();
         assert_eq!(c.record["from"], "HTTPS_PROXY");
         assert_eq!((c.record["scheme"].as_str(), c.record["port"].as_u64()), (Some("https"), Some(443)));
-        let c = from_environment(env(&[("http_proxy", "c.example:8080")])).unwrap().unwrap();
+        let c = from_environment(env(&[("http_proxy", "c.example:8080")]), "environment variable").unwrap().unwrap();
         assert_eq!(c.record, json!({ "from": "http_proxy", "scheme": "http", "host": "c.example", "port": 8080, "no_proxy": [] }));
     }
 
     #[test]
     fn an_unusable_value_is_refused_not_skipped() {
         // ureq would skip the bad ALL_PROXY and use HTTPS_PROXY; this refuses.
-        let e = from_environment(env(&[("ALL_PROXY", "http://[bad"), ("HTTPS_PROXY", "http://ok.example")])).unwrap_err();
+        let e = from_environment(env(&[("ALL_PROXY", "http://[bad"), ("HTTPS_PROXY", "http://ok.example")]), "environment variable").unwrap_err();
         assert!(e.contains("ALL_PROXY") && e.contains("not a proxy URL"), "{e}");
         for v in ["http://user:secret@p.example:1", "http://user@p.example:1"] {
-            let e = from_environment(env(&[("HTTPS_PROXY", v)])).unwrap_err();
+            let e = from_environment(env(&[("HTTPS_PROXY", v)]), "environment variable").unwrap_err();
             assert!(e.contains("user name or password") && !e.contains("secret"), "{e}");
         }
-        let e = from_environment(env(&[("ALL_PROXY", "socks5://p.example:1080")])).unwrap_err();
+        let e = from_environment(env(&[("ALL_PROXY", "socks5://p.example:1080")]), "environment variable").unwrap_err();
         assert!(e.contains("SOCKS"), "{e}");
     }
 
     #[test]
     fn no_proxy_entries_are_recorded_as_used() {
-        let c = from_environment(env(&[("HTTP_PROXY", "http://p.example:3128"), ("no_proxy", "x"), ("NO_PROXY", " Localhost, .Internal.example ,,*.svc")]))
+        let c = from_environment(env(&[("HTTP_PROXY", "http://p.example:3128"), ("no_proxy", "x"), ("NO_PROXY", " Localhost, .Internal.example ,,*.svc")]), "environment variable")
             .unwrap()
             .unwrap();
         assert_eq!(c.record["no_proxy"], json!(["localhost", ".internal.example", "*.svc"]));
@@ -145,8 +146,8 @@ mod tests {
 
     #[test]
     fn settings_are_none_or_environment() {
-        assert!(of_setting(None, "net.proxy").unwrap().is_none());
-        assert!(of_setting(Some(&json!("none")), "net.proxy").unwrap().is_none());
-        assert!(of_setting(Some(&json!("system")), "net.proxy").unwrap_err().contains("net.proxy"));
+        assert!(of_setting(None, "net.proxy", &super::super::values::ProcessEnvironment).unwrap().is_none());
+        assert!(of_setting(Some(&json!("none")), "net.proxy", &super::super::values::ProcessEnvironment).unwrap().is_none());
+        assert!(of_setting(Some(&json!("system")), "net.proxy", &super::super::values::ProcessEnvironment).unwrap_err().contains("net.proxy"));
     }
 }

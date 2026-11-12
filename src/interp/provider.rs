@@ -81,20 +81,20 @@ pub trait Provider {
 }
 
 /// The provider a run config's `model` object names.
-pub fn from_config(cfg: &Json) -> Result<Box<dyn Provider + Send>, String> {
+pub fn from_config(cfg: &Json, values: &dyn super::values::Values) -> Result<Box<dyn Provider + Send>, String> {
     let obj = cfg.as_object().ok_or("model: expected an object")?;
     match obj.get("provider").and_then(Json::as_str) {
         Some("script") => Ok(Box::new(ScriptProvider::from_config(cfg)?)),
-        Some("anthropic") => Ok(Box::new(super::anthropic::AnthropicProvider::from_config(cfg)?)),
+        Some("anthropic") => Ok(Box::new(super::anthropic::AnthropicProvider::from_config(cfg, values)?)),
         _ => Err("model.provider: expected \"anthropic\" or \"script\"".into()),
     }
 }
 
 /// The provider of a run config: the one its `model` names, or, without `model`, none:
 /// a run that asks a model then fails, saying why.
-pub fn of_run(model: Option<&Json>) -> Result<Box<dyn Provider + Send>, String> {
+pub fn of_run(model: Option<&Json>, values: &dyn super::values::Values) -> Result<Box<dyn Provider + Send>, String> {
     match model {
-        Some(m) => from_config(m),
+        Some(m) => from_config(m, values),
         None => Ok(Box::new(NoModel)),
     }
 }

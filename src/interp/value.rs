@@ -10,12 +10,13 @@ use std::collections::{HashMap, HashSet};
 /// A secret from the run config (an API key), or a template filled with one by
 /// `fill_secret`. Its value is only ever placed in an HTTP request (a header or the
 /// body); it is never printed, logged, journaled or sent to a model. `name` is the
-/// environment variable it came from, and `shown` is what may be recorded: `{secret}`
+/// value it came from (an environment variable, or a value given to the run), and `shown` is what may be recorded: `{secret}`
 /// for the key itself, or the template with a placeholder where the key goes.
 #[derive(Clone, PartialEq)]
 pub struct Secret {
     pub name: String,
-    pub value: String,
+    /// Overwritten when dropped.
+    pub value: crate::interp::values::Value,
     pub shown: String,
 }
 

@@ -16,6 +16,8 @@ publish = false
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
+# A run's values are overwritten when dropped (src/interp/values.rs).
+zeroize = "1.9.1"
 # Standard base64 (RFC 4648), strict on decoding, for `base64_encode`/`base64_decode`.
 base64 = "0.23.1"
 getrandom = "0.4.3"

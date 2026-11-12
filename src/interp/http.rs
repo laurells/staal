@@ -592,7 +592,7 @@ mod tests {
             }
         });
         let env = |k: &str| (k == "HTTPS_PROXY").then(|| format!("http://127.0.0.1:{proxy_port}"));
-        let proxy = super::super::proxy::from_environment(env).unwrap();
+        let proxy = super::super::proxy::from_environment(env, "environment variable").unwrap();
         let c = Client::new(&Settings { proxy, ..Settings::default() });
         let cases = [
             ("https://LOCALHOST:9443/x", "localhost:9443"),

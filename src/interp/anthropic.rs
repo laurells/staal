@@ -18,7 +18,8 @@
 //                after the configured retries. The run stops and can be resumed; the
 //                call is made again then. Nothing is recorded as its answer.
 //
-// The API key is read once from the environment variable the config names. It is
+// The API key is read once from the value the config names (an environment variable, or a
+// value given to the run: values.rs), held in a buffer overwritten when dropped. It is
 // sent only in the `x-api-key` header, and removed from every message this module
 // produces.
 
@@ -39,7 +40,8 @@ pub struct AnthropicProvider {
     /// The API's address, parsed once; each request goes to a fixed path under it.
     base: crate::targets::Target,
     model: String,
-    key: String,
+    /// Overwritten when dropped.
+    key: super::values::Value,
     retries: u32,
     retry_delay: Duration,
     /// What the journal records of the proxy `model.proxy` chose (`proxy::record`).
@@ -50,7 +52,7 @@ impl AnthropicProvider {
     /// Parses `{"provider": "anthropic", "model": "...", "api_key": {"env": "NAME"},
     /// "base_url"?, "timeout_ms"?, "connect_timeout_ms"?, "retries"?, "retry_delay_ms"?,
     /// "proxy"?, "extra_root_certificates"?}`.
-    pub fn from_config(cfg: &Json) -> Result<AnthropicProvider, String> {
+    pub fn from_config(cfg: &Json, values: &dyn super::values::Values) -> Result<AnthropicProvider, String> {
         let obj = cfg.as_object().ok_or("model: expected an object")?;
         let known = [
             "provider", "model", "api_key", "base_url", "timeout_ms", "connect_timeout_ms", "retries", "retry_delay_ms",
@@ -71,9 +73,9 @@ impl AnthropicProvider {
             .and_then(|o| o.get("env"))
             .and_then(Json::as_str)
             .ok_or("model.api_key: expected {\"env\": \"<environment variable holding the key>\"}")?;
-        let key = std::env::var(env).map_err(|_| format!("model.api_key: environment variable {env} is not set"))?;
+        let key = values.get(env).ok_or_else(|| format!("model.api_key: no {} {env} is set", values.noun()))?;
         if key.trim().is_empty() {
-            return Err(format!("model.api_key: environment variable {env} is empty"));
+            return Err(format!("model.api_key: the {} {env} is empty", values.noun()));
         }
         if key.chars().any(|c| c.is_control() || c == ' ') {
             return Err(format!("model.api_key: the value of {env} is not a valid key"));
@@ -98,7 +100,7 @@ impl AnthropicProvider {
             None => 1000,
             Some(v) => v.as_u64().filter(|n| *n <= 60_000).ok_or("model.retry_delay_ms: expected at most 60000")?,
         };
-        let proxy = super::proxy::of_setting(obj.get("proxy"), "model.proxy")?;
+        let proxy = super::proxy::of_setting(obj.get("proxy"), "model.proxy", values)?;
         let mut extra = Vec::new();
         if let Some(v) = obj.get("extra_root_certificates") {
             let list = v.as_array().ok_or("model.extra_root_certificates: expected a list of PEM file paths")?;

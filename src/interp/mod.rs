@@ -26,6 +26,7 @@ pub mod provider;
 pub mod proxy;
 pub mod time;
 pub mod value;
+pub mod values;
 
 use crate::ast::*;
 use adapter::{Adapter, SimulatedAdapter};
@@ -240,7 +241,7 @@ pub fn run_config_engine(
     engine: Engine,
 ) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let provider = provider::of_run(cfg.get("model"))?;
+    let provider = provider::of_run(cfg.get("model"), &values::ProcessEnvironment)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     run_engine(prog, source, config, durability, provider, Box::new(adapter), engine)
 }
@@ -292,7 +293,7 @@ pub fn run_config_profiled(
     engine: Engine,
 ) -> Result<(RunResult, std::collections::BTreeMap<String, FnProfile>), String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let provider = provider::of_run(cfg.get("model"))?;
+    let provider = provider::of_run(cfg.get("model"), &values::ProcessEnvironment)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     let native = match engine {
         Engine::Interpreter => None,
@@ -321,7 +322,7 @@ pub trait DebugHook: Send {
 /// message says so.
 pub fn run_config_debugged(prog: &Program, config: &Json, hook: Box<dyn DebugHook>) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let provider = provider::of_run(cfg.get("model"))?;
+    let provider = provider::of_run(cfg.get("model"), &values::ProcessEnvironment)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     let hooks = Hooks { debug: Some(hook), ..Hooks::default() };
     run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)
@@ -391,9 +392,14 @@ pub struct GrantPlan {
 /// Checks `config` for `prog` as a run would, without running anything, and says what
 /// it grants. The model and adapter settings are checked too.
 pub fn plan(prog: &Program, config: &Json) -> Result<Plan, String> {
-    let setup = Setup::from_config(prog, config)?;
+    plan_with(prog, config, std::sync::Arc::new(values::ProcessEnvironment))
+}
+
+/// As `plan`, with the run's values from `values` instead of the process's environment.
+pub fn plan_with(prog: &Program, config: &Json, values: std::sync::Arc<dyn values::Values>) -> Result<Plan, String> {
+    let setup = Setup::from_config(prog, config, values.clone())?;
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    provider::of_run(cfg.get("model"))?;
+    provider::of_run(cfg.get("model"), values.as_ref())?;
     SimulatedAdapter::from_config(cfg.get("adapters"))?;
     let f = prog
         .fns
@@ -476,7 +482,7 @@ pub fn plan(prog: &Program, config: &Json) -> Result<Plan, String> {
 /// a session again for each input and shows only what is new.
 pub fn run_config_capturing(prog: &Program, config: &Json, engine: Engine) -> Result<(RunResult, String), String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let provider = provider::of_run(cfg.get("model"))?;
+    let provider = provider::of_run(cfg.get("model"), &values::ProcessEnvironment)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     let native = match engine {
         Engine::Interpreter => None,
@@ -500,7 +506,7 @@ pub fn run_config_with_native(
     native: crate::native::Native,
 ) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let provider = provider::of_run(cfg.get("model"))?;
+    let provider = provider::of_run(cfg.get("model"), &values::ProcessEnvironment)?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     run_impl(prog, source, config, durability, provider, Box::new(adapter), Hooks { native: Some(native), ..Hooks::default() })
 }
@@ -517,14 +523,57 @@ pub fn run_config_observed(
     engine: Engine,
     observation: observe::Observation,
 ) -> Result<RunResult, String> {
+    run_config_attached(prog, source, config, durability, engine, Attached { observation: Some(observation), values: None })
+}
+
+/// What a program that starts runs for others attaches to one (Staal Studio).
+#[derive(Default)]
+pub struct Attached {
+    /// An observer, offered every event as it happens (`observe`).
+    pub observation: Option<observe::Observation>,
+    /// Where the run's secrets, model API key and proxy variables come from (`values`;
+    /// RUNTIME.md section 21): given, the run reads these and never the process's
+    /// environment. They are dropped, and so overwritten, when the run ends, however it
+    /// ends. None: the process's environment, as the command line reads it.
+    pub values: Option<std::sync::Arc<dyn values::Values>>,
+}
+
+/// Runs a checked program as `run_config_engine` does, with what `attached` gives it.
+/// Returns Err, and runs nothing, for a bad config (a value the config names and the
+/// values do not hold included) or an observer whose thread cannot be started.
+pub fn run_config_attached(prog: &Program, source: &str, config: &Json, durability: Durability, engine: Engine, attached: Attached) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let provider = provider::of_run(cfg.get("model"))?;
+    let values = attached.values.unwrap_or_else(|| std::sync::Arc::new(values::ProcessEnvironment));
+    let provider = provider::of_run(cfg.get("model"), values.as_ref())?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
     let native = match engine {
         Engine::Interpreter => None,
         Engine::Native => Some(compile_native(prog)?),
     };
-    run_impl(prog, source, config, durability, provider, Box::new(adapter), Hooks { native, observe: Some(observation), ..Hooks::default() })
+    let hooks = Hooks { native, observe: attached.observation, values: Some(values), ..Hooks::default() };
+    run_impl(prog, source, config, durability, provider, Box::new(adapter), hooks)
+}
+
+/// As `run_config_attached`, with the given model provider and adapter instead of the ones
+/// the config names (whose `model` is then not read).
+#[allow(clippy::too_many_arguments)]
+pub fn run_attached(
+    prog: &Program,
+    source: &str,
+    config: &Json,
+    durability: Durability,
+    provider: Box<dyn Provider + Send>,
+    adapter: Box<dyn Adapter + Send>,
+    engine: Engine,
+    attached: Attached,
+) -> Result<RunResult, String> {
+    let native = match engine {
+        Engine::Interpreter => None,
+        Engine::Native => Some(compile_native(prog)?),
+    };
+    let values = attached.values.unwrap_or_else(|| std::sync::Arc::new(values::ProcessEnvironment));
+    let hooks = Hooks { native, observe: attached.observation, values: Some(values), ..Hooks::default() };
+    run_impl(prog, source, config, durability, provider, adapter, hooks)
 }
 
 /// What a tool attaches to a run beyond the program and its world.
@@ -541,6 +590,8 @@ struct Hooks {
     /// An observer, offered every event as it happens (`observe`), started once the config
     /// is checked.
     observe: Option<observe::Observation>,
+    /// Where the run's values come from (`values`); the process's environment if none.
+    values: Option<std::sync::Arc<dyn values::Values>>,
 }
 
 fn run_impl(
@@ -553,7 +604,8 @@ fn run_impl(
     mut hooks: Hooks,
 ) -> Result<RunResult, String> {
     // Validate everything first: a bad config must not even create a journal.
-    let setup = Setup::from_config(prog, config)?;
+    let values = hooks.values.take().unwrap_or_else(|| std::sync::Arc::new(values::ProcessEnvironment));
+    let setup = Setup::from_config(prog, config, values)?;
     // After the config is checked, before the journal: a run whose observer cannot be
     // started does not start.
     let feed = hooks.observe.take().map(observe::Feed::start).transpose()?;
@@ -607,9 +659,15 @@ fn binding(source: &str, config: &Json, hooks: &Hooks, setup: &Setup, provider: 
 /// can be resumed before resuming it: the proxies resolved from the environment now,
 /// as a run would resolve them.
 pub fn binding_for(fingerprint: &str, config: &Json, engine: Engine) -> Result<journal::Binding, String> {
+    binding_for_values(fingerprint, config, engine, &values::ProcessEnvironment)
+}
+
+/// As `binding_for`, with the proxies resolved from `values` instead of the process's
+/// environment, as a run given those values would resolve them.
+pub fn binding_for_values(fingerprint: &str, config: &Json, engine: Engine, values: &dyn values::Values) -> Result<journal::Binding, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let net = proxy::of_setting(cfg.get("net").and_then(|n| n.get("proxy")), "net.proxy")?;
-    let model = proxy::of_setting(cfg.get("model").and_then(|m| m.get("proxy")), "model.proxy")?;
+    let net = proxy::of_setting(cfg.get("net").and_then(|n| n.get("proxy")), "net.proxy", values)?;
+    let model = proxy::of_setting(cfg.get("model").and_then(|m| m.get("proxy")), "model.proxy", values)?;
     let engine = match engine {
         Engine::Interpreter => "interpreter",
         Engine::Native => "native",
@@ -650,7 +708,9 @@ struct RuntimeSettings {
     tls: std::sync::Arc<rustls::ClientConfig>,
     fs_max_read_bytes: usize,
     /// Every secret value of the run, removed from anything recorded or shown.
-    secrets: Vec<String>,
+    secrets: Vec<values::Value>,
+    /// Where the run's values come from.
+    values: std::sync::Arc<dyn values::Values>,
     /// The C libraries the run's grants load, each once.
     libraries: Vec<std::sync::Arc<ffi::Library>>,
 }
@@ -705,8 +765,9 @@ struct ParsedGrant {
 /// How a net.http failure that certainly sent nothing begins, in results and journals.
 const NOT_SENT: &str = "not sent: ";
 
-/// Reads `{"env": "VARIABLE"}`: a secret from the environment (RUNTIME.md section 12).
-fn load_secret(spec: &Json, at: &str) -> Result<Secret, String> {
+/// Reads `{"env": "NAME"}`: a secret, from where the run's values come from (RUNTIME.md
+/// sections 12 and 21).
+fn load_secret(spec: &Json, at: &str, values: &dyn values::Values) -> Result<Secret, String> {
     let spec = spec.as_object().ok_or(format!("{at}: expected {{\"env\": \"VARIABLE_NAME\"}}"))?;
     for k in spec.keys() {
         if k != "env" {
@@ -714,7 +775,7 @@ fn load_secret(spec: &Json, at: &str) -> Result<Secret, String> {
         }
     }
     let var = spec.get("env").and_then(Json::as_str).ok_or(format!("{at}.env: expected a variable name"))?;
-    let value = std::env::var(var).map_err(|_| format!("{at}: environment variable {var} is not set"))?;
+    let value = values.get(var).ok_or_else(|| format!("{at}: no {} {var} is set", values.noun()))?;
     if value.len() < MIN_SECRET_BYTES {
         return Err(format!("{at}: {var} is shorter than {MIN_SECRET_BYTES} characters, too short to keep out of logs reliably"));
     }
@@ -852,7 +913,7 @@ fn parse_grant(
                         });
                     }
                     Ty::Named(x) if x == "Secret" => {
-                        let secret = load_secret(v, &nat)?;
+                        let secret = load_secret(v, &nat, runtime.values.as_ref())?;
                         runtime.secrets.push(secret.value.clone());
                         needs.push(NeedArg::Data(Value::Secret(secret)));
                     }
@@ -907,7 +968,7 @@ fn postgres_grant(g: &Map<String, Json>, at: &str, runtime: &mut RuntimeSettings
         let password = match d.get("password") {
             None => None,
             Some(spec) => {
-                let secret = load_secret(spec, &format!("{dat}.password"))?;
+                let secret = load_secret(spec, &format!("{dat}.password"), runtime.values.as_ref())?;
                 runtime.secrets.push(secret.value.clone());
                 Some(secret.value)
             }
@@ -1015,7 +1076,7 @@ pub(crate) fn is_runtime_cap(path: &str) -> bool {
 }
 
 /// Replaces every secret value in `text` with a marker.
-fn scrub_text(secrets: &[String], text: &str) -> String {
+fn scrub_text(secrets: &[values::Value], text: &str) -> String {
     let mut out = text.to_string();
     for s in secrets {
         if out.contains(s.as_str()) {
@@ -1028,7 +1089,7 @@ fn scrub_text(secrets: &[String], text: &str) -> String {
 /// A value as the debugger shows it: data as it is, any secret value of the run in a
 /// text removed, a `Secret` by its variable's name only, and a capability as one,
 /// without its handle.
-fn debug_shown(v: &Value, secrets: &[String]) -> crate::debug::Shown {
+fn debug_shown(v: &Value, secrets: &[values::Value]) -> crate::debug::Shown {
     use crate::debug::Shown;
     let all = |items: &[Value]| items.iter().map(|i| debug_shown(i, secrets)).collect();
     let fields = |fs: &[(String, Value)]| fs.iter().map(|(k, v)| (k.clone(), debug_shown(v, secrets))).collect();
@@ -1066,7 +1127,7 @@ fn debug_shown(v: &Value, secrets: &[String]) -> crate::debug::Shown {
     }
 }
 
-fn scrub_json(secrets: &[String], j: &mut Json) {
+fn scrub_json(secrets: &[values::Value], j: &mut Json) {
     match j {
         Json::String(t) => {
             if secrets.iter().any(|s| t.contains(s.as_str())) {
@@ -1085,7 +1146,7 @@ fn positive(v: &Json, at: &str) -> Result<u64, String> {
 
 /// `"net": {"timeout_ms", "connect_timeout_ms", "max_response_bytes", "proxy"}` and
 /// `"fs": {"max_read_bytes"}`.
-fn runtime_settings(cfg: &Map<String, Json>) -> Result<RuntimeSettings, String> {
+fn runtime_settings(cfg: &Map<String, Json>, values: std::sync::Arc<dyn values::Values>) -> Result<RuntimeSettings, String> {
     let mut net = http::Settings::default();
     if let Some(n) = cfg.get("net") {
         let n = n.as_object().ok_or("net: expected an object")?;
@@ -1108,7 +1169,7 @@ fn runtime_settings(cfg: &Map<String, Json>) -> Result<RuntimeSettings, String> 
                         net.extra_roots.extend(http::read_root_certificates(p).map_err(|e| format!("{at}[{i}]: {e}"))?);
                     }
                 }
-                "proxy" => net.proxy = proxy::of_setting(Some(v), &at)?,
+                "proxy" => net.proxy = proxy::of_setting(Some(v), &at, values.as_ref())?,
                 _ => return Err(format!("net: unknown key '{k}'")),
             }
         }
@@ -1130,7 +1191,7 @@ fn runtime_settings(cfg: &Map<String, Json>) -> Result<RuntimeSettings, String> 
         }
     }
     let tls = tcp::tls_config(&net.extra_roots)?;
-    Ok(RuntimeSettings { net, fs_max_read_bytes, secrets: Vec::new(), tls, libraries: Vec::new() })
+    Ok(RuntimeSettings { net, fs_max_read_bytes, secrets: Vec::new(), values, tls, libraries: Vec::new() })
 }
 
 /// Converts a limit written in source (`max: 500 USD`) to money.
@@ -1200,7 +1261,7 @@ pub(crate) fn check_currencies(limits: &broker::Limits, at: &str) -> Result<(), 
 }
 
 impl Setup {
-    fn from_config(prog: &Program, config: &Json) -> Result<Setup, String> {
+    fn from_config(prog: &Program, config: &Json, values: std::sync::Arc<dyn values::Values>) -> Result<Setup, String> {
         let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
         for k in cfg.keys() {
             if !["entry", "inputs", "grants", "secrets", "model", "adapters", "limits", "net", "fs"].contains(&k.as_str()) {
@@ -1248,7 +1309,7 @@ impl Setup {
                 }
             }
         }
-        let mut runtime = runtime_settings(cfg)?;
+        let mut runtime = runtime_settings(cfg, values)?;
         for k in inputs.keys() {
             match f.params.iter().find(|p| &p.name == k) {
                 None => {
@@ -1306,7 +1367,7 @@ impl Setup {
                 _ if is_secret(p) => {
                     let at = format!("secrets.{}", p.name);
                     let spec = secrets.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this secret"))?;
-                    let secret = load_secret(spec, &at)?;
+                    let secret = load_secret(spec, &at, runtime.values.as_ref())?;
                     runtime.secrets.push(secret.value.clone());
                     args.push(Arg::Data(Value::Secret(secret)));
                 }
@@ -1476,7 +1537,7 @@ struct Interp<'p> {
     /// How each `net.tcp.accept` grant waits, by the grant's broker handle.
     listen: HashMap<usize, tcp::Listen>,
     fs_max_read_bytes: usize,
-    secrets: Vec<String>,
+    secrets: Vec<values::Value>,
     /// Library capabilities' actions, by the path programs use (`termii.sms.send`).
     lib: HashMap<String, LibAction>,
     /// What each granted library capability was given for its needs.
