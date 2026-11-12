@@ -98,6 +98,37 @@ pub enum Step {
     InDoubt { n: u64, key: String },
 }
 
+/// What `Journal::resolve` recorded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Resolved {
+    /// What was recorded, for people: `staalc resolve` prints it.
+    pub summary: String,
+    /// The file that was locked, checked and written: the path named it when it was
+    /// locked, and nothing was opened by path after that.
+    #[cfg(unix)]
+    pub identity: FileIdentity,
+}
+
+/// A file's identity: its device and inode, which a path does not change and two paths
+/// to one file share.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileIdentity {
+    pub device: u64,
+    pub inode: u64,
+}
+
+#[cfg(unix)]
+impl FileIdentity {
+    /// The identity of the file `path` names now, following symbolic links as opening it
+    /// does.
+    pub fn of_path(path: &Path) -> std::io::Result<FileIdentity> {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(path)?;
+        Ok(FileIdentity { device: m.dev(), inode: m.ino() })
+    }
+}
+
 /// How an operator resolves an action left in doubt (`staalc resolve`).
 pub enum Resolution {
     /// It happened; this is the service's receipt.
@@ -234,11 +265,13 @@ impl Journal {
         Ok(j)
     }
 
-    /// Records an operator's answer for an action left in doubt.
     /// Records an operator's answer for an action in doubt. When tasks leave several in
-    /// doubt, `operation` names the one (`op_id`).
-    pub fn resolve(path: &Path, resolution: Resolution, operation: Option<&str>) -> Result<String, String> {
+    /// doubt, `operation` names the one (`op_id`). Says what was recorded, and which file
+    /// was locked and written (`Resolved`).
+    pub fn resolve(path: &Path, resolution: Resolution, operation: Option<&str>) -> Result<Resolved, String> {
         let (file, held, records) = open_existing(path)?;
+        #[cfg(unix)]
+        let identity = held.identity();
         let start = records.first().ok_or_else(|| format!("journal {} is empty", path.display()))?;
         if start["j"] != "start" {
             return Err(format!("journal {}: first record is not a start record", path.display()));
@@ -313,7 +346,11 @@ impl Journal {
             }
             Resolution::Retry => {
                 j.write(&tagged(json!({ "j": "retry", "n": n }), &task))?;
-                return Ok(format!("authorized one more attempt at {what} (operation {shown})"));
+                return Ok(Resolved {
+                    summary: format!("authorized one more attempt at {what} (operation {shown})"),
+                    #[cfg(unix)]
+                    identity,
+                });
             }
             Resolution::Performed { receipt } => {
                 if receipt.is_empty() {
@@ -327,7 +364,18 @@ impl Journal {
             ),
         };
         j.finish(&task, n, result)?;
-        Ok(summary)
+        Ok(Resolved {
+            summary,
+            #[cfg(unix)]
+            identity,
+        })
+    }
+
+    /// The identity of the journal's file, as it was when locked: `None` for a journal
+    /// kept in memory.
+    #[cfg(unix)]
+    pub fn identity(&self) -> Option<FileIdentity> {
+        self._held.as_ref().map(Held::identity)
     }
 
     /// Begins external operation `op` of `task` ("" for the program's own) with the
@@ -436,7 +484,7 @@ impl Journal {
 /// The identity of an open file: its device and inode, so two paths to one file, or a
 /// path re-pointed at another, are never confused.
 #[cfg(unix)]
-type FileId = (u64, u64);
+type FileId = FileIdentity;
 #[cfg(not(unix))]
 type FileId = std::path::PathBuf;
 
@@ -444,7 +492,7 @@ type FileId = std::path::PathBuf;
 fn file_id(file: &File, _path: &Path) -> Result<FileId, String> {
     use std::os::unix::fs::MetadataExt;
     let m = file.metadata().map_err(|e| e.to_string())?;
-    Ok((m.dev(), m.ino()))
+    Ok(FileIdentity { device: m.dev(), inode: m.ino() })
 }
 
 #[cfg(not(unix))]
@@ -458,6 +506,13 @@ static HELD: std::sync::Mutex<Vec<FileId>> = std::sync::Mutex::new(Vec::new());
 /// This process's hold on one journal; dropping it lets the journal go.
 #[derive(Debug)]
 struct Held(FileId);
+
+impl Held {
+    #[cfg(unix)]
+    fn identity(&self) -> FileIdentity {
+        self.0
+    }
+}
 
 impl Drop for Held {
     fn drop(&mut self) {
@@ -482,6 +537,8 @@ const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 fn lock(file: &File, path: &Path) -> Result<Held, String> {
     let shown = path.display();
     let id = file_id(file, path).map_err(|e| format!("cannot lock journal {shown}: {e}"))?;
+    #[cfg(test)]
+    tests::before_lock(path);
     {
         let mut held = HELD.lock().unwrap_or_else(|p| p.into_inner());
         if held.contains(&id) {
@@ -494,7 +551,10 @@ fn lock(file: &File, path: &Path) -> Result<Held, String> {
     let deadline = std::time::Instant::now() + LOCK_WAIT;
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok(hold),
+            Ok(()) => {
+                still_named(path, &hold.0)?;
+                return Ok(hold);
+            }
             Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
@@ -504,6 +564,28 @@ fn lock(file: &File, path: &Path) -> Result<Held, String> {
             Err(std::fs::TryLockError::Error(e)) => return Err(format!("cannot lock journal {shown}: {e}")),
         }
     }
+}
+
+/// After locking: the path must still name the file that was opened, or what was locked
+/// is not the journal the caller named (a file swapped in between opening and locking).
+/// Everything after this goes through the open file; the path is not opened again, so a
+/// later rename or replacement is not seen (RUNTIME.md section 11).
+#[cfg(unix)]
+fn still_named(path: &Path, id: &FileId) -> Result<(), String> {
+    let shown = path.display();
+    match FileIdentity::of_path(path) {
+        Ok(now) if now == *id => Ok(()),
+        Ok(_) => Err(format!(
+            "journal {shown} was replaced while it was being opened: the path no longer names the file that was \
+             opened and locked, so nothing was done"
+        )),
+        Err(e) => Err(format!("journal {shown} was removed or moved while it was being opened ({e}), so nothing was done")),
+    }
+}
+
+#[cfg(not(unix))]
+fn still_named(_path: &Path, _id: &FileId) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1026,6 +1108,108 @@ impl Failpoint {
 mod tests {
     use super::*;
 
+    type Hook = Box<dyn FnOnce() + Send>;
+
+    /// What to do to a path between opening it and locking it, once (`on_lock`).
+    static BEFORE_LOCK: std::sync::Mutex<Vec<(std::path::PathBuf, Hook)>> = std::sync::Mutex::new(Vec::new());
+
+    pub(super) fn before_lock(path: &Path) {
+        let hook = {
+            let mut hooks = BEFORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            hooks.iter().position(|(p, _)| p == path).map(|i| hooks.swap_remove(i).1)
+        };
+        if let Some(f) = hook {
+            f();
+        }
+    }
+
+    /// Runs `f` the next time `path` is opened, after it is opened and before it is locked.
+    fn on_lock(path: &Path, f: impl FnOnce() + Send + 'static) {
+        BEFORE_LOCK.lock().unwrap().push((path.to_path_buf(), Box::new(f)));
+    }
+
+    /// A journal at `name` whose one action is in doubt, as a crash leaves it.
+    fn in_doubt(name: &str) -> std::path::PathBuf {
+        let p = tmp(name);
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        p
+    }
+
+    #[test]
+    fn a_journal_replaced_between_opening_and_locking_is_refused_and_left_alone() {
+        let p = in_doubt("swap");
+        // The file opened, still reachable through a second name, and another put at the path.
+        let opened = p.with_file_name("swap-opened");
+        let _ = std::fs::remove_file(&opened);
+        std::fs::hard_link(&p, &opened).unwrap();
+        let before = std::fs::read(&opened).unwrap();
+        let other = in_doubt("swap-other");
+        let other_bytes = std::fs::read(&other).unwrap();
+        for what in ["resume", "resolve"] {
+            let (from, to) = (other.clone(), p.clone());
+            // Put the other journal at the path after opening; put the original back after.
+            std::fs::copy(&other, other.with_file_name("swap-spare")).unwrap();
+            on_lock(&p, move || std::fs::rename(&from, &to).unwrap());
+            let e = match what {
+                "resume" => Journal::resume(&p, &bind("P", "C")).map(|_| ()).unwrap_err(),
+                _ => Journal::resolve(&p, Resolution::Retry, None).map(|_| ()).unwrap_err(),
+            };
+            assert!(e.contains("was replaced while it was being opened") && e.contains("nothing was done"), "{what}: {e}");
+            assert_eq!(std::fs::read(&opened).unwrap(), before, "{what}: the file opened was written to");
+            assert_eq!(std::fs::read(&p).unwrap(), other_bytes, "{what}: the file swapped in was written to");
+            // Back as it was for the next case.
+            std::fs::rename(other.with_file_name("swap-spare"), &other).unwrap();
+            std::fs::remove_file(&p).unwrap();
+            std::fs::hard_link(&opened, &p).unwrap();
+        }
+        // A path removed between opening and locking.
+        let gone = p.clone();
+        on_lock(&p, move || std::fs::remove_file(&gone).unwrap());
+        let e = Journal::resume(&p, &bind("P", "C")).map(|_| ()).unwrap_err();
+        assert!(e.contains("was removed or moved while it was being opened"), "{e}");
+        assert_eq!(std::fs::read(&opened).unwrap(), before);
+        // A new journal, replaced as soon as it is made, is refused before its start record.
+        let fresh = tmp("swap-new");
+        let (from, to) = (other.clone(), fresh.clone());
+        on_lock(&fresh, move || std::fs::rename(&from, &to).unwrap());
+        let e = Journal::create(&fresh, &bind("P", "C")).map(|_| ()).unwrap_err();
+        assert!(e.contains("was replaced while it was being opened"), "{e}");
+        assert_eq!(std::fs::read(&fresh).unwrap(), other_bytes);
+    }
+
+    #[test]
+    fn the_identity_of_the_file_locked_is_reported() {
+        let p = in_doubt("identity");
+        let id = FileIdentity::of_path(&p).unwrap();
+        let link = p.with_file_name("identity-link");
+        let _ = std::fs::remove_file(&link);
+        std::fs::hard_link(&p, &link).unwrap();
+        assert_eq!(FileIdentity::of_path(&link).unwrap(), id);
+        let r = Journal::resolve(&link, Resolution::Retry, None).unwrap();
+        assert_eq!(r.identity, id);
+        let j = Journal::resume(&p, &bind("P", "C")).unwrap();
+        assert_eq!(j.identity(), Some(id));
+        drop(j);
+        let other = in_doubt("identity-other");
+        assert_ne!(Journal::resume(&other, &bind("P", "C")).unwrap().identity(), Some(id));
+        assert_eq!(Journal::memory().unwrap().identity(), None);
+    }
+
+    /// The OS lock alone, without this process's registry, refuses a second open file
+    /// in the same process (`flock` locks an open file, not a process): checked here on
+    /// each platform CI runs.
+    #[test]
+    fn the_os_lock_refuses_a_second_open_file_in_the_same_process() {
+        let p = in_doubt("flock");
+        let a = File::open(&p).unwrap();
+        let b = File::open(&p).unwrap();
+        a.try_lock().unwrap();
+        assert!(matches!(b.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+        drop(a);
+        b.try_lock().unwrap();
+    }
+
     /// A binding whose hashes are the SHA-256 of `program` and `config`, on the
     /// interpreter, with no proxies.
     fn bind(program: &str, config: &str) -> Binding {
@@ -1148,7 +1332,7 @@ mod tests {
         assert!(Journal::resolve(&p, Resolution::Retry, Some("1.2:1")).unwrap_err().contains("not in doubt"));
         Journal::resolve(&p, Resolution::Performed { receipt: "R".into() }, Some("1.1:1")).unwrap();
         // One left: it is the one resolved without a name.
-        let msg = Journal::resolve(&p, Resolution::Retry, None).unwrap();
+        let msg = Journal::resolve(&p, Resolution::Retry, None).unwrap().summary;
         assert!(msg.contains("operation 1.0:1"), "{msg}");
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert!(matches!(r.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" })).unwrap(), Step::Replay(_)));
@@ -1281,6 +1465,8 @@ mod tests {
         let _ = std::fs::remove_file(&other);
         std::fs::hard_link(&p, &other).unwrap();
         assert!(Journal::resume(&other, &bind("P", "C")).unwrap_err().contains("in this process"));
+        assert!(Journal::resolve(&p, Resolution::Retry, None).unwrap_err().contains("in use by another run in this process"));
+        assert!(Journal::resolve(&other, Resolution::Retry, None).unwrap_err().contains("in this process"));
         drop(held);
         Journal::resume(&p, &bind("P", "C")).unwrap();
     }
@@ -1369,7 +1555,7 @@ mod tests {
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
         j.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap();
         drop(j);
-        let msg = Journal::resolve(&p, Resolution::Performed { receipt: "re_123".into() }, None).unwrap();
+        let msg = Journal::resolve(&p, Resolution::Performed { receipt: "re_123".into() }, None).unwrap().summary;
         assert!(msg.contains("payments.refund.refund"), "{msg}");
         assert!(Journal::resolve(&p, Resolution::Failed { message: "x".into() }, None).unwrap_err().contains("no operation is in doubt"));
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();

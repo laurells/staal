@@ -19,6 +19,15 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- A journal's path is checked again once the journal is locked: a file swapped in at the
+  path between opening and locking is refused (by `run`, `resume` and `resolve` alike),
+  and nothing is written to either file. `Journal::resolve` now returns `Resolved`, what
+  it recorded and the identity (device and inode) of the file it locked, and
+  `Journal::identity` gives a journal's; `FileIdentity::of_path` gives the identity a
+  path names now. A test shows the OS lock alone also refuses a second open of a
+  journal in the same process, on each platform CI runs, beside the registry that
+  refuses it at once.
+
 - `staalc::schema_of(checked, program, entry)` in the library: what `staalc schema`
   prints (an entry's inputs, result, grants and secrets as JSON Schemas, and the code
   that consumes each grant), for programs that embed staalc, such as Staal Studio. It

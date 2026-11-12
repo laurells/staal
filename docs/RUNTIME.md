@@ -995,7 +995,13 @@ journal whose run has just let it go can still look locked for that moment. A lo
 this process does not hold is therefore waited for, up to two seconds, before the
 journal is refused as in use by another process: a child's brief copy is outlasted,
 and a journal another process really holds is refused, two seconds later than it
-would be without the wait.
+would be without the wait. Once the journal is locked, its path must still name the file
+that was opened: a file swapped in at the path between opening and locking is refused,
+and nothing is written to either file. After that, everything goes through the open
+file and the path is not opened again, so a rename or replacement after locking is not
+seen. `Journal::resolve` and `Journal::identity` report the file's identity (device and
+inode) as it was when locked, for a caller that keys journals by identity rather than by
+path.
 
 The journal holds the data sent to models and to actions, and so may contain
 sensitive data. Like the log, it must never be given to a model as context.

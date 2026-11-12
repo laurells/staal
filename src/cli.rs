@@ -550,8 +550,8 @@ fn resolve_cmd(rest: &[String], usage: &str) -> u8 {
         journal::Resolution::Retry
     };
     match journal::Journal::resolve(Path::new(&opts["--journal"]), resolution, opts.get("--operation").map(String::as_str)) {
-        Ok(summary) => {
-            println!("{summary}; now resume the run");
+        Ok(r) => {
+            println!("{}; now resume the run", r.summary);
             0
         }
         Err(e) => {
