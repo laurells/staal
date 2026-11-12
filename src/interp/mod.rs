@@ -20,6 +20,7 @@ pub mod http;
 pub mod journal;
 pub mod tcp;
 pub mod money;
+pub mod observe;
 pub mod anthropic;
 pub mod provider;
 pub mod proxy;
@@ -298,7 +299,7 @@ pub fn run_config_profiled(
         Engine::Native => Some(compile_native(prog)?),
     };
     let sink = std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
-    let hooks = Hooks { native, capture: None, profile: Some(sink.clone()), debug: None };
+    let hooks = Hooks { native, profile: Some(sink.clone()), ..Hooks::default() };
     let r = run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)?;
     let fns = sink.lock().map_err(|_| "the profile was lost; this is a bug in staalc".to_string())?.clone();
     Ok((r, fns))
@@ -322,7 +323,7 @@ pub fn run_config_debugged(prog: &Program, config: &Json, hook: Box<dyn DebugHoo
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
     let provider = provider::of_run(cfg.get("model"))?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
-    let hooks = Hooks { native: None, capture: None, profile: None, debug: Some(hook) };
+    let hooks = Hooks { debug: Some(hook), ..Hooks::default() };
     run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)
 }
 
@@ -482,7 +483,7 @@ pub fn run_config_capturing(prog: &Program, config: &Json, engine: Engine) -> Re
         Engine::Native => Some(compile_native(prog)?),
     };
     let printed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let hooks = Hooks { native, capture: Some(printed.clone()), profile: None, debug: None };
+    let hooks = Hooks { native, capture: Some(printed.clone()), ..Hooks::default() };
     let r = run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)?;
     let text = printed.lock().map_err(|_| "the printed text was lost; this is a bug in staalc".to_string())?.clone();
     Ok((r, text))
@@ -504,6 +505,28 @@ pub fn run_config_with_native(
     run_impl(prog, source, config, durability, provider, Box::new(adapter), Hooks { native: Some(native), ..Hooks::default() })
 }
 
+/// Runs a checked program as `run_config_engine` does, with an observer offered every
+/// event as it happens (`observe`; RUNTIME.md section 20). The run never waits for the
+/// observer, and nothing the observer does reaches the run. Returns Err, and runs nothing,
+/// for a bad config or an observer whose thread cannot be started.
+pub fn run_config_observed(
+    prog: &Program,
+    source: &str,
+    config: &Json,
+    durability: Durability,
+    engine: Engine,
+    observation: observe::Observation,
+) -> Result<RunResult, String> {
+    let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
+    let provider = provider::of_run(cfg.get("model"))?;
+    let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
+    let native = match engine {
+        Engine::Interpreter => None,
+        Engine::Native => Some(compile_native(prog)?),
+    };
+    run_impl(prog, source, config, durability, provider, Box::new(adapter), Hooks { native, observe: Some(observation), ..Hooks::default() })
+}
+
 /// What a tool attaches to a run beyond the program and its world.
 #[derive(Default)]
 struct Hooks {
@@ -515,6 +538,9 @@ struct Hooks {
     profile: Option<std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, FnProfile>>>>,
     /// A debugger, told before each statement.
     debug: Option<Box<dyn DebugHook>>,
+    /// An observer, offered every event as it happens (`observe`), started once the config
+    /// is checked.
+    observe: Option<observe::Observation>,
 }
 
 fn run_impl(
@@ -524,16 +550,22 @@ fn run_impl(
     durability: Durability,
     provider: Box<dyn Provider + Send>,
     adapter: Box<dyn Adapter + Send>,
-    hooks: Hooks,
+    mut hooks: Hooks,
 ) -> Result<RunResult, String> {
     // Validate everything first: a bad config must not even create a journal.
     let setup = Setup::from_config(prog, config)?;
+    // After the config is checked, before the journal: a run whose observer cannot be
+    // started does not start.
+    let feed = hooks.observe.take().map(observe::Feed::start).transpose()?;
     let journal = match durability {
         Durability::None => Journal::memory()?,
         Durability::Create(path) => Journal::create(path, &binding(source, config, &hooks, &setup, provider.as_ref())?)?,
         Durability::CreateWithId(path, id) => Journal::create_with_id(path, id, &binding(source, config, &hooks, &setup, provider.as_ref())?)?,
         Durability::Resume(path) => Journal::resume(path, &binding(source, config, &hooks, &setup, provider.as_ref())?)?,
     };
+    if let Some(f) = &feed {
+        f.set_run_id(journal.run_id());
+    }
     // The interpreter recurses once per nested call, so it runs on a thread with a
     // stack large enough for the depth ceiling, whatever thread called us.
     std::thread::scope(|s| {
@@ -544,6 +576,7 @@ fn run_impl(
                 it.native = hooks.native;
                 it.capture = hooks.capture;
                 it.debug = hooks.debug;
+                it.observe = feed;
                 if hooks.profile.is_some() {
                     it.profile = Some(Profiler::default());
                 }
@@ -1464,6 +1497,12 @@ struct Interp<'p> {
     /// A debugger, and the calls it is shown: each function and its statement now.
     debug: Option<Box<dyn DebugHook>>,
     debug_stack: Vec<(String, crate::lexer::Pos)>,
+    /// An observer, offered each event as it is logged; shared with the run's tasks.
+    observe: Option<std::sync::Arc<observe::Feed>>,
+    /// The journal operation this task is making now (inside `external`), and the last one
+    /// it began: what an observed event is about (`emit`).
+    current_op: Option<u64>,
+    last_op: Option<u64>,
     /// The concurrent task this interpreter runs ("" for the program itself): its
     /// operations are a stream of their own in the journal.
     task: String,
@@ -1600,6 +1639,9 @@ impl<'p> Interp<'p> {
             profile: None,
             debug: None,
             debug_stack: Vec::new(),
+            observe: None,
+            current_op: None,
+            last_op: None,
             task: String::new(),
             spawns: 0,
             started: std::time::Instant::now(),
@@ -1613,6 +1655,19 @@ impl<'p> Interp<'p> {
         if let Some(obj) = fields.as_object_mut() {
             obj.insert("seq".into(), json!(self.log.len() + 1));
             obj.insert("event".into(), json!(event));
+        }
+        // A copy, after secrets are removed; nothing the observer does comes back. The
+        // operation it is about: the one it names; or the one being made, for an event
+        // while it is made; or the one just made, for an event reporting what it gave (only
+        // `external` gives `replayed`). An event before its operation begins (a request,
+        // which may yet be refused and never become one) is about none yet.
+        if let Some(f) = &self.observe {
+            let op = match &fields["operation"] {
+                Json::Number(n) => Some(n.to_string()),
+                Json::String(s) => Some(s.clone()),
+                _ => self.current_op.or(if fields.get("replayed").is_some() { self.last_op } else { None }).map(|n| journal::op_id(&self.task, n)),
+            };
+            f.send(&self.task, &fields, op);
         }
         if let Some(p) = &mut self.profile
             && let Some(top) = p.stack.last()
@@ -2295,6 +2350,9 @@ impl<'p> Interp<'p> {
             profile: None,
             debug: None,
             debug_stack: Vec::new(),
+            observe: self.observe.clone(),
+            current_op: None,
+            last_op: None,
             task: id,
             spawns: 0,
             // A task counts from when its run began, not from when it was forked.
@@ -3468,6 +3526,7 @@ impl<'p> Interp<'p> {
                     (None, Some(e)) => Err(e.to_string()),
                     _ => return fail(FailKind::Journal, format!("malformed result record in the journal: {rec}")),
                 };
+                self.last_op = rec["n"].as_u64();
                 return Ok((answer, true));
             }
             Step::Perform { n, key } => (n, key),
@@ -3489,7 +3548,11 @@ impl<'p> Interp<'p> {
             }
         };
         let id = journal::op_id(&self.task, n);
-        let answer = match live(self, &key) {
+        self.last_op = Some(n);
+        self.current_op = Some(n);
+        let lived = live(self, &key);
+        self.current_op = None;
+        let answer = match lived {
             Answer::Done(a) => a,
             // Exactly as if the process had died here: the intent is recorded, the result
             // is not, and only an operator can say what happened.

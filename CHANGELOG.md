@@ -19,6 +19,14 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- The run observer (RUNTIME.md section 20): `interp::run_config_observed` runs as
+  `run_config_engine` does with an `observe::Observer` offered a copy of each event as it
+  happens, on a thread of its own through a bounded buffer the run never waits on. A full
+  buffer drops events and counts them where they were missed; an observer that errs or
+  panics is detached; every event names its run, task and, where it has one, its journal
+  operation; the schema is named with the staalc version. Every runtime case gives the
+  same result, log and journal observed as not, on both engines.
+
 - `staalc::interp::journal::snapshot`: a journal read through one open file without a
   lock: its complete records, what the read covered, the identity of the file, and how
   many of the records are known durable (`Durable::Records(n)`, for a journal this

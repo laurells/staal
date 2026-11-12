@@ -2125,3 +2125,44 @@ function changes nothing, or changing it twice is harmless). Otherwise resume st
 and `staalc resolve` accepts only `--failed <reason>` or `--retry`: the value a C
 function returned was seen by nobody outside the process, so it cannot be recorded
 for it.
+
+## 20. The run observer
+
+A program that shows runs as they happen (Staal Studio) attaches an observer with
+`interp::run_config_observed`, as `run_config_engine` runs, given an
+`observe::Observation`: an `observe::Observer` and the number of events its buffer holds
+(at least one). The observer is called on a thread of its own, never the run's, and its
+guarantees are each tested (tests/observer_test.rs, tests/observer_secrets_test.rs):
+
+- **It cannot change a run.** It receives a copy of each event the log receives, taken
+  after secrets are removed; nothing it does or returns reaches the run's state, result,
+  log or journal. Every runtime case (tests/run) gives the same result, log and journal
+  with an observer as without, on both engines.
+- **Its failure cannot fail the run.** An observer that returns an error or panics is
+  detached: it receives nothing more, and the run goes on.
+- **It cannot block the run.** The run only ever tries to add an event to the buffer.
+  When the buffer is full, the event is dropped and counted; the next event delivered
+  says how many were dropped just before it (`missed_before`), and `End::missed` says how
+  many were dropped after the last one delivered. So the events delivered and the events
+  missed add up to the log's length, and a gap is shown where it was.
+- **Every event names its run and task**, and the events of one task arrive in that
+  task's order. A task's events are its part of the log, in order.
+- **The operation it is about**, as the journal names it (`n`, or `task:n`), where the
+  event has one: an event naming its operation (`in_doubt`, `retrying_in_doubt`,
+  `journal_write_failed`) gives that one; an event emitted while an operation is being
+  made gives that one; an event reporting what an operation gave (it has `replayed`)
+  gives the one just made. A request (`action_requested`, `model_request`) is emitted
+  before its operation begins, and may yet be refused and never become one, so it names
+  none; the event reporting its outcome does. Events about no operation (a grant, a
+  refusal, a validation, the run's start and end) name none.
+- **The schema is named** (`observe::SCHEMA`, `staalc-observer-1`), with the version of
+  the staalc that emitted each event.
+
+`Observer::end` is called once, when the run is over and every event sent has been
+offered, with how many were delivered, how many were missed after the last one, and why
+the observer was detached, if it was. A run whose config is refused, or whose observer's
+thread cannot be started, starts nothing: no observer, no journal.
+
+What an observer sees is when events were seen. The run's log is the record: it is
+assembled in task order when the run ends, and its `seq` numbers are its own, which the
+observed events do not carry.
