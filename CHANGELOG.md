@@ -102,6 +102,15 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   a separate process). The C worker tests copy staalc with `cp` and a rename, and the
   scripts the MCP, native and install tests run are written by a shell started for
   that alone (src/test_files.rs).
+- Test clients set their read timeout before sending, not after: once a socket can
+  neither send nor receive, macOS refuses any option on it with EINVAL (XNU,
+  `sosetoptlock`: "the socket has been shutdown, no more sockopt's"). A client that
+  had shut down its sending side, and whose connection the program had already
+  dropped, failed that way (seen on macOS on 2026-11-11). Its thread then ended, so the
+  clients after it never came: one test failed when its 20-second wait ran out, and
+  another, with no wait limit, hung until the job was cancelled. Each `staalc` run in
+  the serve tests is now killed, failing the test, if it has not finished within 120
+  seconds, and a CI job ends after 120 minutes rather than GitHub's six hours.
 
 ### Changed
 

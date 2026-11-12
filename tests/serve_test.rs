@@ -40,8 +40,10 @@ fn client(address: String, line: &'static str) -> std::thread::JoinHandle<String
                 Err(e) => panic!("never listening on {address}: {e}"),
             }
         };
-        c.write_all(line.as_bytes()).unwrap();
+        // Set before writing: once both directions are closed, macOS refuses socket
+        // options (EINVAL), and the program may close as soon as it has the request.
         c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        c.write_all(line.as_bytes()).unwrap();
         let mut got = String::new();
         let _ = c.read_to_string(&mut got);
         got
@@ -94,21 +96,52 @@ fn raw_client(address: String, bytes: Vec<u8>, close: bool) -> std::thread::Join
                 Err(e) => panic!("never listening on {address}: {e}"),
             }
         };
+        // Set before writing: once this side has shut down its sending and the program
+        // has dropped the client, macOS refuses socket options (EINVAL).
+        c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
         let _ = c.write_all(&bytes);
         if close {
             let _ = c.shutdown(std::net::Shutdown::Write);
         }
-        c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
         let mut got = Vec::new();
         let _ = c.read_to_end(&mut got);
         got
     })
 }
 
+/// Runs staalc, killed if it has not finished within `STAALC_LIMIT`: a program here waits
+/// for its clients, and a client that never comes (its thread failed) would otherwise
+/// leave the test waiting with nothing said.
 fn staalc(args: &[&str]) -> (Option<i32>, String, String) {
-    let o = Command::new(BIN).args(args).current_dir(ROOT).output().unwrap();
-    (o.status.code(), String::from_utf8_lossy(&o.stdout).trim().to_string(), String::from_utf8_lossy(&o.stderr).trim().to_string())
+    use std::process::Stdio;
+    let mut child = Command::new(BIN).args(args).current_dir(ROOT).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let drain = |mut r: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut b = Vec::new();
+            let _ = r.read_to_end(&mut b);
+            String::from_utf8_lossy(&b).trim().to_string()
+        })
+    };
+    let out = drain(Box::new(child.stdout.take().unwrap()));
+    let err = drain(Box::new(child.stderr.take().unwrap()));
+    let start = Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        if start.elapsed() > STAALC_LIMIT {
+            let _ = child.kill();
+            let _ = child.wait();
+            let (out, err) = (out.join().unwrap(), err.join().unwrap());
+            panic!("staalc {args:?} had not finished after {STAALC_LIMIT:?}, and was killed\nstdout: {out}\nstderr: {err}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    (status.code(), out.join().unwrap(), err.join().unwrap())
 }
+
+/// Far longer than any run here takes (the longest waits 20 seconds for a client).
+const STAALC_LIMIT: Duration = Duration::from_secs(120);
 
 fn engines() -> Vec<&'static str> {
     if cfg!(feature = "native") { vec!["interpreter", "native"] } else { vec!["interpreter"] }

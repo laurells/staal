@@ -948,8 +948,10 @@ mod tests {
         fn raw(addr: String, data: &'static [u8]) -> std::thread::JoinHandle<()> {
             std::thread::spawn(move || {
                 let mut c = TcpStream::connect(&addr).unwrap();
-                c.write_all(data).unwrap();
+                // Set before writing: once the server has dropped this client, macOS
+                // refuses socket options (EINVAL).
                 c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                c.write_all(data).unwrap();
                 let mut got = Vec::new();
                 let _ = c.read_to_end(&mut got);
             })
