@@ -2,9 +2,9 @@
 # Needs Settings > Pages > Source set to "GitHub Actions".
 name: pages
 on:
+  # The site is published with each release, or by hand.
   push:
-    branches: [main]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    tags: ["v*"]
   workflow_dispatch:
 permissions:
   contents: read

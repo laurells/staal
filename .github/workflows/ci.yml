@@ -4,8 +4,11 @@
 # Everything in `cargo test`, with crash injection, plus the build without native code.
 name: ci
 on:
+  # Only for a release (a version tag pushed), or when started by hand: every change is
+  # tested in full on a developer's machine before it is merged.
   push:
-  pull_request:
+    tags: ["v*"]
+  workflow_dispatch:
 permissions:
   contents: read
 env:

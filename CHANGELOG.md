@@ -19,6 +19,17 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- Each action's journal intent records `recovery`, the rule it is made under (`repeat`,
+  `resend_with_key` or `operator`), which resume applies again; an action replayed under
+  another rule is a divergence. No new record type or journal version: an older intent
+  without it is replayed as before. `journal::view` now says who settles an operation in
+  doubt from that recorded rule, where it used `resolve`'s acceptance, which differs: it
+  said an operator settles an in-doubt GET, a keyed request or statement, a repeatable or
+  contained C call and an idempotent adapter's action, all of which resume makes again
+  by itself. `journal::Settle` gains `NotRecorded`, for an intent written before the
+  field. What `resolve` accepts is unchanged. Tested against real crashes
+  (tests/view_test.rs): for each kind of action, what the view says is what resume does.
+
 - `staalc::check_in(root, root_path, entry, text)`: checks a program as `check_path` does,
   reading its own files (the entry, the modules it imports, `staal.json` and
   `staal.lock`) through an `interp::fsx::Root`: one directory at a time from its

@@ -987,6 +987,8 @@ JSON lines, append-only. Records:
 {"j":"resume","run_id":"…","version":3,"staalc":"…","engine":"native",
  "program_sha256":"…","config_sha256":"…","proxies":{…},"at_ms":…}
 {"j":"intent","n":1,"op":"count","key":"…","body":{…}}
+{"j":"intent","n":2,"op":"action","key":"…","body":{…},"recovery":"operator"}
+                                       an action's intent records the rule it is made under
 {"j":"result","n":1,"ok":…}            or  {"j":"result","n":1,"err":"…"}
 {"j":"retry","n":3}                    an operator authorized one more attempt at action 3
                                        (a result or retry an operator's decision wrote also has
@@ -995,7 +997,16 @@ JSON lines, append-only. Records:
 {"j":"end","ok":true,"result":…}       or  {"j":"end","ok":false,"failure":"…","message":"…"}
 ```
 
-`op` is `count`, `model`, `action`, `print`, `clock`, `random` or `input`. After an intent come only
+`op` is `count`, `model`, `action`, `print`, `clock`, `random` or `input`. An action's intent
+records `recovery`, the rule it is made under (`repeat`, `resend_with_key` or `operator`, from
+`interp::runtime_recovery` or `interp::adapter_recovery`): what a resumed run does with it if a
+crash leaves it in doubt. Resume, bound to the same program and config, applies the same rule; an
+action replayed under another rule is a divergence. A reader learns from it who settles an action in
+doubt without the run config, which the journal holds only as a hash: the database key, a C
+function's `repeatable` and isolation, and an adapter's deduplication are all in the config. The
+field adds no record type and no journal version: an intent written by a `staalc` that did not
+record it (0.28.0 and before) is replayed as before, compared without it, and a `staalc` that does
+not know it ignores it. After an intent come only
 its result, or, for an action, `retry`/`attempt` pairs and then its result. A record of a concurrent
 task (section 18) also has `"t"`, the task's id: each task's operations are numbered from 1 by
 themselves and must follow these rules among themselves, and the tasks' records may interleave in any
@@ -1037,7 +1048,12 @@ writer knows: its durable length grows only after each sync returns, and `resume
 `resolve` sync a journal once when they open it, so everything they read is durable.
 For a journal this process does not hold, durability is not established: another
 process may be writing it. `journal::view` is built on a snapshot and carries the same
-identity and durability.
+identity and durability. For each operation in doubt it says who settles it if nobody acts:
+resume, by making it again (any operation not an action, and an action whose recorded rule is
+`repeat` or `resend_with_key`), an operator (an action recorded as `operator`: resume stops at it),
+or that it is not recorded (an action whose intent predates the field). That is apart from what
+`staalc resolve` accepts: any action in doubt but those always made again (above), so an operator
+may also give, say, the response a server gave to a GET that resume would otherwise make again.
 
 The journal holds the data sent to models and to actions, and so may contain
 sensitive data. Like the log, it must never be given to a model as context.

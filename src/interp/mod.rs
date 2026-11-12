@@ -2235,7 +2235,7 @@ impl<'p> Interp<'p> {
         match (f, vals.as_slice()) {
             (Builtin::Print, [Value::Text(t)]) => {
                 let capture = self.capture.clone();
-                let (answer, replayed) = self.external("print", json!({ "text": t }), true, "print", |_, _| {
+                let (answer, replayed) = self.external("print", json!({ "text": t }), Recovery::Repeat, "print", |_, _| {
                     use std::io::Write;
                     if let Some(c) = &capture {
                         return match c.lock() {
@@ -2260,7 +2260,7 @@ impl<'p> Interp<'p> {
                 Ok(Value::Unit)
             }
             (Builtin::Now, []) => {
-                let (answer, replayed) = self.external("clock", json!({}), true, "clock read", |_, _| {
+                let (answer, replayed) = self.external("clock", json!({}), Recovery::Repeat, "clock read", |_, _| {
                     let now = std::time::SystemTime::now();
                     let ms = match now.duration_since(std::time::UNIX_EPOCH) {
                         Ok(d) => i64::try_from(d.as_millis()).ok(),
@@ -2286,7 +2286,7 @@ impl<'p> Interp<'p> {
                 if lo > hi {
                     return fail(FailKind::Value, format!("random_int({lo}, {hi}): the lowest is above the highest"));
                 }
-                let (answer, replayed) = self.external("random", json!({ "lo": lo, "hi": hi }), true, "random number", |_, _| {
+                let (answer, replayed) = self.external("random", json!({ "lo": lo, "hi": hi }), Recovery::Repeat, "random number", |_, _| {
                     match uniform(lo, hi) {
                         Ok(n) => Answer::Done(Ok(json!(n))),
                         Err(e) => Answer::Unknown(e),
@@ -2310,7 +2310,7 @@ impl<'p> Interp<'p> {
                 }
                 // A line read but not recorded before a crash is read again on resume: the
                 // run never saw it.
-                let (answer, replayed) = self.external("input", json!({}), true, "console read", |_, _| {
+                let (answer, replayed) = self.external("input", json!({}), Recovery::Repeat, "console read", |_, _| {
                     use std::io::{BufRead, Read};
                     let mut bytes = Vec::new();
                     let stdin = std::io::stdin();
@@ -3093,9 +3093,9 @@ impl<'p> Interp<'p> {
         self.broker().count_use(h).or_else(internal)?;
         let body =
             json!({ "capability": path, "method": method, "args": args_json, "amount": amount_text, "target": target });
-        let retries = adapter_recovery(self.adapter.idempotent(&path, method)).retries();
+        let recovery = adapter_recovery(self.adapter.idempotent(&path, method));
         let what = format!("action {path}.{method}");
-        let (answer, replayed) = self.external("action", body, retries, &what, |it, key| {
+        let (answer, replayed) = self.external("action", body, recovery, &what, |it, key| {
             Answer::Done(it.adapter.perform(key, &path, method, &args_json).map(|id| json!({ "receipt": id })))
         })?;
         match answer {
@@ -3259,7 +3259,7 @@ impl<'p> Interp<'p> {
         // the service deduplicates by Idempotency-Key, which the runtime then sends.
         let keyed = method != "get" && self.broker().idempotency_key(h).or_else(internal)?;
         let reach = self.broker().addresses(h).or_else(internal)?;
-        let retryable = runtime_recovery(path, keyed, false).retries();
+        let recovery = runtime_recovery(path, keyed, false);
         self.broker().count_use(h).or_else(internal)?;
         let shown: Vec<Json> = headers
             .iter()
@@ -3280,7 +3280,7 @@ impl<'p> Interp<'p> {
                 HeaderValue::Secret(s) => (n, s.value),
             })
             .collect();
-        let (answer, replayed) = self.external("action", jbody, retryable, &what, |it, key| {
+        let (answer, replayed) = self.external("action", jbody, recovery, &what, |it, key| {
             if keyed {
                 send.push(("Idempotency-Key".into(), values::Value::new(key.to_string())));
             }
@@ -3378,11 +3378,11 @@ impl<'p> Interp<'p> {
         let what = format!("action {path} {file}");
         // Reading changes nothing, and writing the same content again leaves the same
         // file, so both are safe to retry after a crash.
-        let retries = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false).retries();
+        let recovery = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false);
         let (answer, replayed) = match method {
             "read" => {
                 let jbody = json!({ "capability": path, "method": method, "target": file });
-                self.external("action", jbody, retries, &what, |it, _key| {
+                self.external("action", jbody, recovery, &what, |it, _key| {
                     Answer::Done(fsx::read(&file, it.fs_max_read_bytes).map(|t| json!({ "text": scrub_text(&it.secrets, &t) })))
                 })?
             }
@@ -3394,7 +3394,7 @@ impl<'p> Interp<'p> {
                 let jbody = json!({ "capability": path, "method": method, "target": file,
                                     "bytes": content.len(), "sha256": sha });
                 let id = format!("write:{}", &sha[..16]);
-                self.external("action", jbody, retries, &what, |_it, _key| {
+                self.external("action", jbody, recovery, &what, |_it, _key| {
                     Answer::Done(fsx::write(&file, content.as_bytes()).map(|()| json!({ "receipt": id })))
                 })?
             }
@@ -3449,8 +3449,8 @@ impl<'p> Interp<'p> {
         let jbody = json!({ "capability": path, "method": method, "target": address,
                             "data_sha256": journal::sha256_hex(data.as_bytes()), "until": until });
         let what = format!("action {path} {address}");
-        let retries = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false).retries();
-        let (answer, replayed) = self.external("action", jbody, retries, &what, |it, _key| {
+        let recovery = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false);
+        let (answer, replayed) = self.external("action", jbody, recovery, &what, |it, _key| {
             match tcp::exchange(&address, data.as_bytes(), until.as_deref(), &it.tcp, path == "net.tls.exchange", &reach) {
                 tcp::Outcome::Reply(t) => Answer::Done(Ok(json!({ "text": scrub_text(&it.secrets, &t) }))),
                 tcp::Outcome::NotSent(e) => Answer::Done(Err(format!("{NOT_SENT}{e}"))),
@@ -3519,7 +3519,7 @@ impl<'p> Interp<'p> {
         let what = format!("action {path}");
         // C code can change anything: every call counts as an effect.
         self.effects += 1;
-        let (answer, replayed) = self.external("action", jbody, runtime_recovery(path, false, f.may_repeat()).retries(), &what, |it, _key| {
+        let (answer, replayed) = self.external("action", jbody, runtime_recovery(path, false, f.may_repeat()), &what, |it, _key| {
             Answer::Done(f.call(&cargs).map(|v| {
                 json!({ "value": match v {
                     ffi::CValue::Int(n) => json!(n),
@@ -3584,8 +3584,8 @@ impl<'p> Interp<'p> {
             what = format!("action {path} {address}");
             let root = self.broker().root(h).or_else(internal)?;
             let Some(listen) = self.listen.get(&root).cloned() else { return internal("an accept grant without its listening settings") };
-            let retries = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false).retries();
-            let (a, r) = self.external("action", jbody, retries, &what, |it, key| {
+            let recovery = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false);
+            let (a, r) = self.external("action", jbody, recovery, &what, |it, key| {
                 let got = tcp::accept(&it.server, &address, until.as_deref(), &listen, &it.tcp, key);
                 // Each client dropped as unusable, with why: never what it sent.
                 for why in &got.dropped {
@@ -3607,8 +3607,8 @@ impl<'p> Interp<'p> {
             let jbody = json!({ "capability": path, "method": method, "target": id,
                                 "data_sha256": journal::sha256_hex(data.as_bytes()) });
             what = format!("action {path} {id}");
-            let retries = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false).retries();
-            let (a, r) = self.external("action", jbody, retries, &what, |it, _key| {
+            let recovery = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false);
+            let (a, r) = self.external("action", jbody, recovery, &what, |it, _key| {
                 Answer::Done(
                     tcp::reply(&it.server, id, data.as_bytes(), &it.tcp, path == "net.tls.reply").map(|()| json!({ "receipt": format!("reply:{id}") })),
                 )
@@ -3677,14 +3677,14 @@ impl<'p> Interp<'p> {
                             "sql_sha256": journal::sha256_hex(sql.as_bytes()),
                             "params_sha256": journal::sha256_hex(params_json.as_bytes()) });
         let keyed = self.broker().idempotency_key(h).or_else(internal)?;
-        let retries = runtime_recovery(path, keyed, false).retries();
+        let recovery = runtime_recovery(path, keyed, false);
         let (answer, replayed) = match method {
-            "query" => self.external("action", jbody, retries, &what, |it, _key| {
+            "query" => self.external("action", jbody, recovery, &what, |it, _key| {
                 Answer::Done(db::query(&file, sql, &params, it.fs_max_read_bytes, it.tcp.timeout).map(|rows| json!({ "text": scrub_text(&it.secrets, &rows.to_string()) })))
             })?,
             "execute" => {
                 self.effects += 1;
-                self.external("action", jbody, retries, &what, |it, key| {
+                self.external("action", jbody, recovery, &what, |it, key| {
                     let changed = db::execute(&file, sql, &params, keyed.then_some(key), it.tcp.timeout);
                     Answer::Done(changed.map(|n| json!({ "receipt": format!("sqlite:{n}") })))
                 })?
@@ -3752,15 +3752,15 @@ impl<'p> Interp<'p> {
                             "params_sha256": journal::sha256_hex(params_json.as_bytes()) });
         let keyed = self.broker().idempotency_key(h).or_else(internal)?;
         let settings = pg::Settings { connect_timeout: self.tcp.connect_timeout, timeout: self.tcp.timeout, tls: self.tcp.tls.clone() };
-        let retries = runtime_recovery(path, keyed, false).retries();
+        let recovery = runtime_recovery(path, keyed, false);
         let (answer, replayed) = match method {
-            "query" => self.external("action", jbody, retries, &what, |it, _key| {
+            "query" => self.external("action", jbody, recovery, &what, |it, _key| {
                 let rows = pg::query(&grant, name, sql, &params, it.fs_max_read_bytes, &settings);
                 Answer::Done(rows.map(|rows| json!({ "text": scrub_text(&it.secrets, &rows.to_string()) })).map_err(|e| scrub_text(&it.secrets, &e)))
             })?,
             "execute" => {
                 self.effects += 1;
-                self.external("action", jbody, retries, &what, |it, key| match pg::execute(&grant, name, sql, &params, keyed.then_some(key), &settings) {
+                self.external("action", jbody, recovery, &what, |it, key| match pg::execute(&grant, name, sql, &params, keyed.then_some(key), &settings) {
                     pg::Executed::Done(n) => Answer::Done(Ok(json!({ "receipt": format!("postgres:{n}") }))),
                     // Nothing from the server is trusted to leave the password out.
                     pg::Executed::Failed(e) => Answer::Done(Err(scrub_text(&it.secrets, &e))),
@@ -3804,10 +3804,11 @@ impl<'p> Interp<'p> {
         &mut self,
         op: &str,
         body: Json,
-        retry_in_doubt: bool,
+        recovery: Recovery,
         what: &str,
         live: impl FnOnce(&mut Self, &str) -> Answer,
     ) -> Result<(Result<Json, String>, bool), Failure> {
+        let retry_in_doubt = recovery.retries();
         // Before anything is journaled: a cancelled run starts no operation.
         if self.cancel.as_ref().is_some_and(cancel::Cancel::is_cancelled) {
             return Err(cancelled());
@@ -3815,7 +3816,10 @@ impl<'p> Interp<'p> {
         if matches!(op, "action" | "count" | "model") {
             self.check_deadline(what)?;
         }
-        let step = match self.journal().begin(&self.task, op, body) {
+        // An action's intent records the rule it is made under; every other operation
+        // is always made again, as a reader knows from its kind.
+        let recorded = (op == "action").then(|| recovery.name());
+        let step = match self.journal().begin(&self.task, op, body, recorded) {
             Ok(step) => step,
             Err(e) => return fail(FailKind::Journal, e),
         };
@@ -3908,7 +3912,7 @@ impl<'p> Interp<'p> {
             ModelRequest { instruction, data, output_schema: schema(ty, &self.types), max_output_tokens: 0 };
         // A real provider's count can change between runs (a tokenizer update), and it
         // decides the token limit, so it is journaled like any other answer from outside.
-        let (counted, _) = self.external("count", req.to_json(), true, "token count", |it, _key| {
+        let (counted, _) = self.external("count", req.to_json(), Recovery::Repeat, "token count", |it, _key| {
             match it.provider.count_input_tokens(&req) {
                 Ok(n) => Answer::Done(Ok(json!(n))),
                 Err(ProviderError::Failed(e)) => Answer::Done(Err(e)),
@@ -3953,7 +3957,7 @@ impl<'p> Interp<'p> {
             }
         }
         self.emit("model_request", json!({ "request": req.to_json(), "input_tokens_counted": input }));
-        let (answer, replayed) = self.external("model", req.to_json(), true, "model call", |it, _key| {
+        let (answer, replayed) = self.external("model", req.to_json(), Recovery::Repeat, "model call", |it, _key| {
             match it.provider.complete(&req) {
                 // A reply without output (a refusal, output cut off) still used tokens:
                 // it is recorded with them, so a resumed run charges them too.

@@ -6,8 +6,10 @@
 # platform). A finding is uploaded as an artifact; a failed run is a bug to fix.
 name: fuzz
 on:
-  schedule:
-    - cron: "17 2 * * 6" # Saturdays, 02:17 UTC
+  # Only for a release (a version tag pushed), or when started by hand: every change is
+  # tested in full on a developer's machine before it is merged.
+  push:
+    tags: ["v*"]
   workflow_dispatch:
 permissions:
   contents: read

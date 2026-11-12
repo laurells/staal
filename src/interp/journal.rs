@@ -519,15 +519,32 @@ impl Journal {
     }
 
     /// Begins external operation `op` of `task` ("" for the program's own) with the
-    /// given intent `body`.
-    pub fn begin(&mut self, task: &str, op: &str, body: Json) -> Result<Step, String> {
+    /// given intent `body`. An action's intent records `recovery`, the rule it is made
+    /// under (`interp::Recovery::name`): what a resumed run does with it if a crash
+    /// leaves it in doubt, so a reader of the journal knows it without the run config.
+    pub fn begin(&mut self, task: &str, op: &str, body: Json, recovery: Option<&str>) -> Result<Step, String> {
         let stream = self.streams.entry(task.to_string()).or_default();
         let n = stream.next_n;
         stream.next_n += 1;
         let key = if task.is_empty() { format!("{}-{n}", self.run_id) } else { format!("{}-{task}-{n}", self.run_id) };
-        let intent = tagged(json!({ "j": "intent", "n": n, "op": op, "key": key, "body": body }), task);
+        let mut intent = json!({ "j": "intent", "n": n, "op": op, "key": key, "body": body });
+        if let Some(r) = recovery {
+            intent["recovery"] = json!(r);
+        }
+        let intent = tagged(intent, task);
         if let Some(recorded) = stream.pending.pop_front() {
-            if recorded != intent {
+            // An intent recorded by a staalc that did not record `recovery` (0.28.0 and
+            // before) is compared without it.
+            let same = if recorded.get("recovery").is_none() {
+                let mut without = intent.clone();
+                if let Some(o) = without.as_object_mut() {
+                    o.remove("recovery");
+                }
+                recorded == without
+            } else {
+                recorded == intent
+            };
+            if !same {
                 return Err(divergence(&op_id(task, n), &recorded, &intent));
             }
             // check_body guarantees what may follow an intent: its result, or operator
@@ -887,9 +904,11 @@ fn open_operations(pending: &Streams) -> (Vec<(String, &Json)>, Vec<String>) {
     (open, authorized)
 }
 
-/// Whether an operator settles the open operation `intent` of `task` (`resolve`), or
-/// `resume` does by making it again, and then why: only an action can be in doubt to
-/// an operator, and some actions are always made again.
+/// Whether `resolve` accepts a resolution for the open operation `intent` of `task`, or
+/// refuses it, and then why: only an action can be resolved, and not one always made
+/// again, whose result could not take the form the program reads. (Who settles an
+/// operation left alone is `settle_of`: an action that is resolved is settled by what
+/// the operator recorded, whatever its rule.)
 fn operator_settles(task: &str, intent: &Json) -> Result<(), String> {
     let n = intent["n"].as_u64().unwrap_or_default(); // checked by check_body
     if intent["op"] != "action" {
@@ -993,10 +1012,34 @@ pub enum OpState {
 /// Who settles an operation in doubt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Settle {
-    /// An operator, with `staalc resolve`.
+    /// An operator, with `staalc resolve`: resume stops at it until one has.
     Operator,
-    /// `resume`, by making it again; why, as `resolve` would refuse it.
+    /// `resume`, by making it again (an action safe to repeat, or one sent again with the
+    /// same key, or any operation not an action); why.
     Resume(String),
+    /// Not recorded: an action whose intent was written by a staalc that did not record
+    /// the rule it was made under (0.28.0 and before). Resume decides it from the run
+    /// config, which the journal holds only as a hash.
+    NotRecorded,
+}
+
+/// Who settles the open operation `intent`: the rule an action recorded when it was
+/// made (`interp::runtime_recovery`, `interp::adapter_recovery`), which resume, bound to
+/// the same program and config, applies again; any other operation, resume.
+fn settle_of(task: &str, intent: &Json) -> Settle {
+    let n = intent["n"].as_u64().unwrap_or_default();
+    if intent["op"] != "action" {
+        return Settle::Resume(format!("operation {} in doubt is a {}, which resume makes again by itself", op_id(task, n), intent["op"]));
+    }
+    match intent.get("recovery").and_then(Json::as_str) {
+        Some("operator") => Settle::Operator,
+        Some("repeat") => Settle::Resume(format!("operation {} in doubt is safe to repeat; resume makes it again by itself", op_id(task, n))),
+        Some("resend_with_key") => Settle::Resume(format!(
+            "operation {} in doubt is sent again with the same idempotency key, which tells the service, or the database, whether it already happened",
+            op_id(task, n)
+        )),
+        _ => Settle::NotRecorded,
+    }
 }
 
 /// Reads the journal at `path` as `resume` and `resolve` interpret it, changing
@@ -1044,7 +1087,7 @@ pub fn view_of(snap: Snapshot, path: &Path) -> Result<View, String> {
                     let state = if authorized.contains(&id) {
                         OpState::RetryAuthorized { attempts: 0 }
                     } else if let Some((_, intent)) = open.iter().find(|(t, i)| t == task && i["n"] == n) {
-                        OpState::InDoubt { attempts: 0, settle: operator_settles(task, intent).map_or_else(Settle::Resume, |()| Settle::Operator) }
+                        OpState::InDoubt { attempts: 0, settle: settle_of(task, intent) }
                     } else {
                         OpState::Failed(String::new()) // replaced by its result below
                     };
@@ -1229,6 +1272,14 @@ fn check_body(records: &[Json], run_id: &str, path: &Path) -> Result<(Streams, O
                 let op_ok = matches!(rec["op"].as_str(), Some("count" | "model" | "action" | "print" | "clock" | "random" | "input"));
                 if !op_ok || !rec["key"].is_string() || rec.get("body").is_none() {
                     return Err(bad(i, "malformed intent record".into()));
+                }
+                // The rule an action was made under, when recorded: one of the three, and
+                // on an action only.
+                if let Some(r) = rec.get("recovery") {
+                    let known = matches!(r.as_str(), Some("repeat" | "resend_with_key" | "operator"));
+                    if !known || rec["op"] != "action" {
+                        return Err(bad(i, format!("an intent records the rule {r}, which only an action may, and only repeat, resend_with_key or operator")));
+                    }
                 }
                 st.open_intent = true;
                 st.last_was_retry = false;
@@ -1426,7 +1477,7 @@ mod tests {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
         let (path, out) = (p.clone(), seen.clone());
         on_sync(id, move || *out.lock().unwrap() = Some(snapshot(&path).unwrap()));
-        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
         let during = seen.lock().unwrap().take().expect("the hook ran");
         assert_eq!((during.records.len(), during.durable), (2, Durable::Records(1)));
         assert_eq!(during.records[1]["j"], "intent");
@@ -1487,7 +1538,7 @@ mod tests {
     fn in_doubt(name: &str) -> std::path::PathBuf {
         let p = tmp(name);
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
         p
     }
 
@@ -1574,7 +1625,7 @@ mod tests {
         assert_eq!(v.operations[0].decisions, vec![want]);
         // The run replays it as it would a resolution without a decision.
         let mut j = Journal::resume(&p, &bind("P", "C")).unwrap();
-        let step = j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        let step = j.begin("", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
         assert!(matches!(step, Step::Replay(rec) if rec["ok"] == json!({ "receipt": "ch_1" })));
     }
 
@@ -1591,7 +1642,7 @@ mod tests {
         assert_eq!(std::fs::read(&p).unwrap(), bytes);
         // The run resumes and ends; the decision is still found, and nothing is written.
         let mut j = Journal::resume(&p, &bind("P", "C")).unwrap();
-        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
         j.end(json!({ "ok": true })).unwrap();
         drop(j);
         let bytes = std::fs::read(&p).unwrap();
@@ -1607,8 +1658,8 @@ mod tests {
     fn the_same_decision_id_with_anything_different_is_refused() {
         let p = tmp("decision-conflict");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        j.begin("1.0", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
-        j.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        j.begin("1.0", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
+        j.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
         drop(j);
         let d = decision(&p, 'd', "the provider's log shows message m1");
         Journal::resolve_decision(&p, &d, Resolution::Performed { receipt: "m1".into() }, "1.0:1").unwrap();
@@ -1649,7 +1700,7 @@ mod tests {
         assert_eq!(Some(last["decision"].clone()), r.decision);
         assert!(matches!(view(&p).unwrap().operations[0].state, OpState::RetryAuthorized { .. }));
         let mut j = Journal::resume(&p, &bind("P", "C")).unwrap();
-        let Step::Perform { n, .. } = j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = j.begin("", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap() else { panic!() };
         j.finish("", n, Ok(json!({ "receipt": "x" }))).unwrap();
         drop(j);
         assert!(Journal::resolve_decision(&p, &d, Resolution::Retry, "1").unwrap().already_recorded);
@@ -1691,8 +1742,8 @@ mod tests {
         rec["n"] = json!(1);
         std::fs::write(&p, &text).unwrap();
         let mut j = Journal::resume(&p, &bind("P", "C")).unwrap();
-        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
-        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
         drop(j);
         let mut twice = rec.clone();
         twice["n"] = json!(2);
@@ -1807,11 +1858,11 @@ mod tests {
     fn a_new_run_replays_exactly_after_reopening() {
         let p = tmp("roundtrip");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        let Step::Perform { n, key } = j.begin("", "model", json!({ "q": 1 })).unwrap() else { panic!() };
+        let Step::Perform { n, key } = j.begin("", "model", json!({ "q": 1 }), None).unwrap() else { panic!() };
         assert_eq!(n, 1);
         assert!(key.ends_with("-1"));
         j.finish("", n, Ok(json!({ "a": 2 }))).unwrap();
-        let Step::Perform { n, .. } = j.begin("", "action", json!({ "x": "y" })).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = j.begin("", "action", json!({ "x": "y" }), None).unwrap() else { panic!() };
         j.finish("", n, Err("declined".into())).unwrap();
         j.end(json!({ "ok": true, "result": 7 })).unwrap();
         let run_id = j.run_id().to_string();
@@ -1820,14 +1871,14 @@ mod tests {
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         assert_eq!(r.run_id(), run_id);
         assert!(r.is_resuming());
-        assert_eq!(r.begin("", "model", json!({ "q": 1 })).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": { "a": 2 } })));
-        assert_eq!(r.begin("", "action", json!({ "x": "y" })).unwrap(), Step::Replay(json!({ "j": "result", "n": 2, "err": "declined" })));
+        assert_eq!(r.begin("", "model", json!({ "q": 1 }), None).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": { "a": 2 } })));
+        assert_eq!(r.begin("", "action", json!({ "x": "y" }), None).unwrap(), Step::Replay(json!({ "j": "result", "n": 2, "err": "declined" })));
         r.end(json!({ "ok": true, "result": 7 })).unwrap();
         // Resuming again is idempotent.
         drop(r);
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        r.begin("", "model", json!({ "q": 1 })).unwrap();
-        r.begin("", "action", json!({ "x": "y" })).unwrap();
+        r.begin("", "model", json!({ "q": 1 }), None).unwrap();
+        r.begin("", "action", json!({ "x": "y" }), None).unwrap();
         assert!(r.end(json!({ "ok": false })).is_err(), "a different ending is divergence");
     }
 
@@ -1835,42 +1886,42 @@ mod tests {
     fn tasks_are_streams_of_their_own_and_replay_whatever_the_interleaving() {
         let p = tmp("tasks");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        let Step::Perform { n, key } = j.begin("", "count", json!(0)).unwrap() else { panic!() };
+        let Step::Perform { n, key } = j.begin("", "count", json!(0), None).unwrap() else { panic!() };
         j.finish("", n, Ok(json!(1))).unwrap();
         // Two tasks, interleaved: each numbered from 1 by itself, with keys of its own.
-        let Step::Perform { n: a1, key: ka } = j.begin("2.0", "model", json!("a")).unwrap() else { panic!() };
-        let Step::Perform { n: b1, key: kb } = j.begin("2.1", "model", json!("b")).unwrap() else { panic!() };
+        let Step::Perform { n: a1, key: ka } = j.begin("2.0", "model", json!("a"), None).unwrap() else { panic!() };
+        let Step::Perform { n: b1, key: kb } = j.begin("2.1", "model", json!("b"), None).unwrap() else { panic!() };
         assert_eq!((a1, b1), (1, 1));
         assert!(ka.ends_with("-2.0-1") && kb.ends_with("-2.1-1") && key.ends_with("-1") && ka != kb);
         j.finish("2.1", b1, Ok(json!("B"))).unwrap();
         j.finish("2.0", a1, Ok(json!("A"))).unwrap();
-        let Step::Perform { n: a2, .. } = j.begin("2.0", "action", json!("a2")).unwrap() else { panic!() };
+        let Step::Perform { n: a2, .. } = j.begin("2.0", "action", json!("a2"), None).unwrap() else { panic!() };
         assert_eq!(a2, 2);
         j.finish("2.0", a2, Ok(json!({ "receipt": "r" }))).unwrap();
-        let Step::Perform { n, .. } = j.begin("", "count", json!(3)).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = j.begin("", "count", json!(3), None).unwrap() else { panic!() };
         assert_eq!(n, 2, "the program's own numbering is not moved by its tasks'");
         j.finish("", n, Ok(json!(1))).unwrap();
         j.end(json!({ "ok": true })).unwrap();
         drop(j);
         // Replayed in a different order across tasks: each task still gets its own.
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        assert!(matches!(r.begin("", "count", json!(0)).unwrap(), Step::Replay(_)));
-        assert_eq!(r.begin("2.0", "model", json!("a")).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": "A", "t": "2.0" })));
-        assert_eq!(r.begin("2.0", "action", json!("a2")).unwrap(), Step::Replay(json!({ "j": "result", "n": 2, "ok": { "receipt": "r" }, "t": "2.0" })));
-        assert_eq!(r.begin("2.1", "model", json!("b")).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": "B", "t": "2.1" })));
+        assert!(matches!(r.begin("", "count", json!(0), None).unwrap(), Step::Replay(_)));
+        assert_eq!(r.begin("2.0", "model", json!("a"), None).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": "A", "t": "2.0" })));
+        assert_eq!(r.begin("2.0", "action", json!("a2"), None).unwrap(), Step::Replay(json!({ "j": "result", "n": 2, "ok": { "receipt": "r" }, "t": "2.0" })));
+        assert_eq!(r.begin("2.1", "model", json!("b"), None).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": "B", "t": "2.1" })));
         // A task that asks for something else than it recorded diverges.
         drop(r);
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        r.begin("", "count", json!(0)).unwrap();
-        assert!(r.begin("2.1", "model", json!("a")).unwrap_err().contains("operation 2.1:1"));
+        r.begin("", "count", json!(0), None).unwrap();
+        assert!(r.begin("2.1", "model", json!("a"), None).unwrap_err().contains("operation 2.1:1"));
     }
 
     #[test]
     fn each_task_in_doubt_is_resolved_by_name() {
         let p = tmp("tasks-doubt");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        j.begin("1.0", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
-        j.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        j.begin("1.0", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
+        j.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap();
         drop(j); // both in flight when the process died
         let all = Journal::resolve(&p, Resolution::Retry, None).unwrap_err();
         assert!(all.contains("1.0:1, 1.1:1") && all.contains("--operation"), "{all}");
@@ -1880,8 +1931,8 @@ mod tests {
         let msg = Journal::resolve(&p, Resolution::Retry, None).unwrap().summary;
         assert!(msg.contains("operation 1.0:1"), "{msg}");
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        assert!(matches!(r.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" })).unwrap(), Step::Replay(_)));
-        assert!(matches!(r.begin("1.0", "action", json!({ "capability": "email.send", "method": "send" })).unwrap(), Step::Perform { .. }));
+        assert!(matches!(r.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap(), Step::Replay(_)));
+        assert!(matches!(r.begin("1.0", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap(), Step::Perform { .. }));
     }
 
     #[test]
@@ -1910,12 +1961,12 @@ mod tests {
     fn an_intent_without_result_is_in_doubt() {
         let p = tmp("doubt");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        let Step::Perform { key, .. } = j.begin("", "action", json!(1)).unwrap() else { panic!() };
+        let Step::Perform { key, .. } = j.begin("", "action", json!(1), None).unwrap() else { panic!() };
         drop(j); // crash before finish
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        assert_eq!(r.begin("", "action", json!(1)).unwrap(), Step::InDoubt { n: 1, key: key.clone() });
+        assert_eq!(r.begin("", "action", json!(1), None).unwrap(), Step::InDoubt { n: 1, key: key.clone() });
         r.finish("", 1, Ok(json!({ "receipt": "R" }))).unwrap();
-        let Step::Perform { n, .. } = r.begin("", "count", json!(2)).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = r.begin("", "count", json!(2), None).unwrap() else { panic!() };
         assert_eq!(n, 2);
     }
 
@@ -1923,11 +1974,11 @@ mod tests {
     fn divergence_is_detected() {
         let p = tmp("diverge");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        let Step::Perform { n, .. } = j.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = j.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" }), None).unwrap() else { panic!() };
         j.finish("", n, Ok(json!({}))).unwrap();
         drop(j);
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        let e = r.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap_err();
+        let e = r.begin("", "action", json!({ "capability": "email.send", "method": "send" }), None).unwrap_err();
         assert!(e.contains("payments.refund") && e.contains("email.send"), "{e}");
     }
 
@@ -1944,7 +1995,7 @@ mod tests {
     fn a_torn_last_line_is_discarded() {
         let p = tmp("torn");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        let Step::Perform { n, .. } = j.begin("", "count", json!(1)).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = j.begin("", "count", json!(1), None).unwrap() else { panic!() };
         j.finish("", n, Ok(json!(5))).unwrap();
         drop(j);
         // A crash in the middle of writing the next intent.
@@ -1952,8 +2003,8 @@ mod tests {
         f.write_all(b"{\"j\":\"intent\",\"n\":2,\"op\":\"mod").unwrap();
         drop(f);
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        assert!(matches!(r.begin("", "count", json!(1)).unwrap(), Step::Replay(_)));
-        assert!(matches!(r.begin("", "model", json!(2)).unwrap(), Step::Perform { n: 2, .. }), "op 2 never started");
+        assert!(matches!(r.begin("", "count", json!(1), None).unwrap(), Step::Replay(_)));
+        assert!(matches!(r.begin("", "model", json!(2), None).unwrap(), Step::Perform { n: 2, .. }), "op 2 never started");
         drop(r);
         // The repaired file is well formed.
         Journal::resume(&p, &bind("P", "C")).unwrap();
@@ -1963,7 +2014,7 @@ mod tests {
     fn damage_before_the_last_line_is_refused() {
         let p = tmp("corrupt");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        let Step::Perform { n, .. } = j.begin("", "count", json!(1)).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = j.begin("", "count", json!(1), None).unwrap() else { panic!() };
         j.finish("", n, Ok(json!(5))).unwrap();
         drop(j);
         let text = std::fs::read_to_string(&p).unwrap().replace("\"result\"", "\"resul");
@@ -2049,22 +2100,22 @@ mod tests {
         let p = tmp("retry");
         let body = json!({ "capability": "email.send", "method": "send" });
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        j.begin("", "action", body.clone()).unwrap();
+        j.begin("", "action", body.clone(), None).unwrap();
         drop(j); // crash: the action is in doubt
-        assert!(matches!(Journal::resume(&p, &bind("P", "C")).unwrap().begin("", "action", body.clone()).unwrap(), Step::InDoubt { .. }));
+        assert!(matches!(Journal::resume(&p, &bind("P", "C")).unwrap().begin("", "action", body.clone(), None).unwrap(), Step::InDoubt { .. }));
         Journal::resolve(&p, Resolution::Retry, None).unwrap();
         assert!(Journal::resolve(&p, Resolution::Retry, None).unwrap_err().contains("already authorized"));
         // Resume performs it, recording the attempt first.
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        assert!(matches!(r.begin("", "action", body.clone()).unwrap(), Step::Perform { n: 1, .. }));
+        assert!(matches!(r.begin("", "action", body.clone(), None).unwrap(), Step::Perform { n: 1, .. }));
         drop(r); // crash during the authorized attempt
         // That attempt may have happened: in doubt again, never silently retried twice.
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        assert!(matches!(r.begin("", "action", body.clone()).unwrap(), Step::InDoubt { n: 1, .. }));
+        assert!(matches!(r.begin("", "action", body.clone(), None).unwrap(), Step::InDoubt { n: 1, .. }));
         drop(r);
         Journal::resolve(&p, Resolution::Performed { receipt: "R9".into() }, None).unwrap();
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        assert_eq!(r.begin("", "action", body).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": { "receipt": "R9" } })));
+        assert_eq!(r.begin("", "action", body, None).unwrap(), Step::Replay(json!({ "j": "result", "n": 1, "ok": { "receipt": "R9" } })));
     }
 
     #[test]
@@ -2098,13 +2149,13 @@ mod tests {
     fn resolve_answers_only_an_action_in_doubt() {
         let p = tmp("resolve");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        j.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap();
+        j.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" }), None).unwrap();
         drop(j);
         let msg = Journal::resolve(&p, Resolution::Performed { receipt: "re_123".into() }, None).unwrap().summary;
         assert!(msg.contains("payments.refund.refund"), "{msg}");
         assert!(Journal::resolve(&p, Resolution::Failed { message: "x".into() }, None).unwrap_err().contains("no operation is in doubt"));
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        let step = r.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap();
+        let step = r.begin("", "action", json!({ "capability": "payments.refund", "method": "refund" }), None).unwrap();
         assert_eq!(step, Step::Replay(json!({ "j": "result", "n": 1, "ok": { "receipt": "re_123" } })));
     }
 
@@ -2113,7 +2164,7 @@ mod tests {
         for cap in ["fs.read", "fs.write", "db.sqlite.query", "net.tcp.accept", "net.tcp.reply", "net.tls.accept", "net.tls.reply"] {
             let p = tmp(&format!("again-{cap}"));
             let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-            j.begin("", "action", json!({ "capability": cap, "method": "m" })).unwrap();
+            j.begin("", "action", json!({ "capability": cap, "method": "m" }), None).unwrap();
             drop(j);
             let before = std::fs::read_to_string(&p).unwrap();
             for r in [Resolution::Performed { receipt: "x".into() }, Resolution::Retry] {
@@ -2148,7 +2199,7 @@ mod tests {
     fn each_resume_of_an_unfinished_run_is_recorded_and_the_start_never_changes() {
         let p = tmp("resume-records");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        let Step::Perform { n, .. } = j.begin("", "action", json!({ "x": 1 })).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = j.begin("", "action", json!({ "x": 1 }), None).unwrap() else { panic!() };
         drop(j); // crashed with the action in doubt
         let start = records(&p)[0].clone();
 
@@ -2173,7 +2224,7 @@ mod tests {
         // The resume records change no stream: the action is still in doubt, and once
         // resolved the run finishes as it would have.
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        assert!(matches!(r.begin("", "action", json!({ "x": 1 })).unwrap(), Step::InDoubt { n: 1, .. }));
+        assert!(matches!(r.begin("", "action", json!({ "x": 1 }), None).unwrap(), Step::InDoubt { n: 1, .. }));
         r.finish("", n, Ok(json!({ "receipt": "R" }))).unwrap();
         r.end(json!({ "ok": true })).unwrap();
         drop(r);
@@ -2260,15 +2311,15 @@ mod tests {
         let p = tmp("view-basic");
         let action = json!({ "capability": "payments.refund", "method": "refund", "amount": "10.00 USD", "target": "o1" });
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        let Step::Perform { n, .. } = j.begin("", "model", json!({ "q": 1 })).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = j.begin("", "model", json!({ "q": 1 }), None).unwrap() else { panic!() };
         j.finish("", n, Ok(json!({ "a": 1 }))).unwrap();
-        let Step::Perform { n, .. } = j.begin("", "action", action.clone()).unwrap() else { panic!() };
+        let Step::Perform { n, .. } = j.begin("", "action", action.clone(), Some("operator")).unwrap() else { panic!() };
         j.finish("", n, Err("declined".into())).unwrap();
-        j.begin("", "action", action.clone()).unwrap();
+        j.begin("", "action", action.clone(), Some("operator")).unwrap();
         drop(j); // crash: the second action is in doubt
         // A resume replays the first two operations and finds the third in doubt.
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
-        assert!(matches!(r.begin("", "model", json!({ "q": 1 })).unwrap(), Step::Replay(_)));
+        assert!(matches!(r.begin("", "model", json!({ "q": 1 }), None).unwrap(), Step::Replay(_)));
         drop(r);
         let v = view(&p).unwrap();
         assert_eq!(v.sessions.len(), 2);
@@ -2291,7 +2342,8 @@ mod tests {
         Journal::resolve(&p, Resolution::Performed { receipt: "R1".into() }, None).unwrap();
         let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
         for (op, body) in [("model", json!({ "q": 1 })), ("action", action.clone()), ("action", action)] {
-            assert!(matches!(r.begin("", op, body).unwrap(), Step::Replay(_)));
+            let rule = (op == "action").then_some("operator");
+            assert!(matches!(r.begin("", op, body, rule).unwrap(), Step::Replay(_)));
         }
         r.end(json!({ "ok": true })).unwrap();
         drop(r);
@@ -2303,45 +2355,87 @@ mod tests {
         assert_eq!(v.end, Some(json!({ "j": "end", "ok": true })));
     }
 
-    /// For each operation of a journal with several tasks, the view says an operator
-    /// settles it exactly when `resolve` accepts it, and otherwise gives `resolve`'s
-    /// own reason.
+    /// For each operation of a journal with several tasks: who settles it, from the rule
+    /// its intent recorded (an operator, resume, or not recorded), and, apart from that,
+    /// whether `resolve` accepts a resolution for it, with `resolve`'s own reason when not.
     #[test]
-    fn a_view_agrees_with_resolve_on_every_operation() {
+    fn a_view_says_who_settles_each_operation_and_resolve_says_what_it_accepts() {
         let p = tmp("view-resolve");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        j.begin("a", "action", json!({ "capability": "email.send", "method": "send", "target": "x" })).unwrap();
-        j.begin("b", "action", json!({ "capability": "fs.write", "method": "write", "target": "/f" })).unwrap();
-        j.begin("c", "model", json!({ "q": 2 })).unwrap();
-        j.begin("d", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap();
-        let Step::Perform { n, .. } = j.begin("e", "action", json!({ "capability": "payments.refund", "method": "refund" })).unwrap() else { panic!() };
+        j.begin("a", "action", json!({ "capability": "email.send", "method": "send", "target": "x" }), Some("operator")).unwrap();
+        j.begin("b", "action", json!({ "capability": "fs.write", "method": "write", "target": "/f" }), Some("repeat")).unwrap();
+        j.begin("c", "model", json!({ "q": 2 }), None).unwrap();
+        j.begin("d", "action", json!({ "capability": "payments.refund", "method": "refund" }), Some("operator")).unwrap();
+        let Step::Perform { n, .. } = j.begin("e", "action", json!({ "capability": "payments.refund", "method": "refund" }), Some("operator")).unwrap() else { panic!() };
         j.finish("e", n, Ok(json!({ "receipt": "R" }))).unwrap();
+        j.begin("f", "action", json!({ "capability": "net.http.get", "method": "get", "target": "https://example.com/" }), Some("repeat")).unwrap();
+        j.begin("g", "action", json!({ "capability": "payments.refund", "method": "refund" }), Some("resend_with_key")).unwrap();
+        j.begin("h", "action", json!({ "capability": "payments.refund", "method": "refund" }), None).unwrap();
         drop(j);
         Journal::resolve(&p, Resolution::Retry, Some("d:1")).unwrap();
         let v = view(&p).unwrap();
-        assert_eq!(v.operations.iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), ["a:1", "b:1", "c:1", "d:1", "e:1"]);
+        assert_eq!(v.operations.iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), ["a:1", "b:1", "c:1", "d:1", "e:1", "f:1", "g:1", "h:1"]);
+        let settle = |id: &str| match &v.operations.iter().find(|o| o.id == id).unwrap().state {
+            OpState::InDoubt { settle, .. } => Some(match settle {
+                Settle::Operator => "operator",
+                Settle::Resume(_) => "resume",
+                Settle::NotRecorded => "not recorded",
+            }),
+            _ => None,
+        };
+        let got: Vec<_> = ["a:1", "b:1", "c:1", "d:1", "e:1", "f:1", "g:1", "h:1"].map(settle).to_vec();
+        assert_eq!(got, [Some("operator"), Some("resume"), Some("resume"), None, None, Some("resume"), Some("resume"), Some("not recorded")]);
+        // What resolve accepts: an action not always made again, in doubt and not yet
+        // decided. A GET is accepted though resume would make it again: an operator may
+        // give the response the server gave.
         for o in &v.operations {
             let copy = tmp(&format!("view-resolve-{}", o.task));
             std::fs::copy(&p, &copy).unwrap();
             let got = Journal::resolve(&copy, Resolution::Failed { message: "m".into() }, Some(&o.id));
-            match &o.state {
-                OpState::InDoubt { settle: Settle::Operator, .. } => assert!(got.is_ok(), "{}: {got:?}", o.id),
-                OpState::InDoubt { settle: Settle::Resume(why), .. } => assert_eq!(got.unwrap_err(), *why, "{}", o.id),
-                OpState::RetryAuthorized { .. } => assert!(got.unwrap_err().contains("a retry is already authorized"), "{}", o.id),
-                OpState::Done(_) | OpState::Failed(_) => assert!(got.unwrap_err().contains("is not in doubt"), "{}", o.id),
+            match (o.task.as_str(), &o.state) {
+                ("a" | "f" | "g" | "h", OpState::InDoubt { .. }) => assert!(got.is_ok(), "{}: {got:?}", o.id),
+                ("b", _) => assert!(got.unwrap_err().contains("which resume makes again by itself; nothing to resolve"), "{}", o.id),
+                ("c", _) => assert!(got.unwrap_err().contains("which resume retries by itself; nothing to resolve"), "{}", o.id),
+                (_, OpState::RetryAuthorized { .. }) => assert!(got.unwrap_err().contains("a retry is already authorized"), "{}", o.id),
+                (_, OpState::Done(_) | OpState::Failed(_)) => assert!(got.unwrap_err().contains("is not in doubt"), "{}", o.id),
+                other => panic!("{}: {other:?}", o.id),
             }
         }
-        let settles: Vec<_> = v.operations.iter().map(|o| matches!(o.state, OpState::InDoubt { settle: Settle::Operator, .. })).collect();
-        assert_eq!(settles, [true, false, false, false, false]);
         // Done in the only session: nothing has replayed it.
         assert_eq!(v.operations.iter().find(|o| o.id == "e:1").map(|o| (&o.state, o.replayed)), Some((&OpState::Done(json!({ "receipt": "R" })), false)));
+    }
+
+    /// An action replayed under another rule than its intent recorded is a divergence;
+    /// one whose intent recorded none (an older journal) is compared without it.
+    #[test]
+    fn an_action_replays_only_under_the_rule_it_recorded() {
+        let action = json!({ "capability": "payments.refund", "method": "refund" });
+        let p = tmp("rule-replay");
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+        let Step::Perform { n, .. } = j.begin("", "action", action.clone(), Some("operator")).unwrap() else { panic!() };
+        j.finish("", n, Ok(json!({ "receipt": "R" }))).unwrap();
+        drop(j);
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
+        let e = r.begin("", "action", action.clone(), Some("resend_with_key")).unwrap_err();
+        assert!(e.contains("replay now makes a different action"), "{e}");
+        drop(r);
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
+        assert!(matches!(r.begin("", "action", action.clone(), Some("operator")).unwrap(), Step::Replay(_)));
+        // Recorded without a rule: replayed under any.
+        let p = tmp("rule-replay-older");
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+        let Step::Perform { n, .. } = j.begin("", "action", action.clone(), None).unwrap() else { panic!() };
+        j.finish("", n, Ok(json!({ "receipt": "R" }))).unwrap();
+        drop(j);
+        let mut r = Journal::resume(&p, &bind("P", "C")).unwrap();
+        assert!(matches!(r.begin("", "action", action, Some("operator")).unwrap(), Step::Replay(_)));
     }
 
     #[test]
     fn a_view_changes_nothing_reads_a_journal_another_holds_and_refuses_what_resume_refuses() {
         let p = tmp("view-held");
         let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
-        j.begin("", "model", json!({ "q": 1 })).unwrap();
+        j.begin("", "model", json!({ "q": 1 }), None).unwrap();
         // Held by a run: still read, without a lock.
         let before = std::fs::read(&p).unwrap();
         let v = view(&p).unwrap();

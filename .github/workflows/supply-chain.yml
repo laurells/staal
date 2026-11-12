@@ -5,10 +5,11 @@
 # already in the build.
 name: supply-chain
 on:
+  # Only for a release (a version tag pushed), or when started by hand: every change is
+  # tested in full on a developer's machine before it is merged.
   push:
-  pull_request:
-  schedule:
-    - cron: "41 5 * * 3" # Wednesdays, 05:41 UTC
+    tags: ["v*"]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
