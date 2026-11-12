@@ -941,6 +941,23 @@ doubt**: it may or may not have happened.
   `net.tls.accept`, `net.tls.reply`) is never resolved: resume
   makes it again, and `staalc resolve` refuses it.
 
+  A program that records who decided, such as Staal Studio, resolves through
+  `Journal::resolve_decision` with a **decision**: an id of 128 random bits, the run id,
+  and the evidence the operator gave (what was checked, and where). The decision is
+  written on the record the resolution writes (the `result`, or the `retry`) as
+  `"decision": {"id", "run_id", "operation", "resolution", "evidence", "staalc"}`, the
+  resolution in the form `Resolution::to_json` gives and the `staalc` that applied it.
+  It is matched on all of it: given an id the journal already records, with the same
+  run, operation, resolution and evidence, `resolve_decision` returns that record and
+  writes nothing, even after the run has gone on or ended, so applying a decision again
+  is harmless; the same id with anything different, or recorded for another operation,
+  is refused as a conflict, and a decision for another run's journal is refused. A
+  second decision for an operation already decided is refused, naming the first. A
+  decision on any other record, one not for its record's run and operation, or an id
+  recorded twice, is corruption. The field adds no record type and no journal version:
+  a `staalc` that does not know it (0.28.0 and before) resumes the journal and ignores
+  it.
+
 The run id is 128 bits from the operating system's random source, so keys
 never collide with another run's. A predictable or reused key could make a
 service return a *different* run's receipt.
@@ -966,6 +983,8 @@ JSON lines, append-only. Records:
 {"j":"intent","n":1,"op":"count","key":"…","body":{…}}
 {"j":"result","n":1,"ok":…}            or  {"j":"result","n":1,"err":"…"}
 {"j":"retry","n":3}                    an operator authorized one more attempt at action 3
+                                       (a result or retry an operator's decision wrote also has
+                                       "decision": {…}, below "staalc resolve")
 {"j":"attempt","n":3}                  that attempt is about to be made
 {"j":"end","ok":true,"result":…}       or  {"j":"end","ok":false,"failure":"…","message":"…"}
 ```

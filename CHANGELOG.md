@@ -19,6 +19,17 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- `Journal::resolve_decision`: a resolution recorded with the operator's decision (an
+  id of 128 random bits, the run, the operation, the resolution, the evidence and the
+  `staalc` that applied it), on the record the resolution writes. A decision is matched
+  on all of it: the same decision again returns the recorded one and writes nothing,
+  even after the run has gone on; the same id with anything different, an id recorded
+  for another operation, a decision for another run, or a second decision for an
+  operation already decided is refused, saying what is recorded. The journal view lists
+  each operation's decisions (`Operation::decisions`). No new record type or journal
+  version: `staalc` 0.28.0 resumes such a journal and ignores the field. `Resolution`
+  is now `Clone`, `PartialEq` and `Debug`, with `to_json`.
+
 - A journal's path is checked again once the journal is locked: a file swapped in at the
   path between opening and locking is refused (by `run`, `resume` and `resolve` alike),
   and nothing is written to either file. `Journal::resolve` now returns `Resolved`, what

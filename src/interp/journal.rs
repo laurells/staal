@@ -107,6 +107,12 @@ pub struct Resolved {
     /// locked, and nothing was opened by path after that.
     #[cfg(unix)]
     pub identity: FileIdentity,
+    /// The decision as the journal records it, for `resolve_decision`: `None` for a
+    /// resolution without one.
+    pub decision: Option<Json>,
+    /// The decision was in the journal already, with everything the same: nothing was
+    /// written, and `decision` is what was recorded then.
+    pub already_recorded: bool,
 }
 
 /// A file's identity: its device and inode, which a path does not change and two paths
@@ -130,6 +136,7 @@ impl FileIdentity {
 }
 
 /// How an operator resolves an action left in doubt (`staalc resolve`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
     /// It happened; this is the service's receipt.
     Performed { receipt: String },
@@ -144,6 +151,63 @@ pub enum Resolution {
     /// It did not happen: perform it on resume. The authorization covers one attempt;
     /// if that attempt is itself interrupted, the action is in doubt again.
     Retry,
+}
+
+impl Resolution {
+    /// The resolution as a decision records it: `{"performed": {"receipt": ...}}`,
+    /// `{"responded": {"status": ..., "body": ...}}`, `{"replied": {"text": ...}}`,
+    /// `{"failed": {"message": ...}}` or `{"retry": {}}`, exactly as given.
+    pub fn to_json(&self) -> Json {
+        match self {
+            Resolution::Performed { receipt } => json!({ "performed": { "receipt": receipt } }),
+            Resolution::Responded { status, body } => json!({ "responded": { "status": status, "body": body } }),
+            Resolution::Replied { text } => json!({ "replied": { "text": text } }),
+            Resolution::Failed { message } => json!({ "failed": { "message": message } }),
+            Resolution::Retry => json!({ "retry": {} }),
+        }
+    }
+}
+
+/// An operator's decision about an operation in doubt, recorded with the resolution it
+/// makes, so a journal says who decided what, on what evidence (Staal Studio's design,
+/// section 7). Applying the same decision again finds it recorded and changes nothing;
+/// the same id with anything else different is refused (`Journal::resolve_decision`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decision {
+    /// 128 random bits, as 32 lowercase hexadecimal digits: unique to this decision.
+    pub id: String,
+    /// The run it is for: the journal's run id must be this.
+    pub run_id: String,
+    /// What the operator checked, and where.
+    pub evidence: String,
+}
+
+impl Decision {
+    fn check(&self) -> Result<(), String> {
+        if !is_hex(&self.id, 32) {
+            return Err(format!("decision id '{}' is not 32 lowercase hexadecimal characters", self.id));
+        }
+        if !is_hex(&self.run_id, 32) {
+            return Err(format!("run id '{}' is not 32 lowercase hexadecimal characters", self.run_id));
+        }
+        if self.evidence.trim().is_empty() {
+            return Err("a decision needs its evidence: what was checked, and where".into());
+        }
+        Ok(())
+    }
+
+    /// The decision as the journal records it, applying `resolution` to `operation`.
+    fn record(&self, operation: &str, resolution: &Resolution) -> Json {
+        json!({
+            "id": self.id, "run_id": self.run_id, "operation": operation,
+            "resolution": resolution.to_json(), "evidence": self.evidence, "staalc": STAALC,
+        })
+    }
+}
+
+/// Whether `s` is `len` lowercase hexadecimal digits.
+fn is_hex(s: &str, len: usize) -> bool {
+    s.len() == len && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[derive(Debug)]
@@ -269,6 +333,22 @@ impl Journal {
     /// doubt, `operation` names the one (`op_id`). Says what was recorded, and which file
     /// was locked and written (`Resolved`).
     pub fn resolve(path: &Path, resolution: Resolution, operation: Option<&str>) -> Result<Resolved, String> {
+        Journal::resolve_with(path, resolution, operation, None)
+    }
+
+    /// As `resolve`, recording `decision` with the resolution: its id, the run, the
+    /// operation, the resolution, the evidence and this `staalc`'s version. Matched on
+    /// all of it: if the journal already records a decision with this id for this run
+    /// and operation, with the same resolution and evidence, that record is returned and
+    /// nothing is written (`already_recorded`), whether or not the run has gone on since;
+    /// the same id with anything different, or recorded for another operation, is
+    /// refused as a conflict. A journal of another run is refused.
+    pub fn resolve_decision(path: &Path, decision: &Decision, resolution: Resolution, operation: &str) -> Result<Resolved, String> {
+        decision.check()?;
+        Journal::resolve_with(path, resolution, Some(operation), Some(decision))
+    }
+
+    fn resolve_with(path: &Path, resolution: Resolution, operation: Option<&str>, decision: Option<&Decision>) -> Result<Resolved, String> {
         let (file, held, records) = open_existing(path)?;
         #[cfg(unix)]
         let identity = held.identity();
@@ -279,23 +359,62 @@ impl Journal {
         check_version(start, path)?;
         let run_id = start["run_id"].as_str().unwrap_or_default();
         let (pending, recorded_end) = check_body(&records[1..], run_id, path)?;
+        if let Some(d) = decision {
+            if d.run_id != run_id {
+                return Err(format!(
+                    "decision {} is for run {}, but journal {} is of run {run_id}; nothing was recorded",
+                    d.id,
+                    d.run_id,
+                    path.display()
+                ));
+            }
+            // check_body has validated every recorded decision, and that no id is
+            // recorded twice.
+            if let Some(recorded) = records.iter().filter_map(|r| r.get("decision")).find(|r| r["id"] == d.id.as_str()) {
+                let given = d.record(operation.unwrap_or_default(), &resolution);
+                let differs: Vec<&str> =
+                    ["run_id", "operation", "resolution", "evidence"].into_iter().filter(|k| recorded[*k] != given[*k]).collect();
+                if !differs.is_empty() {
+                    return Err(format!(
+                        "decision {} is already recorded in this journal with a different {}: recorded for operation {} as {}; \
+                         nothing was recorded",
+                        d.id,
+                        differs.join(", "),
+                        recorded["operation"].as_str().unwrap_or("?"),
+                        recorded["resolution"]
+                    ));
+                }
+                return Ok(Resolved {
+                    summary: format!(
+                        "decision {} was already recorded for operation {}; nothing was recorded again",
+                        d.id,
+                        recorded["operation"].as_str().unwrap_or("?")
+                    ),
+                    #[cfg(unix)]
+                    identity,
+                    decision: Some(recorded.clone()),
+                    already_recorded: true,
+                });
+            }
+        }
         if recorded_end.is_some() {
-            return Err("this run has already finished; nothing is in doubt".into());
+            return Err(format!("this run has already finished; nothing is in doubt{}", decided(&records, operation)));
         }
         let (mut open, authorized) = open_operations(&pending);
         if let Some(id) = authorized.iter().find(|id| operation.is_none_or(|o| o == id.as_str())) {
-            return Err(format!("a retry is already authorized for operation {id}; resume the run"));
+            return Err(format!("a retry is already authorized for operation {id}; resume the run{}", decided(&records, Some(id))));
         }
         let ids: Vec<String> = open.iter().map(|(t, r)| op_id(t, r["n"].as_u64().unwrap_or_default())).collect();
         let (task, intent) = match (operation, open.len()) {
-            (_, 0) => return Err("no operation is in doubt in this journal".into()),
+            (None, 0) => return Err("no operation is in doubt in this journal".into()),
+            (Some(o), 0) => return Err(format!("operation {o} is not in doubt; no operation is{}", decided(&records, operation))),
             (None, 1) => open.swap_remove(0),
             (None, _) => {
                 return Err(format!("operations {} are in doubt; name one with --operation", ids.join(", ")));
             }
             (Some(o), _) => match ids.iter().position(|i| i == o) {
                 Some(k) => open.swap_remove(k),
-                None => return Err(format!("operation {o} is not in doubt; in doubt: {}", ids.join(", "))),
+                None => return Err(format!("operation {o} is not in doubt; in doubt: {}{}", ids.join(", "), decided(&records, operation))),
             },
         };
         operator_settles(&task, intent)?;
@@ -316,6 +435,7 @@ impl Journal {
         let tcp = matches!(intent["body"]["capability"].as_str(), Some("net.tcp.exchange" | "net.tls.exchange"));
         let mut j = Journal::with(Some(file), Some(held), String::new(), BTreeMap::new(), None);
         let shown = op_id(&task, n);
+        let recorded = decision.map(|d| d.record(&shown, &resolution));
         let (result, summary) = match resolution {
             Resolution::Performed { .. } if http => {
                 return Err(format!(
@@ -345,11 +465,17 @@ impl Journal {
                 )
             }
             Resolution::Retry => {
-                j.write(&tagged(json!({ "j": "retry", "n": n }), &task))?;
+                let mut rec = json!({ "j": "retry", "n": n });
+                if let Some(d) = &recorded {
+                    rec["decision"] = d.clone();
+                }
+                j.write(&tagged(rec, &task))?;
                 return Ok(Resolved {
                     summary: format!("authorized one more attempt at {what} (operation {shown})"),
                     #[cfg(unix)]
                     identity,
+                    decision: recorded,
+                    already_recorded: false,
                 });
             }
             Resolution::Performed { receipt } => {
@@ -363,11 +489,21 @@ impl Journal {
                 format!("recorded {what} (operation {shown}) as failed"),
             ),
         };
-        j.finish(&task, n, result)?;
+        let mut rec = match result {
+            Ok(v) => json!({ "j": "result", "n": n, "ok": v }),
+            Err(e) => json!({ "j": "result", "n": n, "err": e }),
+        };
+        if let Some(d) = &recorded {
+            rec["decision"] = d.clone();
+        }
+        j.failpoint.before_result(&shown);
+        j.write(&tagged(rec, &task))?;
         Ok(Resolved {
             summary,
             #[cfg(unix)]
             identity,
+            decision: recorded,
+            already_recorded: false,
         })
     }
 
@@ -760,6 +896,9 @@ pub struct Operation {
     /// its result served that result instead of making the operation again.
     pub replayed: bool,
     pub state: OpState,
+    /// The decisions recorded for it (`Journal::resolve_decision`), in order: a retry's,
+    /// then perhaps a result's.
+    pub decisions: Vec<Json>,
 }
 
 /// Where an operation stands.
@@ -836,6 +975,7 @@ pub fn view(path: &Path) -> Result<View, String> {
                         session: written.get(&(task.clone(), n, "intent")).copied().unwrap_or_default(),
                         replayed: false,
                         state,
+                        decisions: Vec::new(),
                     });
                 }
                 Some("attempt") => {
@@ -845,6 +985,7 @@ pub fn view(path: &Path) -> Result<View, String> {
                 }
                 Some("result") => {
                     if let Some(o) = operations.last_mut() {
+                        o.decisions.extend(rec.get("decision").cloned());
                         o.state = match (rec.get("ok"), rec.get("err")) {
                             (Some(v), _) => OpState::Done(v.clone()),
                             (_, e) => OpState::Failed(e.and_then(Json::as_str).unwrap_or_default().to_string()),
@@ -852,7 +993,12 @@ pub fn view(path: &Path) -> Result<View, String> {
                         o.replayed = written.get(&(task.clone(), n, "result")).is_some_and(|s| *s < last_session);
                     }
                 }
-                _ => {} // a retry: its operation's state is decided above
+                // A retry: its operation's state is decided above.
+                _ => {
+                    if let Some(o) = operations.last_mut() {
+                        o.decisions.extend(rec.get("decision").cloned());
+                    }
+                }
             }
         }
     }
@@ -932,7 +1078,29 @@ fn check_body(records: &[Json], run_id: &str, path: &Path) -> Result<(Streams, O
     let mut pending: BTreeMap<String, VecDeque<Json>> = BTreeMap::new();
     let mut states: BTreeMap<String, State> = BTreeMap::new();
     let mut end = None;
+    let mut decisions: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (i, rec) in records.iter().enumerate() {
+        // A decision rides on the result or retry its resolution wrote: well formed, for
+        // this run and this record's operation, and recorded once.
+        if let Some(d) = rec.get("decision") {
+            let task = rec.get("t").and_then(Json::as_str).unwrap_or_default();
+            let n = rec["n"].as_u64().unwrap_or_default();
+            let ok = matches!(rec["j"].as_str(), Some("result" | "retry"))
+                && d.as_object().is_some_and(|o| o.len() == 6)
+                && d["id"].as_str().is_some_and(|s| is_hex(s, 32))
+                && !run_id.is_empty()
+                && d["run_id"] == run_id
+                && d["operation"] == op_id(task, n).as_str()
+                && d["resolution"].as_object().is_some_and(|o| o.len() == 1)
+                && d["evidence"].is_string()
+                && d["staalc"].is_string();
+            if !ok {
+                return Err(bad(i, "malformed decision".into()));
+            }
+            if !decisions.insert(d["id"].as_str().unwrap_or_default().to_string()) {
+                return Err(bad(i, format!("decision {} is recorded twice", d["id"].as_str().unwrap_or_default())));
+            }
+        }
         if end.is_some() {
             return Err(bad(i, "a record follows the end record".into()));
         }
@@ -1020,6 +1188,18 @@ fn check_body(records: &[Json], run_id: &str, path: &Path) -> Result<(Streams, O
         pending.entry(task).or_default().push_back(rec.clone());
     }
     Ok((pending, end))
+}
+
+/// For a message: the decisions recorded for `operation` (all of them, for `None`),
+/// as "; decided by decision <id> (...)", or nothing.
+fn decided(records: &[Json], operation: Option<&str>) -> String {
+    let found: Vec<String> = records
+        .iter()
+        .filter_map(|r| r.get("decision"))
+        .filter(|d| operation.is_none_or(|o| d["operation"] == o))
+        .map(|d| format!("decision {} ({} for operation {})", d["id"].as_str().unwrap_or("?"), d["resolution"], d["operation"].as_str().unwrap_or("?")))
+        .collect();
+    if found.is_empty() { String::new() } else { format!("; recorded: {}", found.join(", ")) }
 }
 
 /// A record of `task`: tagged with it, unless it is the program's own.
@@ -1194,6 +1374,182 @@ mod tests {
         let other = in_doubt("identity-other");
         assert_ne!(Journal::resume(&other, &bind("P", "C")).unwrap().identity(), Some(id));
         assert_eq!(Journal::memory().unwrap().identity(), None);
+    }
+
+    /// A decision with a fixed id, for the run of the journal at `p`.
+    fn decision(p: &Path, id: char, evidence: &str) -> Decision {
+        let run_id = read_records(p).unwrap()[0]["run_id"].as_str().unwrap().to_string();
+        Decision { id: id.to_string().repeat(32), run_id, evidence: evidence.into() }
+    }
+
+    #[test]
+    fn a_decision_is_recorded_with_its_resolution() {
+        let p = in_doubt("decision");
+        let d = decision(&p, 'a', "the payment shows in the dashboard as ch_1");
+        let r = Journal::resolve_decision(&p, &d, Resolution::Performed { receipt: "ch_1".into() }, "1").unwrap();
+        assert!(!r.already_recorded);
+        let want = json!({
+            "id": d.id, "run_id": d.run_id, "operation": "1", "resolution": { "performed": { "receipt": "ch_1" } },
+            "evidence": "the payment shows in the dashboard as ch_1", "staalc": STAALC,
+        });
+        assert_eq!(r.decision, Some(want.clone()));
+        let last = read_records(&p).unwrap().pop().unwrap();
+        assert_eq!(last, json!({ "j": "result", "n": 1, "ok": { "receipt": "ch_1" }, "decision": want }));
+        let v = view(&p).unwrap();
+        assert_eq!(v.operations[0].decisions, vec![want]);
+        // The run replays it as it would a resolution without a decision.
+        let mut j = Journal::resume(&p, &bind("P", "C")).unwrap();
+        let step = j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        assert!(matches!(step, Step::Replay(rec) if rec["ok"] == json!({ "receipt": "ch_1" })));
+    }
+
+    #[test]
+    fn the_same_decision_again_changes_nothing_even_after_the_run_went_on() {
+        let p = in_doubt("decision-again");
+        let d = decision(&p, 'b', "checked the outbox");
+        let first = Journal::resolve_decision(&p, &d, Resolution::Failed { message: "never sent".into() }, "1").unwrap();
+        let bytes = std::fs::read(&p).unwrap();
+        let again = Journal::resolve_decision(&p, &d, Resolution::Failed { message: "never sent".into() }, "1").unwrap();
+        assert!(again.already_recorded);
+        assert_eq!(again.decision, first.decision);
+        assert!(again.summary.contains("already recorded for operation 1"), "{}", again.summary);
+        assert_eq!(std::fs::read(&p).unwrap(), bytes);
+        // The run resumes and ends; the decision is still found, and nothing is written.
+        let mut j = Journal::resume(&p, &bind("P", "C")).unwrap();
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        j.end(json!({ "ok": true })).unwrap();
+        drop(j);
+        let bytes = std::fs::read(&p).unwrap();
+        assert!(Journal::resolve_decision(&p, &d, Resolution::Failed { message: "never sent".into() }, "1").unwrap().already_recorded);
+        assert_eq!(std::fs::read(&p).unwrap(), bytes);
+        // Another decision for it is refused, naming the one recorded.
+        let other = decision(&p, 'c', "checked again");
+        let e = Journal::resolve_decision(&p, &other, Resolution::Retry, "1").unwrap_err();
+        assert!(e.contains("already finished") && e.contains(&format!("decision {}", d.id)), "{e}");
+    }
+
+    #[test]
+    fn the_same_decision_id_with_anything_different_is_refused() {
+        let p = tmp("decision-conflict");
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+        j.begin("1.0", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        j.begin("1.1", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        drop(j);
+        let d = decision(&p, 'd', "the provider's log shows message m1");
+        Journal::resolve_decision(&p, &d, Resolution::Performed { receipt: "m1".into() }, "1.0:1").unwrap();
+        let bytes = std::fs::read(&p).unwrap();
+        let cases: Vec<(&str, Decision, Resolution, &str)> = vec![
+            ("resolution", d.clone(), Resolution::Performed { receipt: "m2".into() }, "1.0:1"),
+            ("resolution", d.clone(), Resolution::Retry, "1.0:1"),
+            ("evidence", Decision { evidence: "something else".into(), ..d.clone() }, Resolution::Performed { receipt: "m1".into() }, "1.0:1"),
+            ("operation", d.clone(), Resolution::Performed { receipt: "m1".into() }, "1.1:1"),
+        ];
+        for (what, given, resolution, op) in cases {
+            let e = Journal::resolve_decision(&p, &given, resolution, op).unwrap_err();
+            assert!(e.contains(&format!("already recorded in this journal with a different {what}")) && e.contains("nothing was recorded"), "{what}: {e}");
+            assert_eq!(std::fs::read(&p).unwrap(), bytes, "{what}");
+        }
+        // A decision for another run is refused before anything else.
+        let foreign = Decision { run_id: "f".repeat(32), ..d.clone() };
+        let e = Journal::resolve_decision(&p, &foreign, Resolution::Performed { receipt: "m1".into() }, "1.0:1").unwrap_err();
+        assert!(e.contains(&format!("is for run {}", "f".repeat(32))), "{e}");
+        // The other operation is still in doubt, and takes a decision of its own.
+        let e2 = decision(&p, 'e', "nothing in the provider's log");
+        Journal::resolve_decision(&p, &e2, Resolution::Retry, "1.1:1").unwrap();
+        // A second decision for an operation already decided is refused, naming the first.
+        let e3 = decision(&p, '9', "checked twice");
+        let e = Journal::resolve_decision(&p, &e3, Resolution::Retry, "1.0:1").unwrap_err();
+        assert!(e.contains("not in doubt") && e.contains(&format!("decision {}", d.id)), "{e}");
+        let e = Journal::resolve_decision(&p, &e3, Resolution::Retry, "1.1:1").unwrap_err();
+        assert!(e.contains("already authorized") && e.contains(&format!("decision {}", e2.id)), "{e}");
+    }
+
+    #[test]
+    fn a_retry_decision_is_found_after_the_attempt_it_authorized() {
+        let p = in_doubt("decision-retry");
+        let d = decision(&p, 'f', "the action never reached the service");
+        let r = Journal::resolve_decision(&p, &d, Resolution::Retry, "1").unwrap();
+        let last = read_records(&p).unwrap().pop().unwrap();
+        assert_eq!(last["j"], "retry");
+        assert_eq!(Some(last["decision"].clone()), r.decision);
+        assert!(matches!(view(&p).unwrap().operations[0].state, OpState::RetryAuthorized { .. }));
+        let mut j = Journal::resume(&p, &bind("P", "C")).unwrap();
+        let Step::Perform { n, .. } = j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap() else { panic!() };
+        j.finish("", n, Ok(json!({ "receipt": "x" }))).unwrap();
+        drop(j);
+        assert!(Journal::resolve_decision(&p, &d, Resolution::Retry, "1").unwrap().already_recorded);
+        assert_eq!(view(&p).unwrap().operations[0].decisions, vec![r.decision.unwrap()]);
+    }
+
+    #[test]
+    fn a_decision_needs_its_id_run_and_evidence_and_a_recorded_one_must_be_well_formed() {
+        let p = in_doubt("decision-checks");
+        let good = decision(&p, '1', "checked");
+        for (bad, want) in [
+            (Decision { id: "A".repeat(32), ..good.clone() }, "decision id"),
+            (Decision { id: "1".repeat(31), ..good.clone() }, "decision id"),
+            (Decision { run_id: "x".into(), ..good.clone() }, "run id"),
+            (Decision { evidence: "  ".into(), ..good.clone() }, "needs its evidence"),
+        ] {
+            let e = Journal::resolve_decision(&p, &bad, Resolution::Retry, "1").unwrap_err();
+            assert!(e.contains(want), "{e}");
+        }
+        Journal::resolve_decision(&p, &good, Resolution::Performed { receipt: "r".into() }, "1").unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let line = text.lines().last().unwrap().to_string();
+        let mut rec: Json = serde_json::from_str(&line).unwrap();
+        type Damage = Box<dyn Fn(&mut Json)>;
+        let damaged: Vec<(&str, Damage)> = vec![
+            ("another operation", Box::new(|r: &mut Json| r["decision"]["operation"] = json!("2"))),
+            ("another run", Box::new(|r: &mut Json| r["decision"]["run_id"] = json!("0".repeat(32)))),
+            ("a key more", Box::new(|r: &mut Json| r["decision"]["extra"] = json!(1))),
+            ("no evidence", Box::new(|r: &mut Json| { r["decision"].as_object_mut().unwrap().remove("evidence"); })),
+        ];
+        for (what, f) in damaged {
+            let mut r = rec.clone();
+            f(&mut r);
+            std::fs::write(&p, text.replace(&line, &r.to_string())).unwrap();
+            let e = Journal::resume(&p, &bind("P", "C")).map(|_| ()).unwrap_err();
+            assert!(e.contains("malformed decision"), "{what}: {e}");
+        }
+        // One id on two records.
+        rec["n"] = json!(1);
+        std::fs::write(&p, &text).unwrap();
+        let mut j = Journal::resume(&p, &bind("P", "C")).unwrap();
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        drop(j);
+        let mut twice = rec.clone();
+        twice["n"] = json!(2);
+        twice["decision"]["operation"] = json!("2");
+        let mut f = OpenOptions::new().append(true).open(&p).unwrap();
+        writeln!(f, "{twice}").unwrap();
+        drop(f);
+        let e = Journal::resume(&p, &bind("P", "C")).map(|_| ()).unwrap_err();
+        assert!(e.contains(&format!("decision {} is recorded twice", good.id)), "{e}");
+    }
+
+    /// Two resolutions of one operation at once: one is recorded, the other refused.
+    #[test]
+    fn two_decisions_at_once_record_one() {
+        for round in 0..20 {
+            let p = in_doubt(&format!("decision-race-{round}"));
+            let (a, b) = (decision(&p, 'a', "first"), decision(&p, 'b', "second"));
+            let go = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let run = |d: Decision| {
+                let (p, go) = (p.clone(), go.clone());
+                std::thread::spawn(move || {
+                    go.wait();
+                    Journal::resolve_decision(&p, &d, Resolution::Retry, "1")
+                })
+            };
+            let (ra, rb) = (run(a), run(b));
+            let results = [ra.join().unwrap(), rb.join().unwrap()];
+            assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1, "round {round}: {results:?}");
+            let refused = results.iter().find_map(|r| r.as_ref().err()).unwrap();
+            assert!(refused.contains("in use by another run in this process") || refused.contains("already authorized"), "{refused}");
+            assert_eq!(view(&p).unwrap().operations[0].decisions.len(), 1);
+        }
     }
 
     /// The OS lock alone, without this process's registry, refuses a second open file
