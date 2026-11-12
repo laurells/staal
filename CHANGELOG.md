@@ -19,6 +19,15 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- `staalc::interp::journal::snapshot`: a journal read through one open file without a
+  lock: its complete records, what the read covered, the identity of the file, and how
+  many of the records are known durable (`Durable::Records(n)`, for a journal this
+  process writes, as its writer knows) or that it is not established
+  (`Durable::NotEstablished`, for any other). `view` is built on it (`view_of`) and
+  carries the same identity and durability; `read_records` too. `resume` and `resolve`
+  now sync a journal once when they open it, so every record they read is durable even
+  if its writer stopped between writing and syncing it.
+
 - `Journal::resolve_decision`: a resolution recorded with the operator's decision (an
   id of 128 random bits, the run, the operation, the resolution, the evidence and the
   `staalc` that applied it), on the record the resolution writes. A decision is matched

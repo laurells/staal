@@ -1022,6 +1022,17 @@ seen. `Journal::resolve` and `Journal::identity` report the file's identity (dev
 inode) as it was when locked, for a caller that keys journals by identity rather than by
 path.
 
+A reader that must not change a journal reads it with `journal::snapshot`: through one
+open file, without a lock, its complete records (a last line not yet complete is left
+out and counted), the identity of the file read, and how much of it is known durable. A
+reader can see a record its writer has written and not yet synced, so for a journal this
+process holds, the snapshot says how many of the records read are durable, as the
+writer knows: its durable length grows only after each sync returns, and `resume` and
+`resolve` sync a journal once when they open it, so everything they read is durable.
+For a journal this process does not hold, durability is not established: another
+process may be writing it. `journal::view` is built on a snapshot and carries the same
+identity and durability.
+
 The journal holds the data sent to models and to actions, and so may contain
 sensitive data. Like the log, it must never be given to a model as context.
 

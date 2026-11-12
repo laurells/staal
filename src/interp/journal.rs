@@ -226,6 +226,8 @@ pub struct Journal {
     run_id: String,
     failpoint: Failpoint,
     writes: u64,
+    /// The bytes of the file written and synced: every record within them is durable.
+    durable: u64,
 }
 
 #[derive(Debug)]
@@ -249,7 +251,7 @@ impl Journal {
 
     fn with(file: Option<File>, held: Option<Held>, run_id: String, pending: BTreeMap<String, VecDeque<Json>>, recorded_end: Option<Json>) -> Journal {
         let streams = pending.into_iter().map(|(t, p)| (t, Stream { next_n: 1, pending: p })).collect();
-        Journal { file, _held: held, poisoned: false, streams, recorded_end, run_id, failpoint: Failpoint::from_env(), writes: 0 }
+        Journal { file, _held: held, poisoned: false, streams, recorded_end, run_id, failpoint: Failpoint::from_env(), writes: 0, durable: 0 }
     }
 
     pub fn run_id(&self) -> &str {
@@ -303,7 +305,7 @@ impl Journal {
     /// `staalc` and which engine carry the run on. A run that has ended is only replayed,
     /// which changes nothing, and gets no record.
     pub fn resume(path: &Path, binding: &Binding) -> Result<Journal, String> {
-        let (file, held, records) = open_existing(path)?;
+        let (file, held, records, durable) = open_existing(path)?;
         let start = records.first().ok_or_else(|| {
             format!(
                 "journal {} is empty: the run never started, so nothing was done; start a new run",
@@ -315,6 +317,7 @@ impl Journal {
         let (pending, recorded_end) = check_body(&records[1..], &run_id, path)?;
         let ended = recorded_end.is_some();
         let mut j = Journal::with(Some(file), Some(held), run_id, pending, recorded_end);
+        j.durable = durable;
         if !ended {
             let at_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -349,7 +352,7 @@ impl Journal {
     }
 
     fn resolve_with(path: &Path, resolution: Resolution, operation: Option<&str>, decision: Option<&Decision>) -> Result<Resolved, String> {
-        let (file, held, records) = open_existing(path)?;
+        let (file, held, records, durable) = open_existing(path)?;
         #[cfg(unix)]
         let identity = held.identity();
         let start = records.first().ok_or_else(|| format!("journal {} is empty", path.display()))?;
@@ -434,6 +437,7 @@ impl Journal {
         let http = intent["body"]["capability"].as_str().is_some_and(|c| c.starts_with("net.http."));
         let tcp = matches!(intent["body"]["capability"].as_str(), Some("net.tcp.exchange" | "net.tls.exchange"));
         let mut j = Journal::with(Some(file), Some(held), String::new(), BTreeMap::new(), None);
+        j.durable = durable;
         let shown = op_id(&task, n);
         let recorded = decision.map(|d| d.record(&shown, &resolution));
         let (result, summary) = match resolution {
@@ -606,10 +610,20 @@ impl Journal {
         }
         let mut line = rec.to_string();
         line.push('\n');
-        let res = file.write_all(line.as_bytes()).and_then(|()| file.sync_data());
+        let res = file.write_all(line.as_bytes()).and_then(|()| {
+            #[cfg(test)]
+            if let Some(h) = &self._held {
+                tests::before_sync(&h.0);
+            }
+            file.sync_data()
+        });
         if let Err(e) = res {
             self.poisoned = true;
             return Err(format!("could not write the journal: {e}"));
+        }
+        self.durable += line.len() as u64;
+        if let Some(h) = &self._held {
+            h.set_durable(self.durable);
         }
         self.writes += 1;
         self.failpoint.after_write(self.writes);
@@ -636,8 +650,14 @@ fn file_id(_file: &File, path: &Path) -> Result<FileId, String> {
     std::fs::canonicalize(path).map_err(|e| e.to_string())
 }
 
-/// The journals this process holds.
-static HELD: std::sync::Mutex<Vec<FileId>> = std::sync::Mutex::new(Vec::new());
+/// The journals this process holds, each with its durable length: the bytes its writer
+/// has written and synced (`snapshot`).
+static HELD: std::sync::Mutex<Vec<(FileId, u64)>> = std::sync::Mutex::new(Vec::new());
+
+/// The durable length of the journal `id`, if this process holds it.
+fn durable_length(id: &FileId) -> Option<u64> {
+    HELD.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(h, _)| h == id).map(|(_, d)| *d)
+}
 
 /// This process's hold on one journal; dropping it lets the journal go.
 #[derive(Debug)]
@@ -648,11 +668,18 @@ impl Held {
     fn identity(&self) -> FileIdentity {
         self.0
     }
+
+    /// Records that the first `bytes` of the journal are durable.
+    fn set_durable(&self, bytes: u64) {
+        if let Some(e) = HELD.lock().unwrap_or_else(|p| p.into_inner()).iter_mut().find(|(id, _)| *id == self.0) {
+            e.1 = bytes;
+        }
+    }
 }
 
 impl Drop for Held {
     fn drop(&mut self) {
-        HELD.lock().unwrap_or_else(|p| p.into_inner()).retain(|id| *id != self.0);
+        HELD.lock().unwrap_or_else(|p| p.into_inner()).retain(|(id, _)| *id != self.0);
     }
 }
 
@@ -677,11 +704,12 @@ fn lock(file: &File, path: &Path) -> Result<Held, String> {
     tests::before_lock(path);
     {
         let mut held = HELD.lock().unwrap_or_else(|p| p.into_inner());
-        if held.contains(&id) {
+        if held.iter().any(|(h, _)| *h == id) {
             return Err(format!("journal {shown} is in use by another run in this process"));
         }
+        // Nothing is known durable until the holder has synced (open_existing, write).
         #[cfg_attr(unix, allow(clippy::clone_on_copy, reason = "a FileId is a path, not Copy, off Unix"))]
-        held.push(id.clone());
+        held.push((id.clone(), 0));
     }
     let hold = Held(id);
     let deadline = std::time::Instant::now() + LOCK_WAIT;
@@ -739,8 +767,10 @@ fn sync_parent_dir(_path: &Path) -> Result<(), String> {
 }
 
 /// Opens, locks and reads an existing journal. A torn last line is cut off: its write
-/// was never acknowledged. Any other malformed line is refused as corruption.
-fn open_existing(path: &Path) -> Result<(File, Held, Vec<Json>), String> {
+/// was never acknowledged. Any other malformed line is refused as corruption. The file
+/// is then synced, so every record read is durable even if its writer stopped between
+/// writing it and syncing it; returns the records' length, all of it durable.
+fn open_existing(path: &Path) -> Result<(File, Held, Vec<Json>, u64), String> {
     let shown = path.display();
     let mut file = OpenOptions::new().read(true).append(true).open(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -754,21 +784,79 @@ fn open_existing(path: &Path) -> Result<(File, Held, Vec<Json>), String> {
     file.read_to_end(&mut bytes).map_err(|e| format!("cannot read journal {shown}: {e}"))?;
     let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
     if complete < bytes.len() {
-        file.set_len(complete as u64)
-            .and_then(|()| file.sync_data())
-            .map_err(|e| format!("cannot repair torn last line of journal {shown}: {e}"))?;
+        file.set_len(complete as u64).map_err(|e| format!("cannot repair torn last line of journal {shown}: {e}"))?;
     }
-    let text = std::str::from_utf8(&bytes[..complete]).map_err(|_| format!("journal {shown} is corrupt: not UTF-8"))?;
-    let mut records = Vec::new();
+    file.sync_data().map_err(|e| format!("cannot sync journal {shown}: {e}"))?;
+    held.set_durable(complete as u64);
+    let (records, _) = parse_complete(&bytes[..complete], &shown.to_string())?;
+    Ok((file, held, records, complete as u64))
+}
+
+/// The records in `bytes`, which end with a complete line or are empty, and where each
+/// ends (its byte offset after its line end).
+fn parse_complete(bytes: &[u8], shown: &str) -> Result<(Vec<Json>, Vec<u64>), String> {
+    let text = std::str::from_utf8(bytes).map_err(|_| format!("journal {shown} is corrupt: not UTF-8"))?;
+    let (mut records, mut ends) = (Vec::new(), Vec::new());
+    let mut at = 0u64;
     for (i, line) in text.split_terminator('\n').enumerate() {
-        let rec: Json =
-            serde_json::from_str(line).map_err(|e| format!("journal {shown} is corrupt at line {}: {e}", i + 1))?;
+        let rec: Json = serde_json::from_str(line).map_err(|e| format!("journal {shown} is corrupt at line {}: {e}", i + 1))?;
         if !rec.is_object() {
             return Err(format!("journal {shown} is corrupt at line {}: not a record", i + 1));
         }
+        at += line.len() as u64 + 1;
         records.push(rec);
+        ends.push(at);
     }
-    Ok((file, held, records))
+    Ok((records, ends))
+}
+
+/// Whether what a snapshot read is known to be durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Durable {
+    /// This process holds the journal, so its writer says: the first this many records
+    /// read are durable (written and synced); any after them were written and not yet
+    /// synced, and a crash could still lose them.
+    Records(usize),
+    /// This process does not hold the journal: another process may be writing it, or
+    /// none. What was read had been written; whether it is durable is not established.
+    NotEstablished,
+}
+
+/// A journal read at one moment through one open file, changing nothing and taking no
+/// lock: its complete records, what the read covered, the identity of the file read,
+/// and how much of it is known durable (`Durable`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    pub records: Vec<Json>,
+    pub read: Extent,
+    /// The file read: the one the path named when it was opened.
+    #[cfg(unix)]
+    pub identity: FileIdentity,
+    pub durable: Durable,
+}
+
+/// Reads the journal at `path` (`Snapshot`). A torn or unfinished last line is left out
+/// and counted in `read.unfinished_bytes`; any other damage is an error.
+pub fn snapshot(path: &Path) -> Result<Snapshot, String> {
+    let shown = path.display().to_string();
+    let mut file = File::open(path).map_err(|e| format!("cannot read journal {shown}: {e}"))?;
+    let id = file_id(&file, path).map_err(|e| format!("cannot read journal {shown}: {e}"))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|e| format!("cannot read journal {shown}: {e}"))?;
+    let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let (records, ends) = parse_complete(&bytes[..complete], &shown)?;
+    // Asked after reading: a length the writer reached since covers what was read.
+    let durable = match durable_length(&id) {
+        Some(d) => Durable::Records(ends.iter().take_while(|e| **e <= d).count()),
+        None => Durable::NotEstablished,
+    };
+    Ok(Snapshot {
+        read: Extent { records: records.len(), bytes: complete as u64, unfinished_bytes: (bytes.len() - complete) as u64 },
+        records,
+        #[cfg(unix)]
+        identity: id,
+        durable,
+    })
 }
 
 /// A journal's complete records, read without opening it for writing or locking it:
@@ -776,7 +864,7 @@ fn open_existing(path: &Path) -> Result<(File, Held, Vec<Json>), String> {
 /// out, as resuming would cut it off; any other damage is an error. A file with no
 /// complete record gives an empty list.
 pub fn read_records(path: &Path) -> Result<Vec<Json>, String> {
-    read_complete(path).map(|(records, _, _)| records)
+    snapshot(path).map(|s| s.records)
 }
 
 /// Each operation left open in `pending` (check_body's streams), in task order, as
@@ -817,29 +905,11 @@ fn operator_settles(task: &str, intent: &Json) -> Result<(), String> {
     Ok(())
 }
 
-/// A journal's complete records, how many bytes they take, and how many bytes follow
-/// them: the start of a line whose write had not finished when it was read.
-fn read_complete(path: &Path) -> Result<(Vec<Json>, u64, u64), String> {
-    let shown = path.display();
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read journal {shown}: {e}"))?;
-    let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-    let text = std::str::from_utf8(&bytes[..complete]).map_err(|_| format!("journal {shown} is corrupt: not UTF-8"))?;
-    let mut records = Vec::new();
-    for (i, line) in text.split_terminator('\n').enumerate() {
-        let rec: Json = serde_json::from_str(line).map_err(|e| format!("journal {shown} is corrupt at line {}: {e}", i + 1))?;
-        if !rec.is_object() {
-            return Err(format!("journal {shown} is corrupt at line {}: not a record", i + 1));
-        }
-        records.push(rec);
-    }
-    Ok((records, complete as u64, (bytes.len() - complete) as u64))
-}
 
 /// A journal read without changing it: what `resume` and `resolve` would make of it,
 /// from the same validation (`check_body`) and the same rules for what is open and who
-/// settles it. The file is read without a lock: what it holds is what its writer had
-/// written, not established as durable (a writer flushes each record before going
-/// on, but a reader can see a record before its flush returns).
+/// settles it. Built on a `Snapshot`: the file is read without a lock, and `durable`
+/// says how much of what was read is known durable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct View {
     pub run_id: String,
@@ -854,6 +924,11 @@ pub struct View {
     pub end: Option<Json>,
     /// What was read: complete records, their bytes, and the bytes after them.
     pub read: Extent,
+    /// The file read.
+    #[cfg(unix)]
+    pub identity: FileIdentity,
+    /// How many of the records read are known durable.
+    pub durable: Durable,
 }
 
 /// One session of a run: its start, or a resume.
@@ -928,7 +1003,14 @@ pub enum Settle {
 /// nothing. A journal with no complete record, or one `resume` would refuse as corrupt
 /// or of another version, is an error with the message they would give.
 pub fn view(path: &Path) -> Result<View, String> {
-    let (records, bytes, unfinished_bytes) = read_complete(path)?;
+    view_of(snapshot(path)?, path)
+}
+
+/// The view of a snapshot already taken of the journal at `path`.
+pub fn view_of(snap: Snapshot, path: &Path) -> Result<View, String> {
+    let Snapshot { records, read, durable, .. } = snap;
+    #[cfg(unix)]
+    let identity = snap.identity;
     let start = records.first().ok_or_else(|| format!("journal {} is empty: the run never started", path.display()))?;
     if start["j"] != "start" {
         return Err(format!("journal {}: first record is not a start record", path.display()));
@@ -1002,7 +1084,17 @@ pub fn view(path: &Path) -> Result<View, String> {
             }
         }
     }
-    Ok(View { run_id: run_id.to_string(), start: start.clone(), sessions, operations, end, read: Extent { records: records.len(), bytes, unfinished_bytes } })
+    Ok(View {
+        run_id: run_id.to_string(),
+        start: start.clone(),
+        sessions,
+        operations,
+        end,
+        read,
+        #[cfg(unix)]
+        identity,
+        durable,
+    })
 }
 
 /// Whether a run could be resumed from the journal whose first record is `start`:
@@ -1301,6 +1393,89 @@ mod tests {
         if let Some(f) = hook {
             f();
         }
+    }
+
+    type SyncHook = Box<dyn FnOnce() + Send>;
+
+    /// What to do once to a journal, by identity, after a record is written and before it
+    /// is synced (`on_sync`).
+    static BEFORE_SYNC: std::sync::Mutex<Vec<(FileId, SyncHook)>> = std::sync::Mutex::new(Vec::new());
+
+    pub(super) fn before_sync(id: &FileId) {
+        let hook = {
+            let mut hooks = BEFORE_SYNC.lock().unwrap_or_else(|p| p.into_inner());
+            hooks.iter().position(|(h, _)| h == id).map(|i| hooks.swap_remove(i).1)
+        };
+        if let Some(f) = hook {
+            f();
+        }
+    }
+
+    fn on_sync(id: FileId, f: impl FnOnce() + Send + 'static) {
+        BEFORE_SYNC.lock().unwrap().push((id, Box::new(f)));
+    }
+
+    #[test]
+    fn a_snapshot_of_a_journal_this_process_writes_says_which_records_are_durable() {
+        let p = tmp("snapshot-writer");
+        let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+        let id = j.identity().unwrap();
+        let s = snapshot(&p).unwrap();
+        assert_eq!((s.records.len(), s.durable, s.identity), (1, Durable::Records(1), id));
+        // Between writing an intent and syncing it, a snapshot sees it, not yet durable.
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (path, out) = (p.clone(), seen.clone());
+        on_sync(id, move || *out.lock().unwrap() = Some(snapshot(&path).unwrap()));
+        j.begin("", "action", json!({ "capability": "email.send", "method": "send" })).unwrap();
+        let during = seen.lock().unwrap().take().expect("the hook ran");
+        assert_eq!((during.records.len(), during.durable), (2, Durable::Records(1)));
+        assert_eq!(during.records[1]["j"], "intent");
+        // Once the write returns, it is durable.
+        assert_eq!(snapshot(&p).unwrap().durable, Durable::Records(2));
+        // The view says the same.
+        let v = view(&p).unwrap();
+        assert_eq!((v.durable, v.identity, v.read.records), (Durable::Records(2), id, 2));
+        // Let go, nothing is known about it any more.
+        drop(j);
+        let s = snapshot(&p).unwrap();
+        assert_eq!((s.records.len(), s.durable), (2, Durable::NotEstablished));
+    }
+
+    #[test]
+    fn a_journal_opened_again_is_synced_so_all_it_read_is_durable() {
+        let p = in_doubt("snapshot-reopen");
+        // A torn last line, as a writer stopped mid-write leaves it.
+        let mut f = OpenOptions::new().append(true).open(&p).unwrap();
+        f.write_all(b"{\"j\":\"res").unwrap();
+        drop(f);
+        let s = snapshot(&p).unwrap();
+        assert_eq!((s.records.len(), s.read.unfinished_bytes, s.durable), (2, 9, Durable::NotEstablished));
+        let j = Journal::resume(&p, &bind("P", "C")).unwrap();
+        // Read, cut, synced, and the resume record written and synced after it.
+        let s = snapshot(&p).unwrap();
+        assert_eq!((s.records.len(), s.read.unfinished_bytes, s.durable), (3, 0, Durable::Records(3)));
+        assert_eq!(s.records[2]["j"], "resume");
+        drop(j);
+        // resolve, too, holds what it read as durable while it writes.
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (path, out) = (p.clone(), seen.clone());
+        on_sync(FileIdentity::of_path(&p).unwrap(), move || *out.lock().unwrap() = Some(snapshot(&path).unwrap()));
+        Journal::resolve(&p, Resolution::Retry, None).unwrap();
+        let during = seen.lock().unwrap().take().expect("the hook ran");
+        assert_eq!((during.records.len(), during.durable), (4, Durable::Records(3)));
+    }
+
+    #[test]
+    fn a_snapshot_reads_one_file_and_names_it() {
+        let p = in_doubt("snapshot-link");
+        let link = p.with_file_name("snapshot-link-symlink");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&p, &link).unwrap();
+        let s = snapshot(&link).unwrap();
+        assert_eq!(s.identity, FileIdentity::of_path(&p).unwrap());
+        assert_eq!(s.records, read_records(&p).unwrap());
+        assert_eq!(s.read.bytes, std::fs::metadata(&p).unwrap().len());
+        assert!(snapshot(&p.with_file_name("snapshot-none")).unwrap_err().contains("cannot read journal"));
     }
 
     /// Runs `f` the next time `path` is opened, after it is opened and before it is locked.
