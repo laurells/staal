@@ -50,7 +50,7 @@ fn a_run_reads_only_the_values_it_is_given() {
     // Not given: refused, though the process's environment has it.
     let e = run_config_attached(&prog, ECHO, &echo_config(&text), Durability::None, Engine::Interpreter, Attached { values: Some(given(&[])), ..Attached::default() })
         .unwrap_err();
-    assert!(e.contains("secrets.key: no value given to this run STAAL_VALUES_TEST_KEY is set"), "{e}");
+    assert!(e.contains("secrets.key: value given to this run STAAL_VALUES_TEST_KEY is not set"), "{e}");
 
     // Two runs at once, one name, two values: each removes its own, and only its own.
     for engine in engines() {
@@ -83,7 +83,7 @@ fn a_run_reads_only_the_values_it_is_given() {
     let only_secret = given(&[("STAAL_VALUES_TEST_KEY", a)]);
     let e = run_config_attached(&p2, src_no_model, &model("STAAL_VALUES_TEST_API_KEY"), Durability::None, Engine::Interpreter, Attached { values: Some(only_secret), ..Attached::default() })
         .unwrap_err();
-    assert_eq!(e, "model.api_key: no value given to this run STAAL_VALUES_TEST_API_KEY is set");
+    assert_eq!(e, "model.api_key: value given to this run STAAL_VALUES_TEST_API_KEY is not set");
     let with_key = given(&[("STAAL_VALUES_TEST_KEY", a), ("STAAL_VALUES_TEST_API_KEY", "sk-ant-given-key")]);
     let r = run_config_attached(&p2, src_no_model, &model("STAAL_VALUES_TEST_API_KEY"), Durability::None, Engine::Interpreter, Attached { values: Some(with_key), ..Attached::default() })
         .unwrap();

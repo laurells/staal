@@ -775,7 +775,7 @@ fn load_secret(spec: &Json, at: &str, values: &dyn values::Values) -> Result<Sec
         }
     }
     let var = spec.get("env").and_then(Json::as_str).ok_or(format!("{at}.env: expected a variable name"))?;
-    let value = values.get(var).ok_or_else(|| format!("{at}: no {} {var} is set", values.noun()))?;
+    let value = values.get(var).ok_or_else(|| format!("{at}: {} {var} is not set", values.noun()))?;
     if value.len() < MIN_SECRET_BYTES {
         return Err(format!("{at}: {var} is shorter than {MIN_SECRET_BYTES} characters, too short to keep out of logs reliably"));
     }

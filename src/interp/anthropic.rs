@@ -73,9 +73,9 @@ impl AnthropicProvider {
             .and_then(|o| o.get("env"))
             .and_then(Json::as_str)
             .ok_or("model.api_key: expected {\"env\": \"<environment variable holding the key>\"}")?;
-        let key = values.get(env).ok_or_else(|| format!("model.api_key: no {} {env} is set", values.noun()))?;
+        let key = values.get(env).ok_or_else(|| format!("model.api_key: {} {env} is not set", values.noun()))?;
         if key.trim().is_empty() {
-            return Err(format!("model.api_key: the {} {env} is empty", values.noun()));
+            return Err(format!("model.api_key: {} {env} is empty", values.noun()));
         }
         if key.chars().any(|c| c.is_control() || c == ' ') {
             return Err(format!("model.api_key: the value of {env} is not a valid key"));

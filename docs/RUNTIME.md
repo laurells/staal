@@ -2176,7 +2176,7 @@ them from the process's environment. A program that starts runs for others (Staa
 gives each run its own, with `interp::run_config_attached` (or `run_attached`, with a
 provider and adapter of its own) and `Attached { values: Some(...) }`, a
 `values::Given` holding each value by its name. A run given values reads those and nothing
-else: a name it does not hold is refused, saying it is not a "value given to this run",
+else: a name it does not hold is refused ("value given to this run NAME is not set"),
 even when the process's environment has it. Two runs given different values for one name
 each see only their own, and each removes only its own from its log. `plan_with` and
 `binding_for_values` check a config and a journal's binding with the same values.
