@@ -19,6 +19,17 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- `staalc::check_in(root, root_path, entry, text)`: checks a program as `check_path` does,
+  reading its own files (the entry, the modules it imports, `staal.json` and
+  `staal.lock`) through an `interp::fsx::Root`: one directory at a time from its
+  handle, no link followed anywhere, regular files with one name, each at most
+  `packages::MAX_PROJECT_FILE_BYTES` (64 MiB). Packages are read from the project's
+  package store and verified against `staal.lock` as before. For a host that must never
+  resolve a path inside a project. `check_text_at` and `check_in` now share one check,
+  differing only in how files are read (`packages::ProjectFiles`: `PathFiles`,
+  `RootFiles`); `Project::open_with` opens a project with its manifest and lock read the
+  same way. `fsx::Root::shown` gives the folder's name as it was opened.
+
 - `interp::plan_with` takes `CLibraries::Check`: a C grant checked as loading would check
   it, without loading it, so no C code runs; and each `GrantPlan` says whether it is the
   runtime's own capability (`runtime`, live: no simulated form) and, for a C function,

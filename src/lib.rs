@@ -208,15 +208,52 @@ pub fn check_text_at(path: &Path, text: String) -> Result<Checked, String> {
 fn check_text_at_recorded(path: &Path, text: String) -> Result<(Checked, Recorded), String> {
     let root = path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let root = if root.as_os_str().is_empty() { Path::new(".").to_path_buf() } else { root };
-    let project = packages::Project::open(&root)?.map(std::rc::Rc::new);
-    let entry = SourceFile { name: path.display().to_string(), text };
+    let files = packages::PathFiles::new(root.clone(), path);
+    check_project(path.display().to_string(), text, &root, Box::new(files))
+}
+
+/// Checks the program whose entry file is `entry`, a path beneath the folder `root`
+/// holds (as `interp::fsx::Root` takes it: no `..`, `.` or empty part), as `check_path`
+/// checks the file at `root_path`/`entry`, with the same rules for where modules and the
+/// project are found. Every file of the program's own (the entry, the modules it
+/// imports, `staal.json` and `staal.lock`) is read through `root`: opened one directory
+/// at a time from its handle, no link followed anywhere, a regular file with one name, at
+/// most `packages::MAX_PROJECT_FILE_BYTES`. `text`, when given, is the entry's text
+/// instead of the file's (an editor's unsaved text). Packages are read from the project's
+/// package store, in `root_path`, and verified against `staal.lock` file by file, as
+/// `check_path` verifies them. For a host that must never resolve a path inside a
+/// project (Staal Studio).
+#[cfg(unix)]
+pub fn check_in(root: &interp::fsx::Root, root_path: &Path, entry: &str, text: Option<String>) -> Result<Checked, String> {
+    let files = packages::RootFiles::new(root, entry);
+    let leaf = entry.rsplit_once('/').map_or(entry, |(_, l)| l);
+    let text = match text {
+        Some(t) => t,
+        None => packages::ProjectFiles::read(&files, leaf).map_err(|e| match e {
+            packages::ReadError::NotFound(m) | packages::ReadError::Other(m) => m,
+        })?,
+    };
+    let name = packages::ProjectFiles::shown(&files, leaf);
+    let folder = match entry.rsplit_once('/') {
+        Some((base, _)) => root_path.join(base),
+        None => root_path.to_path_buf(),
+    };
+    check_project(name, text, &folder, Box::new(files)).map(|(c, _)| c)
+}
+
+/// The check `check_text_at` and `check_in` share: the entry named `name` with `text`,
+/// in the program's folder `folder` (where its package store is), its own files read
+/// through `files`.
+fn check_project<'a>(name: String, text: String, folder: &Path, files: Box<dyn packages::ProjectFiles + 'a>) -> Result<(Checked, Recorded), String> {
+    let project = packages::Project::open_with(folder, files.as_ref())?.map(std::rc::Rc::new);
+    let entry = SourceFile { name, text };
     let rec = std::rc::Rc::new(std::cell::RefCell::new(Recorded {
         entry: (entry.name.clone(), entry.text.clone()),
         locate: Vec::new(),
         files: Vec::new(),
         project: String::new(),
     }));
-    let source = Recording { inner: packages::ProjectSource::new(root, project.clone(), path), rec: rec.clone() };
+    let source = Recording { inner: packages::ProjectSource::new(files, project.clone()), rec: rec.clone() };
     let loaded = modules::load_from(entry, source);
     let project_part = identity::project_part(project.as_ref().map(|p| p.identity()).as_ref());
     let fingerprint = identity::fingerprint(&loaded.modules(), &project_part);

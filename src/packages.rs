@@ -443,24 +443,146 @@ fn read_tree(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
     Ok(out)
 }
 
+/// The most bytes one of a project's own files may hold when read through a `Root`:
+/// as much as a whole package may (`MAX_BYTES`).
+pub const MAX_PROJECT_FILE_BYTES: u64 = MAX_BYTES;
+
+/// Why a project's file could not be read: there is none, or another reason. Each is
+/// the whole message.
+pub enum ReadError {
+    NotFound(String),
+    Other(String),
+}
+
+impl ReadError {
+    fn message(self) -> String {
+        match self {
+            ReadError::NotFound(m) | ReadError::Other(m) => m,
+        }
+    }
+}
+
+/// How the program's own files are read (its entry's folder: modules, `staal.json`,
+/// `staal.lock`), never its packages', which `Project::open` reads from the package
+/// store and verifies against `staal.lock`, file by file, by SHA-256.
+pub trait ProjectFiles {
+    /// The UTF-8 text of the file at `rel`, a path beneath the program's folder.
+    fn read(&self, rel: &str) -> Result<String, ReadError>;
+    /// Whether anything named `name` (a file, a folder, or anything else) is directly in
+    /// the program's folder.
+    fn has(&self, name: &str) -> bool;
+    /// How `rel` is named in messages and as a file of the program.
+    fn shown(&self, rel: &str) -> String;
+    /// Whether `rel` is the program's entry file itself.
+    fn is_entry(&self, rel: &str) -> bool;
+}
+
+/// Files read by path, as the command line reads them.
+pub struct PathFiles {
+    pub folder: PathBuf,
+    entry_real: Option<PathBuf>,
+}
+
+impl PathFiles {
+    pub fn new(folder: PathBuf, entry: &Path) -> PathFiles {
+        PathFiles { folder, entry_real: std::fs::canonicalize(entry).ok() }
+    }
+}
+
+impl ProjectFiles for PathFiles {
+    fn read(&self, rel: &str) -> Result<String, ReadError> {
+        let path = self.folder.join(rel);
+        std::fs::read_to_string(&path).map_err(|e| {
+            let m = format!("cannot read {}: {e}", path.display());
+            if e.kind() == std::io::ErrorKind::NotFound { ReadError::NotFound(m) } else { ReadError::Other(m) }
+        })
+    }
+    fn has(&self, name: &str) -> bool {
+        self.folder.join(name).exists()
+    }
+    fn shown(&self, rel: &str) -> String {
+        self.folder.join(rel).display().to_string()
+    }
+    fn is_entry(&self, rel: &str) -> bool {
+        self.entry_real.is_some() && std::fs::canonicalize(self.folder.join(rel)).ok() == self.entry_real
+    }
+}
+
+/// Files read through a `Root` (`interp::fsx::Root`): every path beneath its folder
+/// opened one directory at a time from its handle, no link followed anywhere, regular
+/// files with one name only, at most `MAX_PROJECT_FILE_BYTES`. A host that must never
+/// resolve a path inside a project (Staal Studio) reads a program's files this way.
+#[cfg(unix)]
+pub struct RootFiles<'a> {
+    root: &'a crate::interp::fsx::Root,
+    /// The program's folder beneath the root: "" for the root itself, or `a/b`.
+    base: String,
+    /// The entry file beneath the root.
+    entry: String,
+}
+
+#[cfg(unix)]
+impl<'a> RootFiles<'a> {
+    pub fn new(root: &'a crate::interp::fsx::Root, entry: &str) -> RootFiles<'a> {
+        let base = entry.rsplit_once('/').map(|(b, _)| b.to_string()).unwrap_or_default();
+        RootFiles { root, base, entry: entry.to_string() }
+    }
+
+    fn full(&self, rel: &str) -> String {
+        if self.base.is_empty() { rel.to_string() } else { format!("{}/{rel}", self.base) }
+    }
+}
+
+#[cfg(unix)]
+impl ProjectFiles for RootFiles<'_> {
+    fn read(&self, rel: &str) -> Result<String, ReadError> {
+        let full = self.full(rel);
+        let (dir, name) = full.rsplit_once('/').unwrap_or(("", full.as_str()));
+        // Whether it is there at all: a listing of its folder, which follows no link.
+        let present = match self.root.list(dir) {
+            Ok(entries) => entries.iter().any(|e| e.name.as_deref() == Some(name)),
+            Err(e) => return Err(ReadError::Other(format!("cannot read {}: {e}", self.shown(rel)))),
+        };
+        if !present {
+            return Err(ReadError::NotFound(format!("cannot read {}: there is no such file", self.shown(rel))));
+        }
+        self.root.read(&full, MAX_PROJECT_FILE_BYTES as usize).map_err(|e| ReadError::Other(format!("cannot read {}: {e}", self.shown(rel))))
+    }
+    fn has(&self, name: &str) -> bool {
+        self.root.list(&self.base).is_ok_and(|entries| entries.iter().any(|e| e.name.as_deref() == Some(name)))
+    }
+    fn shown(&self, rel: &str) -> String {
+        format!("{}/{}", self.root.shown(), self.full(rel))
+    }
+    fn is_entry(&self, rel: &str) -> bool {
+        // Nothing beneath a root is reached through a link, and a file with two names is
+        // never read, so one file has one path here.
+        self.full(rel) == self.entry
+    }
+}
+
 impl Project {
     /// Opens the project in `root`: None when it has no `staal.json` (a program
     /// without packages). Every package is verified against `staal.lock` here.
     pub fn open(root: &Path) -> Result<Option<Project>, String> {
-        let mpath = root.join(MANIFEST);
-        let lpath = root.join(LOCKFILE);
-        let mtext = match std::fs::read_to_string(&mpath) {
+        Project::open_with(root, &PathFiles::new(root.to_path_buf(), root))
+    }
+
+    /// As `open`, the project's own `staal.json` and `staal.lock` read through `files`;
+    /// its packages from the package store in `root`, verified against `staal.lock`.
+    pub fn open_with(root: &Path, files: &dyn ProjectFiles) -> Result<Option<Project>, String> {
+        let mtext = match files.read(MANIFEST) {
             Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if lpath.exists() {
-                    return Err(format!("{} exists without {}", lpath.display(), mpath.display()));
+            Err(ReadError::NotFound(_)) => {
+                if files.has(LOCKFILE) {
+                    return Err(format!("{} exists without {}", files.shown(LOCKFILE), files.shown(MANIFEST)));
                 }
                 return Ok(None);
             }
-            Err(e) => return Err(format!("cannot read {}: {e}", mpath.display())),
+            Err(ReadError::Other(m)) => return Err(m),
         };
         let manifest = Manifest::parse(&mtext, MANIFEST, false)?;
-        if manifest.dependencies.is_empty() && !lpath.exists() {
+        if manifest.dependencies.is_empty() && !files.has(LOCKFILE) {
             return Ok(Some(Project {
                 root: root.to_path_buf(),
                 deps: BTreeMap::new(),
@@ -469,8 +591,7 @@ impl Project {
                 lock_text: None,
             }));
         }
-        let ltext = std::fs::read_to_string(&lpath)
-            .map_err(|e| format!("cannot read {}: {e}; run `staalc fetch` to fetch the dependencies", lpath.display()))?;
+        let ltext = files.read(LOCKFILE).map_err(|e| format!("{}; run `staalc fetch` to fetch the dependencies", e.message()))?;
         let lock = Lock::parse(&ltext, LOCKFILE)?;
         let mut packages = BTreeMap::new();
         for (name, lp) in &lock.packages {
@@ -616,24 +737,24 @@ fn locked_text(l: &LockedPackage) -> String {
     }
 }
 
-/// Finds modules for a program in `root` that may use packages.
-pub struct ProjectSource {
-    pub root: PathBuf,
+/// Finds modules for a program, reading its own files through `files`, that may use
+/// packages.
+pub struct ProjectSource<'a> {
+    pub files: Box<dyn ProjectFiles + 'a>,
     pub project: Option<std::rc::Rc<Project>>,
-    entry_real: Option<PathBuf>,
 }
 
-impl ProjectSource {
-    pub fn new(root: PathBuf, project: Option<std::rc::Rc<Project>>, entry: &Path) -> ProjectSource {
-        ProjectSource { root, project, entry_real: std::fs::canonicalize(entry).ok() }
+impl<'a> ProjectSource<'a> {
+    pub fn new(files: Box<dyn ProjectFiles + 'a>, project: Option<std::rc::Rc<Project>>) -> ProjectSource<'a> {
+        ProjectSource { files, project }
     }
 
-    fn local_exists(&self, base: &Path, first: &str) -> bool {
-        base.join(first).exists() || base.join(format!("{first}.staal")).exists()
+    fn local_exists(&self, first: &str) -> bool {
+        self.files.has(first) || self.files.has(&format!("{first}.staal"))
     }
 }
 
-impl Source for ProjectSource {
+impl Source for ProjectSource<'_> {
     fn locate(&mut self, from: &[String], written: &[String]) -> Result<Vec<String>, String> {
         let Some(project) = &self.project else { return Ok(written.to_vec()) };
         let first = &written[0];
@@ -658,7 +779,7 @@ impl Source for ProjectSource {
                     if written.len() < 2 {
                         return Err(format!("import a module of package {first}, such as {first}.<module>"));
                     }
-                    if self.local_exists(&self.root, first) {
+                    if self.local_exists(first) {
                         return Err(format!("'{first}' is both a dependency and a file or folder of this program; rename one"));
                     }
                     return Ok(written.to_vec());
@@ -679,16 +800,12 @@ impl Source for ProjectSource {
             let text = pkg.modules.get(&rel).ok_or(format!("package {} has no module {rel}.staal", pkg.name))?;
             return Ok(SourceFile { name: format!("{}:{rel}.staal", pkg.name), text: text.clone() });
         }
-        let mut file = self.root.clone();
-        for seg in module {
-            file.push(seg);
+        let rel = format!("{}.staal", module.join("/"));
+        if self.files.is_entry(&rel) {
+            return Err(format!("{} is the program itself", self.files.shown(&rel)));
         }
-        file.set_extension("staal");
-        if self.entry_real.is_some() && std::fs::canonicalize(&file).ok() == self.entry_real {
-            return Err(format!("{} is the program itself", file.display()));
-        }
-        let text = std::fs::read_to_string(&file).map_err(|e| format!("cannot read {}: {e}", file.display()))?;
-        Ok(SourceFile { name: file.display().to_string(), text })
+        let text = self.files.read(&rel).map_err(ReadError::message)?;
+        Ok(SourceFile { name: self.files.shown(&rel), text })
     }
 }
 

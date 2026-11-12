@@ -179,6 +179,11 @@ mod imp {
             Ok(Root { dir, shown: shown.to_string() })
         }
 
+        /// How the folder is named in messages: as it was given to `open` or `from_fd`.
+        pub fn shown(&self) -> &str {
+            &self.shown
+        }
+
         /// The directory holding `rel`'s last part, that part, and how `rel` is shown.
         fn parent(&self, rel: &str) -> Result<(OwnedFd, CString, String), String> {
             let parts = parts(rel)?;

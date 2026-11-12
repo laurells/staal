@@ -1002,3 +1002,138 @@ fn library(p: cap bank.pay.send, url: Text) -> Receipt {
     let shown = messages(&main);
     assert!(shown.contains("cannot be widened"), "{shown}");
 }
+
+/// `check_in` reads a program's own files through a `Root` and checks it exactly as
+/// `check_path` does: the same files, fingerprint, result and schema, with a fetched
+/// package and a local module, at the root of the folder opened and in a folder beneath.
+#[cfg(unix)]
+#[test]
+fn check_in_reads_through_a_root_and_agrees_with_check_path() {
+    let (app, main) = fetched_sms("check-in");
+    std::fs::create_dir_all(app.join("util")).unwrap();
+    std::fs::write(app.join("util/greet.staal"), "pub fn greeting() -> Text {\n    return \"hi\"\n}\n").unwrap();
+    std::fs::write(
+        &main,
+        "import sms.termii\nimport util.greet\nfn go(t: cap sms.termii.send) -> Receipt {\n    return t.send(\"2348012345678\", greet.greeting())\n}\n",
+    )
+    .unwrap();
+    let same = |by_path: &staalc::Checked, by_root: &staalc::Checked| {
+        assert_eq!(by_path.fingerprint, by_root.fingerprint);
+        let files = |c: &staalc::Checked| c.files.iter().map(|f| (f.name.clone(), f.text.clone())).collect::<Vec<_>>();
+        assert_eq!(files(by_path), files(by_root));
+        assert_eq!(by_path.packages, by_root.packages);
+        let (p, r) = (by_path.result.as_ref().unwrap(), by_root.result.as_ref().unwrap());
+        assert_eq!(staalc::schema_of(by_path, p, Some("go")).unwrap(), staalc::schema_of(by_root, r, Some("go")).unwrap());
+    };
+    let by_path = staalc::check_path(&main).unwrap();
+    assert!(by_path.files.len() >= 3, "the entry, the module and the package");
+    let root = staalc::interp::fsx::Root::open(&app).unwrap();
+    same(&by_path, &staalc::check_in(&root, &app, "main.staal", None).unwrap());
+    // The program in a folder beneath the one opened.
+    let above = app.parent().unwrap();
+    let root = staalc::interp::fsx::Root::open(above).unwrap();
+    same(&by_path, &staalc::check_in(&root, above, "app/main.staal", None).unwrap());
+    // The rules both share: a local file named as a dependency is refused, and so is a
+    // module that is the program itself, each with the same message but for the path.
+    let err_of = |r: Result<staalc::Checked, String>| match r {
+        Err(e) => e,
+        Ok(c) => c.result.err().map(|d| d.iter().map(|d| d.msg.clone()).collect::<Vec<_>>().join("\n")).unwrap_or_default(),
+    };
+    std::fs::write(app.join("sms.staal"), "fn x() -> Int {\n    return 1\n}\n").unwrap();
+    let (p, r) = (err_of(staalc::check_path(&main)), err_of(staalc::check_in(&root, above, "app/main.staal", None)));
+    assert!(p.contains("is both a dependency and a file") && r.contains("is both a dependency and a file"), "{p}\n{r}");
+    std::fs::remove_file(app.join("sms.staal")).unwrap();
+    std::fs::write(app.join("util/greet.staal"), "import main\npub fn greeting() -> Text {\n    return \"hi\"\n}\n").unwrap();
+    let (p, r) = (err_of(staalc::check_path(&main)), err_of(staalc::check_in(&root, above, "app/main.staal", None)));
+    assert!(p.contains("is the program itself") && r.contains("is the program itself"), "{p}\n{r}");
+    std::fs::write(app.join("util/greet.staal"), "pub fn greeting() -> Text {\n    return \"hi\"\n}\n").unwrap();
+    // An editor's unsaved text instead of the file's.
+    let unsaved = std::fs::read_to_string(&main).unwrap().replace("greet.greeting()", "\"unsaved\"");
+    let c = staalc::check_in(&root, above, "app/main.staal", Some(unsaved.clone())).unwrap();
+    assert_eq!(c.files[0].text, unsaved);
+    assert_eq!(c.fingerprint, staalc::check_text_at(&main, unsaved).unwrap().fingerprint);
+}
+
+/// What `check_in` never reads, though `check_path` follows it: a link in any position
+/// (the entry, a module, a module's folder, `staal.json`), a file with a second name,
+/// anything but a regular file, and a path out of the folder opened.
+#[cfg(unix)]
+#[test]
+fn check_in_reads_no_link_no_second_name_and_nothing_outside() {
+    use std::os::unix::fs::symlink;
+    let b = base("check-in-refusals");
+    let outside = b.join("outside");
+    std::fs::create_dir_all(outside.join("util")).unwrap();
+    std::fs::write(outside.join("util/greet.staal"), "pub fn greeting() -> Text {\n    return \"from outside\"\n}\n").unwrap();
+    std::fs::write(outside.join("greet.staal"), "pub fn greeting() -> Text {\n    return \"from outside\"\n}\n").unwrap();
+    std::fs::write(outside.join("staal.json"), "{}").unwrap();
+    let main_text = "import util.greet\nfn main() -> Text {\n    return greet.greeting()\n}\n";
+    // A fresh project for each case, as `make` leaves it.
+    let case = |name: &str, make: &dyn Fn(&Path)| -> (PathBuf, Result<staalc::Checked, String>) {
+        let app = b.join(name);
+        std::fs::create_dir_all(app.join("util")).unwrap();
+        std::fs::write(app.join("main.staal"), main_text).unwrap();
+        std::fs::write(app.join("util/greet.staal"), "pub fn greeting() -> Text {\n    return \"inside\"\n}\n").unwrap();
+        make(&app);
+        let root = staalc::interp::fsx::Root::open(&app).unwrap();
+        let r = staalc::check_in(&root, &app, "main.staal", None);
+        (app, r)
+    };
+    let refused = |name: &str, make: &dyn Fn(&Path), why: &str| {
+        let (app, r) = case(name, make);
+        // A file that cannot be read is refused as the check's error, or, for a module, as
+        // the diagnostic staalc gives any module it cannot read.
+        let e = match r {
+            Err(e) => e,
+            Ok(c) => match c.result {
+                Err(d) => d.iter().map(|d| d.msg.clone()).collect::<Vec<_>>().join("\n"),
+                Ok(_) => panic!("{name}: read"),
+            },
+        };
+        assert!(e.contains(why), "{name}: {e}");
+        // The same layout, which the command line reads by path, follows the link.
+        (app, e)
+    };
+    // The plain project is read.
+    let (_, ok) = case("plain", &|_| {});
+    assert!(ok.unwrap().result.is_ok());
+    // A module that is a link, to a file outside and to one inside.
+    let (app, _) = refused("module-link-out", &|a| {
+        std::fs::remove_file(a.join("util/greet.staal")).unwrap();
+        symlink(outside.join("greet.staal"), a.join("util/greet.staal")).unwrap();
+    }, "symbolic link");
+    assert!(staalc::check_path(&app.join("main.staal")).unwrap().files.iter().any(|f| f.text.contains("from outside")), "check_path follows it");
+    refused("module-link-in", &|a| {
+        std::fs::rename(a.join("util/greet.staal"), a.join("util/real.staal")).unwrap();
+        symlink(a.join("util/real.staal"), a.join("util/greet.staal")).unwrap();
+    }, "symbolic link");
+    // A module's folder that is a link.
+    refused("folder-link", &|a| {
+        std::fs::remove_dir_all(a.join("util")).unwrap();
+        symlink(outside.join("util"), a.join("util")).unwrap();
+    }, "symbolic link");
+    // The entry itself, and staal.json.
+    refused("entry-link", &|a| {
+        std::fs::rename(a.join("main.staal"), a.join("real.staal")).unwrap();
+        symlink(a.join("real.staal"), a.join("main.staal")).unwrap();
+    }, "symbolic link");
+    refused("manifest-link", &|a| symlink(outside.join("staal.json"), a.join("staal.json")).unwrap(), "symbolic link");
+    // A second name for a module.
+    refused("hard-link", &|a| std::fs::hard_link(a.join("util/greet.staal"), a.join("util/twin.staal")).unwrap(), "hard links");
+    // Not a regular file: a FIFO, which would block a reader that opened it to wait.
+    refused("fifo", &|a| {
+        std::fs::remove_file(a.join("util/greet.staal")).unwrap();
+        let p = std::ffi::CString::new(a.join("util/greet.staal").to_str().unwrap()).unwrap();
+        // SAFETY: mkfifo with a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(p.as_ptr(), 0o600) }, 0);
+    }, "not a regular file");
+    // A module that is not there at all.
+    refused("missing", &|a| std::fs::remove_file(a.join("util/greet.staal")).unwrap(), "there is no such file");
+    // A path out of the folder opened.
+    let app = b.join("plain");
+    let root = staalc::interp::fsx::Root::open(&app).unwrap();
+    for entry in ["../outside/greet.staal", "/etc/hosts", "./main.staal", "util//greet.staal"] {
+        let e = staalc::check_in(&root, &app, entry, None).err().unwrap_or_else(|| panic!("{entry}: read"));
+        assert!(e.contains("is absolute") || e.contains("'.' or '..'"), "{entry}: {e}");
+    }
+}
