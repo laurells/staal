@@ -166,6 +166,35 @@ impl Resolution {
             Resolution::Retry => json!({ "retry": {} }),
         }
     }
+
+    /// Its kind, as `to_json` names it: "performed", "responded", "replied", "failed" or
+    /// "retry".
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Resolution::Performed { .. } => "performed",
+            Resolution::Responded { .. } => "responded",
+            Resolution::Replied { .. } => "replied",
+            Resolution::Failed { .. } => "failed",
+            Resolution::Retry => "retry",
+        }
+    }
+}
+
+/// The kinds of resolution (`Resolution::kind`) an operator may record for an action in
+/// doubt of `capability`, the rule `resolve` applies: a C call's result is a value nobody
+/// outside the process saw, so it can only be failed or made again; an HTTP request is
+/// answered with what the server responded, a TCP exchange with what the peer replied,
+/// and any other action with the receipt it was performed under.
+pub fn answers_for(capability: &str) -> &'static [&'static str] {
+    if capability.starts_with("ffi.") {
+        &["failed", "retry"]
+    } else if capability.starts_with("net.http.") {
+        &["responded", "failed", "retry"]
+    } else if matches!(capability, "net.tcp.exchange" | "net.tls.exchange") {
+        &["replied", "failed", "retry"]
+    } else {
+        &["performed", "failed", "retry"]
+    }
 }
 
 /// An operator's decision about an operation in doubt, recorded with the resolution it
@@ -336,7 +365,17 @@ impl Journal {
     /// doubt, `operation` names the one (`op_id`). Says what was recorded, and which file
     /// was locked and written (`Resolved`).
     pub fn resolve(path: &Path, resolution: Resolution, operation: Option<&str>) -> Result<Resolved, String> {
-        Journal::resolve_with(path, resolution, operation, None)
+        Journal::resolve_with(path, resolution, operation, None, true)
+    }
+
+    /// Whether `resolve_decision` would accept this resolution now, asked without
+    /// recording anything: the same checks, made the same way on the journal as it is,
+    /// with its lock taken and let go. `Ok` is also the answer when the journal already
+    /// records `decision` exactly so, as `resolve_decision` then records nothing. The
+    /// journal can change after this answers; `resolve_decision` checks again.
+    pub fn check_resolution(path: &Path, decision: &Decision, resolution: Resolution, operation: &str) -> Result<(), String> {
+        decision.check()?;
+        Journal::resolve_with(path, resolution, Some(operation), Some(decision), false).map(|_| ())
     }
 
     /// As `resolve`, recording `decision` with the resolution: its id, the run, the
@@ -348,10 +387,18 @@ impl Journal {
     /// refused as a conflict. A journal of another run is refused.
     pub fn resolve_decision(path: &Path, decision: &Decision, resolution: Resolution, operation: &str) -> Result<Resolved, String> {
         decision.check()?;
-        Journal::resolve_with(path, resolution, Some(operation), Some(decision))
+        Journal::resolve_with(path, resolution, Some(operation), Some(decision), true)
     }
 
-    fn resolve_with(path: &Path, resolution: Resolution, operation: Option<&str>, decision: Option<&Decision>) -> Result<Resolved, String> {
+    /// With `write` false, every check is made and nothing is written: what is returned
+    /// then is only that the resolution would be accepted.
+    fn resolve_with(
+        path: &Path,
+        resolution: Resolution,
+        operation: Option<&str>,
+        decision: Option<&Decision>,
+        write: bool,
+    ) -> Result<Resolved, String> {
         let (file, held, records, durable) = open_existing(path)?;
         #[cfg(unix)]
         let identity = held.identity();
@@ -420,41 +467,24 @@ impl Journal {
                 None => return Err(format!("operation {o} is not in doubt; in doubt: {}{}", ids.join(", "), decided(&records, operation))),
             },
         };
-        operator_settles(&task, intent)?;
         let n = intent["n"].as_u64().unwrap_or_default(); // checked by check_body
-        let what = format!(
-            "{}.{}",
-            intent["body"]["capability"].as_str().unwrap_or("?"),
-            intent["body"]["method"].as_str().unwrap_or("?")
-        );
-        // A C call's result is a value nobody outside the process saw: an operator can
-        // only say it failed, or have it made again.
-        if intent["body"]["capability"].as_str().is_some_and(|c| c.starts_with("ffi."))
-            && !matches!(resolution, Resolution::Failed { .. } | Resolution::Retry)
-        {
-            return Err(format!("{what} is a call of a C function: record --failed <reason>, or --retry to call it again"));
+        operator_settles(&task, n, &intent["op"], &intent["body"])?;
+        let capability = intent["body"]["capability"].as_str().unwrap_or("?");
+        let what = format!("{capability}.{}", intent["body"]["method"].as_str().unwrap_or("?"));
+        let answers = answers_for(capability);
+        if !answers.contains(&resolution.kind()) {
+            return Err(match answers[0] {
+                "failed" => format!("{what} is a call of a C function: record --failed <reason>, or --retry to call it again"),
+                "responded" => format!("{what} is an HTTP request: record what the server answered with --status <code> [--body <text>]"),
+                "replied" => format!("{what} is a TCP exchange: record what the peer answered with --reply <text>"),
+                _ => format!("{what} is not an HTTP request or a TCP exchange: record it with --performed <receipt>"),
+            });
         }
-        let http = intent["body"]["capability"].as_str().is_some_and(|c| c.starts_with("net.http."));
-        let tcp = matches!(intent["body"]["capability"].as_str(), Some("net.tcp.exchange" | "net.tls.exchange"));
         let mut j = Journal::with(Some(file), Some(held), String::new(), BTreeMap::new(), None);
         j.durable = durable;
         let shown = op_id(&task, n);
         let recorded = decision.map(|d| d.record(&shown, &resolution));
         let (result, summary) = match resolution {
-            Resolution::Performed { .. } if http => {
-                return Err(format!(
-                    "{what} is an HTTP request: record what the server answered with --status <code> [--body <text>]"
-                ))
-            }
-            Resolution::Performed { .. } | Resolution::Responded { .. } if tcp => {
-                return Err(format!("{what} is a TCP exchange: record what the peer answered with --reply <text>"))
-            }
-            Resolution::Responded { .. } if !http => {
-                return Err(format!("{what} is not an HTTP request: record it with --performed <receipt>"))
-            }
-            Resolution::Replied { .. } if !tcp => {
-                return Err(format!("{what} is not a TCP exchange: record it with {}", if http { "--status <code> [--body <text>]" } else { "--performed <receipt>" }))
-            }
             Resolution::Replied { text } => (
                 Ok(json!({ "text": text })),
                 format!("recorded {what} (operation {shown}) as answered"),
@@ -473,7 +503,9 @@ impl Journal {
                 if let Some(d) = &recorded {
                     rec["decision"] = d.clone();
                 }
-                j.write(&tagged(rec, &task))?;
+                if write {
+                    j.write(&tagged(rec, &task))?;
+                }
                 return Ok(Resolved {
                     summary: format!("authorized one more attempt at {what} (operation {shown})"),
                     #[cfg(unix)]
@@ -500,8 +532,10 @@ impl Journal {
         if let Some(d) = &recorded {
             rec["decision"] = d.clone();
         }
-        j.failpoint.before_result(&shown);
-        j.write(&tagged(rec, &task))?;
+        if write {
+            j.failpoint.before_result(&shown);
+            j.write(&tagged(rec, &task))?;
+        }
         Ok(Resolved {
             summary,
             #[cfg(unix)]
@@ -909,21 +943,28 @@ fn open_operations(pending: &Streams) -> (Vec<(String, &Json)>, Vec<String>) {
 /// again, whose result could not take the form the program reads. (Who settles an
 /// operation left alone is `settle_of`: an action that is resolved is settled by what
 /// the operator recorded, whatever its rule.)
-fn operator_settles(task: &str, intent: &Json) -> Result<(), String> {
-    let n = intent["n"].as_u64().unwrap_or_default(); // checked by check_body
-    if intent["op"] != "action" {
-        return Err(format!("operation {} in doubt is a {}, which resume retries by itself; nothing to resolve", op_id(task, n), intent["op"]));
+fn operator_settles(task: &str, n: u64, op: &Json, body: &Json) -> Result<(), String> {
+    if op != "action" {
+        return Err(format!("operation {} in doubt is a {op}, which resume retries by itself; nothing to resolve", op_id(task, n)));
     }
     // Actions always safe to make again: resume makes them again, and a result
     // recorded here could not take the form the program reads.
     if let Some(c @ ("fs.read" | "fs.write" | "db.sqlite.query" | "db.postgres.query" | "net.tcp.accept" | "net.tcp.reply" | "net.tls.accept"
-        | "net.tls.reply")) = intent["body"]["capability"].as_str()
+        | "net.tls.reply")) = body["capability"].as_str()
     {
         return Err(format!("operation {} in doubt is {c}, which resume makes again by itself; nothing to resolve", op_id(task, n)));
     }
     Ok(())
 }
 
+/// The kinds of resolution `resolve` takes for operation `o` of a journal's view, were it
+/// in doubt: none, with `resolve`'s reason, for an operation an operator does not settle;
+/// otherwise `answers_for` its capability. The same rule `resolve` applies; whether `o`
+/// is in doubt, and the run not finished, it checks besides.
+pub fn operator_answers(o: &Operation) -> Result<&'static [&'static str], String> {
+    operator_settles(&o.task, o.n, &json!(o.op), &o.body)?;
+    Ok(answers_for(o.body["capability"].as_str().unwrap_or("?")))
+}
 
 /// A journal read without changing it: what `resume` and `resolve` would make of it,
 /// from the same validation (`check_body`) and the same rules for what is open and who
@@ -1606,6 +1647,77 @@ mod tests {
     fn decision(p: &Path, id: char, evidence: &str) -> Decision {
         let run_id = read_records(p).unwrap()[0]["run_id"].as_str().unwrap().to_string();
         Decision { id: id.to_string().repeat(32), run_id, evidence: evidence.into() }
+    }
+
+    /// Asking whether a resolution would be accepted gives `resolve_decision`'s own
+    /// answer, word for word, and writes nothing; what it accepts is what
+    /// `operator_answers` says of the operation.
+    #[test]
+    fn checking_a_resolution_answers_as_resolving_it_and_writes_nothing() {
+        let actions = [
+            ("email.send", "send", Some("operator")),
+            ("net.http.post", "post", Some("operator")),
+            ("net.tcp.exchange", "exchange", Some("operator")),
+            ("ffi.c", "call", Some("operator")),
+            ("net.http.get", "get", Some("repeat")),
+            ("email.send", "send", Some("resend_with_key")),
+            ("email.send", "send", None),
+            ("fs.write", "write", Some("repeat")),
+        ];
+        let resolutions = || {
+            vec![
+                Resolution::Performed { receipt: "r1".into() },
+                Resolution::Performed { receipt: String::new() },
+                Resolution::Responded { status: 200, body: "ok".into() },
+                Resolution::Responded { status: 99, body: String::new() },
+                Resolution::Replied { text: "+OK".into() },
+                Resolution::Failed { message: "never sent".into() },
+                Resolution::Retry,
+            ]
+        };
+        for (k, (cap, method, rule)) in actions.iter().enumerate() {
+            for (m, resolution) in resolutions().into_iter().enumerate() {
+                let p = tmp(&format!("check-{k}-{m}"));
+                let mut j = Journal::create(&p, &bind("P", "C")).unwrap();
+                j.begin("", "action", json!({ "capability": cap, "method": method }), *rule).unwrap();
+                drop(j);
+                let d = decision(&p, 'c', "checked the service");
+                let before = std::fs::read(&p).unwrap();
+                let checked = Journal::check_resolution(&p, &d, resolution.clone(), "1");
+                assert_eq!(std::fs::read(&p).unwrap(), before, "{cap} {rule:?} {resolution:?}: checking wrote");
+                let kind = resolution.kind();
+                let resolved = Journal::resolve_decision(&p, &d, resolution, "1").map(|_| ());
+                assert_eq!(checked, resolved, "{cap} {rule:?} {kind}");
+                // What the view's operation says it takes is what was taken, for every
+                // resolution whose values are ones staalc takes.
+                if !matches!(m, 1 | 3) {
+                    let v = view(&p).unwrap();
+                    let o = v.operations.iter().find(|o| o.id == "1").unwrap();
+                    let takes = operator_answers(o).map(|a| a.contains(&kind)).unwrap_or(false);
+                    let decided = o.decisions.iter().any(|x| x["id"] == d.id.as_str());
+                    assert_eq!(decided, takes, "{cap} {rule:?} {kind}: {checked:?}");
+                    assert_eq!(checked.is_ok(), takes, "{cap} {rule:?} {kind}: {checked:?}");
+                }
+            }
+        }
+        // Checked again once recorded: the same decision is accepted, as resolving it again
+        // records nothing; another is refused, as resolving it would be.
+        let p = in_doubt("check-recorded");
+        let d = decision(&p, 'b', "the provider's log shows it");
+        Journal::resolve_decision(&p, &d, Resolution::Performed { receipt: "m1".into() }, "1").unwrap();
+        let before = std::fs::read(&p).unwrap();
+        assert_eq!(Journal::check_resolution(&p, &d, Resolution::Performed { receipt: "m1".into() }, "1"), Ok(()));
+        let other = decision(&p, '7', "again");
+        let e = Journal::check_resolution(&p, &other, Resolution::Retry, "1").unwrap_err();
+        assert!(e.contains("not in doubt"), "{e}");
+        assert_eq!(std::fs::read(&p).unwrap(), before);
+        // A journal another holds is refused, as resolving it would be.
+        let p = in_doubt("check-held");
+        let held = Journal::resume(&p, &bind("P", "C")).unwrap();
+        let d = decision(&p, 'a', "x");
+        assert!(Journal::check_resolution(&p, &d, Resolution::Retry, "1").is_err());
+        drop(held);
+        assert_eq!(Journal::check_resolution(&p, &d, Resolution::Retry, "1"), Ok(()));
     }
 
     #[test]

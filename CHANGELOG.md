@@ -19,6 +19,14 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- `Journal::check_resolution` says whether `resolve_decision` would accept a resolution
+  now, with the same checks and messages, and writes nothing. `journal::answers_for`
+  names the kinds of resolution an action of a capability takes, the rule `resolve` now
+  applies through it, and `journal::operator_answers` what `resolve` takes for an
+  operation of a journal's view, with its reason when an operator does not settle it;
+  `Resolution::kind` names a resolution's kind. A resolution the
+  action does not take is refused as before; the message for `--status` or `--reply` on
+  an action that is neither an HTTP request nor a TCP exchange now names both.
 - Each action's journal intent records `recovery`, the rule it is made under (`repeat`,
   `resend_with_key` or `operator`), which resume applies again; an action replayed under
   another rule is a divergence. No new record type or journal version: an older intent
