@@ -33,7 +33,8 @@ export type FailureKind =
   | 'deadline'
   | 'internal'
   | 'journal'
-  | 'in_doubt';
+  | 'in_doubt'
+  | 'cancelled';
 
 export interface Failure {
   kind: FailureKind;

@@ -777,6 +777,7 @@ A failure has a kind and a message:
 | `deadline` | the run passed `limits.deadline_ms` before starting an action or model call (section 4) |
 | `internal` | a state the compiler should have ruled out (a bug in staalc), reported instead of crashing |
 | `journal`, `in_doubt` | durability failures (section 11) |
+| `cancelled` | the run was cancelled from outside (section 22); it records no end, so it can be resumed |
 
 A failure stops the current function and every caller up to the nearest
 enclosing `try`. `try e` evaluates `e`: on success it yields
@@ -796,7 +797,7 @@ what `.failure` holds is always of the type the callee declares. A capability's
 action cannot declare `fails`. `.failure`, like the rest of an Outcome, is
 untrusted. Both engines raise and carry typed errors.
 
-`step_limit`, `depth_limit`, `deadline`, `internal`, `journal` and `in_doubt` are **fatal**: `try` never catches
+`step_limit`, `depth_limit`, `deadline`, `internal`, `journal`, `in_doubt` and `cancelled` are **fatal**: `try` never catches
 them, and they always end the run. The deployment limits are safeguards, not
 part of the program's meaning, so a program must not be able to observe them
 (a runaway loop or recursion must not end in a "successful" run). An
@@ -2190,4 +2191,21 @@ does not reach: copies a library makes inside itself (the HTTP client's header b
 TLS records, the PostgreSQL client's connection settings) and copies the allocator left
 behind when a buffer grew or moved are outside staalc's control. Clearing narrows how long
 a value stays in memory; it does not prove it has gone.
+
+## 22. Cancelling a run
+
+A program that starts runs for others keeps a `cancel::Cancel` handle, given to the run in
+`Attached { cancel: Some(...) }`, and calls `cancel()` to stop it. The run checks it at
+each step (each statement and loop iteration, on the interpreter and in native code
+alike, where it is read atomically) and before each operation, in the program and in
+every concurrent task: once cancelled, it stops with a `cancelled` failure, which `try`
+cannot catch and which takes precedence over a task's ordinary failure.
+
+An operation already under way is never interrupted: stopping an action part way would
+leave its outcome unknown. It finishes, or reaches its own timeout, and is journaled as
+usual; the run stops at its next step. So a cancel during an action, a model call or a
+`net.tcp.accept` waiting for a client takes effect when that operation returns.
+
+Like a run stopped in doubt, a cancelled run records no end in its journal: it can be
+resumed, which replays everything it recorded and goes on from there.
 

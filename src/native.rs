@@ -36,7 +36,7 @@
 use crate::ast::{ArithOp, Builtin, CmpOp, Expr, FnDecl, LogicOp, Pattern, Program, Stmt, Ty, Variant};
 use crate::interp::value::{from_json, to_json, Value};
 use serde_json::{json, Value as Json};
-use crate::interp::{arith, arith_failure, builtin, compare, depth_limit, list_index, neg, step_limit, Failure, FailKind};
+use crate::interp::{arith, arith_failure, builtin, cancelled, compare, depth_limit, list_index, neg, step_limit, Failure, FailKind};
 use cranelift_codegen::ir::{
     self, condcodes::IntCC, types, AbiParam, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, UserFuncName,
 };
@@ -46,7 +46,7 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
 use std::collections::{HashMap, HashSet};
 
-/// The state native code shares with the interpreter. The first five fields are read
+/// The state native code shares with the interpreter. The first six fields are read
 /// and written by generated code at fixed offsets; the rest only by Rust.
 #[repr(C)]
 pub struct Ctx {
@@ -55,6 +55,9 @@ pub struct Ctx {
     pub depth: u64,
     pub max_depth: u64,
     pub failed: u64,
+    /// The run's cancel flag, read atomically by generated code at each step: `NEVER`
+    /// when the run has no cancel handle. It outlives the call (the run keeps its handle).
+    cancel: *const std::sync::atomic::AtomicU8,
     pub failure: Option<Failure>,
     arena: Vec<Option<Value>>,
     free: Vec<usize>,
@@ -71,12 +74,19 @@ impl Ctx {
             depth,
             max_depth,
             failed: 0,
+            cancel: &NEVER,
             failure: None,
             arena: Vec::new(),
             free: Vec::new(),
             tables: std::ptr::null(),
             peak: 0,
         }
+    }
+
+    /// Native code stops at its next step once `c` is cancelled. `c` must outlive the
+    /// calls made with this Ctx: the run holds its handle until it ends.
+    pub fn cancel_with(&mut self, c: &crate::interp::cancel::Cancel) {
+        self.cancel = c.flag();
     }
 
     fn put(&mut self, v: Value) -> i64 {
@@ -120,6 +130,10 @@ const OFF_MAX_STEPS: i32 = 8;
 const OFF_DEPTH: i32 = 16;
 const OFF_MAX_DEPTH: i32 = 24;
 const OFF_FAILED: i32 = 32;
+const OFF_CANCEL: i32 = 40;
+
+/// The cancel flag of a run without a cancel handle: never set.
+static NEVER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Constants and names the generated code refers to by number.
 #[derive(Default)]
@@ -217,6 +231,18 @@ unsafe extern "C" fn rt_step_limit(c: *mut Ctx) {
     let c = unsafe { ctx(c) };
     let f = step_limit(c.max_steps);
     record(c, f);
+}
+
+// Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this.
+#[unsafe(export_name = "staal_rt_cancelled")]
+unsafe extern "C" fn rt_cancelled(c: *mut Ctx) {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    let c = unsafe { ctx(c) };
+    record(c, cancelled());
 }
 
 // Exported so `staalc build` executables link to it by name.
@@ -1473,6 +1499,7 @@ pub struct Native {
 struct Helpers {
     step: FuncId,
     depth: FuncId,
+    cancel: FuncId,
     arith: FuncId,
     neg: FuncId,
     no_return: FuncId,
@@ -1630,6 +1657,7 @@ impl Native {
 const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("staal_rt_step_limit", rt_step_limit as *const u8),
     ("staal_rt_depth_limit", rt_depth_limit as *const u8),
+    ("staal_rt_cancelled", rt_cancelled as *const u8),
     ("staal_rt_arith", rt_arith as *const u8),
     ("staal_rt_neg", rt_neg as *const u8),
     ("staal_rt_no_return", rt_no_return as *const u8),
@@ -1702,6 +1730,7 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
     let h = Helpers {
         step: helper(module, "staal_rt_step_limit", 0, false)?,
         depth: helper(module, "staal_rt_depth_limit", 0, false)?,
+        cancel: helper(module, "staal_rt_cancelled", 0, false)?,
         arith: helper(module, "staal_rt_arith", 3, false)?,
         neg: helper(module, "staal_rt_neg", 1, false)?,
         no_return: helper(module, "staal_rt_no_return", 0, false)?,
@@ -2017,6 +2046,11 @@ impl<M: Module> Gen<'_, '_, '_, M> {
         let max = self.b.ins().load(types::I64, flags, self.ctx, OFF_MAX_STEPS);
         let over = self.b.ins().icmp(IntCC::UnsignedGreaterThan, steps, max);
         self.fail_if(over, self.h.step, &[]);
+        // The run's cancel flag, read atomically: another thread may set it at any time.
+        let flag = self.b.ins().load(types::I64, flags, self.ctx, OFF_CANCEL);
+        let set = self.b.ins().atomic_load(types::I8, MemFlagsData::trusted(), flag);
+        let cancelled = self.b.ins().icmp_imm(IntCC::NotEqual, set, 0);
+        self.fail_if(cancelled, self.h.cancel, &[]);
     }
 
     fn lookup(&self, n: &str) -> Option<&Var> {
@@ -2773,6 +2807,9 @@ mod tests {
         assert_eq!(&c.depth as *const u64 as usize - base, OFF_DEPTH as usize);
         assert_eq!(&c.max_depth as *const u64 as usize - base, OFF_MAX_DEPTH as usize);
         assert_eq!(&c.failed as *const u64 as usize - base, OFF_FAILED as usize);
+        assert_eq!(&c.cancel as *const *const std::sync::atomic::AtomicU8 as usize - base, OFF_CANCEL as usize);
+        // A pointer, read by generated code as one 64-bit word.
+        assert_eq!(std::mem::size_of::<*const std::sync::atomic::AtomicU8>(), 8);
     }
 
     #[test]

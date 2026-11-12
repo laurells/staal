@@ -11,6 +11,7 @@
 pub mod adapter;
 pub mod addresses;
 pub mod broker;
+pub mod cancel;
 pub mod db;
 pub mod ffi;
 pub mod ffi_worker;
@@ -61,6 +62,9 @@ pub enum FailKind {
     Journal,
     /// An action that is not idempotent may or may not have happened before a crash.
     InDoubt,
+    /// The run was cancelled from outside (`cancel::Cancel`): it stopped at its next step,
+    /// or before its next operation, and records no end, so it can be resumed.
+    Cancelled,
 }
 
 impl FailKind {
@@ -84,7 +88,8 @@ impl FailKind {
             | FailKind::Deadline
             | FailKind::Internal
             | FailKind::Journal
-            | FailKind::InDoubt => false,
+            | FailKind::InDoubt
+            | FailKind::Cancelled => false,
         }
     }
 }
@@ -104,6 +109,7 @@ impl fmt::Display for FailKind {
             FailKind::Internal => "internal",
             FailKind::Journal => "journal",
             FailKind::InDoubt => "in_doubt",
+            FailKind::Cancelled => "cancelled",
         })
     }
 }
@@ -523,7 +529,7 @@ pub fn run_config_observed(
     engine: Engine,
     observation: observe::Observation,
 ) -> Result<RunResult, String> {
-    run_config_attached(prog, source, config, durability, engine, Attached { observation: Some(observation), values: None })
+    run_config_attached(prog, source, config, durability, engine, Attached { observation: Some(observation), ..Attached::default() })
 }
 
 /// What a program that starts runs for others attaches to one (Staal Studio).
@@ -536,6 +542,10 @@ pub struct Attached {
     /// environment. They are dropped, and so overwritten, when the run ends, however it
     /// ends. None: the process's environment, as the command line reads it.
     pub values: Option<std::sync::Arc<dyn values::Values>>,
+    /// A cancel handle the caller keeps a clone of: `Cancel::cancel` stops the run at its
+    /// next step or before its next operation, with a `cancelled` failure and no end in
+    /// its journal (RUNTIME.md section 22).
+    pub cancel: Option<cancel::Cancel>,
 }
 
 /// Runs a checked program as `run_config_engine` does, with what `attached` gives it.
@@ -550,7 +560,7 @@ pub fn run_config_attached(prog: &Program, source: &str, config: &Json, durabili
         Engine::Interpreter => None,
         Engine::Native => Some(compile_native(prog)?),
     };
-    let hooks = Hooks { native, observe: attached.observation, values: Some(values), ..Hooks::default() };
+    let hooks = Hooks { native, observe: attached.observation, values: Some(values), cancel: attached.cancel, ..Hooks::default() };
     run_impl(prog, source, config, durability, provider, Box::new(adapter), hooks)
 }
 
@@ -572,7 +582,7 @@ pub fn run_attached(
         Engine::Native => Some(compile_native(prog)?),
     };
     let values = attached.values.unwrap_or_else(|| std::sync::Arc::new(values::ProcessEnvironment));
-    let hooks = Hooks { native, observe: attached.observation, values: Some(values), ..Hooks::default() };
+    let hooks = Hooks { native, observe: attached.observation, values: Some(values), cancel: attached.cancel, ..Hooks::default() };
     run_impl(prog, source, config, durability, provider, adapter, hooks)
 }
 
@@ -592,6 +602,8 @@ struct Hooks {
     observe: Option<observe::Observation>,
     /// Where the run's values come from (`values`); the process's environment if none.
     values: Option<std::sync::Arc<dyn values::Values>>,
+    /// A cancel handle the caller keeps (`cancel`).
+    cancel: Option<cancel::Cancel>,
 }
 
 fn run_impl(
@@ -629,6 +641,7 @@ fn run_impl(
                 it.capture = hooks.capture;
                 it.debug = hooks.debug;
                 it.observe = feed;
+                it.cancel = hooks.cancel;
                 if hooks.profile.is_some() {
                     it.profile = Some(Profiler::default());
                 }
@@ -1560,6 +1573,8 @@ struct Interp<'p> {
     debug_stack: Vec<(String, crate::lexer::Pos)>,
     /// An observer, offered each event as it is logged; shared with the run's tasks.
     observe: Option<std::sync::Arc<observe::Feed>>,
+    /// The run's cancel handle, if it has one; shared with its tasks and native code.
+    cancel: Option<cancel::Cancel>,
     /// The journal operation this task is making now (inside `external`), and the last one
     /// it began: what an observed event is about (`emit`).
     current_op: Option<u64>,
@@ -1701,6 +1716,7 @@ impl<'p> Interp<'p> {
             debug: None,
             debug_stack: Vec::new(),
             observe: None,
+            cancel: None,
             current_op: None,
             last_op: None,
             task: String::new(),
@@ -1840,11 +1856,11 @@ impl<'p> Interp<'p> {
             to_json(&v, false).or_else(internal)
         });
         // Record how the run ended, unless it must not count as ended: after a journal
-        // failure nothing more may be written, and a run stopped in doubt must stay
-        // resumable once an operator has resolved it.
+        // failure nothing more may be written, a run stopped in doubt must stay resumable
+        // once an operator has resolved it, and a cancelled run stays resumable.
         let ending = match &result {
             Ok(v) => Some(json!({ "ok": true, "result": v })),
-            Err(f) if matches!(f.kind, FailKind::Journal | FailKind::InDoubt) => None,
+            Err(f) if matches!(f.kind, FailKind::Journal | FailKind::InDoubt | FailKind::Cancelled) => None,
             Err(f) => Some(json!({ "ok": false, "failure": f.kind.to_string(), "message": f.message })),
         };
         if let Some(rec) = ending
@@ -1961,6 +1977,9 @@ impl<'p> Interp<'p> {
                 self.depth as u64 + 1,
                 self.limits.max_depth as u64,
             );
+            if let Some(c) = &self.cancel {
+                ctx.cancel_with(c);
+            }
             if let Some(r) = n.call(name, &mut ctx, &args) {
                 self.steps = ctx.steps;
                 return r;
@@ -2226,6 +2245,9 @@ impl<'p> Interp<'p> {
         if self.steps > self.limits.max_steps {
             return Err(step_limit(self.limits.max_steps));
         }
+        if self.cancel.as_ref().is_some_and(cancel::Cancel::is_cancelled) {
+            return Err(cancelled());
+        }
         Ok(())
     }
 
@@ -2412,6 +2434,7 @@ impl<'p> Interp<'p> {
             debug: None,
             debug_stack: Vec::new(),
             observe: self.observe.clone(),
+            cancel: self.cancel.clone(),
             current_op: None,
             last_op: None,
             task: id,
@@ -2544,8 +2567,9 @@ impl<'p> Interp<'p> {
             match r {
                 Some(Ok(v)) => values.push(v),
                 Some(Err(f)) => {
-                    let stops = matches!(f.kind, FailKind::InDoubt | FailKind::Journal | FailKind::Internal);
-                    let first_stops = first.as_ref().is_some_and(|x| matches!(x.kind, FailKind::InDoubt | FailKind::Journal | FailKind::Internal));
+                    let stops = matches!(f.kind, FailKind::InDoubt | FailKind::Journal | FailKind::Internal | FailKind::Cancelled);
+                    let first_stops =
+                        first.as_ref().is_some_and(|x| matches!(x.kind, FailKind::InDoubt | FailKind::Journal | FailKind::Internal | FailKind::Cancelled));
                     if first.is_none() || (stops && !first_stops) {
                         first = Some(f);
                     }
@@ -3574,6 +3598,10 @@ impl<'p> Interp<'p> {
         what: &str,
         live: impl FnOnce(&mut Self, &str) -> Answer,
     ) -> Result<(Result<Json, String>, bool), Failure> {
+        // Before anything is journaled: a cancelled run starts no operation.
+        if self.cancel.as_ref().is_some_and(cancel::Cancel::is_cancelled) {
+            return Err(cancelled());
+        }
         if matches!(op, "action" | "count" | "model") {
             self.check_deadline(what)?;
         }
@@ -3788,6 +3816,10 @@ pub(crate) fn list_index(items: &[Value], i: i64) -> Result<Value, Failure> {
 
 pub(crate) fn step_limit(max_steps: u64) -> Failure {
     Failure { raised: None, kind: FailKind::StepLimit, message: format!("more than {max_steps} steps executed") }
+}
+
+pub(crate) fn cancelled() -> Failure {
+    Failure { raised: None, kind: FailKind::Cancelled, message: "the run was cancelled; it can be resumed".into() }
 }
 
 pub(crate) fn depth_limit(max_depth: u64) -> Failure {
