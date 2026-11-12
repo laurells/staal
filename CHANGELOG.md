@@ -19,6 +19,12 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- `debug::Session::start_attached` and `interp::run_config_debugged_attached` start a
+  debugged run with what `interp::Attached` gives it, as `run_config_attached` takes it:
+  its secrets, model API key and proxy variables read from the values given, never the
+  process's environment, and a cancel handle that stops it while it is going on.
+  `Session::start` and `run_config_debugged` are unchanged.
+- `lsp::completions` is public: the language server's completion list for a text.
 - `Journal::check_resolution` says whether `resolve_decision` would accept a resolution
   now, with the same checks and messages, and writes nothing. `journal::answers_for`
   names the kinds of resolution an action of a capability takes, the rule `resolve` now

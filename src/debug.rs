@@ -536,11 +536,18 @@ impl Session {
     /// Starts `prog` under the debugger with run config `config`; `files` are the
     /// program's files, as `check_path` gives them.
     pub fn start(prog: Arc<Program>, files: Vec<SourceFile>, config: Json) -> Session {
+        Session::start_attached(prog, files, config, interp::Attached::default())
+    }
+
+    /// As `start`, with what `attached` gives the run (`interp::run_config_attached`):
+    /// its values, read from there and never from the process's environment, an
+    /// observer, and a cancel handle, which stops the run while it is going on.
+    pub fn start_attached(prog: Arc<Program>, files: Vec<SourceFile>, config: Json, attached: interp::Attached) -> Session {
         let (commands, rx) = channel();
         let (tx, messages) = channel();
         let remote = Remote { core: Core::new(&prog, files), commands: rx, messages: tx.clone() };
         std::thread::spawn(move || {
-            let r = interp::run_config_debugged(&prog, &config, Box::new(remote));
+            let r = interp::run_config_debugged_attached(&prog, &config, Box::new(remote), attached);
             let _ = tx.send(Message::Ended(r));
         });
         Session { commands, messages, stopped: false, ended: false }

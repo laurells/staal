@@ -327,10 +327,18 @@ pub trait DebugHook: Send {
 /// statement for `hook`. A run the hook stops fails with an `internal` failure whose
 /// message says so.
 pub fn run_config_debugged(prog: &Program, config: &Json, hook: Box<dyn DebugHook>) -> Result<RunResult, String> {
+    run_config_debugged_attached(prog, config, hook, Attached::default())
+}
+
+/// As `run_config_debugged`, with what `attached` gives the run: where its secrets, model
+/// API key and proxy variables come from, an observer, and a cancel handle, as
+/// `run_config_attached` takes them.
+pub fn run_config_debugged_attached(prog: &Program, config: &Json, hook: Box<dyn DebugHook>, attached: Attached) -> Result<RunResult, String> {
     let cfg = config.as_object().ok_or("run config: expected a JSON object")?;
-    let provider = provider::of_run(cfg.get("model"), &values::ProcessEnvironment)?;
+    let values = attached.values.unwrap_or_else(|| std::sync::Arc::new(values::ProcessEnvironment));
+    let provider = provider::of_run(cfg.get("model"), values.as_ref())?;
     let adapter = SimulatedAdapter::from_config(cfg.get("adapters"))?;
-    let hooks = Hooks { debug: Some(hook), ..Hooks::default() };
+    let hooks = Hooks { debug: Some(hook), observe: attached.observation, values: Some(values), cancel: attached.cancel, ..Hooks::default() };
     run_impl(prog, "", config, Durability::None, provider, Box::new(adapter), hooks)
 }
 

@@ -267,3 +267,59 @@ fn a_session_takes_commands_only_while_stopped_and_quit_ends_the_run() {
     assert!(s.wait().unwrap_err().contains("has ended"));
     assert!(s.command(C::Continue).unwrap_err().contains("has ended"));
 }
+
+/// A session started with values given to it reads its secrets from them and never from
+/// the process's environment: the value named is in neither the environment nor the
+/// config; given, the run uses it (a text holding it shows it removed); not given, the
+/// run cannot start. A cancel stops a run that is going on.
+#[test]
+fn a_session_given_values_reads_them_and_not_the_environment() {
+    use staalc::debug::{Command, Event, Session, Shown};
+    use staalc::interp::values::{Given, Value};
+    const NAME: &str = "STAAL_DEBUG_ATTACHED_TEST_KEY_NEVER_SET";
+    const KEY: &str = "sk-debug-attached-7c31";
+    assert!(std::env::var_os(NAME).is_none());
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("debug-attached");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("main.staal");
+    std::fs::write(
+        &file,
+        "type Name { name: Text }\n\nfn main(key: Secret) -> Int {\n    let n = validate propose(Name, tokens: 100)\n    let i = 0\n    loop {\n        set i = i + 1\n    }\n    return 1\n}\n",
+    )
+    .unwrap();
+    let checked = staalc::check_path(&file).unwrap();
+    let prog = std::sync::Arc::new(checked.result.unwrap_or_else(|e| panic!("{e:?}")));
+    let config = serde_json::json!({
+        "entry": "main",
+        "secrets": { "key": { "env": NAME } },
+        "model": { "provider": "script", "responses": [{ "output": { "name": format!("leak {KEY} here") }, "output_tokens": 3 }] }
+    });
+    let given = || staalc::interp::Attached {
+        values: Some(std::sync::Arc::new(Given::new([(NAME.to_string(), Value::new(KEY.to_string()))]))),
+        ..Default::default()
+    };
+    // Not given: the process's environment does not hold it, so the run cannot start.
+    let mut s = Session::start(prog.clone(), checked.files.clone(), config.clone());
+    let Event::Ended(Err(e)) = s.wait().unwrap() else { panic!("the run started without its value") };
+    assert!(e.contains(NAME), "{e}");
+    // Given: read from there.
+    let cancel = staalc::interp::cancel::Cancel::new();
+    let mut s = Session::start_attached(prog, checked.files, config, staalc::interp::Attached { cancel: Some(cancel.clone()), ..given() });
+    assert!(matches!(s.wait().unwrap(), Event::Stopped(_)));
+    s.command(Command::Break { file: None, line: 5 }).unwrap();
+    s.command(Command::Continue).unwrap();
+    let Event::Stopped(stop) = s.wait().unwrap() else { panic!("no stop at line 5") };
+    let n = stop.locals.iter().find(|(name, _)| name == "n").map(|(_, v)| v.clone()).unwrap();
+    let Shown::Record { fields, .. } = n else { panic!("{n:?}") };
+    let Shown::Text(t) = &fields[0].1 else { panic!("{fields:?}") };
+    assert!(!t.contains(KEY) && t.starts_with("leak ") && t.ends_with(" here"), "{t}");
+    // Going on, in a loop with no end: the cancel stops it.
+    s.command(Command::Delete { file: None, line: 5 }).unwrap();
+    s.command(Command::Continue).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    cancel.cancel();
+    let Event::Ended(Ok(r)) = s.wait().unwrap() else { panic!("the run did not end") };
+    let f = r.result.unwrap_err();
+    assert_eq!(f.kind.to_string(), "cancelled", "{}", f.message);
+}

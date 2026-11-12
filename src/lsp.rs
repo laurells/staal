@@ -227,7 +227,10 @@ fn file_uri(name: &str) -> Option<String> {
 
 /// Completion items: reserved words, built-in functions, and the names `text`
 /// declares (functions, types, enums, interfaces, constants, variables).
-fn completions(text: &str) -> Vec<Json> {
+/// What the server offers to complete in `text`, as `textDocument/completion` answers:
+/// the reserved words, the built-in functions and the names `text` declares, each with
+/// its kind as the protocol numbers it (14 keyword, 3 function, 6 variable, 7 class).
+pub fn completions(text: &str) -> Vec<Json> {
     use crate::lexer::Tok;
     let mut items = Vec::new();
     // Kinds, as the protocol numbers them: 14 keyword, 3 function, 6 variable, 7 class.
