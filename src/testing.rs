@@ -97,7 +97,27 @@ pub struct Summary {
 /// Runs every test in `files`, in order, giving each case to `each` as it ends. An
 /// error is something that stops all testing (a file that cannot be read, a test that
 /// cannot be started), as `staalc test` exits 2 for; a test that fails is a case.
-pub fn run(files: &[PathBuf], settings: &Settings, mut each: impl FnMut(&Case)) -> Result<Summary, String> {
+pub fn run(files: &[PathBuf], settings: &Settings, each: impl FnMut(&Case)) -> Result<Summary, String> {
+    run_checked(files, |f| crate::check_path(f), settings, each)
+}
+
+/// As `run`, for files named beneath the folder `root` holds, as `check_in` takes them:
+/// every file of each program's own read through `root`, no link followed. A case's
+/// `file` is the name given. For a host that must never resolve a path inside a project
+/// (Staal Studio).
+#[cfg(unix)]
+pub fn run_in(root: &crate::interp::fsx::Root, root_path: &Path, files: &[String], settings: &Settings, each: impl FnMut(&Case)) -> Result<Summary, String> {
+    let named: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+    run_checked(
+        &named,
+        |f| crate::check_in(root, root_path, f.to_str().ok_or_else(|| format!("{} is not a UTF-8 name", f.display()))?, None),
+        settings,
+        each,
+    )
+}
+
+/// `run`, each file checked by `check`.
+fn run_checked(files: &[PathBuf], check: impl Fn(&PathBuf) -> Result<crate::Checked, String>, settings: &Settings, mut each: impl FnMut(&Case)) -> Result<Summary, String> {
     let mut summary = Summary::default();
     let mut give = |case: Case, summary: &mut Summary| {
         match case.outcome {
@@ -107,7 +127,7 @@ pub fn run(files: &[PathBuf], settings: &Settings, mut each: impl FnMut(&Case)) 
         each(&case);
     };
     for file in files {
-        let checked = crate::check_path(file)?;
+        let checked = check(file)?;
         let failed = |why: &str| Case { file: file.clone(), test: None, outcome: Outcome::Failed(why.into()), diagnostics: Vec::new() };
         let prog = match &checked.result {
             Ok(p) => p,
@@ -172,6 +192,26 @@ pub fn files_under(dir: &Path) -> Result<Vec<PathBuf>, String> {
             }
         } else if file_name.ends_with("_test.staal") {
             out.push(p);
+        }
+    }
+    Ok(out)
+}
+
+/// As `files_under`, beneath the folder `root` holds: `dir` a path beneath it ("" for
+/// the folder itself), and each file named beneath it. Read one folder at a time from
+/// the root's handle; a link is never followed, so a linked folder or file is left out,
+/// as is a name that is not UTF-8, which no path here can name.
+#[cfg(unix)]
+pub fn files_under_in(root: &crate::interp::fsx::Root, dir: &str) -> Result<Vec<String>, String> {
+    use crate::interp::fsx::Kind;
+    let mut out = Vec::new();
+    for e in root.list(dir)? {
+        let Some(name) = e.name else { continue };
+        let path = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
+        match e.kind {
+            Kind::Dir if !name.starts_with('.') && name != "target" && name != "node_modules" => out.append(&mut files_under_in(root, &path)?),
+            Kind::File if name.ends_with("_test.staal") => out.push(path),
+            _ => {}
         }
     }
     Ok(out)

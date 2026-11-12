@@ -19,6 +19,13 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Added
 
+- A project read only through a `Root`, for agents and tests as for checks:
+  `agent::check_manifest_in`, `agent::check_in`, `agent::describe::describe_in` and
+  `bytes_in` read an agent's folder through a root (a tool's `program` a file's own name
+  in it, never through a link); `testing::run_in` and `testing::files_under_in` find and
+  run tests through one; `fsx::Root::sub` opens a folder beneath a root from its handle;
+  `host::tool::parse_tool_with` takes how a tool's program is found and checked. Each
+  gives what the path-reading form gives, word for word, on staalc's fixtures.
 - `debug::Session::start_attached` and `interp::run_config_debugged_attached` start a
   debugged run with what `interp::Attached` gives it, as `run_config_attached` takes it:
   its secrets, model API key and proxy variables read from the values given, never the

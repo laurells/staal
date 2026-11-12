@@ -392,3 +392,62 @@ fn a_description_goes_stale_with_every_change_that_matters() {
     describe();
     assert_eq!(staalc_agent("check", &d).0, Some(0));
 }
+
+/// Read through a `Root`, the agent check gives what it gives by path, word for word, on
+/// every fixture: the same refusals, the same description, the same answer about the
+/// committed one, fresh or stale.
+#[cfg(unix)]
+#[test]
+fn the_check_through_a_root_is_the_check_by_path() {
+    use staalc::agent;
+    let mut differ = Vec::new();
+    for (name, _) in fixtures() {
+        let file = Path::new(ROOT).join(format!("tests/fixtures/agent/manifests/{name}.json"));
+        let d = agent_dir(&format!("in-root-{name}"), &file);
+        let root = staalc::interp::fsx::Root::open(&d).unwrap();
+        let msg = |r: Result<agent::Checked, String>| r.map(|c| c.programs.iter().map(|p| p.fingerprint.clone()).collect::<Vec<_>>());
+        let (by_path, in_root) = (msg(agent::check_manifest(&d)), msg(agent::check_manifest_in(&root, &d)));
+        if by_path != in_root {
+            differ.push(format!("{name}: manifest by path {by_path:?}, through a root {in_root:?}"));
+            continue;
+        }
+        if let Ok(c) = agent::check_manifest(&d) {
+            let (a, b) = (agent::describe::bytes(&d, &c), agent::describe::bytes_in(&root, &d, &c));
+            if a != b {
+                differ.push(format!("{name}: description by path {a:?}, through a root {b:?}"));
+            }
+        }
+        // The committed description, as copied (fresh for the valid agent, stale or
+        // refused for most), then written fresh.
+        for round in ["as copied", "described"] {
+            if round == "described" && agent::write_description(&d).is_err() {
+                continue;
+            }
+            let (a, b) = (msg(agent::check(&d)), msg(agent::check_in(&root, &d)));
+            if a != b {
+                differ.push(format!("{name}, {round}: check by path {a:?}, through a root {b:?}"));
+            }
+        }
+    }
+    assert!(differ.is_empty(), "{}", differ.join("\n"));
+    // A tool's program reached through a link: by path it is resolved and must be in the
+    // folder; through a root it is never followed.
+    let d = agent_dir("in-root-link", &Path::new(ROOT).join("tests/fixtures/agent/valid/refunds/agent.json"));
+    std::fs::rename(d.join("refund.staal"), d.join("real.staal")).unwrap();
+    std::os::unix::fs::symlink(d.join("real.staal"), d.join("refund.staal")).unwrap();
+    let root = staalc::interp::fsx::Root::open(&d).unwrap();
+    let e = agent::check_manifest_in(&root, &d).err().expect("a program through a link was read");
+    assert!(e.contains("is not a file in the agent's folder"), "{e}");
+    // The project's staal.json through a link: refused by the check and by the
+    // description, each reading it through the root.
+    let d = agent_dir("in-root-manifest-link", &Path::new(ROOT).join("tests/fixtures/agent/valid/refunds/agent.json"));
+    let root = staalc::interp::fsx::Root::open(&d).unwrap();
+    let c = agent::check_manifest_in(&root, &d).unwrap();
+    std::fs::rename(d.join("staal.json"), d.join("real.json")).unwrap();
+    std::os::unix::fs::symlink(d.join("real.json"), d.join("staal.json")).unwrap();
+    assert!(agent::describe::describe(&d, &c).is_ok(), "by path, the link is followed");
+    let e = agent::describe::describe_in(&root, &d, &c).unwrap_err();
+    assert!(e.contains("symbolic link"), "{e}");
+    let e = agent::check_manifest_in(&root, &d).err().expect("staal.json through a link was read");
+    assert!(e.contains("symbolic link"), "{e}");
+}

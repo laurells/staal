@@ -242,10 +242,22 @@ fn tool(def: &ToolDef, checked: &crate::Checked, authority: &BTreeMap<String, Js
 
 /// The described form of a checked agent, as JSON.
 pub fn describe(root: &std::path::Path, checked: &Checked) -> Result<Json, String> {
+    describe_of(crate::packages::Project::open(root)?, checked)
+}
+
+/// As `describe`, the agent's folder read through `root` (opened at `root_path`): its
+/// `staal.json` and `staal.lock` read from the root's handle, its packages from the
+/// package store and verified against `staal.lock`, as `check_in` reads them.
+#[cfg(unix)]
+pub fn describe_in(root: &crate::interp::fsx::Root, root_path: &std::path::Path, checked: &Checked) -> Result<Json, String> {
+    describe_of(crate::packages::Project::open_with(root_path, &crate::packages::RootFiles::new(root, "agent.json"))?, checked)
+}
+
+fn describe_of(project: Option<crate::packages::Project>, checked: &Checked) -> Result<Json, String> {
     let m = &checked.manifest;
     let mut dependencies = Vec::new();
     let mut authority_of: BTreeMap<String, Json> = BTreeMap::new();
-    if let Some(project) = crate::packages::Project::open(root)? {
+    if let Some(project) = project {
         for (name, p) in &project.packages {
             let mut authority = Map::new();
             for (cap, a) in &p.manifest.authority {
@@ -287,4 +299,10 @@ pub fn describe(root: &std::path::Path, checked: &Checked) -> Result<Json, Strin
 /// The bytes of `agent.described.json`: the description in RFC 8785 form.
 pub fn bytes(root: &std::path::Path, checked: &Checked) -> Result<String, String> {
     crate::jcs::canonical(&describe(root, checked)?)
+}
+
+/// The bytes of `describe_in`'s description, as `bytes` gives them.
+#[cfg(unix)]
+pub fn bytes_in(root: &crate::interp::fsx::Root, root_path: &std::path::Path, checked: &Checked) -> Result<String, String> {
+    crate::jcs::canonical(&describe_in(root, root_path, checked)?)
 }

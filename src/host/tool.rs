@@ -403,6 +403,24 @@ pub fn parse_tool(
     definer: Definer,
     warnings: &mut Vec<String>,
 ) -> Result<Tool, String> {
+    let resolve = |at: &str, program: &str| std::fs::canonicalize(dir.join(program)).map_err(|e| format!("{at}.program: {program}: {e}"));
+    parse_tool_with(v, at, model, settings, definer, warnings, &resolve, &|p: &Path| crate::check_path(p))
+}
+
+/// As `parse_tool`, the tool's program named by `resolve` (from the definition's
+/// `program`, with the definition's place for messages) and checked by `check`: a host
+/// that reads a project only through a `Root` checks it with `check_in`.
+#[allow(clippy::too_many_arguments)]
+pub fn parse_tool_with(
+    v: &Json,
+    at: &str,
+    model: Option<&Json>,
+    settings: &Settings,
+    definer: Definer,
+    warnings: &mut Vec<String>,
+    resolve: &dyn Fn(&str, &str) -> Result<PathBuf, String>,
+    check: &dyn Fn(&Path) -> Result<crate::Checked, String>,
+) -> Result<Tool, String> {
     let (grants, app_inputs_allowed) = match definer {
         Definer::Manifest => (Grants::Fixed, false),
         Definer::App(g) => (g, true),
@@ -451,7 +469,7 @@ pub fn parse_tool(
     let title = text(o, "title", at)?;
     let description = text(o, "description", at)?.ok_or(format!("{at}.description: missing; a model chooses tools by it"))?;
     let program = text(o, "program", at)?.ok_or(format!("{at}.program: missing"))?;
-    let program = std::fs::canonicalize(dir.join(&program)).map_err(|e| format!("{at}.program: {program}: {e}"))?;
+    let program = resolve(at, &program)?;
     let entry = text(o, "entry", at)?.unwrap_or_else(|| "main".into());
     let engine = match o.get("engine").map(|e| e.as_str()) {
         None | Some(Some("interpreter")) => Engine::Interpreter,
@@ -465,7 +483,7 @@ pub fn parse_tool(
     };
 
     // The program, checked and held: a file changed while the server runs is never used.
-    let checked = crate::check_path(&program).map_err(|e| format!("{at}.program: {e}"))?;
+    let checked = check(&program).map_err(|e| format!("{at}.program: {e}"))?;
     let prog = match checked.result {
         Ok(p) => p,
         Err(diags) => {

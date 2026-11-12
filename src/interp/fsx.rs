@@ -205,6 +205,16 @@ mod imp {
             write_in(&dir, &name, &shown, content)
         }
 
+        /// The folder at `rel` beneath this one ("" for this one), as a root of its own:
+        /// opened one directory at a time from this root's handle, no link followed, and
+        /// named in messages beneath this root's name.
+        pub fn sub(&self, rel: &str) -> Result<Root, String> {
+            let parts = parts(rel)?;
+            let dir = open_dirs(self.dir.as_raw_fd(), &parts, &self.shown)?;
+            let shown = if rel.is_empty() { self.shown.clone() } else { format!("{}/{rel}", self.shown) };
+            Root::from_fd(dir, &shown)
+        }
+
         /// The entries of the directory at `rel` ("" for the root), sorted by name, `.`
         /// and `..` left out. No link is followed, in the path or in an entry.
         pub fn list(&self, rel: &str) -> Result<Vec<Entry>, String> {
@@ -696,6 +706,25 @@ mod tests {
         assert_eq!(fs::read_to_string(d.join("moved/g")).unwrap(), "new");
         assert!(!d.join("outside/g").exists());
         assert_eq!(r.list("").unwrap().iter().filter_map(|e| e.name.clone()).collect::<Vec<_>>(), vec!["f", "g"]);
+    }
+
+    #[test]
+    fn a_sub_root_is_opened_from_its_roots_handle_and_never_through_a_link() {
+        let d = dir("root-sub");
+        fs::create_dir_all(d.join("allowed/a/b")).unwrap();
+        fs::write(d.join("allowed/a/b/f"), "deep").unwrap();
+        let r = root(&d);
+        let s = r.sub("a/b").unwrap();
+        assert_eq!(s.read("f", 100).unwrap(), "deep");
+        assert_eq!(s.shown(), format!("{}/a/b", r.shown()));
+        assert_eq!(r.sub("").unwrap().list("").unwrap(), r.list("").unwrap());
+        symlink(d.join("outside"), d.join("allowed/out")).unwrap();
+        assert!(r.sub("out").unwrap_err().contains("symbolic link"));
+        assert!(r.sub("../outside").is_err() && r.sub("/etc").is_err());
+        assert!(r.sub("a/b/f").unwrap_err().contains("not a directory") || r.sub("a/b/f").is_err());
+        // It stays the folder it opened when that folder is moved.
+        fs::rename(d.join("allowed/a/b"), d.join("allowed/a/c")).unwrap();
+        assert_eq!(s.read("f", 100).unwrap(), "deep");
     }
 
     #[test]

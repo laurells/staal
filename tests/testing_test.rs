@@ -144,3 +144,47 @@ fn the_command_line_prints_what_the_library_returns() {
     let stderr = String::from_utf8_lossy(&o.stderr);
     assert!(!diagnostics.is_empty() && diagnostics.iter().all(|m| stderr.contains(m.as_str())), "{stderr}");
 }
+
+/// Through a `Root`, the tests found and their results are what they are by path: the
+/// same files, in the same order, and the same cases with the same outcomes, each named
+/// by its path beneath the root. A file with check errors and a file with no tests are
+/// cases alike. A folder or file reached through a link is never followed.
+#[cfg(unix)]
+#[test]
+fn tests_run_through_a_root_as_by_path() {
+    let d = scratch("testing-in-root");
+    fs::create_dir_all(d.join("staal")).unwrap();
+    for e in fs::read_dir(Path::new(ROOT).join("tests/staal")).unwrap() {
+        let e = e.unwrap();
+        fs::copy(e.path(), d.join("staal").join(e.file_name())).unwrap();
+    }
+    fs::write(d.join("staal/broken_test.staal"), "fn test_x() {\n    let a = nope\n}\n").unwrap();
+    fs::write(d.join("staal/none_test.staal"), "fn helper() -> Int {\n    return 1\n}\n").unwrap();
+    fs::create_dir_all(d.join("target")).unwrap();
+    fs::write(d.join("target/skipped_test.staal"), "fn test_x() {\n}\n").unwrap();
+    let outside = scratch("testing-in-root-outside");
+    fs::write(outside.join("away_test.staal"), "fn test_x() {\n}\n").unwrap();
+    std::os::unix::fs::symlink(&outside, d.join("linked")).unwrap();
+    std::os::unix::fs::symlink(outside.join("away_test.staal"), d.join("staal/link_test.staal")).unwrap();
+    let root = staalc::interp::fsx::Root::open(&d).unwrap();
+    let in_root = staalc::testing::files_under_in(&root, "").unwrap();
+    let by_path: Vec<String> = staalc::testing::files_under(&d)
+        .unwrap()
+        .iter()
+        .map(|p| p.strip_prefix(&d).unwrap().to_str().unwrap().to_string())
+        // By path, links are followed; through a root, never.
+        .filter(|p| !p.starts_with("linked/") && p != "staal/link_test.staal")
+        .collect();
+    assert_eq!(in_root, by_path);
+    assert!(in_root.contains(&"staal/broken_test.staal".to_string()) && !in_root.iter().any(|p| p.contains("link")), "{in_root:?}");
+    let settings = Settings::new(None, engines()).unwrap();
+    let mut got = Vec::new();
+    let s = staalc::testing::run_in(&root, &d, &in_root, &settings, |c| got.push(c.clone())).unwrap();
+    let files: Vec<PathBuf> = in_root.iter().map(|p| d.join(p)).collect();
+    let want = cases(&files, &settings);
+    let rel = |c: &Case| Case { file: c.file.strip_prefix(&d).map(Path::to_path_buf).unwrap_or(c.file.clone()), ..c.clone() };
+    // A diagnostic names its file as the check named it: by path, the path; through a
+    // root, the root's name for it, which is the same path.
+    assert_eq!(got.iter().map(rel).collect::<Vec<_>>(), want.iter().map(rel).collect::<Vec<_>>());
+    assert_eq!((s.passed + s.failed, s.failed > 0, s.passed > 0), (got.len(), true, true));
+}

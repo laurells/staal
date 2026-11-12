@@ -575,27 +575,104 @@ pub struct Checked {
     pub programs: Vec<crate::Checked>,
 }
 
+/// How an agent's folder is read: by path, as the command line reads it, or through a
+/// `Root`, for a host that must never resolve a path inside a project (Staal Studio).
+/// The checks are the same either way; only how a file is reached differs.
+trait Folder {
+    /// The text of the file `name` in the folder.
+    fn read(&self, name: &str) -> Result<String, String>;
+    /// The folder, as messages and the tool host name it.
+    fn path(&self) -> Result<PathBuf, String>;
+    /// A tool's `program`: a file in the folder itself, as its path.
+    fn program(&self, at: &str, program: &str) -> Result<PathBuf, String>;
+    /// That program, checked.
+    fn check(&self, program: &Path) -> Result<crate::Checked, String>;
+}
+
+/// The command line's: by path.
+struct ByPath<'a>(&'a Path);
+
+impl Folder for ByPath<'_> {
+    fn read(&self, name: &str) -> Result<String, String> {
+        let path = self.0.join(name);
+        std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+    }
+    fn path(&self) -> Result<PathBuf, String> {
+        std::fs::canonicalize(self.0).map_err(|e| format!("{}: {e}", self.0.display()))
+    }
+    fn program(&self, at: &str, program: &str) -> Result<PathBuf, String> {
+        let root = self.path()?;
+        let real = std::fs::canonicalize(root.join(program)).map_err(|e| format!("{at}.program: {program}: {e}"))?;
+        if real.parent() != Some(root.as_path()) || !real.is_file() {
+            return Err(format!("{at}.program: {program} is not a file in the agent's folder"));
+        }
+        Ok(real)
+    }
+    fn check(&self, program: &Path) -> Result<crate::Checked, String> {
+        crate::check_path(program)
+    }
+}
+
+/// Through a `Root`: each file opened from its handle, no link followed. A tool's
+/// `program` is a file's own name, directly in the folder.
+#[cfg(unix)]
+struct InRoot<'a> {
+    root: &'a crate::interp::fsx::Root,
+    path: &'a Path,
+}
+
+#[cfg(unix)]
+impl Folder for InRoot<'_> {
+    fn read(&self, name: &str) -> Result<String, String> {
+        self.root.read(name, crate::packages::MAX_PROJECT_FILE_BYTES as usize).map_err(|e| format!("cannot read {}: {e}", self.path.join(name).display()))
+    }
+    fn path(&self) -> Result<PathBuf, String> {
+        Ok(self.path.to_path_buf())
+    }
+    fn program(&self, at: &str, program: &str) -> Result<PathBuf, String> {
+        use crate::interp::fsx::Kind;
+        let plain = !program.is_empty() && program != "." && program != ".." && !program.contains('/');
+        let found = if plain { self.root.list("")?.into_iter().find(|e| e.name.as_deref() == Some(program)) } else { None };
+        match found {
+            Some(e) if e.kind == Kind::File => Ok(self.path.join(program)),
+            None if plain => Err(format!("{at}.program: {program}: {}", std::io::Error::from_raw_os_error(libc::ENOENT))),
+            _ => Err(format!("{at}.program: {program} is not a file in the agent's folder")),
+        }
+    }
+    fn check(&self, program: &Path) -> Result<crate::Checked, String> {
+        let name = program.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{} is not a file's name", program.display()))?;
+        crate::check_in(self.root, self.path, name, None)
+    }
+}
+
 /// `staalc agent check` without the description: `agent.json` read and held to the
 /// project in `root` (AGENT_MANIFEST.md section 6, checks 1 to 7 but the description).
 pub fn check_manifest(root: &Path) -> Result<Checked, String> {
-    let path = root.join("agent.json");
-    let text_of_file = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    check_manifest_of(&ByPath(root))
+}
+
+/// As `check_manifest`, the agent's folder read through `root` (opened at `root_path`):
+/// every file opened from its handle, no link followed; a tool's `program` is a file's
+/// own name in the folder.
+#[cfg(unix)]
+pub fn check_manifest_in(root: &crate::interp::fsx::Root, root_path: &Path) -> Result<Checked, String> {
+    check_manifest_of(&InRoot { root, path: root_path })
+}
+
+fn check_manifest_of(folder: &dyn Folder) -> Result<Checked, String> {
+    let text_of_file = folder.read("agent.json")?;
     let manifest = read(&text_of_file)?;
     let mine = crate::semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
     let range = crate::semver::Range::parse(&manifest.requires_staalc)?;
     if !range.matches(&mine) {
         return Err(format!("agent.json.requires_staalc: '{}' does not include this staalc, {mine}", manifest.requires_staalc));
     }
-    let root = std::fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let root = folder.path()?;
     let mut programs = Vec::new();
     for (i, t) in manifest.tools.iter().enumerate() {
         let at = format!("agent.json.tools[{i}] ('{}')", t.name);
-        let file: PathBuf = root.join(&t.program);
-        let real = std::fs::canonicalize(&file).map_err(|e| format!("{at}.program: {}: {e}", t.program))?;
-        if real.parent() != Some(root.as_path()) || !real.is_file() {
-            return Err(format!("{at}.program: {} is not a file in the agent's folder", t.program));
-        }
-        let checked = crate::check_path(&real).map_err(|e| format!("{at}.program: {e}"))?;
+        let real = folder.program(&at, &t.program)?;
+        let checked = folder.check(&real).map_err(|e| format!("{at}.program: {e}"))?;
         let prog = match &checked.result {
             Ok(p) => p,
             Err(d) => {
@@ -644,14 +721,15 @@ pub fn check_manifest(root: &Path) -> Result<Checked, String> {
         };
         let model = json!({ "provider": "script", "responses": [] });
         let mut warnings = Vec::new();
-        crate::host::tool::parse_tool(
+        crate::host::tool::parse_tool_with(
             &def,
             &format!("agent.json.tools[{i}]"),
-            &root,
             Some(&model),
             &settings,
             crate::host::tool::Definer::App(crate::host::tool::Grants::PerCall),
             &mut warnings,
+            &|at, program| folder.program(at, program),
+            &|program| folder.check(program),
         )?;
         programs.push(checked);
     }
@@ -665,13 +743,33 @@ pub fn check(root: &Path) -> Result<Checked, String> {
     let fresh = describe::bytes(root, &checked)?;
     let path = root.join("agent.described.json");
     let committed = std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}; run `staalc agent describe`", path.display()))?;
+    is_current(&path, &committed, &fresh)?;
+    Ok(checked)
+}
+
+/// As `check`, the agent's folder read through `root` (opened at `root_path`), as
+/// `check_manifest_in` reads it; `agent.described.json` read through it too.
+#[cfg(unix)]
+pub fn check_in(root: &crate::interp::fsx::Root, root_path: &Path) -> Result<Checked, String> {
+    let checked = check_manifest_in(root, root_path)?;
+    let fresh = describe::bytes_in(root, root_path, &checked)?;
+    let path = root_path.join("agent.described.json");
+    let committed = root
+        .read("agent.described.json", crate::packages::MAX_PROJECT_FILE_BYTES as usize)
+        .map_err(|e| format!("cannot read {}: {e}; run `staalc agent describe`", path.display()))?;
+    is_current(&path, committed.as_bytes(), &fresh)?;
+    Ok(checked)
+}
+
+/// Whether the committed description at `path` is `fresh`, byte for byte.
+fn is_current(path: &Path, committed: &[u8], fresh: &str) -> Result<(), String> {
     if committed != fresh.as_bytes() {
         return Err(format!(
             "{} differs from a fresh description of the agent; run `staalc agent describe` and commit what it writes",
             path.display()
         ));
     }
-    Ok(checked)
+    Ok(())
 }
 
 /// `staalc agent describe`: checks `agent.json` against the project and writes
