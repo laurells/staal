@@ -277,6 +277,29 @@ unsafe extern "C" fn rt_arith(c: *mut Ctx, op: i64, a: i64, b: i64) {
 /// # Safety
 ///
 /// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this. Records the failure of the Int built-in `code` on `a` (and `b`,
+/// for one of two arguments): the interpreter's own `builtin`, given the same
+/// arguments, says it, so the message is its message.
+#[unsafe(export_name = "staal_rt_int_builtin")]
+unsafe extern "C" fn rt_int_builtin(c: *mut Ctx, code: i64, a: i64, b: i64) {
+    let f = match usize::try_from(code).ok().and_then(|i| BUILTINS.get(i)).copied() {
+        None => internal(format!("native code: unknown built-in {code}")),
+        Some(f) => {
+            let args = if f.inline_int_arity() == Some(1) { vec![Value::Int(a)] } else { vec![Value::Int(a), Value::Int(b)] };
+            match builtin(f, &args) {
+                Err(f) => f,
+                Ok(v) => internal(format!("native code: {}({a}, {b}) reported as a failure, but gives {v:?}", f.name())),
+            }
+        }
+    };
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    record(unsafe { ctx(c) }, f);
+}
+
+// Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
 /// code calls this.
 #[unsafe(export_name = "staal_rt_neg")]
 unsafe extern "C" fn rt_neg(c: *mut Ctx, a: i64) {
@@ -1501,6 +1524,7 @@ struct Helpers {
     depth: FuncId,
     cancel: FuncId,
     arith: FuncId,
+    int_builtin: FuncId,
     neg: FuncId,
     no_return: FuncId,
     konst: FuncId,
@@ -1660,6 +1684,7 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("staal_rt_cancelled", rt_cancelled as *const u8),
     ("staal_rt_arith", rt_arith as *const u8),
     ("staal_rt_neg", rt_neg as *const u8),
+    ("staal_rt_int_builtin", rt_int_builtin as *const u8),
     ("staal_rt_no_return", rt_no_return as *const u8),
     ("staal_rt_const", rt_const as *const u8),
     ("staal_rt_clone", rt_clone as *const u8),
@@ -1732,6 +1757,7 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
         depth: helper(module, "staal_rt_depth_limit", 0, false)?,
         cancel: helper(module, "staal_rt_cancelled", 0, false)?,
         arith: helper(module, "staal_rt_arith", 3, false)?,
+        int_builtin: helper(module, "staal_rt_int_builtin", 3, false)?,
         neg: helper(module, "staal_rt_neg", 1, false)?,
         no_return: helper(module, "staal_rt_no_return", 0, false)?,
         konst: helper(module, "staal_rt_const", 1, true)?,
@@ -2585,6 +2611,42 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 let lh = self.as_handle(l, &lt);
                 let rh = self.as_handle(r, &rt);
                 Ok(self.call_checked(self.h.cmp, &[code, lh, rh]))
+            }
+            Expr::Builtin { f, args, .. } if f.inline_int_arity() == Some(args.len()) && args.iter().all(|a| self.ty(a).is_ok_and(|t| is(&t, "Int"))) => {
+                // An Int built-in in machine code: each argument evaluated in order, the
+                // failure cases checked first, and the interpreter's own failure
+                // recorded for them (`rt_int_builtin`).
+                let mut vs = Vec::with_capacity(args.len());
+                for a in args {
+                    vs.push(self.expr(a)?);
+                }
+                let code = BUILTINS.iter().position(|b| b == f).expect("every built-in") as i64;
+                let code = self.b.ins().iconst(types::I64, code);
+                let a = vs[0];
+                let b = vs.get(1).copied().unwrap_or_else(|| self.b.ins().iconst(types::I64, 0));
+                Ok(match f {
+                    Builtin::Rem => {
+                        let zero = self.b.ins().icmp_imm_s(IntCC::Equal, b, 0);
+                        self.fail_if(zero, self.h.int_builtin, &[code, a, b]);
+                        // rem(a, -1) is 0 for every a, MIN included (wrapping_rem); a
+                        // divisor of 1 gives the same, and never overflows.
+                        let minus1 = self.b.ins().icmp_imm_s(IntCC::Equal, b, -1);
+                        let one = self.b.ins().iconst(types::I64, 1);
+                        let d = self.b.ins().select(minus1, one, b);
+                        self.b.ins().srem(a, d)
+                    }
+                    Builtin::Abs => {
+                        let min = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
+                        self.fail_if(min, self.h.int_builtin, &[code, a, b]);
+                        let neg = self.b.ins().ineg(a);
+                        let below = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, a, 0);
+                        self.b.ins().select(below, neg, a)
+                    }
+                    // Equal Ints are the same value, whichever is given back.
+                    Builtin::Min => self.b.ins().smin(a, b),
+                    Builtin::Max => self.b.ins().smax(a, b),
+                    _ => return Err(format!("native code: {} is not an Int built-in", f.name())),
+                })
             }
             Expr::Builtin { f, args, .. } => {
                 let ret = self.ty(e)?;

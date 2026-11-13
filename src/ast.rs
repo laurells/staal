@@ -573,6 +573,16 @@ impl Builtin {
         }
     }
 
+    /// How many Int arguments this built-in takes when native code computes it in
+    /// machine code (`rem`, `abs`, `min`, `max` of Ints); None for every other.
+    pub fn inline_int_arity(self) -> Option<usize> {
+        match self {
+            Builtin::Rem | Builtin::Min | Builtin::Max => Some(2),
+            Builtin::Abs => Some(1),
+            _ => None,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Builtin::Len => "len",

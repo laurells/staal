@@ -474,7 +474,11 @@ impl Gen<'_> {
         }
         let e = |g: &mut Gen, k: K| g.expr(k, d + 1);
         match k {
-            K::Int => match self.rng.below(10) {
+            K::Int => match self.rng.below(14) {
+                10 => format!("rem({}, {})", e(self, K::Int), e(self, K::Int)),
+                11 => format!("abs({})", e(self, K::Int)),
+                12 => format!("min({}, {})", e(self, K::Int), e(self, K::Int)),
+                13 => format!("max({}, {})", e(self, K::Int), e(self, K::Int)),
                 0 => format!("({} + {})", e(self, K::Int), e(self, K::Int)),
                 1 => format!("({} - {})", e(self, K::Int), e(self, K::Int)),
                 2 => format!("({} * {})", e(self, K::Int), e(self, K::Int)),
@@ -806,6 +810,12 @@ fn every_failure_at_its_edge_is_identical() {
         ("div by zero", "7 / (3 - 3)".into()),
         ("MIN / -1", format!("{min} / (-1)")),
         ("negate MIN", format!("-({min})")),
+        ("rem by zero", "rem(7, 3 - 3)".into()),
+        ("abs of MIN", format!("abs({min})")),
+        // Not failures: the edges each gives an answer at.
+        ("fine rem of MIN by -1", format!("rem({min}, -(1))")),
+        ("fine rem signs", "rem(-(7), 3) * 1000 + rem(7, -(3)) * 100 + rem(-(7), -(3))".into()),
+        ("fine abs, min, max", format!("abs(-(9223372036854775807)) - max(min({min}, 3), 2) + min(max(-(1), 0), 9)")),
         ("index past the end", "[1, 2, 3][3]".into()),
         ("negative index", "[1, 2, 3][-(1)]".into()),
         ("url_segment of ..", "len(url_segment(\"..\"))".into()),
@@ -822,7 +832,7 @@ fn every_failure_at_its_edge_is_identical() {
         let i = outcome(&run_config_engine(&prog, &src, &cfg, Durability::None, Engine::Interpreter));
         let n = outcome(&run_config_engine(&prog, &src, &cfg, Durability::None, Engine::Native));
         assert_eq!(i["result"], n["result"], "{label}");
-        if label == "fine" {
+        if label.starts_with("fine") {
             assert!(i["result"].get("ok").is_some(), "{label}: {}", i["result"]);
         } else {
             assert_eq!(i["result"]["failed"], "value", "{label}: {}", i["result"]);
