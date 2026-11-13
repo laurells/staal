@@ -911,6 +911,14 @@ this server for everything else. Its README says how to install it from the fold
 
 ## Running programs, and surviving crashes
 
+## Running programs, and surviving crashes
+
+```
+$ staalc run examples/quickstart/refund.staal --fn issue_refund --arg order-42
+Refunded 4999 USD for order-42 (reconciled: true)
+-> true
+```
+
 ### Inspect a function's input and result
 
 `staalc schema` prints the JSON Schema for an entry function's inputs and result,
@@ -1001,132 +1009,10 @@ The command prints:
     "type": "string"
   },
   "secrets": []
-}## Running programs, and surviving crashes
-
-    staalc run      prog.staal --entry greet --input name=Ada
-    staalc config   prog.staal --entry remind > run.json       # a config to fill in
-    staalc run      prog.staal --config run.json --journal run.journal [--log run.jsonl]
-    staalc resume   prog.staal --config run.json --journal run.journal
-    staalc resolve --journal run.journal (--performed <receipt> | --status <code> [--body <text>]
-                                          | --reply <text> | --failed <reason> | --retry)
-
-### Inspect a function's input and result
-
-`staalc schema` prints the JSON Schema for an entry function's inputs and result,
-along with the capabilities and secrets it needs. For the quickstart refund program:
-
-```sh
-$ staalc schema examples/quickstart/refund.staal
-```
-
-The command prints:
-
-```json
-{
-  "entry": "main",
-  "grants": [
-    {
-      "cap": "payments.refund",
-      "name": "pay"
-    }
-  ],
-  "input": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "additionalProperties": false,
-    "properties": {
-      "amount": {
-        "anyOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "amount": {
-                "pattern": "^[0-9]+$",
-                "type": "string"
-              },
-              "currency": {
-                "enum": [
-                  "JPY"
-                ]
-              }
-            },
-            "required": [
-              "amount",
-              "currency"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "amount": {
-                "pattern": "^[0-9]+(\\.[0-9]{1,2})?$",
-                "type": "string"
-              },
-              "currency": {
-                "enum": [
-                  "AUD",
-                  "CAD",
-                  "EUR",
-                  "GBP",
-                  "GHS",
-                  "KES",
-                  "NGN",
-                  "USD",
-                  "ZAR"
-                ]
-              }
-            },
-            "required": [
-              "amount",
-              "currency"
-            ],
-            "type": "object"
-          }
-        ],
-        "description": "money: a decimal amount as a string, e.g. {\"amount\": \"12.50\", \"currency\": \"USD\"}"
-      },
-      "order": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "order",
-      "amount"
-    ],
-    "type": "object"
-  },
-  "output": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "string"
-  },
-  "reads_console": false,
-  "secrets": []
 }
 ```
 
-`entry` names the function described (`main` by default). `input` describes the
-values callers must supply: an `order` string and an `amount` in one of the
-supported money formats, where the amount's format depends on the currency:
-whole units for JPY, up to two decimal places for the others. `output` describes
-the returned value, a string. `grants` lists the capability the operator must
-provide: `pay` needs `payments.refund`. `reads_console` indicates whether the
-function can reach `read_line()`, which `staalc mcp` refuses. `secrets` lists
-secret inputs; this example needs none.
-
-
-```
-
-`input` describes the values callers must supply: an order string and an amount
-in one of the supported money formats. `output` describes the returned value, a
-string. `grants` lists the capability the operator must provide: `pay` needs
-`payments.refund`. `secrets` lists secret inputs; this example needs none.
-
-    staalc run     prog.staal --entry greet --input name=Ada
-    staalc config  prog.staal --entry remind > run.json      # a config to fill in
-    staalc run     prog.staal --config run.json --journal run.journal [--log run.jsonl]
-    staalc resume  prog.staal --config run.json --journal run.journal
-    staalc resolve --journal run.journal (--performed <receipt> | --status <code> [--body <text>]
-                                          | --reply <text> | --failed <reason> | --retry)
+Every public function produces an entry under `functions`. `entry` names the function described (`main` by default). `input` describes the values callers must supply: an `order` string and an `amount` in one of the supported money formats, where the amount's format depends on the currency: whole units for JPY, up to two decimal places for the others. `output` describes the returned value, a string. `grants` lists the capability the operator must provide: `pay` needs `payments.refund`. `reads_console` indicates whether the function can reach `read_line()`, which `staalc mcp` refuses. `secrets` lists secret inputs; this example needs none. It lets tooling understand what a program requires and produces without executing it.
 
 A program that needs nothing an operator must grant runs straight from the command
 line: `--entry` names the function (`main` if left out) and each `--input` gives a
