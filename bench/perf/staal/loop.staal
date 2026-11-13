@@ -1,0 +1,13 @@
+// A counted loop of integer arithmetic.
+fn main(n: Int) -> Int {
+    let i = 0
+    let s = 0
+    loop {
+        if i >= n {
+            break
+        }
+        set s = s + rem(i * i, 7)
+        set i = i + 1
+    }
+    return s
+}

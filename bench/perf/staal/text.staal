@@ -1,0 +1,13 @@
+// Text built by concatenation: n numbers joined with commas, then measured.
+fn main(n: Int) -> Int {
+    let t = ""
+    let i = 0
+    loop {
+        if i >= n {
+            break
+        }
+        set t = t + to_text(i) + ","
+        set i = i + 1
+    }
+    return len(t)
+}

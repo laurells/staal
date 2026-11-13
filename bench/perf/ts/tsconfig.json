@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "commonjs",
+    "strict": true,
+    "outDir": "out",
+    "types": [],
+    "skipLibCheck": true
+  },
+  "files": [
+    "globals.d.ts",
+    "fib.ts",
+    "loop.ts",
+    "money.ts",
+    "lists.ts",
+    "maps.ts",
+    "text.ts",
+    "startup.ts"
+  ]
+}

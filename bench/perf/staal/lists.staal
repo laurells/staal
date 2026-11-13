@@ -1,0 +1,16 @@
+// Collections: n pseudo-random numbers appended to a list one by one, then sorted.
+fn main(n: Int) -> Int {
+    let xs: List<Int, 1000000> = []
+    let x = 12345
+    let i = 0
+    loop {
+        if i >= n {
+            break
+        }
+        set i = i + 1
+        set x = rem(x * 1103515245 + 12345, 2147483648)
+        set xs = append(xs, x)
+    }
+    let sorted = sort(xs)
+    return sorted[0] + sorted[len(sorted) / 2] + sorted[len(sorted) - 1]
+}

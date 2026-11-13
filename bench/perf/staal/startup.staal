@@ -1,0 +1,4 @@
+// Nothing to compute: the cost of starting.
+fn main() -> Int {
+    return 1
+}

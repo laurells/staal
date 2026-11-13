@@ -1,0 +1,14 @@
+// Exact money: the total of n invoice lines, each a price times a quantity.
+fn main(n: Int) -> Text {
+    let price = 0.37 USD
+    let total = 0.00 USD
+    let i = 0
+    loop {
+        if i >= n {
+            break
+        }
+        set total = total + price * (rem(i, 10) + 1)
+        set i = i + 1
+    }
+    return to_text(total)
+}
