@@ -1,0 +1,43 @@
+// Map and set lookups find a key by its order (Ints by value, texts by their bytes), and
+// remove takes it out in place, or changes nothing when it is not there.
+
+fn text_keys() -> Text {
+    let m: Map<Text, Int, 10> = ["b": 1]
+    set m = put(m, "a", 2)
+    set m = put(m, "B", 3)
+    set m = put(m, "é", 4)
+    set m = put(m, "", 5)
+    let found = ""
+    for k in ["", "B", "a", "b", "é", "c", "A"] {
+        match get(m, k) {
+            some(v) => { set found = found + k + "=" + json(v) + " " }
+            none => { set found = found + k + "? " }
+        }
+    }
+    return found + json(keys(m)) + " " + json(contains(m, "é")) + json(contains(m, "e"))
+}
+
+fn int_keys() -> Text {
+    let m: Map<Int, Text, 10> = [0: "zero", -5: "minus five", 7: "seven"]
+    set m = put(m, -9223372036854775807 - 1, "min")
+    let got = ""
+    for k in [-9223372036854775807 - 1, -5, 0, 7, 8] {
+        match get(m, k) {
+            some(v) => { set got = got + v + "," }
+            none => { set got = got + "none," }
+        }
+    }
+    return got + json(keys(m))
+}
+
+fn removing() -> Text {
+    let m: Map<Text, Int, 10> = ["a": 1, "b": 2, "c": 3]
+    let kept = m
+    set m = remove(m, "b")
+    set m = remove(m, "zz")
+    let s: Set<Int, 10> = to_set([5, 1, 3])
+    let s0 = s
+    set s = remove(s, 1)
+    set s = remove(s, 4)
+    return json(m) + " " + json(kept) + " " + json(items(s)) + " " + json(items(s0)) + " " + json(contains(s, 3)) + json(contains(s, 1))
+}

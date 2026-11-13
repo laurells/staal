@@ -4168,7 +4168,7 @@ pub(crate) fn arith(op: ArithOp, l: Value, r: Value) -> Result<Value, Failure> {
 }
 
 /// The built-in functions that make a new value from one they are given, changing
-/// it: `append`, `put`, `add` and `concat` (of its first list). Given the arguments to
+/// it: `append`, `put`, `add`, `remove` and `concat` (of its first list). Given the arguments to
 /// own, the first is changed in place when nothing else holds its contents (a value a
 /// `set` moved into the call), and copied first otherwise, so no other value ever sees
 /// the change. Every other built-in is `builtin`'s.
@@ -4212,7 +4212,23 @@ pub(crate) fn builtin_owned(f: Builtin, mut args: Vec<Value>) -> Result<Value, F
             make_mut(&mut a).extend(b.iter().cloned());
             Ok(Value::List(a))
         }
-        (Builtin::Append | Builtin::Put | Builtin::Add | Builtin::Concat, _) => {
+        // Found by binary search (the order is kept); a key that is not there leaves the
+        // map or set as it is, with nothing copied.
+        (Builtin::Remove, [Value::Map(es), k]) => {
+            let mut es = std::mem::take(es);
+            if let Ok(i) = es.binary_search_by(|(x, _)| key_order(x, k)) {
+                make_mut(&mut es).remove(i);
+            }
+            Ok(Value::Map(es))
+        }
+        (Builtin::Remove, [Value::Set(xs), v]) => {
+            let mut xs = std::mem::take(xs);
+            if let Ok(i) = xs.binary_search_by(|x| key_order(x, v)) {
+                make_mut(&mut xs).remove(i);
+            }
+            Ok(Value::Set(xs))
+        }
+        (Builtin::Append | Builtin::Put | Builtin::Add | Builtin::Concat | Builtin::Remove, _) => {
             internal(format!("`{}` of arguments it does not take", f.name()))
         }
         _ => builtin(f, &args),
@@ -4229,14 +4245,17 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         (Builtin::Len, [Value::Set(xs)]) => count(xs.len()),
         (Builtin::Contains, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.contains(b.as_str()))),
         (Builtin::Contains, [Value::List(xs), v]) => Ok(Value::Bool(xs.contains(v))),
-        (Builtin::Contains, [Value::Map(es), k]) => Ok(Value::Bool(es.iter().any(|(x, _)| x == k))),
-        (Builtin::Contains, [Value::Set(xs), v]) => Ok(Value::Bool(xs.contains(v))),
-        (Builtin::Get, [Value::Map(es), k]) => Ok(Value::Opt(es.iter().find(|(x, _)| x == k).map(|(_, v)| Box::new(v.clone())))),
+        // A map's entries and a set's items are kept in key order (`key_order`, a total
+        // order on the keys a map or set can hold, equal exactly when the keys are), so
+        // a key is found by binary search.
+        (Builtin::Contains, [Value::Map(es), k]) => Ok(Value::Bool(es.binary_search_by(|(x, _)| key_order(x, k)).is_ok())),
+        (Builtin::Contains, [Value::Set(xs), v]) => Ok(Value::Bool(xs.binary_search_by(|x| key_order(x, v)).is_ok())),
+        (Builtin::Get, [Value::Map(es), k]) => {
+            Ok(Value::Opt(es.binary_search_by(|(x, _)| key_order(x, k)).ok().map(|i| Box::new(es[i].1.clone()))))
+        }
         // Changing a value is one implementation, `builtin_owned`; given arguments it
         // does not own, its first is shared, so it is copied before it changes.
-        (Builtin::Put | Builtin::Add | Builtin::Append | Builtin::Concat, _) => builtin_owned(f, args.to_vec()),
-        (Builtin::Remove, [Value::Map(es), k]) => Ok(Value::Map(es.iter().filter(|(x, _)| x != k).cloned().collect::<Vec<_>>().into())),
-        (Builtin::Remove, [Value::Set(xs), v]) => Ok(Value::Set(xs.iter().filter(|x| *x != v).cloned().collect::<Vec<_>>().into())),
+        (Builtin::Put | Builtin::Add | Builtin::Append | Builtin::Concat | Builtin::Remove, _) => builtin_owned(f, args.to_vec()),
         (Builtin::Keys, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>().into())),
         (Builtin::Values, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>().into())),
         (Builtin::Entries, [Value::Map(es)]) => {

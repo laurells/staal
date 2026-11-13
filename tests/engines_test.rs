@@ -190,6 +190,15 @@ fn the_move_cases_really_run_native_code() {
 }
 
 #[test]
+fn the_lookup_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/lookups.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    assert_eq!(got, ["int_keys", "removing", "text_keys"]);
+}
+
+#[test]
 fn the_map_cases_really_run_native_code() {
     let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/maps.staal")).unwrap();
     let prog = staalc::check_program(&src).unwrap();
