@@ -1,0 +1,1 @@
+{"entry": "times", "expect": {"result": {"amount": "0.00", "currency": "USD"}}, "model": {"provider": "script", "responses": []}, "inputs": {"m": {"amount": "0.00", "currency": "USD"}, "k": -5}}

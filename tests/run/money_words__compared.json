@@ -1,0 +1,1 @@
+{"entry": "compared", "expect": {"result": "[true,true,false,false,false,true,true,false,true]"}, "model": {"provider": "script", "responses": []}, "inputs": {}}

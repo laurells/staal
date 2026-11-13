@@ -257,6 +257,14 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   in, so `append`, `put`, `add`, `concat` and `+` change it in place (RUNTIME.md section
   15, "How values are held"). 10,000 appends took 2.1 s and take 19 ms. Nothing a
   program can see changes.
+- Money arithmetic and comparisons in native code are machine instructions, where
+  each went through the interpreter's general functions for values: the money
+  benchmark (1,000,000 lines) takes 12.6 ms, where it took 211 ms. Failures and their
+  messages are the interpreter's (RUNTIME.md section 15).
+- A map or set finds a key by binary search, where it read each key in turn; `remove`
+  takes a key out in place when nothing else holds the map or set.
+- A text is held shared, as a list is: reading a text variable no longer copies the
+  text, and `set t = t + x` adds to `t` in place when nothing else holds it.
 - Native code computes `rem`, `abs`, `min` and `max` of Ints in machine code, where it
   called the interpreter's general path for built-ins: a loop calling `rem` runs 18
   times faster. Failures and their messages are the interpreter's.

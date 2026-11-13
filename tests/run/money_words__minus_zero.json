@@ -1,0 +1,1 @@
+{"entry": "minus", "expect": {"result": {"amount": "0.00", "currency": "AUD"}}, "model": {"provider": "script", "responses": []}, "inputs": {"a": {"amount": "1.01", "currency": "AUD"}, "b": {"amount": "1.01", "currency": "AUD"}}}

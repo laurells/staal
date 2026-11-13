@@ -1,0 +1,1 @@
+{"entry": "found", "expect": {"result": "7.01 EUR"}, "model": {"provider": "script", "responses": []}, "inputs": {"k": "cake"}}

@@ -1,0 +1,1 @@
+{"entry": "captured", "expect": {"result": {"amount": "7", "currency": "JPY"}}, "model": {"provider": "script", "responses": []}, "inputs": {"extra": {"amount": "3", "currency": "JPY"}}}

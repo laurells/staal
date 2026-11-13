@@ -199,6 +199,20 @@ fn the_lookup_cases_really_run_native_code() {
 }
 
 #[test]
+fn the_money_cases_really_run_native_code() {
+    for (file, want) in [
+        ("money.staal", &["at_most", "change", "differ", "exact", "half_written", "same", "total"][..]),
+        ("money_words.staal", &["captured", "captured::fn@34:22", "compared", "cost", "found", "lines", "minus", "ordered_across", "plus", "times", "total_of", "yen"][..]),
+    ] {
+        let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run").join(file)).unwrap();
+        let prog = staalc::check_program(&src).unwrap();
+        let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+        got.sort();
+        assert_eq!(got, want, "{file}");
+    }
+}
+
+#[test]
 fn the_map_cases_really_run_native_code() {
     let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/maps.staal")).unwrap();
     let prog = staalc::check_program(&src).unwrap();

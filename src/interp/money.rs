@@ -29,6 +29,17 @@ impl Currency {
         CURRENCIES
     }
 
+    /// Its position in `all()`, which is how native code holds it; None for a currency
+    /// not in that list.
+    pub fn index(self) -> Option<usize> {
+        CURRENCIES.iter().position(|(c, e)| *c == self.code && *e == self.exponent)
+    }
+
+    /// The currency at position `i` of `all()`.
+    pub fn at(i: usize) -> Option<Currency> {
+        CURRENCIES.get(i).map(|(c, e)| Currency { code: c, exponent: *e })
+    }
+
     pub fn parse(code: &str) -> Result<Currency, String> {
         CURRENCIES
             .iter()

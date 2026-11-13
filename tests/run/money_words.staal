@@ -1,0 +1,76 @@
+// Money held in machine words inside native code (RUNTIME.md section 15), and boxed
+// wherever it leaves a function: parameters, results, calls, function values,
+// records, lists, maps and optional values. Each case runs on both engines.
+type Line { name: Text, price: Money, qty: Int }
+
+fn cost(l: Line) -> Money {
+    return l.price * l.qty
+}
+
+fn total_of(xs: List<Money, 10>) -> Money {
+    let total = 0 JPY
+    for x in xs {
+        set total = total + x
+    }
+    return total
+}
+
+// Through a call, a record, a list and back.
+fn lines() -> Text {
+    let ls = [Line { name: "a", price: 1.25 GBP, qty: 3 }, Line { name: "b", price: 0.50 GBP, qty: 0 }]
+    let total = 0.00 GBP
+    let each: List<Money, 10> = []
+    for l in ls {
+        let c = cost(l)
+        set total = total + c
+        set each = append(each, c)
+    }
+    let r = Line { name: "t", price: total, qty: 1 }
+    return to_text(total) + " " + json(each) + " " + to_text(r.price)
+}
+
+// A function value that captures Money and is called with it.
+fn captured(extra: Money) -> Money {
+    let plus_extra = fn(m: Money) -> Money {
+        return m + extra
+    }
+    return plus_extra(plus_extra(1 JPY))
+}
+
+fn yen() -> Text {
+    return to_text(total_of([5 JPY, 7 JPY, 0 JPY])) + " " + json(minor_units(12345 JPY * 2))
+}
+
+// An optional amount, matched; a map of amounts.
+fn found(k: Text) -> Text {
+    let prices: Map<Text, Money, 5> = ["tea": 2.00 EUR, "cake": 3.50 EUR]
+    match get(prices, k) {
+        some(p) => { return to_text(p * 2 + 0.01 EUR) }
+        none => { return "none" }
+    }
+}
+
+// Each comparison in one currency, and the two that answer for two.
+fn compared() -> Text {
+    let a = 1.00 USD
+    let b = 2.00 USD
+    let c = 1.00 EUR
+    return json([a < b, a <= b, a > b, a >= b, a == b, a != b, a == a, a == c, a != c])
+}
+
+fn ordered_across(a: Money, b: Money) -> Bool {
+    return a > b
+}
+
+// Money times an Int: a negative Int fails unless the amount is zero.
+fn times(m: Money, k: Int) -> Money {
+    return k * m
+}
+
+fn plus(a: Money, b: Money) -> Money {
+    return a + b
+}
+
+fn minus(a: Money, b: Money) -> Money {
+    return a - b
+}

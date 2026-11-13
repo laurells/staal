@@ -1,0 +1,1 @@
+{"entry": "plus", "expect": {"failure": "value", "message_contains": "overflow"}, "model": {"provider": "script", "responses": []}, "inputs": {"a": {"amount": "92233720368547758.07", "currency": "USD"}, "b": {"amount": "0.01", "currency": "USD"}}}

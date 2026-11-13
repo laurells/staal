@@ -34,6 +34,7 @@
 // 0; every caller checks `failed` after each call or fallible helper, and returns.
 
 use crate::ast::{ArithOp, Builtin, CmpOp, Expr, FnDecl, LogicOp, Pattern, Program, Stmt, Ty, Variant};
+use crate::interp::money::{Currency, Money};
 use crate::interp::value::{from_json, to_json, Value};
 use serde_json::{json, Value as Json};
 use crate::interp::{arith, arith_failure, builtin, builtin_owned, cancelled, compare, depth_limit, list_index, neg, step_limit, Failure, FailKind};
@@ -386,6 +387,99 @@ unsafe extern "C" fn rt_unbox(c: *mut Ctx, h: i64) -> i64 {
         Value::Bool(b) => Ok(b as i64),
         _ => Err(internal("native code: expected an Int or Bool")),
     })
+}
+
+/// The Money native code holds as two words: its minor amount, and its currency's
+/// position in `Currency::all()`.
+fn money(minor: i64, cur: i64) -> Result<Money, Failure> {
+    let currency = usize::try_from(cur).ok().and_then(Currency::at);
+    let currency = currency.ok_or_else(|| internal(format!("native code: no currency {cur}")))?;
+    if minor < 0 {
+        return Err(internal(format!("native code: a negative amount of money, {minor}")));
+    }
+    Ok(Money { minor, currency })
+}
+
+/// One operand of a failed Money operation: `tag` -1 for the Int `v`, else the Money
+/// of minor amount `v` in the currency at position `tag`.
+fn operand(v: i64, tag: i64) -> Result<Value, Failure> {
+    if tag == -1 { Ok(Value::Int(v)) } else { money(v, tag).map(Value::Money) }
+}
+
+// Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this. Boxes the Money of minor amount `minor` in the currency at
+/// position `cur`.
+#[unsafe(export_name = "staal_rt_money_box")]
+unsafe extern "C" fn rt_money_box(c: *mut Ctx, minor: i64, cur: i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
+        let m = money(minor, cur)?;
+        Ok(c.put(Value::Money(m)))
+    })
+}
+
+// Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this, and `out` must point to two writable i64 values. Takes the Money
+/// handle `h`, and writes its minor amount and its currency's position to `out`.
+#[unsafe(export_name = "staal_rt_money_unbox")]
+unsafe extern "C" fn rt_money_unbox(c: *mut Ctx, h: i64, out: *mut i64) -> i64 {
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    guard(unsafe { ctx(c) }, |c| {
+        let Value::Money(m) = c.take(h)? else { return Err(internal("native code: expected Money")) };
+        let cur = m.currency.index().ok_or_else(|| internal(format!("native code: an unknown currency {}", m.currency.code)))?;
+        // SAFETY: generated code passes a stack slot of two i64 values.
+        unsafe {
+            *out = m.minor;
+            *out.add(1) = cur as i64;
+        }
+        Ok(0)
+    })
+}
+
+// Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this. Records the failure of arithmetic `op` on two operands (see
+/// `operand`) that native code found would fail: the interpreter's own `arith`,
+/// given the same values, says it, so the message is its message.
+#[unsafe(export_name = "staal_rt_money_arith")]
+unsafe extern "C" fn rt_money_arith(c: *mut Ctx, op: i64, a: i64, at: i64, b: i64, bt: i64) {
+    let f = (|| {
+        let op = arith_op(op).ok_or_else(|| internal("native code: unknown operator"))?;
+        match arith(op, operand(a, at)?, operand(b, bt)?) {
+            Err(f) => Ok::<Failure, Failure>(f),
+            Ok(v) => Err(internal(format!("native code: money arithmetic reported as a failure, but gives {v:?}"))),
+        }
+    })();
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    record(unsafe { ctx(c) }, f.unwrap_or_else(|e| e));
+}
+
+// Exported so `staalc build` executables link to it by name.
+/// # Safety
+///
+/// `c` must be the Ctx of the native code now running (see `ctx`); only generated
+/// code calls this. Records the failure of comparison `op` on two amounts of money in
+/// different currencies: the interpreter's own `compare` says it.
+#[unsafe(export_name = "staal_rt_money_cmp")]
+unsafe extern "C" fn rt_money_cmp(c: *mut Ctx, op: i64, a: i64, at: i64, b: i64, bt: i64) {
+    let f = (|| {
+        let op = usize::try_from(op).ok().and_then(|i| CMPS.get(i)).copied();
+        let op = op.ok_or_else(|| internal("native code: unknown comparison"))?;
+        match compare(op, &operand(a, at)?, &operand(b, bt)?) {
+            Err(f) => Ok::<Failure, Failure>(f),
+            Ok(v) => Err(internal(format!("native code: a money comparison reported as a failure, but gives {v}"))),
+        }
+    })();
+    // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
+    record(unsafe { ctx(c) }, f.unwrap_or_else(|e| e));
 }
 
 // Exported so `staalc build` executables link to it by name.
@@ -1044,6 +1138,31 @@ fn rep(t: &Ty) -> Rep {
     if is(t, "Int") || is(t, "Bool") { Rep::Raw } else { Rep::Handle }
 }
 
+/// How a function body holds a value of a type in its variables and expressions. As
+/// `rep`, but Money is held in machine words too: an i128 whose low 64 bits are the
+/// minor amount and high 64 bits the currency's position in `Currency::all()`. Where a
+/// value crosses into or out of the body (parameters, results, calls, collections,
+/// helpers), it is held as `rep` says, Money boxed as a handle.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Local {
+    Raw,
+    Money,
+    Handle,
+}
+
+fn local(t: &Ty) -> Local {
+    match rep(t) {
+        Rep::Raw => Local::Raw,
+        Rep::Handle if is(t, "Money") => Local::Money,
+        Rep::Handle => Local::Handle,
+    }
+}
+
+/// The machine type of a variable of type `t`.
+fn var_type(t: &Ty) -> ir::Type {
+    if local(t) == Local::Money { types::I128 } else { types::I64 }
+}
+
 fn is(t: &Ty, n: &str) -> bool {
     matches!(t, Ty::Named(x) if x == n)
 }
@@ -1532,6 +1651,10 @@ struct Helpers {
     drop: FuncId,
     boxv: FuncId,
     unbox: FuncId,
+    money_box: FuncId,
+    money_unbox: FuncId,
+    money_arith: FuncId,
+    money_cmp: FuncId,
     arith_val: FuncId,
     cmp: FuncId,
     builtin: FuncId,
@@ -1691,6 +1814,10 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("staal_rt_drop", rt_drop as *const u8),
     ("staal_rt_box", rt_box as *const u8),
     ("staal_rt_unbox", rt_unbox as *const u8),
+    ("staal_rt_money_box", rt_money_box as *const u8),
+    ("staal_rt_money_unbox", rt_money_unbox as *const u8),
+    ("staal_rt_money_arith", rt_money_arith as *const u8),
+    ("staal_rt_money_cmp", rt_money_cmp as *const u8),
     ("staal_rt_arith_val", rt_arith_val as *const u8),
     ("staal_rt_cmp", rt_cmp as *const u8),
     ("staal_rt_builtin", rt_builtin as *const u8),
@@ -1765,6 +1892,10 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
         drop: helper(module, "staal_rt_drop", 1, false)?,
         boxv: helper(module, "staal_rt_box", 2, true)?,
         unbox: helper(module, "staal_rt_unbox", 1, true)?,
+        money_box: helper(module, "staal_rt_money_box", 2, true)?,
+        money_unbox: helper(module, "staal_rt_money_unbox", 2, true)?,
+        money_arith: helper(module, "staal_rt_money_arith", 5, false)?,
+        money_cmp: helper(module, "staal_rt_money_cmp", 5, false)?,
         arith_val: helper(module, "staal_rt_arith_val", 3, true)?,
         cmp: helper(module, "staal_rt_cmp", 3, true)?,
         builtin: helper(module, "staal_rt_builtin", 3, true)?,
@@ -2008,8 +2139,10 @@ impl<M: Module> Gen<'_, '_, '_, M> {
         let sig = self.env.sigs[f.name.as_str()].0.clone();
         let mut first = Vec::new();
         for ((p, v), t) in f.params.iter().zip(&params[1..]).zip(sig) {
-            let var = self.b.declare_var(types::I64);
-            self.b.def_var(var, *v);
+            // A Money parameter arrives boxed, and is held in machine words.
+            let v = self.unhandle_money(*v, &t);
+            let var = self.b.declare_var(var_type(&t));
+            self.b.def_var(var, v);
             first.push((p.name.clone(), Var { var, ty: t }));
         }
         self.scopes.push(first);
@@ -2094,7 +2227,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
     /// Drops the values held by the variables of scopes `from..`.
     fn drop_scopes_from(&mut self, from: usize) {
         let handles: Vec<Variable> =
-            self.scopes[from..].iter().flatten().filter(|(_, v)| rep(&v.ty) == Rep::Handle).map(|(_, v)| v.var).collect();
+            self.scopes[from..].iter().flatten().filter(|(_, v)| local(&v.ty) == Local::Handle).map(|(_, v)| v.var).collect();
         for var in handles {
             let h = self.b.use_var(var);
             self.call0(self.h.drop, &[h]);
@@ -2102,7 +2235,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
     }
 
     fn drop_value(&mut self, v: ir::Value, t: &Ty) {
-        if rep(t) == Rep::Handle {
+        if local(t) == Local::Handle {
             self.call0(self.h.drop, &[v]);
         }
     }
@@ -2126,7 +2259,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
     }
 
     fn declare(&mut self, name: &str, v: ir::Value, ty: Ty) {
-        let var = self.b.declare_var(types::I64);
+        let var = self.b.declare_var(var_type(&ty));
         self.b.def_var(var, v);
         self.scopes.last_mut().expect("a scope").push((name.to_string(), Var { var, ty }));
     }
@@ -2172,7 +2305,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 };
                 let old = self.b.use_var(var);
                 self.b.def_var(var, v);
-                if moves && rep(&t) == Rep::Handle {
+                if moves && local(&t) == Local::Handle {
                     // 0 where the read took the value; the old value where it did not run.
                     let held = self.b.create_block();
                     let next = self.b.create_block();
@@ -2193,7 +2326,10 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 Ok(true)
             }
             Stmt::Return(Some(e), _) => {
+                let t = self.ty(e)?;
                 let v = self.expr(e)?;
+                // The result leaves as `rep` holds it: Money boxed.
+                let v = self.handle_money(v, &t);
                 self.drop_scopes_from(0);
                 self.b.ins().return_(&[v]);
                 Ok(false)
@@ -2491,18 +2627,19 @@ impl<M: Module> Gen<'_, '_, '_, M> {
     fn var_handle(&mut self, e: &Expr) -> Option<ir::Value> {
         let Expr::Var(n, _) = e else { return None };
         let v = self.lookup(n)?;
-        if rep(&v.ty) != Rep::Handle {
+        if local(&v.ty) != Local::Handle {
             return None;
         }
         let var = v.var;
         Some(self.b.use_var(var))
     }
 
-    /// A handle for a value of type `t` (boxing Int and Bool).
+    /// A handle for a value of type `t` (boxing Int, Bool and Money).
     fn as_handle(&mut self, v: ir::Value, t: &Ty) -> ir::Value {
-        match rep(t) {
-            Rep::Handle => v,
-            Rep::Raw => {
+        match local(t) {
+            Local::Handle => v,
+            Local::Money => self.handle_money(v, t),
+            Local::Raw => {
                 let kind = self.b.ins().iconst(types::I64, if is(t, "Int") { 0 } else { 1 });
                 self.call0(self.h.boxv, &[kind, v]).expect("a result")
             }
@@ -2511,10 +2648,104 @@ impl<M: Module> Gen<'_, '_, '_, M> {
 
     /// A handle turned into the representation of type `t`.
     fn unhandle(&mut self, h: ir::Value, t: &Ty) -> ir::Value {
-        match rep(t) {
-            Rep::Handle => h,
-            Rep::Raw => self.call_checked(self.h.unbox, &[h]),
+        match local(t) {
+            Local::Handle => h,
+            Local::Money => self.unhandle_money(h, t),
+            Local::Raw => self.call_checked(self.h.unbox, &[h]),
         }
+    }
+
+    /// A value of type `t` as it crosses out of a body (`rep`): Money boxed into a
+    /// handle, anything else as it is.
+    fn handle_money(&mut self, v: ir::Value, t: &Ty) -> ir::Value {
+        if local(t) != Local::Money {
+            return v;
+        }
+        let (minor, cur) = self.b.ins().isplit(v);
+        self.call_checked(self.h.money_box, &[minor, cur])
+    }
+
+    /// A value of type `t` as it crosses into a body: a Money handle taken and held in
+    /// machine words, anything else as it is.
+    fn unhandle_money(&mut self, h: ir::Value, t: &Ty) -> ir::Value {
+        if local(t) != Local::Money {
+            return h;
+        }
+        let slot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 16, 3));
+        let addr = self.b.ins().stack_addr(types::I64, slot, 0);
+        self.call_checked(self.h.money_unbox, &[h, addr]);
+        let flags = MemFlagsData::trusted();
+        let minor = self.b.ins().load(types::I64, flags, addr, 0);
+        let cur = self.b.ins().load(types::I64, flags, addr, 8);
+        self.b.ins().iconcat(minor, cur)
+    }
+
+    /// Money arithmetic in machine code: Money + or - Money, and Money * Int either way
+    /// round. Every case the interpreter's `arith` fails (different currencies, an
+    /// overflow, a negative result) is found here, and its failure recorded by that
+    /// same function (`rt_money_arith`), so the message is the same.
+    fn money_arith(&mut self, op: ArithOp, code: ir::Value, l: (ir::Value, &Ty), r: (ir::Value, &Ty)) -> Result<ir::Value, String> {
+        // Each operand as a word and a tag: a Money's minor amount and currency, or an
+        // Int and -1.
+        let mut split = |(v, t): (ir::Value, &Ty)| {
+            if is(t, "Money") {
+                self.b.ins().isplit(v)
+            } else {
+                (v, self.b.ins().iconst(types::I64, -1))
+            }
+        };
+        let (a, at) = split(l);
+        let (b, bt) = split(r);
+        let (lm, rm) = (is(l.1, "Money"), is(r.1, "Money"));
+        let (v, cur, bad) = match op {
+            ArithOp::Add | ArithOp::Sub if lm && rm => {
+                let (v, over) = if op == ArithOp::Add { self.b.ins().sadd_overflow(a, b) } else { self.b.ins().ssub_overflow(a, b) };
+                let other = self.b.ins().icmp(IntCC::NotEqual, at, bt);
+                let below = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, v, 0);
+                let bad = self.b.ins().bor(other, over);
+                (v, at, self.b.ins().bor(bad, below))
+            }
+            ArithOp::Mul if lm != rm && (is(l.1, "Int") || is(r.1, "Int")) => {
+                let (v, over) = self.b.ins().smul_overflow(a, b);
+                let below = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, v, 0);
+                (v, if lm { at } else { bt }, self.b.ins().bor(over, below))
+            }
+            _ => return Err("native code: money arithmetic it does not support".into()),
+        };
+        self.fail_if(bad, self.h.money_arith, &[code, a, at, b, bt]);
+        Ok(self.b.ins().iconcat(v, cur))
+    }
+
+    /// A comparison of two amounts of money in machine code, as the interpreter's
+    /// `compare`: in one currency, their minor amounts compared; in two, never equal,
+    /// and asking which is more fails (`rt_money_cmp`).
+    fn money_cmp(&mut self, op: CmpOp, code: ir::Value, l: ir::Value, r: ir::Value) -> ir::Value {
+        let (a, at) = self.b.ins().isplit(l);
+        let (b, bt) = self.b.ins().isplit(r);
+        let c = match op {
+            CmpOp::Eq => {
+                let same = self.b.ins().icmp(IntCC::Equal, at, bt);
+                let eq = self.b.ins().icmp(IntCC::Equal, a, b);
+                self.b.ins().band(same, eq)
+            }
+            CmpOp::Ne => {
+                let other = self.b.ins().icmp(IntCC::NotEqual, at, bt);
+                let ne = self.b.ins().icmp(IntCC::NotEqual, a, b);
+                self.b.ins().bor(other, ne)
+            }
+            _ => {
+                let other = self.b.ins().icmp(IntCC::NotEqual, at, bt);
+                self.fail_if(other, self.h.money_cmp, &[code, a, at, b, bt]);
+                let cc = match op {
+                    CmpOp::Lt => IntCC::SignedLessThan,
+                    CmpOp::Le => IntCC::SignedLessThanOrEqual,
+                    CmpOp::Gt => IntCC::SignedGreaterThan,
+                    _ => IntCC::SignedGreaterThanOrEqual,
+                };
+                self.b.ins().icmp(cc, a, b)
+            }
+        };
+        self.b.ins().uextend(types::I64, c)
     }
 
     /// Stores `vals` in a stack array; returns its address.
@@ -2542,14 +2773,19 @@ impl<M: Module> Gen<'_, '_, '_, M> {
             }
             Expr::Bool(v, _) => Ok(self.b.ins().iconst(types::I64, *v as i64)),
             Expr::Str(s, _) => Ok(self.konst(Value::text(s.clone()))),
-            Expr::Money(m, _) => Ok(self.konst(Value::Money(*m))),
+            Expr::Money(m, _) => {
+                let cur = m.currency.index().ok_or("native code: an unknown currency")?;
+                let minor = self.b.ins().iconst(types::I64, m.minor);
+                let cur = self.b.ins().iconst(types::I64, cur as i64);
+                Ok(self.b.ins().iconcat(minor, cur))
+            }
             Expr::Var(n, _) => {
                 let (var, t) = {
                     let x = self.lookup(n).ok_or(format!("native code: unknown variable '{n}'"))?;
                     (x.var, x.ty.clone())
                 };
                 let v = self.b.use_var(var);
-                if self.moving.as_deref() == Some(n.as_str()) && rep(&t) == Rep::Handle {
+                if self.moving.as_deref() == Some(n.as_str()) && local(&t) == Local::Handle {
                     // The `set` of this variable moves its value here: the handle is
                     // taken, and 0 (no value) left in the variable.
                     self.moving = None;
@@ -2558,9 +2794,9 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                     return Ok(v);
                 }
                 // Reading a variable copies its value, as the interpreter does.
-                Ok(match rep(&t) {
-                    Rep::Raw => v,
-                    Rep::Handle => self.call_checked(self.h.clone, &[v]),
+                Ok(match local(&t) {
+                    Local::Raw | Local::Money => v,
+                    Local::Handle => self.call_checked(self.h.clone, &[v]),
                 })
             }
             Expr::Arith { op, left, right, .. } => {
@@ -2589,6 +2825,9 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                             self.b.ins().sdiv(l, r)
                         }
                     });
+                }
+                if is(&lt, "Money") || is(&rt, "Money") {
+                    return self.money_arith(*op, code, (l, &lt), (r, &rt));
                 }
                 let lh = self.as_handle(l, &lt);
                 let rh = self.as_handle(r, &rt);
@@ -2639,6 +2878,9 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 }
                 let code = CMPS.iter().position(|c| c == op).expect("every comparison") as i64;
                 let code = self.b.ins().iconst(types::I64, code);
+                if is(&lt, "Money") && is(&rt, "Money") {
+                    return Ok(self.money_cmp(*op, code, l, r));
+                }
                 let lh = self.as_handle(l, &lt);
                 let rh = self.as_handle(r, &rt);
                 Ok(self.call_checked(self.h.cmp, &[code, lh, rh]))
@@ -2815,9 +3057,12 @@ impl<M: Module> Gen<'_, '_, '_, M> {
             }
             Expr::Call { name, args, slots, .. } => {
                 // Evaluated in the order written, passed in parameter order.
+                let ret = self.ty(e)?;
                 let mut written = Vec::with_capacity(args.len());
                 for a in args {
-                    written.push(self.expr(a)?);
+                    let t = self.ty(a)?;
+                    let v = self.expr(a)?;
+                    written.push(self.handle_money(v, &t));
                 }
                 let mut vals = vec![self.ctx];
                 if slots.is_empty() {
@@ -2845,7 +3090,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 let r = self.b.inst_results(call)[0];
                 self.b.ins().store(flags, depth, self.ctx, OFF_DEPTH);
                 self.check_failed();
-                Ok(r)
+                Ok(self.unhandle_money(r, &ret))
             }
             Expr::Closure { name, captures, .. } => {
                 let mut held = Vec::with_capacity(captures.len());
@@ -2863,10 +3108,13 @@ impl<M: Module> Gen<'_, '_, '_, M> {
             // The callee first, then the arguments in the order written, as the
             // interpreter does; then the call, with the same depth check as any call.
             Expr::CallValue { callee, args, .. } => {
+                let ret = self.ty(e)?;
                 let f = self.expr(callee)?;
                 let mut vals = Vec::with_capacity(args.len());
                 for a in args {
-                    vals.push(self.expr(a)?);
+                    let t = self.ty(a)?;
+                    let v = self.expr(a)?;
+                    vals.push(self.handle_money(v, &t));
                 }
                 let argv = self.argv(&vals);
                 let n = self.b.ins().iconst(types::I64, vals.len() as i64);
@@ -2880,7 +3128,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 let r = self.call0(self.h.call_value, &[f, argv, n]).expect("a result");
                 self.b.ins().store(flags, depth, self.ctx, OFF_DEPTH);
                 self.check_failed();
-                Ok(r)
+                Ok(self.unhandle_money(r, &ret))
             }
             _ => Err("native code: expression not supported".into()),
         }

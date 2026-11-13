@@ -3680,7 +3680,7 @@ impl<'p> Interp<'p> {
                 )
             })?;
             self.effects += 1;
-            (a, r, String::clone(&id))
+            (a, r, String::clone(id))
         };
         match answer {
             Ok(v) => {

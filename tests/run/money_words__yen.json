@@ -1,0 +1,1 @@
+{"entry": "yen", "expect": {"result": "12 JPY 24690"}, "model": {"provider": "script", "responses": []}, "inputs": {}}

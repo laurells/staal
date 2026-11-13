@@ -1,0 +1,1 @@
+{"entry": "times", "expect": {"failure": "value", "message_contains": "overflow"}, "model": {"provider": "script", "responses": []}, "inputs": {"m": {"amount": "92233720368547758.07", "currency": "USD"}, "k": 2}}

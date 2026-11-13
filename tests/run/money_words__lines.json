@@ -1,0 +1,1 @@
+{"entry": "lines", "expect": {"result": "3.75 GBP [{\"amount\":\"3.75\",\"currency\":\"GBP\"},{\"amount\":\"0.00\",\"currency\":\"GBP\"}] 3.75 GBP"}, "model": {"provider": "script", "responses": []}, "inputs": {}}

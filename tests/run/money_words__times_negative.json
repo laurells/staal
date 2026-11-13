@@ -1,0 +1,1 @@
+{"entry": "times", "expect": {"failure": "value", "message_contains": "cannot be negative"}, "model": {"provider": "script", "responses": []}, "inputs": {"m": {"amount": "0.01", "currency": "USD"}, "k": -1}}

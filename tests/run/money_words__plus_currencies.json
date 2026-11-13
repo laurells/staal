@@ -1,0 +1,1 @@
+{"entry": "plus", "expect": {"failure": "value", "message_contains": "different currencies"}, "model": {"provider": "script", "responses": []}, "inputs": {"a": {"amount": "1.00", "currency": "USD"}, "b": {"amount": "1.00", "currency": "CAD"}}}

@@ -1889,7 +1889,19 @@ is. Building a list, map, set or text one item at a time is then linear, as it i
 languages that grow them in place. The move cannot be seen: nothing else in the
 expression reads the variable, and a failure while it is evaluated either leaves the
 function or, caught by a `try` within the expression, lets it go on without reading
-the variable again. Text is not shared: reading a text variable copies it.
+the variable again. A text is held shared in the same way: reading a text variable
+copies a pointer, and `set t = t + x` adds to `t` where it is when nothing else holds
+it. A map or set keeps its keys in order, so `get`, `contains`, `put` and `remove` find
+a key by binary search rather than by reading each key in turn.
+
+Native code holds Int, Bool and Money in machine words inside a function. An amount of
+money is two words, its minor amount and its currency, and `+`, `-`, `*` and the
+comparisons on it are machine instructions that check what the interpreter checks: two
+currencies, an overflow, a result below zero, or ordering two currencies. When a check
+fails, the interpreter's own function for that operation is given the same values and
+reports the failure, so its kind and message are the interpreter's. Where money leaves
+the function (a call, a result, a record, a list, a built-in), it is held as any other
+value is.
 
 Because the engine is not in the config, a journal does not record it: a run that
 crashed on one engine resumes on the other.
