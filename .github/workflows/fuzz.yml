@@ -21,8 +21,6 @@ jobs:
         target: [parse, format, journal, config, manifest, jwt, engines]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
-      RUSTC_BOOTSTRAP: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Rust
@@ -32,6 +30,10 @@ jobs:
       - name: Seeds from the repository
         run: scripts/fuzz_seed.sh
       - name: Fuzz for 20 minutes with AddressSanitizer
+        # Here only: cargo-fuzz's own dependencies (rustix) take RUSTC_BOOTSTRAP as a
+        # nightly compiler and use attributes this toolchain refuses.
+        env:
+          RUSTC_BOOTSTRAP: "1"
         run: cargo fuzz run --sanitizer address ${{ matrix.target }} -- -max_total_time=1200 -timeout=10 -print_final_stats=1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()

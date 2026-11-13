@@ -1,10 +1,13 @@
-# Publishes site/ (the landing page) to GitHub Pages when it changes on main.
+# Publishes site/ (the landing page) to GitHub Pages.
 # Needs Settings > Pages > Source set to "GitHub Actions".
 name: pages
 on:
-  # The site is published with each release, or by hand.
-  push:
-    tags: ["v*"]
+  # After each release's workflow succeeds, the site as it was at the release; or by
+  # hand, from main. Not on the tag itself: the github-pages environment deploys from
+  # main only, and a run started by another workflow's end runs on main.
+  workflow_run:
+    workflows: ["release"]
+    types: [completed]
   workflow_dispatch:
 permissions:
   contents: read
@@ -15,12 +18,15 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:

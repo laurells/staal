@@ -4,8 +4,9 @@ GitHub Actions runs only for a release, or when started by hand. A change is mer
 to `main` once both full suites pass on a developer's machine (`cargo test --features
 failpoints --no-fail-fast` and `cargo test --no-default-features --no-fail-fast`), with
 clippy and the lock files checked. A version tag then runs every workflow: `ci.yml`
-and `supply-chain.yml` on every platform, the fuzz and frameworks checks, the site, and
-the release itself. So what only another platform shows (macOS, Linux on ARM) is first
+and `supply-chain.yml` on every platform, the fuzz and frameworks checks, and the
+release itself; when the release workflow succeeds, `pages.yml` publishes the site as
+it was at the tag (from main, the only branch the `github-pages` environment deploys). So what only another platform shows (macOS, Linux on ARM) is first
 seen at the release: a tag whose `ci.yml` fails is not published.
 
 A release is a version tag. Pushing one runs `.github/workflows/release.yml`, which

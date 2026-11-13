@@ -67,7 +67,16 @@ jobs:
           "$PYTHON" -m pip install --quiet build setuptools wheel
           if [ "$(uname -s)" = Linux ]; then "$PYTHON" -m pip install --quiet auditwheel patchelf; fi
       - name: Tests
-        run: cargo test --no-fail-fast
+        run: |
+          # The container runs as root with HOME a folder of the runner's user, and the
+          # C worker tests keep their worker under HOME, where staalc refuses a file
+          # another user could change. So they run with root's own home; cargo and
+          # rustup keep the toolchain the Rust step installed under the other HOME.
+          if [ -n "${{ matrix.container }}" ]; then
+            export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+            export HOME=/root
+          fi
+          cargo test --no-fail-fast
       - name: Release archive
         run: scripts/package.sh dist
       - name: Python wheel
