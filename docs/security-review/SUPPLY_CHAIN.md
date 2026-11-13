@@ -37,7 +37,11 @@ operator names at run time (THREAT_MODEL.md T55).
 - **Age.** A dependency version is chosen only when it has been published for at
   least two weeks (CONTRIBUTING.md), so a malicious release has time to be found
   and yanked before it is used. This includes security fixes: the advisories in
-  section 4 were fixed with versions at least two weeks old.
+  section 4 were fixed with versions at least two weeks old. There has been one
+  exception, decided by the maintainer on 2026-11-13 as the only one, the rule
+  otherwise unchanged: seven moderate advisories in `hono` and `@hono/node-server`,
+  reached only through the agent SDKs of the framework tests (`node/test/frameworks`,
+  nothing shipped), were fixed with versions 12 and 11 days old (section 5).
 - **Exact versions** for the crates that handle TLS, crypto, HTTP framing and code
   generation (`=` in `Cargo.toml`); `Cargo.lock` fixes every other one.
 - **Sources.** crates.io only; no git dependency and no other registry (`deny.toml`
@@ -83,6 +87,15 @@ automatically ([SELF_ASSESSMENT.md](SELF_ASSESSMENT.md) F1).
   framework adapters (`openai-agents`, `langgraph`, `claude-agent-sdk`, `google-adk`)
   name lower bounds only; the user's resolver chooses the versions.
 - **Node.js package** (`node/`): no runtime dependencies.
+- **The framework tests' web server.** The agent SDKs that `node/test/frameworks`
+  installs bring in `hono` and `@hono/node-server`. On 2026-11-13 these had seven
+  moderate advisories (GHSA-4m76-xfj5-7975, GHSA-h7mg-cq63-vhpq, GHSA-3gg2-335m-rxc6,
+  GHSA-46wx-v44x-9hh2 and GHSA-4h7h-rv7c-7m2v in `hono` before 4.13.16;
+  GHSA-qv5m-9pm6-hqp3 and GHSA-jpvv-r467-5p4w in `@hono/node-server` before 2.1.6),
+  about routing, middleware and form validation of a public server. They are pinned
+  by `overrides` to `hono` 4.13.16 and `@hono/node-server` 2.1.6, published 2026-11-01
+  and 2026-11-02: the one exception to the age rule (section 2). The tests serve
+  nothing outside the test, and none of these is in what staalc ships.
 - **Test and build tools**: the SDK conformance and framework tests install from
   requirement files naming the top-level packages at exact versions, with
   `pip --uploaded-prior-to=P14D` (nothing published in the last 14 days, which also
