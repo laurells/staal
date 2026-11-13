@@ -24,59 +24,59 @@
       "answer": "1",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.002782983,
-          "min_s": 0.002407525,
-          "max_s": 0.003243667,
-          "peak_rss_kib": 9884,
+          "median_s": 0.002216516,
+          "min_s": 0.00201473,
+          "max_s": 0.002421513,
+          "peak_rss_kib": 10568,
           "runs": 5
         },
         "Staal native": {
-          "median_s": 0.002847636,
-          "min_s": 0.002806887,
-          "max_s": 0.004006767,
-          "peak_rss_kib": 13168,
+          "median_s": 0.002622232,
+          "min_s": 0.002567328,
+          "max_s": 0.002865938,
+          "peak_rss_kib": 14000,
           "runs": 5
         },
         "Staal executable": {
-          "median_s": 0.002727835,
-          "min_s": 0.002351453,
-          "max_s": 0.002986734,
-          "peak_rss_kib": 10712,
+          "median_s": 0.002376151,
+          "min_s": 0.002336909,
+          "max_s": 0.002684661,
+          "peak_rss_kib": 10576,
           "runs": 5
         },
         "Rust": {
-          "median_s": 0.001162702,
-          "min_s": 0.001124839,
-          "max_s": 0.001265615,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001159705,
+          "min_s": 0.001125553,
+          "max_s": 0.001239361,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Go": {
-          "median_s": 0.001187191,
-          "min_s": 0.001105694,
-          "max_s": 0.001273458,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001553331,
+          "min_s": 0.001257004,
+          "max_s": 0.001667062,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Python": {
-          "median_s": 0.013282033,
-          "min_s": 0.012691389,
-          "max_s": 0.015277021,
-          "peak_rss_kib": 8936,
+          "median_s": 0.016130304,
+          "min_s": 0.012495953,
+          "max_s": 0.018082762,
+          "peak_rss_kib": 8928,
           "runs": 5
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.037479082,
-          "min_s": 0.024281988,
-          "max_s": 0.038883189,
-          "peak_rss_kib": 43196,
+          "median_s": 0.024756005,
+          "min_s": 0.023389292,
+          "max_s": 0.026172021,
+          "peak_rss_kib": 43172,
           "runs": 5
         },
         "TypeScript (Bun)": {
-          "median_s": 0.004026198,
-          "min_s": 0.003876252,
-          "max_s": 0.007199818,
-          "peak_rss_kib": 12180,
+          "median_s": 0.005353653,
+          "min_s": 0.005047587,
+          "max_s": 0.005888552,
+          "peak_rss_kib": 12420,
           "runs": 5
         }
       }
@@ -87,59 +87,59 @@
       "answer": "2178309",
       "results": {
         "Staal interpreter": {
-          "median_s": 3.904798794,
-          "min_s": 3.757252438,
-          "max_s": 4.296146679,
-          "peak_rss_kib": 10000,
+          "median_s": 1.748779828,
+          "min_s": 1.683195901,
+          "max_s": 1.782409692,
+          "peak_rss_kib": 10632,
           "runs": 5
         },
         "Staal native": {
-          "median_s": 0.028607997,
-          "min_s": 0.027918298,
-          "max_s": 0.033904623,
-          "peak_rss_kib": 13120,
+          "median_s": 0.028395382,
+          "min_s": 0.027391127,
+          "max_s": 0.030618745,
+          "peak_rss_kib": 14040,
           "runs": 5
         },
         "Staal executable": {
-          "median_s": 0.030106045,
-          "min_s": 0.026261606,
-          "max_s": 0.053865916,
-          "peak_rss_kib": 10748,
+          "median_s": 0.03011486,
+          "min_s": 0.027208275,
+          "max_s": 0.049725759,
+          "peak_rss_kib": 10552,
           "runs": 5
         },
         "Rust": {
-          "median_s": 0.014335091,
-          "min_s": 0.014176295,
-          "max_s": 0.020427996,
-          "peak_rss_kib": 2296,
+          "median_s": 0.014481611,
+          "min_s": 0.013883559,
+          "max_s": 0.019104578,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Go": {
-          "median_s": 0.014629602,
-          "min_s": 0.014140096,
-          "max_s": 0.014698288,
-          "peak_rss_kib": 2296,
+          "median_s": 0.017972567,
+          "min_s": 0.014094986,
+          "max_s": 0.018717995,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Python": {
-          "median_s": 0.307896968,
-          "min_s": 0.274847488,
-          "max_s": 0.373359142,
-          "peak_rss_kib": 9116,
+          "median_s": 0.27740005,
+          "min_s": 0.271925431,
+          "max_s": 0.337520081,
+          "peak_rss_kib": 8996,
           "runs": 5
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.050818835,
-          "min_s": 0.048396423,
-          "max_s": 0.055216199,
-          "peak_rss_kib": 48604,
+          "median_s": 0.052207347,
+          "min_s": 0.050589342,
+          "max_s": 0.079263596,
+          "peak_rss_kib": 48580,
           "runs": 5
         },
         "TypeScript (Bun)": {
-          "median_s": 0.025017538,
-          "min_s": 0.023097286,
-          "max_s": 0.03357468,
-          "peak_rss_kib": 22308,
+          "median_s": 0.023861244,
+          "min_s": 0.021891742,
+          "max_s": 0.027908178,
+          "peak_rss_kib": 22648,
           "runs": 5
         }
       }
@@ -150,59 +150,59 @@
       "answer": "19999999",
       "results": {
         "Staal interpreter": {
-          "median_s": 5.336100883,
-          "min_s": 5.181032611,
-          "max_s": 5.742956381,
-          "peak_rss_kib": 10020,
+          "median_s": 2.9490619,
+          "min_s": 2.839448316,
+          "max_s": 3.258392712,
+          "peak_rss_kib": 10496,
           "runs": 5
         },
         "Staal native": {
-          "median_s": 0.041934623,
-          "min_s": 0.039770183,
-          "max_s": 0.042895247,
-          "peak_rss_kib": 13364,
+          "median_s": 0.04128383,
+          "min_s": 0.039614781,
+          "max_s": 0.042250524,
+          "peak_rss_kib": 14232,
           "runs": 5
         },
         "Staal executable": {
-          "median_s": 0.070993659,
-          "min_s": 0.039605232,
-          "max_s": 0.082003276,
-          "peak_rss_kib": 10800,
+          "median_s": 0.039439894,
+          "min_s": 0.038203604,
+          "max_s": 0.045786207,
+          "peak_rss_kib": 10496,
           "runs": 5
         },
         "Rust": {
-          "median_s": 0.012395596,
-          "min_s": 0.012089121,
-          "max_s": 0.012742804,
-          "peak_rss_kib": 2296,
+          "median_s": 0.012532305,
+          "min_s": 0.012137561,
+          "max_s": 0.012705749,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Go": {
-          "median_s": 0.012933545,
-          "min_s": 0.012279502,
-          "max_s": 0.015454453,
-          "peak_rss_kib": 2296,
+          "median_s": 0.012273412,
+          "min_s": 0.011658779,
+          "max_s": 0.012958505,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Python": {
-          "median_s": 0.701924554,
-          "min_s": 0.677631698,
-          "max_s": 0.762083402,
-          "peak_rss_kib": 9100,
+          "median_s": 0.733359611,
+          "min_s": 0.679878494,
+          "max_s": 0.811838201,
+          "peak_rss_kib": 9132,
           "runs": 5
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.141167223,
-          "min_s": 0.138909953,
-          "max_s": 0.156450008,
-          "peak_rss_kib": 50672,
+          "median_s": 0.142760029,
+          "min_s": 0.137083046,
+          "max_s": 0.164902959,
+          "peak_rss_kib": 50580,
           "runs": 5
         },
         "TypeScript (Bun)": {
-          "median_s": 0.089673733,
-          "min_s": 0.086780341,
-          "max_s": 0.090389188,
-          "peak_rss_kib": 23504,
+          "median_s": 0.085370413,
+          "min_s": 0.083922283,
+          "max_s": 0.103460924,
+          "peak_rss_kib": 23408,
           "runs": 5
         }
       }
@@ -213,59 +213,59 @@
       "answer": "\"2035000.00 USD\"",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.608674439,
-          "min_s": 0.546954304,
-          "max_s": 0.64320869,
-          "peak_rss_kib": 10040,
+          "median_s": 0.323106588,
+          "min_s": 0.311628892,
+          "max_s": 0.409136951,
+          "peak_rss_kib": 10524,
           "runs": 5
         },
         "Staal native": {
-          "median_s": 0.211331622,
-          "min_s": 0.204037246,
-          "max_s": 0.237169531,
-          "peak_rss_kib": 13672,
+          "median_s": 0.008760759,
+          "min_s": 0.008435273,
+          "max_s": 0.01168558,
+          "peak_rss_kib": 14516,
           "runs": 5
         },
         "Staal executable": {
-          "median_s": 0.223061525,
-          "min_s": 0.180226578,
-          "max_s": 0.226070234,
-          "peak_rss_kib": 10756,
+          "median_s": 0.006642447,
+          "min_s": 0.00645244,
+          "max_s": 0.007496925,
+          "peak_rss_kib": 10764,
           "runs": 5
         },
         "Rust": {
-          "median_s": 0.002261696,
-          "min_s": 0.002180458,
-          "max_s": 0.003321244,
-          "peak_rss_kib": 2296,
+          "median_s": 0.002057722,
+          "min_s": 0.001937673,
+          "max_s": 0.002256561,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Go": {
-          "median_s": 0.002382033,
-          "min_s": 0.002374036,
-          "max_s": 0.003764022,
-          "peak_rss_kib": 2296,
+          "median_s": 0.002170338,
+          "min_s": 0.001981816,
+          "max_s": 0.003037477,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Python": {
-          "median_s": 0.220630099,
-          "min_s": 0.205253391,
-          "max_s": 0.362928891,
-          "peak_rss_kib": 10312,
+          "median_s": 0.223926864,
+          "min_s": 0.201925789,
+          "max_s": 0.253697816,
+          "peak_rss_kib": 10300,
           "runs": 5
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.029826337,
-          "min_s": 0.029353842,
-          "max_s": 0.0316933,
-          "peak_rss_kib": 48652,
+          "median_s": 0.027920304,
+          "min_s": 0.027016423,
+          "max_s": 0.029236469,
+          "peak_rss_kib": 48660,
           "runs": 5
         },
         "TypeScript (Bun)": {
-          "median_s": 0.009678382,
-          "min_s": 0.008667526,
-          "max_s": 0.010547211,
-          "peak_rss_kib": 23536,
+          "median_s": 0.00809654,
+          "min_s": 0.007816159,
+          "max_s": 0.008498553,
+          "peak_rss_kib": 23484,
           "runs": 5
         }
       }
@@ -276,59 +276,59 @@
       "answer": "3221857277",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.021865738,
-          "min_s": 0.020861167,
-          "max_s": 0.022048197,
-          "peak_rss_kib": 14480,
+          "median_s": 0.008652929,
+          "min_s": 0.008317402,
+          "max_s": 0.008973169,
+          "peak_rss_kib": 12732,
           "runs": 5
         },
         "Staal native": {
-          "median_s": 0.01505401,
-          "min_s": 0.0135151,
-          "max_s": 0.015269182,
-          "peak_rss_kib": 18728,
+          "median_s": 0.009452318,
+          "min_s": 0.008389502,
+          "max_s": 0.010209228,
+          "peak_rss_kib": 16720,
           "runs": 5
         },
         "Staal executable": {
-          "median_s": 0.011565456,
-          "min_s": 0.011231858,
-          "max_s": 0.011787805,
-          "peak_rss_kib": 15440,
+          "median_s": 0.006735608,
+          "min_s": 0.006585561,
+          "max_s": 0.007556507,
+          "peak_rss_kib": 12432,
           "runs": 5
         },
         "Rust": {
-          "median_s": 0.002088524,
-          "min_s": 0.002070569,
-          "max_s": 0.002152837,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001521759,
+          "min_s": 0.001455873,
+          "max_s": 0.00215646,
+          "peak_rss_kib": 2340,
           "runs": 5
         },
         "Go": {
-          "median_s": 0.002763697,
-          "min_s": 0.002047582,
-          "max_s": 0.003345067,
-          "peak_rss_kib": 2296,
+          "median_s": 0.002309332,
+          "min_s": 0.002081341,
+          "max_s": 0.002487098,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Python": {
-          "median_s": 0.016871569,
-          "min_s": 0.016618618,
-          "max_s": 0.018651687,
+          "median_s": 0.019688666,
+          "min_s": 0.017751002,
+          "max_s": 0.022685078,
           "peak_rss_kib": 9648,
           "runs": 5
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.028143192,
-          "min_s": 0.027234931,
-          "max_s": 0.03080845,
-          "peak_rss_kib": 48968,
+          "median_s": 0.031192405,
+          "min_s": 0.027910579,
+          "max_s": 0.035865878,
+          "peak_rss_kib": 48944,
           "runs": 5
         },
         "TypeScript (Bun)": {
-          "median_s": 0.007628212,
-          "min_s": 0.007188174,
-          "max_s": 0.008568089,
-          "peak_rss_kib": 23124,
+          "median_s": 0.007909915,
+          "min_s": 0.007543692,
+          "max_s": 0.009523774,
+          "peak_rss_kib": 22960,
           "runs": 5
         }
       }
@@ -339,59 +339,122 @@
       "answer": "9990000",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.068778128,
-          "min_s": 0.066091431,
-          "max_s": 0.071574544,
-          "peak_rss_kib": 10396,
+          "median_s": 0.019937129,
+          "min_s": 0.018810689,
+          "max_s": 0.025765391,
+          "peak_rss_kib": 11064,
           "runs": 5
         },
         "Staal native": {
-          "median_s": 0.05224179,
-          "min_s": 0.050619993,
-          "max_s": 0.053259336,
-          "peak_rss_kib": 14512,
+          "median_s": 0.01612713,
+          "min_s": 0.015868776,
+          "max_s": 0.021730451,
+          "peak_rss_kib": 15212,
           "runs": 5
         },
         "Staal executable": {
-          "median_s": 0.049826765,
-          "min_s": 0.048598031,
-          "max_s": 0.052503161,
-          "peak_rss_kib": 11188,
+          "median_s": 0.014353089,
+          "min_s": 0.013062462,
+          "max_s": 0.014792637,
+          "peak_rss_kib": 10892,
           "runs": 5
         },
         "Rust": {
-          "median_s": 0.00160389,
-          "min_s": 0.001522869,
-          "max_s": 0.002284118,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001527927,
+          "min_s": 0.00146128,
+          "max_s": 0.001760561,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Go": {
-          "median_s": 0.001554243,
-          "min_s": 0.001376834,
-          "max_s": 0.002096308,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001369081,
+          "min_s": 0.001277791,
+          "max_s": 0.001546966,
+          "peak_rss_kib": 2268,
           "runs": 5
         },
         "Python": {
-          "median_s": 0.016387603,
-          "min_s": 0.016137473,
-          "max_s": 0.017217188,
-          "peak_rss_kib": 9248,
+          "median_s": 0.016147751,
+          "min_s": 0.015640097,
+          "max_s": 0.01775906,
+          "peak_rss_kib": 9244,
           "runs": 5
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.028297339,
-          "min_s": 0.025397142,
-          "max_s": 0.036780699,
-          "peak_rss_kib": 43472,
+          "median_s": 0.027609708,
+          "min_s": 0.024918252,
+          "max_s": 0.034773896,
+          "peak_rss_kib": 43432,
           "runs": 5
         },
         "TypeScript (Bun)": {
-          "median_s": 0.007262515,
-          "min_s": 0.006091195,
-          "max_s": 0.008064687,
-          "peak_rss_kib": 18508,
+          "median_s": 0.006166744,
+          "min_s": 0.00611833,
+          "max_s": 0.007264191,
+          "peak_rss_kib": 18496,
+          "runs": 5
+        }
+      }
+    },
+    {
+      "workload": "bigmap",
+      "n": 100000,
+      "answer": "4999950000",
+      "results": {
+        "Staal interpreter": {
+          "median_s": 0.188141994,
+          "min_s": 0.154652832,
+          "max_s": 0.207842975,
+          "peak_rss_kib": 23992,
+          "runs": 5
+        },
+        "Staal native": {
+          "median_s": 0.107679419,
+          "min_s": 0.091862154,
+          "max_s": 0.133106284,
+          "peak_rss_kib": 28152,
+          "runs": 5
+        },
+        "Staal executable": {
+          "median_s": 0.104791314,
+          "min_s": 0.085916411,
+          "max_s": 0.117479686,
+          "peak_rss_kib": 23612,
+          "runs": 5
+        },
+        "Rust": {
+          "median_s": 0.010907339,
+          "min_s": 0.008640272,
+          "max_s": 0.011881574,
+          "peak_rss_kib": 5484,
+          "runs": 5
+        },
+        "Go": {
+          "median_s": 0.013137895,
+          "min_s": 0.009394904,
+          "max_s": 0.015953851,
+          "peak_rss_kib": 6036,
+          "runs": 5
+        },
+        "Python": {
+          "median_s": 0.040048522,
+          "min_s": 0.038088834,
+          "max_s": 0.049581123,
+          "peak_rss_kib": 22272,
+          "runs": 5
+        },
+        "TypeScript (Node.js)": {
+          "median_s": 0.041930466,
+          "min_s": 0.039490538,
+          "max_s": 0.052589625,
+          "peak_rss_kib": 57172,
+          "runs": 5
+        },
+        "TypeScript (Bun)": {
+          "median_s": 0.023491433,
+          "min_s": 0.019680285,
+          "max_s": 0.029187532,
+          "peak_rss_kib": 31812,
           "runs": 5
         }
       }
@@ -402,59 +465,122 @@
       "answer": "288890",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.029022087,
-          "min_s": 0.028418856,
-          "max_s": 0.031215444,
-          "peak_rss_kib": 10352,
+          "median_s": 0.023786454,
+          "min_s": 0.021493684,
+          "max_s": 0.03775351,
+          "peak_rss_kib": 10764,
           "runs": 5
         },
         "Staal native": {
-          "median_s": 0.021657387,
-          "min_s": 0.020018473,
-          "max_s": 0.02499302,
-          "peak_rss_kib": 13904,
+          "median_s": 0.024087586,
+          "min_s": 0.017440244,
+          "max_s": 0.02472555,
+          "peak_rss_kib": 14356,
           "runs": 5
         },
         "Staal executable": {
-          "median_s": 0.024058111,
-          "min_s": 0.02053872,
-          "max_s": 0.026038202,
-          "peak_rss_kib": 10788,
+          "median_s": 0.016356333,
+          "min_s": 0.016179387,
+          "max_s": 0.016625457,
+          "peak_rss_kib": 10524,
           "runs": 5
         },
         "Rust": {
-          "median_s": 0.002616507,
-          "min_s": 0.002595984,
-          "max_s": 0.003837577,
-          "peak_rss_kib": 2460,
+          "median_s": 0.002631692,
+          "min_s": 0.00258482,
+          "max_s": 0.00264183,
+          "peak_rss_kib": 2352,
           "runs": 5
         },
         "Go": {
-          "median_s": 0.004389488,
-          "min_s": 0.003561547,
-          "max_s": 0.004750251,
+          "median_s": 0.003275304,
+          "min_s": 0.003213607,
+          "max_s": 0.003499361,
           "peak_rss_kib": 3728,
           "runs": 5
         },
         "Python": {
-          "median_s": 0.020024942,
-          "min_s": 0.018873151,
-          "max_s": 0.023298209,
-          "peak_rss_kib": 12416,
+          "median_s": 0.018154588,
+          "min_s": 0.017904056,
+          "max_s": 0.019197915,
+          "peak_rss_kib": 12436,
           "runs": 5
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.047261662,
-          "min_s": 0.038347099,
-          "max_s": 0.048327662,
-          "peak_rss_kib": 55248,
+          "median_s": 0.04460592,
+          "min_s": 0.036375684,
+          "max_s": 0.046751092,
+          "peak_rss_kib": 55176,
           "runs": 5
         },
         "TypeScript (Bun)": {
-          "median_s": 0.017550296,
-          "min_s": 0.015058458,
-          "max_s": 0.019796,
-          "peak_rss_kib": 24692,
+          "median_s": 0.015085275,
+          "min_s": 0.013401248,
+          "max_s": 0.015713354,
+          "peak_rss_kib": 24720,
+          "runs": 5
+        }
+      }
+    },
+    {
+      "workload": "textread",
+      "n": 100000,
+      "answer": "100000000",
+      "results": {
+        "Staal interpreter": {
+          "median_s": 0.016160286,
+          "min_s": 0.015623262,
+          "max_s": 0.021385964,
+          "peak_rss_kib": 10708,
+          "runs": 5
+        },
+        "Staal native": {
+          "median_s": 0.016248198,
+          "min_s": 0.015609905,
+          "max_s": 0.019227128,
+          "peak_rss_kib": 14804,
+          "runs": 5
+        },
+        "Staal executable": {
+          "median_s": 0.015100598,
+          "min_s": 0.014518795,
+          "max_s": 0.016151573,
+          "peak_rss_kib": 10500,
+          "runs": 5
+        },
+        "Rust": {
+          "median_s": 0.011880995,
+          "min_s": 0.011817849,
+          "max_s": 0.022845652,
+          "peak_rss_kib": 2336,
+          "runs": 5
+        },
+        "Go": {
+          "median_s": 0.108793114,
+          "min_s": 0.104770299,
+          "max_s": 0.133608982,
+          "peak_rss_kib": 2448,
+          "runs": 5
+        },
+        "Python": {
+          "median_s": 0.041089943,
+          "min_s": 0.039080424,
+          "max_s": 0.056594416,
+          "peak_rss_kib": 9260,
+          "runs": 5
+        },
+        "TypeScript (Node.js)": {
+          "median_s": 1.076335626,
+          "min_s": 1.025030756,
+          "max_s": 1.097388422,
+          "peak_rss_kib": 87772,
+          "runs": 5
+        },
+        "TypeScript (Bun)": {
+          "median_s": 0.315684403,
+          "min_s": 0.314883603,
+          "max_s": 0.442594122,
+          "peak_rss_kib": 20900,
           "runs": 5
         }
       }
@@ -467,59 +593,59 @@
       "answer": "3219844767",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.008367799,
-          "min_s": 0.008003127,
-          "max_s": 0.008662421,
-          "peak_rss_kib": 11032,
+          "median_s": 0.004875502,
+          "min_s": 0.003896347,
+          "max_s": 0.00526638,
+          "peak_rss_kib": 11116,
           "runs": 3
         },
         "Staal native": {
-          "median_s": 0.008410302,
-          "min_s": 0.007965182,
-          "max_s": 0.009137948,
-          "peak_rss_kib": 14944,
+          "median_s": 0.005979936,
+          "min_s": 0.005652853,
+          "max_s": 0.006201252,
+          "peak_rss_kib": 15132,
           "runs": 3
         },
         "Staal executable": {
-          "median_s": 0.005392776,
-          "min_s": 0.005231872,
-          "max_s": 0.005635035,
-          "peak_rss_kib": 11696,
+          "median_s": 0.003625356,
+          "min_s": 0.003541569,
+          "max_s": 0.003709482,
+          "peak_rss_kib": 10784,
           "runs": 3
         },
         "Rust": {
-          "median_s": 0.001275126,
-          "min_s": 0.00125607,
-          "max_s": 0.001302064,
-          "peak_rss_kib": 2296,
+          "median_s": 0.00154777,
+          "min_s": 0.001301207,
+          "max_s": 0.003442119,
+          "peak_rss_kib": 2268,
           "runs": 3
         },
         "Go": {
-          "median_s": 0.001771402,
-          "min_s": 0.001703251,
-          "max_s": 0.002067343,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001598981,
+          "min_s": 0.001449576,
+          "max_s": 0.003471066,
+          "peak_rss_kib": 2268,
           "runs": 3
         },
         "Python": {
-          "median_s": 0.018920457,
-          "min_s": 0.015154996,
-          "max_s": 0.020094899,
-          "peak_rss_kib": 9276,
+          "median_s": 0.014383729,
+          "min_s": 0.014182569,
+          "max_s": 0.020813146,
+          "peak_rss_kib": 9368,
           "runs": 3
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.035709556,
-          "min_s": 0.035671173,
-          "max_s": 0.037828072,
-          "peak_rss_kib": 48696,
+          "median_s": 0.026270476,
+          "min_s": 0.025838941,
+          "max_s": 0.026424029,
+          "peak_rss_kib": 48656,
           "runs": 3
         },
         "TypeScript (Bun)": {
-          "median_s": 0.007934907,
-          "min_s": 0.007377392,
-          "max_s": 0.008544246,
-          "peak_rss_kib": 20516,
+          "median_s": 0.007701251,
+          "min_s": 0.005722784,
+          "max_s": 0.008652568,
+          "peak_rss_kib": 21704,
           "runs": 3
         }
       }
@@ -530,59 +656,59 @@
       "answer": "3220714341",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.011096783,
-          "min_s": 0.009783697,
-          "max_s": 0.011770561,
-          "peak_rss_kib": 12212,
+          "median_s": 0.005734458,
+          "min_s": 0.005662385,
+          "max_s": 0.005925491,
+          "peak_rss_kib": 11716,
           "runs": 3
         },
         "Staal native": {
-          "median_s": 0.009091072,
-          "min_s": 0.008889968,
-          "max_s": 0.009433128,
-          "peak_rss_kib": 16264,
+          "median_s": 0.00671941,
+          "min_s": 0.006566943,
+          "max_s": 0.007564484,
+          "peak_rss_kib": 15688,
           "runs": 3
         },
         "Staal executable": {
-          "median_s": 0.006816165,
-          "min_s": 0.006627898,
-          "max_s": 0.00789313,
-          "peak_rss_kib": 12964,
+          "median_s": 0.005771322,
+          "min_s": 0.004833947,
+          "max_s": 0.007859706,
+          "peak_rss_kib": 11548,
           "runs": 3
         },
         "Rust": {
-          "median_s": 0.001405637,
-          "min_s": 0.001390074,
-          "max_s": 0.001506517,
-          "peak_rss_kib": 2308,
+          "median_s": 0.001432614,
+          "min_s": 0.001402043,
+          "max_s": 0.001453892,
+          "peak_rss_kib": 2268,
           "runs": 3
         },
         "Go": {
-          "median_s": 0.002001504,
-          "min_s": 0.00170063,
-          "max_s": 0.002119274,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001571238,
+          "min_s": 0.001570071,
+          "max_s": 0.001607016,
+          "peak_rss_kib": 2280,
           "runs": 3
         },
         "Python": {
-          "median_s": 0.017113118,
-          "min_s": 0.01544212,
-          "max_s": 0.021115566,
-          "peak_rss_kib": 9496,
+          "median_s": 0.014763261,
+          "min_s": 0.014195062,
+          "max_s": 0.015178653,
+          "peak_rss_kib": 9492,
           "runs": 3
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.030325825,
-          "min_s": 0.025735997,
-          "max_s": 0.032520954,
-          "peak_rss_kib": 48832,
+          "median_s": 0.029878094,
+          "min_s": 0.026668498,
+          "max_s": 0.041229367,
+          "peak_rss_kib": 48764,
           "runs": 3
         },
         "TypeScript (Bun)": {
-          "median_s": 0.006793803,
-          "min_s": 0.006399812,
-          "max_s": 0.007114814,
-          "peak_rss_kib": 22936,
+          "median_s": 0.007413343,
+          "min_s": 0.00680944,
+          "max_s": 0.008039593,
+          "peak_rss_kib": 22780,
           "runs": 3
         }
       }
@@ -593,59 +719,59 @@
       "answer": "3221857277",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.021169263,
-          "min_s": 0.02009353,
-          "max_s": 0.022081594,
-          "peak_rss_kib": 14672,
+          "median_s": 0.012451466,
+          "min_s": 0.012283214,
+          "max_s": 0.016453868,
+          "peak_rss_kib": 12712,
           "runs": 3
         },
         "Staal native": {
-          "median_s": 0.015269264,
-          "min_s": 0.013371117,
-          "max_s": 0.015746498,
-          "peak_rss_kib": 18684,
+          "median_s": 0.009610964,
+          "min_s": 0.009522153,
+          "max_s": 0.01012487,
+          "peak_rss_kib": 16800,
           "runs": 3
         },
         "Staal executable": {
-          "median_s": 0.009723628,
-          "min_s": 0.00955308,
-          "max_s": 0.010028548,
-          "peak_rss_kib": 15360,
+          "median_s": 0.006450755,
+          "min_s": 0.006313409,
+          "max_s": 0.007655248,
+          "peak_rss_kib": 12404,
           "runs": 3
         },
         "Rust": {
-          "median_s": 0.002085718,
-          "min_s": 0.002078112,
-          "max_s": 0.002139839,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001502916,
+          "min_s": 0.001470597,
+          "max_s": 0.001505457,
+          "peak_rss_kib": 2268,
           "runs": 3
         },
         "Go": {
-          "median_s": 0.002643163,
-          "min_s": 0.002171257,
-          "max_s": 0.002699264,
-          "peak_rss_kib": 2296,
+          "median_s": 0.002035889,
+          "min_s": 0.001978235,
+          "max_s": 0.00217876,
+          "peak_rss_kib": 2268,
           "runs": 3
         },
         "Python": {
-          "median_s": 0.016699279,
-          "min_s": 0.016086041,
-          "max_s": 0.024243033,
-          "peak_rss_kib": 9620,
+          "median_s": 0.017299979,
+          "min_s": 0.016378369,
+          "max_s": 0.018201015,
+          "peak_rss_kib": 9644,
           "runs": 3
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.028381627,
-          "min_s": 0.028295102,
-          "max_s": 0.039070504,
-          "peak_rss_kib": 49008,
+          "median_s": 0.028271873,
+          "min_s": 0.026936206,
+          "max_s": 0.029013735,
+          "peak_rss_kib": 48904,
           "runs": 3
         },
         "TypeScript (Bun)": {
-          "median_s": 0.009157487,
-          "min_s": 0.008268699,
-          "max_s": 0.010490445,
-          "peak_rss_kib": 23192,
+          "median_s": 0.007165597,
+          "min_s": 0.006816026,
+          "max_s": 0.012968781,
+          "peak_rss_kib": 23052,
           "runs": 3
         }
       }
@@ -656,59 +782,59 @@
       "answer": "3222358995",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.041260573,
-          "min_s": 0.033658883,
-          "max_s": 0.042138477,
-          "peak_rss_kib": 19380,
+          "median_s": 0.014418021,
+          "min_s": 0.01411254,
+          "max_s": 0.014705212,
+          "peak_rss_kib": 14604,
           "runs": 3
         },
         "Staal native": {
-          "median_s": 0.024035802,
-          "min_s": 0.024027079,
-          "max_s": 0.024583948,
-          "peak_rss_kib": 23420,
+          "median_s": 0.012340371,
+          "min_s": 0.011959086,
+          "max_s": 0.01245075,
+          "peak_rss_kib": 18908,
           "runs": 3
         },
         "Staal executable": {
-          "median_s": 0.020446168,
-          "min_s": 0.019902106,
-          "max_s": 0.02049306,
-          "peak_rss_kib": 20448,
+          "median_s": 0.010235903,
+          "min_s": 0.010144929,
+          "max_s": 0.011395481,
+          "peak_rss_kib": 14524,
           "runs": 3
         },
         "Rust": {
-          "median_s": 0.002594786,
-          "min_s": 0.00259142,
-          "max_s": 0.002602436,
-          "peak_rss_kib": 2360,
+          "median_s": 0.002079134,
+          "min_s": 0.001850318,
+          "max_s": 0.002658121,
+          "peak_rss_kib": 2440,
           "runs": 3
         },
         "Go": {
-          "median_s": 0.003933902,
-          "min_s": 0.003927008,
-          "max_s": 0.004093347,
+          "median_s": 0.003492747,
+          "min_s": 0.003179483,
+          "max_s": 0.003696583,
           "peak_rss_kib": 2576,
           "runs": 3
         },
         "Python": {
-          "median_s": 0.026676874,
-          "min_s": 0.026134089,
-          "max_s": 0.028052153,
-          "peak_rss_kib": 10020,
+          "median_s": 0.022810604,
+          "min_s": 0.020239541,
+          "max_s": 0.027901521,
+          "peak_rss_kib": 10028,
           "runs": 3
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.04734213,
-          "min_s": 0.044742802,
-          "max_s": 0.047864004,
-          "peak_rss_kib": 49980,
+          "median_s": 0.032628862,
+          "min_s": 0.031384022,
+          "max_s": 0.03293758,
+          "peak_rss_kib": 49916,
           "runs": 3
         },
         "TypeScript (Bun)": {
-          "median_s": 0.015029142,
-          "min_s": 0.014287491,
-          "max_s": 0.015824686,
-          "peak_rss_kib": 24140,
+          "median_s": 0.01207829,
+          "min_s": 0.009795381,
+          "max_s": 0.012248954,
+          "peak_rss_kib": 24152,
           "runs": 3
         }
       }
@@ -719,59 +845,59 @@
       "answer": "63890",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.015504088,
-          "min_s": 0.015188223,
-          "max_s": 0.015924146,
-          "peak_rss_kib": 10036,
+          "median_s": 0.007028705,
+          "min_s": 0.006885662,
+          "max_s": 0.007121828,
+          "peak_rss_kib": 10424,
           "runs": 3
         },
         "Staal native": {
-          "median_s": 0.009857327,
-          "min_s": 0.00968203,
-          "max_s": 0.01008341,
-          "peak_rss_kib": 13432,
+          "median_s": 0.007867727,
+          "min_s": 0.007762334,
+          "max_s": 0.007924187,
+          "peak_rss_kib": 14224,
           "runs": 3
         },
         "Staal executable": {
-          "median_s": 0.007849153,
-          "min_s": 0.007694827,
-          "max_s": 0.008332303,
-          "peak_rss_kib": 10744,
+          "median_s": 0.006178732,
+          "min_s": 0.006068935,
+          "max_s": 0.006380112,
+          "peak_rss_kib": 10516,
           "runs": 3
         },
         "Rust": {
-          "median_s": 0.001753197,
-          "min_s": 0.001675328,
-          "max_s": 0.001956861,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001527056,
+          "min_s": 0.001451183,
+          "max_s": 0.001606472,
+          "peak_rss_kib": 2268,
           "runs": 3
         },
         "Go": {
-          "median_s": 0.001786982,
-          "min_s": 0.001696897,
-          "max_s": 0.001861622,
-          "peak_rss_kib": 2296,
+          "median_s": 0.001613371,
+          "min_s": 0.001582768,
+          "max_s": 0.001629361,
+          "peak_rss_kib": 2268,
           "runs": 3
         },
         "Python": {
-          "median_s": 0.019219732,
-          "min_s": 0.015054285,
-          "max_s": 0.019461378,
-          "peak_rss_kib": 9856,
+          "median_s": 0.020080616,
+          "min_s": 0.014818608,
+          "max_s": 0.020410139,
+          "peak_rss_kib": 9880,
           "runs": 3
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.029838189,
-          "min_s": 0.029827079,
-          "max_s": 0.032227576,
-          "peak_rss_kib": 51376,
+          "median_s": 0.034350063,
+          "min_s": 0.033786739,
+          "max_s": 0.036660195,
+          "peak_rss_kib": 51348,
           "runs": 3
         },
         "TypeScript (Bun)": {
-          "median_s": 0.007398771,
-          "min_s": 0.007113708,
-          "max_s": 0.008657903,
-          "peak_rss_kib": 20996,
+          "median_s": 0.006207125,
+          "min_s": 0.005990427,
+          "max_s": 0.007080055,
+          "peak_rss_kib": 18900,
           "runs": 3
         }
       }
@@ -782,59 +908,59 @@
       "answer": "138890",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.015635306,
-          "min_s": 0.015580022,
-          "max_s": 0.015768083,
-          "peak_rss_kib": 9744,
+          "median_s": 0.01602756,
+          "min_s": 0.015595908,
+          "max_s": 0.016967414,
+          "peak_rss_kib": 10628,
           "runs": 3
         },
         "Staal native": {
-          "median_s": 0.01257572,
-          "min_s": 0.011624694,
-          "max_s": 0.012978226,
-          "peak_rss_kib": 13464,
+          "median_s": 0.013281935,
+          "min_s": 0.013202326,
+          "max_s": 0.013554635,
+          "peak_rss_kib": 14436,
           "runs": 3
         },
         "Staal executable": {
-          "median_s": 0.011299473,
-          "min_s": 0.009973301,
-          "max_s": 0.0123823,
-          "peak_rss_kib": 10612,
+          "median_s": 0.011429086,
+          "min_s": 0.010140697,
+          "max_s": 0.011605915,
+          "peak_rss_kib": 10560,
           "runs": 3
         },
         "Rust": {
-          "median_s": 0.001983362,
-          "min_s": 0.001956431,
-          "max_s": 0.002078113,
-          "peak_rss_kib": 2500,
+          "median_s": 0.001857305,
+          "min_s": 0.001847812,
+          "max_s": 0.001940645,
+          "peak_rss_kib": 2392,
           "runs": 3
         },
         "Go": {
-          "median_s": 0.002536351,
-          "min_s": 0.002522758,
-          "max_s": 0.002933047,
+          "median_s": 0.002136227,
+          "min_s": 0.002128298,
+          "max_s": 0.00221316,
           "peak_rss_kib": 2704,
           "runs": 3
         },
         "Python": {
-          "median_s": 0.021076264,
-          "min_s": 0.016063434,
-          "max_s": 0.021969208,
-          "peak_rss_kib": 10732,
+          "median_s": 0.015837452,
+          "min_s": 0.015321844,
+          "max_s": 0.016718018,
+          "peak_rss_kib": 10768,
           "runs": 3
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.031699456,
-          "min_s": 0.029457476,
-          "max_s": 0.033840355,
-          "peak_rss_kib": 51760,
+          "median_s": 0.029420987,
+          "min_s": 0.028864057,
+          "max_s": 0.030803414,
+          "peak_rss_kib": 51692,
           "runs": 3
         },
         "TypeScript (Bun)": {
-          "median_s": 0.011911021,
-          "min_s": 0.009210065,
-          "max_s": 0.012831401,
-          "peak_rss_kib": 22776,
+          "median_s": 0.008670378,
+          "min_s": 0.0084025,
+          "max_s": 0.011579885,
+          "peak_rss_kib": 22780,
           "runs": 3
         }
       }
@@ -845,59 +971,59 @@
       "answer": "288890",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.045940142,
-          "min_s": 0.044461426,
-          "max_s": 0.047418376,
-          "peak_rss_kib": 9916,
+          "median_s": 0.019620997,
+          "min_s": 0.019525235,
+          "max_s": 0.019901443,
+          "peak_rss_kib": 10700,
           "runs": 3
         },
         "Staal native": {
-          "median_s": 0.019631946,
-          "min_s": 0.019364319,
-          "max_s": 0.019765804,
-          "peak_rss_kib": 13976,
+          "median_s": 0.017274721,
+          "min_s": 0.017130032,
+          "max_s": 0.017831821,
+          "peak_rss_kib": 14212,
           "runs": 3
         },
         "Staal executable": {
-          "median_s": 0.01779118,
-          "min_s": 0.017765597,
-          "max_s": 0.017841245,
-          "peak_rss_kib": 10820,
+          "median_s": 0.016804363,
+          "min_s": 0.015961268,
+          "max_s": 0.0267211,
+          "peak_rss_kib": 10648,
           "runs": 3
         },
         "Rust": {
-          "median_s": 0.002589753,
-          "min_s": 0.002492417,
-          "max_s": 0.002592796,
-          "peak_rss_kib": 2460,
+          "median_s": 0.002554034,
+          "min_s": 0.002524853,
+          "max_s": 0.002605648,
+          "peak_rss_kib": 2360,
           "runs": 3
         },
         "Go": {
-          "median_s": 0.003390378,
-          "min_s": 0.003193877,
-          "max_s": 0.003583717,
+          "median_s": 0.003799783,
+          "min_s": 0.003299914,
+          "max_s": 0.003855991,
           "peak_rss_kib": 3728,
           "runs": 3
         },
         "Python": {
-          "median_s": 0.018877101,
-          "min_s": 0.018801678,
-          "max_s": 0.018997406,
-          "peak_rss_kib": 12420,
+          "median_s": 0.019228656,
+          "min_s": 0.018191529,
+          "max_s": 0.021558108,
+          "peak_rss_kib": 12444,
           "runs": 3
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.03623752,
-          "min_s": 0.03558401,
-          "max_s": 0.038864465,
-          "peak_rss_kib": 55200,
+          "median_s": 0.037216744,
+          "min_s": 0.035416023,
+          "max_s": 0.041723291,
+          "peak_rss_kib": 55176,
           "runs": 3
         },
         "TypeScript (Bun)": {
-          "median_s": 0.016284389,
-          "min_s": 0.015487794,
-          "max_s": 0.017381985,
-          "peak_rss_kib": 24820,
+          "median_s": 0.014166547,
+          "min_s": 0.013809772,
+          "max_s": 0.014698147,
+          "peak_rss_kib": 24680,
           "runs": 3
         }
       }
@@ -908,63 +1034,63 @@
       "answer": "588890",
       "results": {
         "Staal interpreter": {
-          "median_s": 0.09944674,
-          "min_s": 0.098474337,
-          "max_s": 0.099981003,
-          "peak_rss_kib": 10620,
+          "median_s": 0.041441888,
+          "min_s": 0.038814012,
+          "max_s": 0.044675754,
+          "peak_rss_kib": 10880,
           "runs": 3
         },
         "Staal native": {
-          "median_s": 0.043014595,
-          "min_s": 0.042771991,
-          "max_s": 0.044408464,
-          "peak_rss_kib": 14224,
+          "median_s": 0.030590808,
+          "min_s": 0.03023763,
+          "max_s": 0.032446234,
+          "peak_rss_kib": 14720,
           "runs": 3
         },
         "Staal executable": {
-          "median_s": 0.039255595,
-          "min_s": 0.039212197,
-          "max_s": 0.043084964,
-          "peak_rss_kib": 11504,
+          "median_s": 0.030873545,
+          "min_s": 0.030387339,
+          "max_s": 0.032181278,
+          "peak_rss_kib": 10772,
           "runs": 3
         },
         "Rust": {
-          "median_s": 0.005647392,
-          "min_s": 0.004215641,
-          "max_s": 0.00565101,
-          "peak_rss_kib": 2716,
+          "median_s": 0.004066333,
+          "min_s": 0.004016504,
+          "max_s": 0.005164913,
+          "peak_rss_kib": 2620,
           "runs": 3
         },
         "Go": {
-          "median_s": 0.012581351,
-          "min_s": 0.010423379,
-          "max_s": 0.01284226,
+          "median_s": 0.006558525,
+          "min_s": 0.005614341,
+          "max_s": 0.0083605,
           "peak_rss_kib": 5776,
           "runs": 3
         },
         "Python": {
-          "median_s": 0.038632552,
-          "min_s": 0.036851381,
-          "max_s": 0.038679695,
-          "peak_rss_kib": 15860,
+          "median_s": 0.025230784,
+          "min_s": 0.025004376,
+          "max_s": 0.031513875,
+          "peak_rss_kib": 15896,
           "runs": 3
         },
         "TypeScript (Node.js)": {
-          "median_s": 0.059373509,
-          "min_s": 0.046575911,
-          "max_s": 0.060114364,
-          "peak_rss_kib": 59844,
+          "median_s": 0.05516275,
+          "min_s": 0.04590941,
+          "max_s": 0.059833469,
+          "peak_rss_kib": 59788,
           "runs": 3
         },
         "TypeScript (Bun)": {
-          "median_s": 0.032131242,
-          "min_s": 0.026947819,
-          "max_s": 0.033664962,
-          "peak_rss_kib": 28744,
+          "median_s": 0.025693997,
+          "min_s": 0.025481593,
+          "max_s": 0.033716667,
+          "peak_rss_kib": 28912,
           "runs": 3
         }
       }
     }
   ],
-  "floor_rss_kib": 2296
+  "floor_rss_kib": 2268
 }

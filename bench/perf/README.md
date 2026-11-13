@@ -1,6 +1,6 @@
 # Speed: Staal beside Rust, Go, Python and TypeScript
 
-The same seven workloads, written once in each language, timed as whole processes.
+The same nine workloads, written once in each language, timed as whole processes.
 `python3 run.py` builds every program, checks that every one gives the same answer,
 then times each five times. Results are in [results/RESULTS.md](results/RESULTS.md),
 with the raw numbers in `results/results.json`. CI does not run it.
@@ -22,7 +22,9 @@ workload reaches it.
 | money | totals n invoice lines, each 0.37 USD times 1 to 10 | exact money arithmetic |
 | lists | appends n pseudo-random numbers to a list one by one, then sorts it | building a collection |
 | maps | counts n keys, from 1000 distinct ones, in a map | a map updated many times |
+| bigmap | puts n distinct keys in a map in scattered order, then looks each up | a large map |
 | text | joins the numbers below n with commas, and measures the text | building a long text |
+| textread | measures a text of n characters 1000 times, and searches it for a number | reading a long text |
 
 ## How each language is written
 
@@ -38,10 +40,11 @@ is of ordinary code, not of each language at its most tuned.
   what Python code uses for exact money. Text as a list of parts joined once.
 - **TypeScript**: compiled by `tsc` and run on Node.js; and the same source run by
   Bun. Money as integer cents in a `number`, exact below 2^53. The pseudo-random step
-  uses `Math.imul`, because the product exceeds what a `number` holds exactly.
+  uses `Math.imul`, because the product exceeds what a `number` holds exactly. A
+  text's length in characters is `[...t].length`: `t.length` counts UTF-16 units.
 - **Staal**: as the language has it. A list grows by `append`, a map by `put` and a
-  text by `+`; each makes a new value (values do not change), so building a
-  collection of n items one at a time copies it n times.
+  text by `+`, each written `set x = f(x, ...)`; values do not change, but one that
+  nothing else holds is added to in place (RUNTIME.md section 15).
 
 Every language computes the same answer for every size; `run.py` stops if any
 disagrees.
@@ -59,25 +62,29 @@ limits are what it is for. None of that is measured here.
 
 ## What they show about Staal
 
-Read with RESULTS.md, measured after two changes to the runtime (CHANGELOG): native
-code computing `rem`, `abs`, `min` and `max` in machine code, and values held shared
-and moved into a `set` that reads them once, so collections and texts are built in
-place.
+Read with RESULTS.md. Since the first measurement, the runtime has changed in ways
+the CHANGELOG lists: Int built-ins and money computed in machine code, values shared
+and added to in place, maps and sets as trees, and the interpreter's variables held
+in one list per call.
 
-- **Native code is within a few times Rust and Go on calls, arithmetic and loops**:
-  `fib` at about twice Rust's time, `loop` at about three times. Both are faster than
-  Node.js, and level with Bun or ahead of it. Every Int operation is still checked and
-  every step counted, which Rust (with overflow checks) does only in part and Go not
-  at all.
-- **Collections and text are built in linear time**, as in the other languages: a
-  list of 10,000 in 15 ms (2.1 s before the change), a text of 50,000 pieces in 22 ms.
-  They stay several times slower than Rust and Go, and are about Python's speed: each
-  operation still goes through the runtime's general functions for values.
-- **Money is the slowest**: about Python's `Decimal`, a hundred times Rust's integer
-  cents. Money arithmetic in native code goes through the interpreter's functions for
-  values, each with its currency checked; computing it in machine code, as Ints now
-  are, is the next change to make.
-- **The interpreter is slow**: about 13 times CPython on `fib`. Its variables are
-  looked up by name in a map on every read. Native code is what to use where
-  computation matters; the interpreter is the reference both engines are held to.
-- **Memory is small**: 10 to 18 MiB a run, against 42 to 54 MiB for Node.js.
+- **Native code is within a few times Rust and Go on computation**: `fib` at twice
+  Rust's time, `loop` at three times, money at four (8.8 ms, where it took 211 ms).
+  It is faster than Node.js on all of them, about level with Bun on `fib` and money,
+  and twice Bun's speed on `loop`. Every Int and
+  money operation is still checked, and every step counted, which Rust (with
+  overflow checks) does only in part and Go not at all.
+- **Collections and text are built in linear time**, at 4 to 11 times Rust's time:
+  about Python's speed (twice it on lists, a third slower on text in native code).
+  Each operation still goes through the runtime's general functions for values.
+- **A large map is the weakest**: 100,000 distinct keys in 108 ms, ten times Rust,
+  under three times Python and Node.js and nearly five times Bun, which use hash
+  tables. A Staal
+  map is a tree, so its keys are always in order, which a hash table's are not. It
+  took 13.8 s before maps were trees.
+- **Reading a long text is fast**: within 1.4 times Rust, ahead of Go and Python.
+  Reading a variable shares the text rather than copying it.
+- **The interpreter is slow**: 6 times CPython on `fib` and 4 times on `loop` (it was
+  13 times). Each expression is a step through a tree of the program. Native code is
+  what to use where computation matters; the interpreter is the reference both
+  engines are held to.
+- **Memory is small**: 10 to 28 MiB a run, against 42 to 86 MiB for Node.js.
