@@ -59,26 +59,25 @@ limits are what it is for. None of that is measured here.
 
 ## What they show about Staal
 
-Read with RESULTS.md:
+Read with RESULTS.md, measured after two changes to the runtime (CHANGELOG): native
+code computing `rem`, `abs`, `min` and `max` in machine code, and values held shared
+and moved into a `set` that reads them once, so collections and texts are built in
+place.
 
-- **Function calls and integer arithmetic in native code are close to Rust and Go.**
-  `fib` on Staal's native engine takes about twice Rust's time, about what Bun
-  takes, and half what Node.js takes.
-- **The interpreter is slow**: about 13 times CPython's time on `fib`, and 6 times on
-  `loop`. Native code is what to use where computation matters.
-- **Built-in functions are slow from native code.** `loop` spends nearly all its
-  time in the built-in `rem`, which native code calls through the interpreter's
-  general path for built-ins, at about 130 ns a call: 1.3 s, slower than CPython. The
-  same loop with the remainder written as a Staal function (`a - (a / 7) * 7`) ran in
-  74 ms in a separate measurement, closer to Node.js than to Python. Money arithmetic
-  goes the same way: native Staal takes about twice Python's `Decimal` time.
-- **Building a collection or a text one item at a time is quadratic.** `append`,
-  `put` and `+` copy the whole value each time, so doubling n about quadruples the
-  time (the scaling table: 10,000 items in 2 s, 20,000 in 9 s). Native code does not
-  change this: the copying is in the runtime. The other languages grow these in
-  place, in amortised constant time, and stay in milliseconds.
-- **Memory is small**: 10 to 23 MiB a run, against 42 to 54 MiB for Node.js.
-
-The last two are where Staal's runtime can improve without changing the language:
-calling built-ins directly from native code, and values that share their contents
-instead of copying them when a new one is made.
+- **Native code is within a few times Rust and Go on calls, arithmetic and loops**:
+  `fib` at about twice Rust's time, `loop` at about three times. Both are faster than
+  Node.js, and level with Bun or ahead of it. Every Int operation is still checked and
+  every step counted, which Rust (with overflow checks) does only in part and Go not
+  at all.
+- **Collections and text are built in linear time**, as in the other languages: a
+  list of 10,000 in 15 ms (2.1 s before the change), a text of 50,000 pieces in 22 ms.
+  They stay several times slower than Rust and Go, and are about Python's speed: each
+  operation still goes through the runtime's general functions for values.
+- **Money is the slowest**: about Python's `Decimal`, a hundred times Rust's integer
+  cents. Money arithmetic in native code goes through the interpreter's functions for
+  values, each with its currency checked; computing it in machine code, as Ints now
+  are, is the next change to make.
+- **The interpreter is slow**: about 13 times CPython on `fib`. Its variables are
+  looked up by name in a map on every read. Native code is what to use where
+  computation matters; the interpreter is the reference both engines are held to.
+- **Memory is small**: 10 to 18 MiB a run, against 42 to 54 MiB for Node.js.
