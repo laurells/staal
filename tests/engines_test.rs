@@ -177,6 +177,18 @@ fn the_tuple_cases_really_run_native_code() {
     assert_eq!(got, want);
 }
 
+/// Every function of the move cases but the one using `try` (which native code does
+/// not run) compiles, so the native engine's moves are what those cases test there.
+#[test]
+fn the_move_cases_really_run_native_code() {
+    let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/moves.staal")).unwrap();
+    let prog = staalc::check_program(&src).unwrap();
+    let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
+    got.sort();
+    let want = ["building", "fill", "moved_to_a_call", "not_read", "shared_list", "shared_map", "shared_set", "shared_text", "through_a_call", "twice"];
+    assert_eq!(got, want);
+}
+
 #[test]
 fn the_map_cases_really_run_native_code() {
     let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/maps.staal")).unwrap();

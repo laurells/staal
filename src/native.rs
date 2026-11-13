@@ -36,7 +36,7 @@
 use crate::ast::{ArithOp, Builtin, CmpOp, Expr, FnDecl, LogicOp, Pattern, Program, Stmt, Ty, Variant};
 use crate::interp::value::{from_json, to_json, Value};
 use serde_json::{json, Value as Json};
-use crate::interp::{arith, arith_failure, builtin, cancelled, compare, depth_limit, list_index, neg, step_limit, Failure, FailKind};
+use crate::interp::{arith, arith_failure, builtin, builtin_owned, cancelled, compare, depth_limit, list_index, neg, step_limit, Failure, FailKind};
 use cranelift_codegen::ir::{
     self, condcodes::IntCC, types, AbiParam, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, UserFuncName,
 };
@@ -575,25 +575,25 @@ unsafe extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, 
         match f {
             Builtin::Map => {
                 let mut out = Vec::with_capacity(xs.len());
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
                     out.push(unsafe { call_function(c, &func, vec![x]) }?);
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(out.into()))
             }
             Builtin::Filter => {
                 let mut out = Vec::new();
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
                     if test(unsafe { call_function(c, &func, vec![x.clone()]) }?)? {
                         out.push(x);
                     }
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(out.into()))
             }
             Builtin::Any | Builtin::All => {
                 let want = f == Builtin::Any;
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
                     if test(unsafe { call_function(c, &func, vec![x]) }?)? == want {
                         return Ok(Value::Bool(want));
@@ -603,7 +603,7 @@ unsafe extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, 
             }
             Builtin::Count => {
                 let mut k: i64 = 0;
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
                     if test(unsafe { call_function(c, &func, vec![x]) }?)? {
                         k += 1;
@@ -613,7 +613,7 @@ unsafe extern "C" fn rt_with_function(c: *mut Ctx, code: i64, argv: *const i64, 
             }
             Builtin::Fold => {
                 let Some(mut acc) = start else { return Err(Some(internal("native code: `fold` without a start"))) };
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
                     acc = unsafe { call_function(c, &func, vec![acc, x]) }?;
                 }
@@ -665,7 +665,7 @@ unsafe extern "C" fn rt_builtin(c: *mut Ctx, code: i64, argv: *const i64, n: i64
         let f = f.ok_or_else(|| internal("native code: unknown built-in"))?;
         // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
         let args = unsafe { take_args(c, argv, n) }?;
-        let v = builtin(f, &args)?;
+        let v = builtin_owned(f, args)?;
         Ok(c.put(v))
     })
 }
@@ -906,7 +906,7 @@ unsafe extern "C" fn rt_list(c: *mut Ctx, argv: *const i64, n: i64) -> i64 {
     guard(unsafe { ctx(c) }, |c| {
         // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
         let vals = unsafe { take_args(c, argv, n) }?;
-        Ok(c.put(Value::List(vals)))
+        Ok(c.put(Value::List(vals.into())))
     })
 }
 
@@ -936,9 +936,9 @@ unsafe extern "C" fn rt_empty(c: *mut Ctx, kind: i64) -> i64 {
     // SAFETY: `c` is the Ctx generated code passed (this helper's contract; see `ctx`).
     guard(unsafe { ctx(c) }, |c| {
         let v = match kind {
-            0 => Value::List(Vec::new()),
-            1 => Value::Set(Vec::new()),
-            2 => Value::Map(Vec::new()),
+            0 => Value::List(Vec::new().into()),
+            1 => Value::Set(Vec::new().into()),
+            2 => Value::Map(Vec::new().into()),
             _ => return Err(internal(format!("native code: no empty collection of kind {kind}"))),
         };
         Ok(c.put(v))
@@ -1829,6 +1829,7 @@ fn codegen<M: Module>(prog: &Program, module: &mut M, set: &HashSet<String>) -> 
                 ctx: ir::Value::from_u32(0),
                 scopes: Vec::new(),
                 exits: Vec::new(),
+                moving: None,
                 heads: Vec::new(),
             };
             g.function(f)?;
@@ -1992,6 +1993,9 @@ struct Gen<'b, 'm, 'p, M: Module> {
     exits: Vec<(ir::Block, usize)>,
     /// Where `continue` jumps for each enclosing loop, and the scope depth it drops to.
     heads: Vec<(ir::Block, usize)>,
+    /// The variable a `set` being compiled moves into its expression (the interpreter's
+    /// `Interp::moves`): its one read takes the handle and leaves 0 in the variable.
+    moving: Option<String>,
 }
 
 impl<M: Module> Gen<'_, '_, '_, M> {
@@ -2153,14 +2157,33 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 Ok(true)
             }
             Stmt::Set { name, value, .. } => {
-                let v = self.expr(value)?;
+                // As the interpreter: an expression that reads the variable once is given
+                // its value, not a copy (`Interp::moves`).
+                let moves = value.count_var(name) == 1;
+                if moves {
+                    self.moving = Some(name.clone());
+                }
+                let v = self.expr(value);
+                self.moving = None;
+                let v = v?;
                 let (var, t) = {
                     let x = self.lookup(name).ok_or(format!("native code: unknown variable '{name}'"))?;
                     (x.var, x.ty.clone())
                 };
                 let old = self.b.use_var(var);
                 self.b.def_var(var, v);
-                self.drop_value(old, &t);
+                if moves && rep(&t) == Rep::Handle {
+                    // 0 where the read took the value; the old value where it did not run.
+                    let held = self.b.create_block();
+                    let next = self.b.create_block();
+                    self.b.ins().brif(old, held, &[], next, &[]);
+                    self.b.switch_to_block(held);
+                    self.call0(self.h.drop, &[old]);
+                    self.b.ins().jump(next, &[]);
+                    self.b.switch_to_block(next);
+                } else {
+                    self.drop_value(old, &t);
+                }
                 Ok(true)
             }
             Stmt::Expr(e) => {
@@ -2526,6 +2549,14 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                     (x.var, x.ty.clone())
                 };
                 let v = self.b.use_var(var);
+                if self.moving.as_deref() == Some(n.as_str()) && rep(&t) == Rep::Handle {
+                    // The `set` of this variable moves its value here: the handle is
+                    // taken, and 0 (no value) left in the variable.
+                    self.moving = None;
+                    let none = self.b.ins().iconst(types::I64, 0);
+                    self.b.def_var(var, none);
+                    return Ok(v);
+                }
                 // Reading a variable copies its value, as the interpreter does.
                 Ok(match rep(&t) {
                     Rep::Raw => v,
@@ -2976,7 +3007,7 @@ fn first_with(words: List<Text, 10>, c: Text) -> Text {
         assert_eq!(native.call("skip", &mut ctx, &[Value::Int(7)]).unwrap().unwrap(), Value::Int(10000));
         assert!(ctx.peak <= 12, "at most {} values were alive at once", ctx.peak);
         assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
-        let words = Value::List(["cat", "dog", "bird"].iter().map(|w| Value::Text(w.to_string())).collect());
+        let words = Value::List(["cat", "dog", "bird"].iter().map(|w| Value::Text(w.to_string())).collect::<Vec<_>>().into());
         let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
         let r = native.call("first_with", &mut ctx, &[words, Value::Text("i".into())]).unwrap().unwrap();
         assert_eq!(r, Value::Text("bird".into()));

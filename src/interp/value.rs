@@ -39,6 +39,24 @@ pub struct Receipt {
     pub method: String,
 }
 
+/// The contents of a list, map or set, shared by every value holding them. Values never
+/// change, as a program sees them: a copy is a new pointer to the same contents, and
+/// changing a value (`make_mut`) copies its contents first if anything else holds them,
+/// so no other value sees the change. When nothing else does (a value moved out of the
+/// variable a `set` replaces), the change is made in place.
+pub type Shared<T> = std::sync::Arc<T>;
+
+/// The contents of `v`, to change: in place when nothing else holds them, copied first
+/// otherwise.
+pub fn make_mut<T: Clone>(v: &mut Shared<T>) -> &mut T {
+    Shared::make_mut(v)
+}
+
+/// The contents of `v`, owned: taken when nothing else holds them, copied otherwise.
+pub fn into_inner<T: Clone>(v: Shared<T>) -> T {
+    Shared::unwrap_or_clone(v)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Unit,
@@ -50,16 +68,17 @@ pub enum Value {
     /// A value of enum `ty`: one variant and its fields, in declaration order.
     Enum { ty: String, variant: String, fields: Vec<(String, Value)> },
     /// A list; its length never exceeds the maximum in its type (checked where lists
-    /// enter from outside, and fixed for literals).
-    List(Vec<Value>),
+    /// enter from outside, and fixed for literals). Shared: copying a list copies a
+    /// pointer, and a list is copied only when one that is shared is changed (`Shared`).
+    List(Shared<Vec<Value>>),
     /// A value of `Optional<T>`: a T (`some`), or nothing (`none`).
     Opt(Option<Box<Value>>),
     /// A tuple: its elements, in order.
     Tuple(Vec<Value>),
-    /// A map: its entries, each key once, in key order (`key_order`).
-    Map(Vec<(Value, Value)>),
-    /// A set: its items, each once, in order (`key_order`).
-    Set(Vec<Value>),
+    /// A map: its entries, each key once, in key order (`key_order`). Shared, as a list.
+    Map(Shared<Vec<(Value, Value)>>),
+    /// A set: its items, each once, in order (`key_order`). Shared, as a list.
+    Set(Shared<Vec<Value>>),
     /// A function value: function `name`, called with `captured` before its arguments.
     Func { name: String, captured: Vec<Value> },
     /// Raw output from outside (a model, or text given to `parse`), not yet checked
@@ -171,7 +190,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
             if out.windows(2).any(|w| w[0].0 == w[1].0) {
                 return Err(format!("{path}: a key appears twice"));
             }
-            Ok(Value::Map(out))
+            Ok(Value::Map(out.into()))
         }
         Ty::Set(t, max) => {
             let items = json.as_array().ok_or_else(|| expected("a list"))?;
@@ -187,7 +206,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
                 let shown = to_json(&w[0], false).map(|j| j.to_string()).unwrap_or_default();
                 return Err(format!("{path}: {} appears twice; a set holds each item once", crate::clip::clip(&shown)));
             }
-            Ok(Value::Set(out))
+            Ok(Value::Set(out.into()))
         }
         Ty::List(inner, max) => {
             let items = json.as_array().ok_or_else(|| expected("a list"))?;
@@ -200,7 +219,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
             for (i, item) in items.iter().enumerate() {
                 out.push(from_json_at(inner, item, types, &format!("{path}[{i}]"), depth + 1, lenient)?);
             }
-            Ok(Value::List(out))
+            Ok(Value::List(out.into()))
         }
         Ty::Named(n) => match n.as_str() {
             "Text" => json.as_str().map(|s| Value::Text(s.to_string())).ok_or_else(|| expected("a string")),
@@ -354,7 +373,7 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
         Value::Tuple(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
         Value::Map(entries) => {
             let mut obj = Map::new();
-            for (k, v) in entries {
+            for (k, v) in entries.iter() {
                 let key = match k {
                     Value::Text(t) => t.clone(),
                     Value::Int(n) => n.to_string(),
@@ -563,8 +582,8 @@ mod tests {
     fn lists_are_bounded_at_the_boundary() {
         let t = types();
         let ty = Ty::List(Box::new(Ty::Named("Int".into())), 3);
-        assert_eq!(from_json(&ty, &json!([1, 2, 3]), &t, "xs").unwrap(), Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]));
-        assert_eq!(from_json(&ty, &json!([]), &t, "xs").unwrap(), Value::List(vec![]));
+        assert_eq!(from_json(&ty, &json!([1, 2, 3]), &t, "xs").unwrap(), Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()));
+        assert_eq!(from_json(&ty, &json!([]), &t, "xs").unwrap(), Value::List(vec![].into()));
         assert!(from_json(&ty, &json!([1, 2, 3, 4]), &t, "xs").unwrap_err().contains("at most 3"));
         assert!(from_json(&ty, &json!([1, "two"]), &t, "xs").unwrap_err().contains("xs[1]"));
         assert!(from_json(&ty, &json!({ "0": 1 }), &t, "xs").is_err());

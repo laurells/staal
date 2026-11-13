@@ -1702,9 +1702,40 @@ enum Flow {
 /// Variables of one function invocation: a stack of block scopes.
 struct Frame {
     scopes: Vec<HashMap<String, Value>>,
+    /// The value of the variable a `set` replaces, moved out of it while the new value
+    /// is computed (`Interp::moves`): its one read takes it, so nothing else holds it and
+    /// a list, map, set or text it is built from is changed in place.
+    moved: Option<(String, Value)>,
 }
 
 impl Frame {
+    fn new() -> Frame {
+        Frame { scopes: vec![HashMap::new()], moved: None }
+    }
+
+    /// The value of variable `name`, as an expression reads it: the moved value, taken,
+    /// if it is the variable a `set` moved; a copy otherwise.
+    fn read(&mut self, name: &str) -> Result<Value, Failure> {
+        if let Some((n, _)) = &self.moved
+            && n == name
+        {
+            return Ok(self.moved.take().expect("checked").1);
+        }
+        self.get(name)
+    }
+
+    /// Moves the value of `name` out of it, for a `set` of `name`; Unit stands in it
+    /// meanwhile, and no expression reads it (`Interp::moves`).
+    fn move_out(&mut self, name: &str) -> Result<(), Failure> {
+        for s in self.scopes.iter_mut().rev() {
+            if let Some(slot) = s.get_mut(name) {
+                self.moved = Some((name.to_string(), std::mem::replace(slot, Value::Unit)));
+                return Ok(());
+            }
+        }
+        internal(format!("`set` of undeclared variable '{name}'"))
+    }
+
     fn get(&self, name: &str) -> Result<Value, Failure> {
         for s in self.scopes.iter().rev() {
             if let Some(v) = s.get(name) {
@@ -1737,6 +1768,9 @@ impl Frame {
 }
 
 struct Interp<'p> {
+    /// For each `set`'s expression, by its address in the program, whether the `set`
+    /// moves its variable's value (`moves`).
+    moves: HashMap<usize, bool>,
     fns: HashMap<&'p str, &'p FnDecl>,
     types: Types,
     provider: Box<dyn Provider + Send>,
@@ -1879,6 +1913,7 @@ impl<'p> Interp<'p> {
         journal: Journal,
     ) -> Self {
         Interp {
+            moves: HashMap::new(),
             fns: prog.fns.iter().map(|f| (f.name.as_str(), f)).collect(),
             types: types_of(prog),
             provider,
@@ -2197,7 +2232,7 @@ impl<'p> Interp<'p> {
                 return r;
             }
         }
-        let mut frame = Frame { scopes: vec![HashMap::new()] };
+        let mut frame = Frame::new();
         for (p, v) in f.params.iter().zip(args) {
             let v = match &p.ty {
                 Ty::Cap { limits, .. } => self.narrow(v, limits)?,
@@ -2390,24 +2425,24 @@ impl<'p> Interp<'p> {
         match f {
             Builtin::Map => {
                 let mut out = Vec::with_capacity(xs.len());
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     out.push(call(self, vec![x])?);
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(out.into()))
             }
             Builtin::Filter => {
                 let mut out = Vec::new();
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     if test(call(self, vec![x.clone()])?)? {
                         out.push(x);
                     }
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(out.into()))
             }
             Builtin::Any | Builtin::All => {
                 // Stops at the first item that decides, as `or` and `and` do.
                 let want = f == Builtin::Any;
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     if test(call(self, vec![x])?)? == want {
                         return Ok(Value::Bool(want));
                     }
@@ -2416,7 +2451,7 @@ impl<'p> Interp<'p> {
             }
             Builtin::Count => {
                 let mut n: i64 = 0;
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     if test(call(self, vec![x])?)? {
                         n += 1;
                     }
@@ -2425,7 +2460,7 @@ impl<'p> Interp<'p> {
             }
             Builtin::Fold => {
                 let Some(mut acc) = start else { return internal("`fold` without a start") };
-                for x in xs {
+                for x in crate::interp::value::into_inner(xs) {
                     acc = call(self, vec![acc, x])?;
                 }
                 Ok(acc)
@@ -2491,7 +2526,7 @@ impl<'p> Interp<'p> {
                 let mut v = self.eval(frame, value)?;
                 // `[]` takes its declared type, which may be a set.
                 if matches!(ty, Some(Ty::Set(..))) && matches!(value, Expr::List(items, _) if items.is_empty()) {
-                    v = Value::Set(Vec::new());
+                    v = Value::Set(Vec::new().into());
                 }
                 if let Some(Ty::Cap { limits, .. }) = ty {
                     v = self.narrow(v, limits)?;
@@ -2500,8 +2535,19 @@ impl<'p> Interp<'p> {
                 Ok(Flow::Next)
             }
             Stmt::Set { name, value, .. } => {
-                let v = self.eval(frame, value)?;
-                frame.assign(name, v)?;
+                if !self.moves(value, name) {
+                    let v = self.eval(frame, value)?;
+                    frame.assign(name, v)?;
+                    return Ok(Flow::Next);
+                }
+                // The variable's value is moved into the expression's one read of it.
+                frame.move_out(name)?;
+                let r = self.eval(frame, value);
+                // Not read (a branch not taken): it is back where it was, then replaced.
+                if let Some((n, v)) = frame.moved.take() {
+                    frame.assign(&n, v)?;
+                }
+                frame.assign(name, r?)?;
                 Ok(Flow::Next)
             }
             Stmt::Fail(msg, _) => {
@@ -2594,7 +2640,7 @@ impl<'p> Interp<'p> {
                 let Value::List(items) = self.eval(frame, list)? else {
                     return internal("`for` over a value that is not a list");
                 };
-                for item in items {
+                for item in crate::interp::value::into_inner(items) {
                     self.tick()?;
                     frame.scopes.push(HashMap::new());
                     let bound = frame.set(var, item);
@@ -2611,11 +2657,23 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// Whether `set name = value` moves the variable's value into the expression rather
+    /// than copying it: when the expression reads `name` exactly once. Moving it is then
+    /// unobservable. Nothing else in the expression reads the variable; a failure while
+    /// it is evaluated leaves the function (a `try` catches only a call's failure, which
+    /// happens in the callee's own frame), or, caught by a `try` within the expression,
+    /// lets the expression go on without reading the variable again; and the result
+    /// becomes the variable's value whatever the expression did with the old one.
+    fn moves(&mut self, value: &Expr, name: &str) -> bool {
+        *self.moves.entry(value as *const Expr as usize).or_insert_with(|| value.count_var(name) == 1)
+    }
+
     /// An interpreter for concurrent task `id`: the same program, journal, broker and
     /// services, its own steps (at most what this one has left), budget meters (copies,
     /// settled when the tasks end) and log.
     fn fork_task(&self, id: String) -> Interp<'p> {
         Interp {
+            moves: self.moves.clone(),
             fns: self.fns.clone(),
             types: self.types.clone(),
             provider: self.provider.fork(),
@@ -2701,7 +2759,7 @@ impl<'p> Interp<'p> {
         self.spawns += 1;
         let prefix = if self.task.is_empty() { String::new() } else { format!("{}/", self.task) };
         let mut tasks: Vec<Interp<'p>> = (0..items.len()).map(|i| self.fork_task(format!("{prefix}{}.{i}", self.spawns))).collect();
-        let calls: Vec<Vec<Value>> = items
+        let calls: Vec<Vec<Value>> = value::into_inner(items)
             .into_iter()
             .map(|x| given.iter().map(|g| g.clone().unwrap_or_else(|| x.clone())).collect())
             .collect();
@@ -2794,7 +2852,7 @@ impl<'p> Interp<'p> {
         }
         match self.fns.get(name.as_str()).map(|f| f.ret.is_none()) {
             Some(true) => Ok(Value::Unit),
-            Some(false) => Ok(Value::List(values)),
+            Some(false) => Ok(Value::List(values.into())),
             None => internal(format!("undefined function '{name}'")),
         }
     }
@@ -2802,7 +2860,7 @@ impl<'p> Interp<'p> {
     fn eval(&mut self, frame: &mut Frame, e: &Expr) -> Result<Value, Failure> {
         match e {
             Expr::Parallel { list, item, call, .. } => self.parallel(frame, list, item, call),
-            Expr::Var(n, _) => frame.get(n),
+            Expr::Var(n, _) => frame.read(n),
             Expr::Str(s, _) => Ok(Value::Text(s.clone())),
             Expr::Bool(b, _) => Ok(Value::Bool(*b)),
             Expr::Money(m, _) => Ok(Value::Money(*m)),
@@ -2851,7 +2909,7 @@ impl<'p> Interp<'p> {
                 if f.is_effect() {
                     return self.effect(*f, vals);
                 }
-                builtin(*f, &vals)
+                builtin_owned(*f, vals)
             }
             Expr::Record { ty, fields, .. } => {
                 let Some(decl) = self.types.get(ty).cloned() else { return internal(format!("unknown record type {ty}")) };
@@ -2874,7 +2932,7 @@ impl<'p> Interp<'p> {
                 for i in items {
                     vals.push(self.eval(frame, i)?);
                 }
-                Ok(Value::List(vals))
+                Ok(Value::List(vals.into()))
             }
             Expr::Variant { ty, variant, fields, .. } => {
                 let decl = self.types.variants(ty).and_then(|vs| vs.iter().find(|(v, _)| v == variant)).map(|(_, f)| f.clone());
@@ -3234,7 +3292,7 @@ impl<'p> Interp<'p> {
         match it.next() {
             None => {}
             Some(Value::List(hs)) => {
-                for h in hs {
+                for h in crate::interp::value::into_inner(hs) {
                     match h {
                         Value::Header { name, value } => headers.push((name, value)),
                         _ => return internal("a header list holds something that is not a header"),
@@ -3353,7 +3411,7 @@ impl<'p> Interp<'p> {
                     ty: "Response".into(),
                     fields: vec![
                         ("status".into(), Value::Int(status)),
-                        ("headers".into(), Value::List(headers)),
+                        ("headers".into(), Value::List(headers.into())),
                         ("body".into(), Value::Text(text.to_string())),
                         ("complete".into(), Value::Bool(complete)),
                     ],
@@ -3659,7 +3717,7 @@ impl<'p> Interp<'p> {
             None => Vec::new(),
             Some(Value::List(items)) => {
                 let mut ps = Vec::new();
-                for i in items {
+                for i in items.iter() {
                     let Value::Text(t) = i else { return internal("db.sqlite parameters that are not text") };
                     ps.push(t.clone());
                 }
@@ -3729,7 +3787,7 @@ impl<'p> Interp<'p> {
             None => Vec::new(),
             Some(Value::List(items)) => {
                 let mut ps = Vec::new();
-                for i in items {
+                for i in items.iter() {
                     let Value::Text(t) = i else { return internal("db.postgres parameters that are not text") };
                     ps.push(t.clone());
                 }
@@ -4109,6 +4167,58 @@ pub(crate) fn arith(op: ArithOp, l: Value, r: Value) -> Result<Value, Failure> {
     }
 }
 
+/// The built-in functions that make a new value from one they are given, changing
+/// it: `append`, `put`, `add` and `concat` (of its first list). Given the arguments to
+/// own, the first is changed in place when nothing else holds its contents (a value a
+/// `set` moved into the call), and copied first otherwise, so no other value ever sees
+/// the change. Every other built-in is `builtin`'s.
+pub(crate) fn builtin_owned(f: Builtin, mut args: Vec<Value>) -> Result<Value, Failure> {
+    use value::make_mut;
+    let take = |v: &mut Value| std::mem::replace(v, Value::Unit);
+    match (f, args.as_mut_slice()) {
+        (Builtin::Append, [Value::List(xs), v, Value::Int(cap)]) => {
+            if xs.len() as i64 >= *cap {
+                return fail(FailKind::Value, format!("the list is full: it holds at most {cap} items, so {} cannot be added", shown(v)));
+            }
+            let mut xs = std::mem::take(xs);
+            make_mut(&mut xs).push(take(v));
+            Ok(Value::List(xs))
+        }
+        (Builtin::Put, [Value::Map(es), k, v, Value::Int(cap)]) => {
+            let mut es = std::mem::take(es);
+            match es.binary_search_by(|(x, _)| key_order(x, k)) {
+                Ok(i) => make_mut(&mut es)[i].1 = take(v),
+                Err(i) => {
+                    if es.len() as i64 >= *cap {
+                        return fail(FailKind::Value, format!("the map is full: it holds at most {cap} entries, so {} cannot be added", shown(k)));
+                    }
+                    make_mut(&mut es).insert(i, (take(k), take(v)));
+                }
+            }
+            Ok(Value::Map(es))
+        }
+        (Builtin::Add, [Value::Set(xs), v, Value::Int(cap)]) => {
+            let mut xs = std::mem::take(xs);
+            if let Err(i) = xs.binary_search_by(|x| key_order(x, v)) {
+                if xs.len() as i64 >= *cap {
+                    return fail(FailKind::Value, format!("the set is full: it holds at most {cap} items, so {} cannot be added", shown(v)));
+                }
+                make_mut(&mut xs).insert(i, take(v));
+            }
+            Ok(Value::Set(xs))
+        }
+        (Builtin::Concat, [Value::List(a), Value::List(b)]) => {
+            let mut a = std::mem::take(a);
+            make_mut(&mut a).extend(b.iter().cloned());
+            Ok(Value::List(a))
+        }
+        (Builtin::Append | Builtin::Put | Builtin::Add | Builtin::Concat, _) => {
+            internal(format!("`{}` of arguments it does not take", f.name()))
+        }
+        _ => builtin(f, &args),
+    }
+}
+
 /// The built-in functions. `len` of Text counts Unicode characters, not bytes.
 pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
     let count = |n: usize| i64::try_from(n).map(Value::Int).or_else(|_| internal("length does not fit in an Int"));
@@ -4122,42 +4232,22 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         (Builtin::Contains, [Value::Map(es), k]) => Ok(Value::Bool(es.iter().any(|(x, _)| x == k))),
         (Builtin::Contains, [Value::Set(xs), v]) => Ok(Value::Bool(xs.contains(v))),
         (Builtin::Get, [Value::Map(es), k]) => Ok(Value::Opt(es.iter().find(|(x, _)| x == k).map(|(_, v)| Box::new(v.clone())))),
-        (Builtin::Put, [Value::Map(es), k, v, Value::Int(cap)]) => {
-            let mut es = es.clone();
-            match es.binary_search_by(|(x, _)| key_order(x, k)) {
-                Ok(i) => es[i].1 = v.clone(),
-                Err(i) => {
-                    if es.len() as i64 >= *cap {
-                        return fail(FailKind::Value, format!("the map is full: it holds at most {cap} entries, so {} cannot be added", shown(k)));
-                    }
-                    es.insert(i, (k.clone(), v.clone()));
-                }
-            }
-            Ok(Value::Map(es))
-        }
-        (Builtin::Remove, [Value::Map(es), k]) => Ok(Value::Map(es.iter().filter(|(x, _)| x != k).cloned().collect())),
-        (Builtin::Remove, [Value::Set(xs), v]) => Ok(Value::Set(xs.iter().filter(|x| *x != v).cloned().collect())),
-        (Builtin::Keys, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(k, _)| k.clone()).collect())),
-        (Builtin::Values, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(_, v)| v.clone()).collect())),
+        // Changing a value is one implementation, `builtin_owned`; given arguments it
+        // does not own, its first is shared, so it is copied before it changes.
+        (Builtin::Put | Builtin::Add | Builtin::Append | Builtin::Concat, _) => builtin_owned(f, args.to_vec()),
+        (Builtin::Remove, [Value::Map(es), k]) => Ok(Value::Map(es.iter().filter(|(x, _)| x != k).cloned().collect::<Vec<_>>().into())),
+        (Builtin::Remove, [Value::Set(xs), v]) => Ok(Value::Set(xs.iter().filter(|x| *x != v).cloned().collect::<Vec<_>>().into())),
+        (Builtin::Keys, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>().into())),
+        (Builtin::Values, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>().into())),
         (Builtin::Entries, [Value::Map(es)]) => {
-            Ok(Value::List(es.iter().map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()])).collect()))
-        }
-        (Builtin::Add, [Value::Set(xs), v, Value::Int(cap)]) => {
-            let mut xs = xs.clone();
-            if let Err(i) = xs.binary_search_by(|x| key_order(x, v)) {
-                if xs.len() as i64 >= *cap {
-                    return fail(FailKind::Value, format!("the set is full: it holds at most {cap} items, so {} cannot be added", shown(v)));
-                }
-                xs.insert(i, v.clone());
-            }
-            Ok(Value::Set(xs))
+            Ok(Value::List(es.iter().map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()])).collect::<Vec<_>>().into()))
         }
         (Builtin::Items, [Value::Set(xs)]) => Ok(Value::List(xs.clone())),
         (Builtin::ToSet, [Value::List(xs)]) => {
-            let mut xs = xs.clone();
+            let mut xs = value::into_inner(xs.clone());
             xs.sort_by(key_order);
             xs.dedup();
-            Ok(Value::Set(xs))
+            Ok(Value::Set(xs.into()))
         }
         (Builtin::StartsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.starts_with(b.as_str()))),
         (Builtin::EndsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.ends_with(b.as_str()))),
@@ -4276,7 +4366,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         }
         (Builtin::Slice, [Value::List(xs), Value::Int(start), Value::Int(end)]) => {
             let (a, b) = slice_bounds(*start, *end, xs.len(), "a list", "items")?;
-            Ok(Value::List(xs[a..b].to_vec()))
+            Ok(Value::List(xs[a..b].to_vec().into()))
         }
         (Builtin::IndexOf, [Value::Text(t), Value::Text(part)]) => match t.find(part.as_str()) {
             Some(byte) => Ok(Value::Opt(Some(Box::new(count(t[..byte].chars().count())?)))),
@@ -4294,7 +4384,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             if parts.len() as u64 > u64::try_from(*most).unwrap_or(0) {
                 return fail(FailKind::Value, format!("split gives {} parts, more than the {most} allowed", parts.len()));
             }
-            Ok(Value::List(parts))
+            Ok(Value::List(parts.into()))
         }
         (Builtin::Join, [Value::List(xs), Value::Text(sep)]) => {
             let mut out = String::new();
@@ -4336,15 +4426,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             // The remainder of `/`, so it has the sign of `a`; rem(MIN, -1) is 0.
             Ok(Value::Int(a.wrapping_rem(*b)))
         }
-        (Builtin::Append, [Value::List(xs), v, Value::Int(cap)]) => {
-            if xs.len() as i64 >= *cap {
-                return fail(FailKind::Value, format!("the list is full: it holds at most {cap} items, so {} cannot be added", shown(v)));
-            }
-            let mut xs = xs.clone();
-            xs.push(v.clone());
-            Ok(Value::List(xs))
-        }
-        (Builtin::Reverse, [Value::List(xs)]) => Ok(Value::List(xs.iter().rev().cloned().collect())),
+        (Builtin::Reverse, [Value::List(xs)]) => Ok(Value::List(xs.iter().rev().cloned().collect::<Vec<_>>().into())),
         (Builtin::Sort, [Value::List(xs)]) => {
             if let Some(Value::Money(first)) = xs.first()
                 && let Some(Value::Money(other)) = xs.iter().find(|x| !matches!(x, Value::Money(m) if m.currency == first.currency))
@@ -4354,17 +4436,17 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
                     format!("`sort` of money in different currencies ({} and {})", first.currency.code, other.currency.code),
                 );
             }
-            let mut xs = xs.clone();
+            let mut xs = value::into_inner(xs.clone());
             // Stable, in the order maps and sets keep: Ints and money by value, text by its bytes.
             xs.sort_by(|a, b| match (a, b) {
                 (Value::Money(x), Value::Money(y)) => x.minor.cmp(&y.minor),
                 _ => key_order(a, b),
             });
-            Ok(Value::List(xs))
+            Ok(Value::List(xs.into()))
         }
         (Builtin::Sum, [Value::List(xs)]) => {
             let mut total: i64 = 0;
-            for x in xs {
+            for x in xs.iter() {
                 let Value::Int(n) = x else { return internal("`sum` of a list that is not Int") };
                 total = match total.checked_add(*n) {
                     Some(t) => t,
@@ -4373,7 +4455,6 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             }
             Ok(Value::Int(total))
         }
-        (Builtin::Concat, [Value::List(a), Value::List(b)]) => Ok(Value::List(a.iter().chain(b.iter()).cloned().collect())),
         (Builtin::Sha256, [Value::Text(t)]) => {
             use sha2::Digest;
             Ok(Value::Text(hex(&sha2::Sha256::digest(t.as_bytes()))))
@@ -4499,7 +4580,7 @@ pub(crate) fn map_literal(vals: Vec<Value>) -> Result<Value, Failure> {
             Err(i) => es.insert(i, (k, v)),
         }
     }
-    Ok(Value::Map(es))
+    Ok(Value::Map(es.into()))
 }
 
 /// A map key or set item as a message shows it: as JSON, so text is quoted.
@@ -4567,7 +4648,7 @@ fn eval_pure(e: &Expr, types: &Types) -> Result<Value, Failure> {
         }
         Expr::Builtin { f, args, .. } => {
             let vals = args.iter().map(ev).collect::<Result<Vec<_>, _>>()?;
-            builtin(*f, &vals)
+            builtin_owned(*f, vals)
         }
         Expr::NoneLit(_) => Ok(Value::Opt(None)),
         Expr::SomeOf(inner, _) => Ok(Value::Opt(Some(Box::new(ev(inner)?)))),
@@ -4586,7 +4667,7 @@ fn eval_pure(e: &Expr, types: &Types) -> Result<Value, Failure> {
             }
             Ok(Value::Record { ty: ty.clone(), fields: out })
         }
-        Expr::List(items, _) => Ok(Value::List(items.iter().map(ev).collect::<Result<Vec<_>, _>>()?)),
+        Expr::List(items, _) => Ok(Value::List(items.iter().map(ev).collect::<Result<Vec<_>, _>>()?.into())),
         Expr::Variant { ty, variant, fields, .. } => {
             let decl = types.variants(ty).and_then(|vs| vs.iter().find(|(v, _)| v == variant)).map(|(_, f)| f.clone());
             let Some(decl) = decl else { return internal(format!("unknown variant {ty}.{variant}")) };
@@ -4706,6 +4787,43 @@ fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
 mod tests {
     use super::*;
 
+    /// A list, map or set nothing else holds is changed in place by the built-ins that
+    /// make a new one from it, its contents kept where they are; one another value holds
+    /// is copied first, and that other value is unchanged. In place is what makes
+    /// building one item at a time linear (bench/perf).
+    #[test]
+    fn a_value_nothing_else_holds_is_changed_in_place_and_a_shared_one_is_copied() {
+        let mut v = Vec::with_capacity(8);
+        v.push(Value::Int(1));
+        let list = value::Shared::new(v);
+        let at = value::Shared::as_ptr(&list) as usize;
+        let buffer = list.as_ptr() as usize;
+        let Value::List(out) = builtin_owned(Builtin::Append, vec![Value::List(list), Value::Int(2), Value::Int(8)]).unwrap() else { panic!() };
+        assert_eq!((value::Shared::as_ptr(&out) as usize, out.as_ptr() as usize), (at, buffer), "copied though nothing else held it");
+        assert_eq!(*out, vec![Value::Int(1), Value::Int(2)]);
+        // Shared: copied, the other holder unchanged.
+        let other = out.clone();
+        let Value::List(changed) = builtin_owned(Builtin::Append, vec![Value::List(out), Value::Int(3), Value::Int(8)]).unwrap() else { panic!() };
+        assert!(!value::Shared::ptr_eq(&changed, &other));
+        assert_eq!((other.len(), changed.len()), (2, 3));
+        // A map and a set the same way.
+        let map = value::Shared::new(vec![(Value::Int(1), Value::Int(10))]);
+        let at = value::Shared::as_ptr(&map) as usize;
+        let Value::Map(m) = builtin_owned(Builtin::Put, vec![Value::Map(map), Value::Int(1), Value::Int(11), Value::Int(4)]).unwrap() else { panic!() };
+        assert_eq!(value::Shared::as_ptr(&m) as usize, at);
+        let keep = m.clone();
+        let Value::Map(m2) = builtin_owned(Builtin::Put, vec![Value::Map(m), Value::Int(2), Value::Int(20), Value::Int(4)]).unwrap() else { panic!() };
+        assert_eq!((keep.len(), m2.len(), keep[0].1.clone()), (1, 2, Value::Int(11)));
+        let set = value::Shared::new(vec![Value::Int(1)]);
+        let at = value::Shared::as_ptr(&set) as usize;
+        let Value::Set(s2) = builtin_owned(Builtin::Add, vec![Value::Set(set), Value::Int(0), Value::Int(4)]).unwrap() else { panic!() };
+        assert_eq!((value::Shared::as_ptr(&s2) as usize, s2.to_vec()), (at, vec![Value::Int(0), Value::Int(1)]));
+        // The borrowing form never changes what it is given.
+        let given = vec![Value::List(value::Shared::new(vec![Value::Int(1)])), Value::Int(2), Value::Int(4)];
+        let r = builtin(Builtin::Append, &given).unwrap();
+        assert_eq!((given[0].clone(), r), (Value::List(vec![Value::Int(1)].into()), Value::List(vec![Value::Int(1), Value::Int(2)].into())));
+    }
+
     /// `random_int` draws within its bounds, over every width up to all of Int, and
     /// evenly: each of three values about a third of the time (a deviation of seven
     /// standard deviations in any of them would happen less than once in a trillion runs).
@@ -4750,7 +4868,7 @@ mod tests {
         assert!(too_long(builtin(Builtin::Upper, &[text("ŉ".repeat(k + 1))])));
         // join: the separator counts too.
         let half = || text("a".repeat(MAX_TEXT_BYTES / 2));
-        let parts = Value::List(vec![half(), half()]);
+        let parts = Value::List(vec![half(), half()].into());
         assert!(builtin(Builtin::Join, &[parts.clone(), text(String::new())]).is_ok());
         assert!(too_long(builtin(Builtin::Join, &[parts, text(",".into())])));
     }

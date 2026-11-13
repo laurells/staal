@@ -1,0 +1,1 @@
+{"entry": "shared_map", "expect": {"result": "{\"a\":2,\"b\":3} {\"a\":1}"}, "model": {"provider": "script", "responses": []}, "inputs": {}}

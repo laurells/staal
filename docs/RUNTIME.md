@@ -1874,7 +1874,22 @@ journals. Native code:
   comparison, built-ins, indexing, record building);
 - copies a value when a variable is read, as the interpreter does (a field or item
   read from a variable copies only that field or item), and drops a variable's value
-  when it is reassigned or leaves scope, so memory use matches the interpreter's.
+  when it is reassigned or leaves scope, so memory use matches the interpreter's;
+- moves a variable's value into a `set` of it whose expression reads it once, as the
+  interpreter does (below).
+
+**How values are held.** No program can change a value: `append`, `put`, `add`,
+`remove`, `concat` and `+` each give a new one. Inside the runtime, a list, map or set
+holds its contents shared, so copying one (reading a variable, passing an argument)
+copies a pointer. Making a new one from it copies its contents first if anything else
+holds them, so no other value ever sees a change. When nothing else does, the new one
+is made in place: `set xs = append(xs, x)`, whose expression reads `xs` once, moves
+`xs`'s value into `append` rather than copying it, and `append` adds to it where it
+is. Building a list, map, set or text one item at a time is then linear, as it is in
+languages that grow them in place. The move cannot be seen: nothing else in the
+expression reads the variable, and a failure while it is evaluated either leaves the
+function or, caught by a `try` within the expression, lets it go on without reading
+the variable again. Text is not shared: reading a text variable copies it.
 
 Because the engine is not in the config, a journal does not record it: a run that
 crashed on one engine resumes on the other.

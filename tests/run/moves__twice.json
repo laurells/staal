@@ -1,0 +1,1 @@
+{"entry": "twice", "expect": {"result": "[1,2,1,2] [1,2,2] abab"}, "model": {"provider": "script", "responses": []}, "inputs": {}}

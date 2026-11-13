@@ -913,6 +913,20 @@ impl Expr {
         }
     }
 
+    /// How many times the variable `name` is read in this expression, everything
+    /// evaluated with it included (a lambda's body runs where it is called, with what its
+    /// captures give it, so it is not counted; its captures are).
+    pub fn count_var(&self, name: &str) -> usize {
+        let own = match self {
+            Expr::Var(n, _) => return usize::from(n == name),
+            // An action reads its receiver, a variable named here rather than an
+            // expression.
+            Expr::Action { receiver, .. } => usize::from(receiver == name),
+            _ => 0,
+        };
+        own + self.children().iter().map(|c| c.count_var(name)).sum::<usize>()
+    }
+
     /// Every expression directly inside this one, `blind_to` included, to change them.
     pub fn children_mut(&mut self) -> Vec<&mut Expr> {
         match self {

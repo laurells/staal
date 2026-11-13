@@ -1,0 +1,1 @@
+{"entry": "building", "expect": {"result": "[0,1,2,3,4] [0,1,2,3,4]"}, "model": {"provider": "script", "responses": []}, "inputs": {}}

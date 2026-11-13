@@ -1,0 +1,96 @@
+// A `set` whose expression reads its variable once is given the variable's value, not a
+// copy, so a list, map, set or text built from it changes in place (RUNTIME.md section
+// 15). No program can tell: a value another variable shares is copied before it
+// changes, a failure leaves the caller's value as it was, and a read that never runs
+// leaves the variable as it was.
+
+fn shared_list() -> Text {
+    let xs: List<Int, 10> = [1, 2]
+    let a = xs
+    set xs = append(xs, 3)
+    let before = json(a)
+    set a = append(a, 9)
+    return json(xs) + " " + before + " " + json(a)
+}
+
+fn shared_map() -> Text {
+    let m: Map<Text, Int, 10> = ["a": 1]
+    let n = m
+    set m = put(m, "a", 2)
+    set m = put(m, "b", 3)
+    return json(m) + " " + json(n)
+}
+
+fn shared_set() -> Text {
+    let s: Set<Int, 10> = to_set([3, 1])
+    let t = s
+    set s = add(s, 2)
+    return json(items(s)) + " " + json(items(t))
+}
+
+fn shared_text() -> Text {
+    let t = "ab"
+    let u = t
+    set t = t + "c"
+    set t = t + u
+    return u + "|" + t
+}
+
+fn building() -> Text {
+    let xs: List<Int, 100> = []
+    let sizes: List<Int, 100> = []
+    let i = 0
+    loop {
+        if i >= 5 {
+            break
+        }
+        let before = xs
+        set xs = append(xs, i)
+        set sizes = append(sizes, len(before))
+        set i = i + 1
+    }
+    return json(xs) + " " + json(sizes)
+}
+
+fn fill(given: List<Int, 2>) -> List<Int, 2> {
+    let xs = given
+    set xs = append(xs, 9)
+    return xs
+}
+
+fn after_failure() -> Text {
+    let xs: List<Int, 2> = [1, 2]
+    let r = try fill(xs)
+    return json(r.ok) + " " + json(xs)
+}
+
+fn twice() -> Text {
+    // Read twice: copied, as before.
+    let xs: List<Int, 10> = [1, 2]
+    let both = concat(xs, xs)
+    let ys: List<Int, 20> = [1, 2]
+    set ys = append(ys, len(ys))
+    let t = "ab"
+    set t = t + t
+    return json(both) + " " + json(ys) + " " + t
+}
+
+fn not_read() -> Text {
+    let ok = true
+    set ok = false and ok
+    let yes = false
+    set yes = true or yes
+    return json(ok) + " " + json(yes)
+}
+
+fn through_a_call(xs: List<Int, 10>) -> List<Int, 10> {
+    return append(xs, len(xs))
+}
+
+fn moved_to_a_call() -> Text {
+    let xs: List<Int, 10> = [5]
+    let keep = xs
+    set xs = through_a_call(xs)
+    set xs = through_a_call(xs)
+    return json(xs) + " " + json(keep)
+}

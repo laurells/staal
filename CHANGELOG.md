@@ -251,6 +251,15 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
 
 ### Changed
 
+- Building a list, map, set or text one item at a time is linear, where it was
+  quadratic: a list, map or set holds its contents shared, copied only when one that is
+  shared changes, and a `set` whose expression reads its variable once moves the value
+  in, so `append`, `put`, `add`, `concat` and `+` change it in place (RUNTIME.md section
+  15, "How values are held"). 10,000 appends took 2.1 s and take 19 ms. Nothing a
+  program can see changes.
+- Native code computes `rem`, `abs`, `min` and `max` of Ints in machine code, where it
+  called the interpreter's general path for built-ins: a loop calling `rem` runs 18
+  times faster. Failures and their messages are the interpreter's.
 - `staalc debug` shows a capability as `"<capability>"` rather than its internal
   handle number, and a secret as `{"secret": NAME}`, and removes any secret value of
   the run from a text it shows. Other values are shown as before.
