@@ -127,7 +127,7 @@ pub struct Failure {
 /// text, or for a value of a declared `fails` type, that value as JSON and the value.
 pub(crate) fn raise(v: Value) -> Failure {
     match v {
-        Value::Text(m) => Failure { raised: None, kind: FailKind::Action, message: m },
+        Value::Text(m) => Failure { raised: None, kind: FailKind::Action, message: String::clone(&m) },
         v => {
             let message = match to_json(&v, false) {
                 Ok(j) => j.to_string(),
@@ -1068,7 +1068,7 @@ fn parse_grant(
                     }
                     Ty::Named(x) if x == "Text" => {
                         let text = v.as_str().ok_or(format!("{nat}: expected a string"))?;
-                        needs.push(NeedArg::Data(Value::Text(text.to_string())));
+                        needs.push(NeedArg::Data(Value::text(text.to_string())));
                     }
                     other => return Err(format!("{nat}: a {other} cannot be supplied; the compiler should have refused it")),
                 }
@@ -2397,7 +2397,7 @@ impl<'p> Interp<'p> {
                     Err(e) => return fail(FailKind::Value, e),
                 };
                 self.emit("input", json!({ "text": line, "replayed": replayed }));
-                Ok(Value::Opt(line.map(|t| Box::new(Value::Text(t)))))
+                Ok(Value::Opt(line.map(|t| Box::new(Value::text(t)))))
             }
             _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
         }
@@ -2861,7 +2861,7 @@ impl<'p> Interp<'p> {
         match e {
             Expr::Parallel { list, item, call, .. } => self.parallel(frame, list, item, call),
             Expr::Var(n, _) => frame.read(n),
-            Expr::Str(s, _) => Ok(Value::Text(s.clone())),
+            Expr::Str(s, _) => Ok(Value::text(s.clone())),
             Expr::Bool(b, _) => Ok(Value::Bool(*b)),
             Expr::Money(m, _) => Ok(Value::Money(*m)),
             Expr::Int(n, _) => match i64::try_from(*n) {
@@ -2964,7 +2964,7 @@ impl<'p> Interp<'p> {
                 Value::Tuple(items) => tuple_item(items, field),
                 Value::Outcome { ok, error, raised, .. } => match field.as_str() {
                     "ok" => Ok(Value::Bool(ok)),
-                    "error" => Ok(Value::Text(error)),
+                    "error" => Ok(Value::text(error)),
                     "failure" => Ok(Value::Opt(raised)),
                     _ => internal(format!("Outcome has no field '{field}'")),
                 },
@@ -3035,7 +3035,7 @@ impl<'p> Interp<'p> {
                         Value::Text(t) => t,
                         _ => return internal("`instruct` was not Text"),
                     },
-                    None => "Respond with a value of the requested type.".to_string(),
+                    None => crate::interp::value::Shared::new("Respond with a value of the requested type.".to_string()),
                 };
                 let mut payload = Vec::with_capacity(data.len());
                 for d in data {
@@ -3043,7 +3043,7 @@ impl<'p> Interp<'p> {
                     // Re-checked here even though the compiler forbids it.
                     payload.push(to_json(&v, true).or_else(internal)?);
                 }
-                self.model_call(ty, instruction, payload, *tokens)
+                self.model_call(ty, String::clone(&instruction), payload, *tokens)
             }
             Expr::Parse { ty, text, .. } => match self.eval(frame, text)? {
                 Value::Text(t) => match serde_json::from_str::<Json>(&t) {
@@ -3221,7 +3221,7 @@ impl<'p> Interp<'p> {
             "action_requested",
             json!({ "capability": path, "method": method, "amount": amount_text, "target": target }),
         );
-        let authorized = self.broker().authorize(h, amount, target.as_deref());
+        let authorized = self.broker().authorize(h, amount, target.as_ref().map(|t| t.as_str()));
         if let Err(why) = authorized {
             return self.refuse(path, method, FailKind::Capability, why);
         }
@@ -3245,7 +3245,7 @@ impl<'p> Interp<'p> {
                     json!({ "capability": path, "method": method, "amount": amount_text, "target": target, "receipt": id }),
                 );
                 self.broker().charge(h, amount).or_else(internal)?;
-                Ok(Value::Receipt(Receipt { id, capability: path.to_string(), method: method.to_string() }))
+                Ok(Value::Receipt(Receipt { id: String::clone(&id), capability: path.to_string(), method: method.to_string() }))
             }
             Ok(_) => internal("a capability action returned something that is not Text"),
             Err(f) => {
@@ -3281,7 +3281,7 @@ impl<'p> Interp<'p> {
         // A body is Text, or a Secret (a template filled by `fill_secret`).
         let (body, body_shown): (Option<values::Value>, Json) = if has_body {
             match it.next() {
-                Some(Value::Text(b)) => (Some(values::Value::new(b.clone())), json!(b)),
+                Some(Value::Text(b)) => (Some(values::Value::new(String::clone(&b.clone()))), json!(b)),
                 Some(Value::Secret(s)) => (Some(s.value), json!({ "secret": s.name, "shown": s.shown })),
                 _ => return internal("net.http without a body"),
             }
@@ -3389,7 +3389,7 @@ impl<'p> Interp<'p> {
                             };
                             out.push(Value::Record {
                                 ty: "HeaderField".into(),
-                                fields: vec![("name".into(), Value::Text(n.to_string())), ("value".into(), Value::Text(val.to_string()))],
+                                fields: vec![("name".into(), Value::text(n.to_string())), ("value".into(), Value::text(val.to_string()))],
                             });
                         }
                         if out.len() > http::MAX_HEADER_FIELDS {
@@ -3412,7 +3412,7 @@ impl<'p> Interp<'p> {
                     fields: vec![
                         ("status".into(), Value::Int(status)),
                         ("headers".into(), Value::List(headers.into())),
-                        ("body".into(), Value::Text(text.to_string())),
+                        ("body".into(), Value::text(text.to_string())),
                         ("complete".into(), Value::Bool(complete)),
                     ],
                 })
@@ -3475,7 +3475,7 @@ impl<'p> Interp<'p> {
                 self.performed += 1;
                 self.emit("action_performed", json!({ "capability": path, "method": method, "target": file, "replayed": replayed }));
                 match (method, v["text"].as_str(), v["receipt"].as_str()) {
-                    ("read", Some(t), _) => Ok(Value::Text(t.to_string())),
+                    ("read", Some(t), _) => Ok(Value::text(t.to_string())),
                     ("write", _, Some(id)) => {
                         Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
                     }
@@ -3517,7 +3517,7 @@ impl<'p> Interp<'p> {
         let what = format!("action {path} {address}");
         let recovery = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false);
         let (answer, replayed) = self.external("action", jbody, recovery, &what, |it, _key| {
-            match tcp::exchange(&address, data.as_bytes(), until.as_deref(), &it.tcp, path == "net.tls.exchange", &reach) {
+            match tcp::exchange(&address, data.as_bytes(), until.as_ref().map(|t| t.as_str()), &it.tcp, path == "net.tls.exchange", &reach) {
                 tcp::Outcome::Reply(t) => Answer::Done(Ok(json!({ "text": scrub_text(&it.secrets, &t) }))),
                 tcp::Outcome::NotSent(e) => Answer::Done(Err(format!("{NOT_SENT}{e}"))),
                 tcp::Outcome::Unusable(e) => Answer::Done(Err(e)),
@@ -3532,7 +3532,7 @@ impl<'p> Interp<'p> {
                 self.performed += 1;
                 self.effects += 1;
                 self.emit("action_performed", json!({ "capability": path, "method": method, "target": address, "replayed": replayed }));
-                Ok(Value::Text(t.to_string()))
+                Ok(Value::text(t.to_string()))
             }
             Err(msg) => {
                 if !msg.starts_with(NOT_SENT) {
@@ -3558,7 +3558,7 @@ impl<'p> Interp<'p> {
             cargs.push(match a {
                 Value::Int(n) => ffi::CValue::Int(*n),
                 Value::Bool(b) => ffi::CValue::Bool(*b),
-                Value::Text(t) => ffi::CValue::Text(t.clone()),
+                Value::Text(t) => ffi::CValue::Text(String::clone(&t.clone())),
                 other => return internal(format!("{path} given {other:?}; the checker should have refused it")),
             });
         }
@@ -3599,7 +3599,7 @@ impl<'p> Interp<'p> {
             Ok(v) => {
                 let got = match (f.ret, &v["value"]) {
                     (CType::Bool, Json::Bool(b)) => Value::Bool(*b),
-                    (CType::Text, Json::String(t)) => Value::Text(t.clone()),
+                    (CType::Text, Json::String(t)) => Value::text(t.clone()),
                     (CType::Void, Json::Null) => Value::Unit,
                     (CType::Bool | CType::Text | CType::Void, _) => {
                         return fail(FailKind::Journal, format!("malformed C result in the journal: {v}"));
@@ -3652,7 +3652,7 @@ impl<'p> Interp<'p> {
             let Some(listen) = self.listen.get(&root).cloned() else { return internal("an accept grant without its listening settings") };
             let recovery = runtime_recovery(path, self.broker().idempotency_key(h).or_else(internal)?, false);
             let (a, r) = self.external("action", jbody, recovery, &what, |it, key| {
-                let got = tcp::accept(&it.server, &address, until.as_deref(), &listen, &it.tcp, key);
+                let got = tcp::accept(&it.server, &address, until.as_ref().map(|t| t.as_str()), &listen, &it.tcp, key);
                 // Each client dropped as unusable, with why: never what it sent.
                 for why in &got.dropped {
                     it.emit("client_dropped", json!({ "capability": path, "target": address, "reason": why }));
@@ -3680,7 +3680,7 @@ impl<'p> Interp<'p> {
                 )
             })?;
             self.effects += 1;
-            (a, r, id.clone())
+            (a, r, String::clone(&id))
         };
         match answer {
             Ok(v) => {
@@ -3688,7 +3688,7 @@ impl<'p> Interp<'p> {
                     let (Some(c), Some(d)) = (v["connection"].as_str(), v["data"].as_str()) else {
                         return fail(FailKind::Journal, format!("malformed accept result in the journal: {v}"));
                     };
-                    Value::Record { ty: "Incoming".into(), fields: vec![("connection".into(), Value::Text(c.into())), ("data".into(), Value::Text(d.into()))] }
+                    Value::Record { ty: "Incoming".into(), fields: vec![("connection".into(), Value::Text(String::from(c).into())), ("data".into(), Value::Text(String::from(d).into()))] }
                 } else {
                     let Some(r) = v["receipt"].as_str() else {
                         return fail(FailKind::Journal, format!("malformed reply result in the journal: {v}"));
@@ -3719,7 +3719,7 @@ impl<'p> Interp<'p> {
                 let mut ps = Vec::new();
                 for i in items.iter() {
                     let Value::Text(t) = i else { return internal("db.sqlite parameters that are not text") };
-                    ps.push(t.clone());
+                    ps.push(String::clone(t));
                 }
                 ps
             }
@@ -3762,7 +3762,7 @@ impl<'p> Interp<'p> {
                 self.performed += 1;
                 self.emit("action_performed", json!({ "capability": path, "method": method, "target": file, "replayed": replayed }));
                 match (method, v["text"].as_str(), v["receipt"].as_str()) {
-                    ("query", Some(t), _) => Ok(Value::Text(t.to_string())),
+                    ("query", Some(t), _) => Ok(Value::text(t.to_string())),
                     ("execute", _, Some(id)) => {
                         Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
                     }
@@ -3789,7 +3789,7 @@ impl<'p> Interp<'p> {
                 let mut ps = Vec::new();
                 for i in items.iter() {
                     let Value::Text(t) = i else { return internal("db.postgres parameters that are not text") };
-                    ps.push(t.clone());
+                    ps.push(String::clone(t));
                 }
                 ps
             }
@@ -3800,7 +3800,7 @@ impl<'p> Interp<'p> {
             return internal(format!("{path} was granted without its databases"));
         };
         self.emit("action_requested", json!({ "capability": path, "method": method, "target": name }));
-        if !grant.databases.contains_key(name) {
+        if !grant.databases.contains_key(name.as_str()) {
             let names: Vec<&str> = grant.databases.keys().map(String::as_str).collect();
             let why = format!("the grant reaches no database named '{name}' (it reaches {})", names.join(", "));
             return self.refuse(path, method, FailKind::Capability, why);
@@ -3840,7 +3840,7 @@ impl<'p> Interp<'p> {
                 self.performed += 1;
                 self.emit("action_performed", json!({ "capability": path, "method": method, "target": name, "replayed": replayed }));
                 match (method, v["text"].as_str(), v["receipt"].as_str()) {
-                    ("query", Some(t), _) => Ok(Value::Text(t.to_string())),
+                    ("query", Some(t), _) => Ok(Value::text(t.to_string())),
                     ("execute", _, Some(id)) => {
                         Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
                     }
@@ -4161,7 +4161,10 @@ pub(crate) fn arith(op: ArithOp, l: Value, r: Value) -> Result<Value, Failure> {
             if a.len().saturating_add(b.len()) > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("text would be longer than {MAX_TEXT_BYTES} bytes"));
             }
-            Ok(Value::Text(a + &b))
+            // In place when nothing else holds the left text (a value a `set` moved in).
+            let mut a = a;
+            value::make_mut(&mut a).push_str(&b);
+            Ok(Value::Text(a))
         }
         _ => internal(format!("`{op}` applied to values the compiler should have rejected")),
     }
@@ -4272,7 +4275,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         (Builtin::EndsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.ends_with(b.as_str()))),
         (Builtin::Header, [Value::Text(name), v]) => {
             let value = match v {
-                Value::Text(t) => HeaderValue::Text(t.clone()),
+                Value::Text(t) => HeaderValue::Text(String::clone(&t.clone())),
                 Value::Secret(s) => HeaderValue::Secret(s.clone()),
                 _ => return internal("`header` value is neither Text nor a Secret"),
             };
@@ -4281,7 +4284,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
                 HeaderValue::Secret(s) => http::check_header(name, &s.value),
             };
             check.map_err(|e| Failure { raised: None, kind: FailKind::Value, message: e })?;
-            Ok(Value::Header { name: name.clone(), value })
+            Ok(Value::Header { name: String::clone(&name.clone()), value })
         }
         (Builtin::FillSecret, [Value::Text(template), Value::Secret(key)]) => {
             // Exactly once. The program writes its own placeholder; a second one can only
@@ -4319,7 +4322,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             if worst > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("text would be longer than {MAX_TEXT_BYTES} bytes"));
             }
-            Ok(Value::Text(t.replace(from.as_str(), to)))
+            Ok(Value::text(t.replace(from.as_str(), to)))
         }
         // Lowercasing can lengthen a text (some letters become two), so it is checked.
         (Builtin::Lower, [Value::Text(t)]) => {
@@ -4327,30 +4330,30 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             if lower.len() > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("lower would give a text longer than {MAX_TEXT_BYTES} bytes"));
             }
-            Ok(Value::Text(lower))
+            Ok(Value::text(lower))
         }
         (Builtin::UrlSegment, [Value::Text(t)]) => {
-            if t.is_empty() || t == "." || t == ".." {
+            if t.is_empty() || t.as_str() == "." || t.as_str() == ".." {
                 return fail(FailKind::Value, format!("{t:?} cannot be a URL path segment"));
             }
             let seg = form_escape(t);
             if seg.len() > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("url_segment would give a text longer than {MAX_TEXT_BYTES} bytes"));
             }
-            Ok(Value::Text(seg))
+            Ok(Value::text(seg))
         }
-        (Builtin::Trim, [Value::Text(t)]) => Ok(Value::Text(t.trim().to_string())),
+        (Builtin::Trim, [Value::Text(t)]) => Ok(Value::text(t.trim().to_string())),
         (Builtin::Text, [Value::Text(t)]) => Ok(Value::Text(t.clone())),
-        (Builtin::Text, [Value::Int(n)]) => Ok(Value::Text(n.to_string())),
-        (Builtin::Text, [Value::Bool(b)]) => Ok(Value::Text(b.to_string())),
-        (Builtin::Text, [Value::Money(m)]) => Ok(Value::Text(m.to_string())),
+        (Builtin::Text, [Value::Int(n)]) => Ok(Value::text(n.to_string())),
+        (Builtin::Text, [Value::Bool(b)]) => Ok(Value::text(b.to_string())),
+        (Builtin::Text, [Value::Money(m)]) => Ok(Value::text(m.to_string())),
         (Builtin::Form, [Value::Record { fields, .. }]) => {
             let mut parts = Vec::with_capacity(fields.len());
             for (k, v) in fields {
                 let text = match v {
                     Value::Text(t) => t.clone(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => crate::interp::value::Shared::new(n.to_string()),
+                    Value::Bool(b) => crate::interp::value::Shared::new(b.to_string()),
                     _ => return internal("`form` field that is not Text, Int or Bool"),
                 };
                 parts.push(format!("{}={}", form_escape(k), form_escape(&text)));
@@ -4359,16 +4362,16 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             if out.len() > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("form would be longer than {MAX_TEXT_BYTES} bytes"));
             }
-            Ok(Value::Text(out))
+            Ok(Value::text(out))
         }
         (Builtin::MinorUnits, [Value::Money(m)]) => Ok(Value::Int(m.minor)),
-        (Builtin::Currency, [Value::Money(m)]) => Ok(Value::Text(m.currency.code.to_string())),
+        (Builtin::Currency, [Value::Money(m)]) => Ok(Value::text(m.currency.code.to_string())),
         (Builtin::Json, [v]) => {
             let text = to_json(v, true).map_err(|e| Failure { raised: None, kind: FailKind::Internal, message: e })?.to_string();
             if text.len() > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("json would be longer than {MAX_TEXT_BYTES} bytes"));
             }
-            Ok(Value::Text(text))
+            Ok(Value::text(text))
         }
         (Builtin::Upper, [Value::Text(t)]) => {
             // Uppercasing can lengthen a text (`ß` becomes `SS`).
@@ -4376,12 +4379,12 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             if upper.len() > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("upper would give a text longer than {MAX_TEXT_BYTES} bytes"));
             }
-            Ok(Value::Text(upper))
+            Ok(Value::text(upper))
         }
         (Builtin::Slice, [Value::Text(t), Value::Int(start), Value::Int(end)]) => {
             let n = t.chars().count();
             let (a, b) = slice_bounds(*start, *end, n, "a text", "characters")?;
-            Ok(Value::Text(t.chars().skip(a).take(b - a).collect()))
+            Ok(Value::Text(t.chars().skip(a).take(b - a).collect::<String>().into()))
         }
         (Builtin::Slice, [Value::List(xs), Value::Int(start), Value::Int(end)]) => {
             let (a, b) = slice_bounds(*start, *end, xs.len(), "a list", "items")?;
@@ -4399,7 +4402,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             if sep.is_empty() {
                 return fail(FailKind::Value, "`split` needs a separator that is not empty");
             }
-            let parts: Vec<Value> = t.split(sep.as_str()).map(|p| Value::Text(p.to_string())).collect();
+            let parts: Vec<Value> = t.split(sep.as_str()).map(|p| Value::text(p.to_string())).collect();
             if parts.len() as u64 > u64::try_from(*most).unwrap_or(0) {
                 return fail(FailKind::Value, format!("split gives {} parts, more than the {most} allowed", parts.len()));
             }
@@ -4418,7 +4421,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
                 }
                 out.push_str(x);
             }
-            Ok(Value::Text(out))
+            Ok(Value::text(out))
         }
         (Builtin::ToInt, [Value::Text(t)]) => Ok(Value::Opt(parse_int(t).map(|n| Box::new(Value::Int(n))))),
         (Builtin::Abs, [Value::Int(n)]) => match n.checked_abs() {
@@ -4476,7 +4479,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         }
         (Builtin::Sha256, [Value::Text(t)]) => {
             use sha2::Digest;
-            Ok(Value::Text(hex(&sha2::Sha256::digest(t.as_bytes()))))
+            Ok(Value::text(hex(&sha2::Sha256::digest(t.as_bytes()))))
         }
         (Builtin::Base64Encode, [Value::Text(t)]) => {
             use base64::Engine;
@@ -4484,20 +4487,20 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             if t.len().div_ceil(3).saturating_mul(4) > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("base64_encode would give a text longer than {MAX_TEXT_BYTES} bytes"));
             }
-            Ok(Value::Text(base64::engine::general_purpose::STANDARD.encode(t.as_bytes())))
+            Ok(Value::text(base64::engine::general_purpose::STANDARD.encode(t.as_bytes())))
         }
         (Builtin::Base64Decode, [Value::Text(t)]) => {
             use base64::Engine;
             let bytes = base64::engine::general_purpose::STANDARD.decode(t.as_bytes()).ok();
-            Ok(Value::Opt(bytes.and_then(|b| String::from_utf8(b).ok()).map(|s| Box::new(Value::Text(s)))))
+            Ok(Value::Opt(bytes.and_then(|b| String::from_utf8(b).ok()).map(|s| Box::new(Value::text(s)))))
         }
         (Builtin::HexEncode, [Value::Text(t)]) => {
             if t.len().saturating_mul(2) > MAX_TEXT_BYTES {
                 return fail(FailKind::Value, format!("hex_encode would give a text longer than {MAX_TEXT_BYTES} bytes"));
             }
-            Ok(Value::Text(hex(t.as_bytes())))
+            Ok(Value::text(hex(t.as_bytes())))
         }
-        (Builtin::FormatTime, [Value::Int(t)]) => time::format(*t).map(Value::Text).or_else(|e| fail(FailKind::Value, e)),
+        (Builtin::FormatTime, [Value::Int(t)]) => time::format(*t).map(Value::text).or_else(|e| fail(FailKind::Value, e)),
         (Builtin::ParseTime, [Value::Text(t)]) => Ok(Value::Opt(time::parse(t).map(|ms| Box::new(Value::Int(ms))))),
         (Builtin::MakeTime, [Value::Int(y), Value::Int(mo), Value::Int(d), Value::Int(h), Value::Int(mi), Value::Int(s)]) => {
             time::make(*y, *mo, *d, *h, *mi, *s).map(Value::Int).or_else(|e| fail(FailKind::Value, e))
@@ -4511,7 +4514,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
             Err(e) => fail(FailKind::Value, e),
         },
         (Builtin::Weekday, [Value::Int(t)]) => time::weekday(*t).map(Value::Int).or_else(|e| fail(FailKind::Value, e)),
-        (Builtin::HexDecode, [Value::Text(t)]) => Ok(Value::Opt(unhex(t).and_then(|b| String::from_utf8(b).ok()).map(|s| Box::new(Value::Text(s))))),
+        (Builtin::HexDecode, [Value::Text(t)]) => Ok(Value::Opt(unhex(t).and_then(|b| String::from_utf8(b).ok()).map(|s| Box::new(Value::text(s))))),
         _ => internal(format!("`{}` applied to values the compiler should have rejected", f.name())),
     }
 }
@@ -4632,7 +4635,7 @@ pub(crate) fn eval_const(e: &Expr, prog: &Program) -> Result<Value, Failure> {
 fn eval_pure(e: &Expr, types: &Types) -> Result<Value, Failure> {
     let ev = |x: &Expr| eval_pure(x, types);
     match e {
-        Expr::Str(s, _) => Ok(Value::Text(s.clone())),
+        Expr::Str(s, _) => Ok(Value::text(s.clone())),
         Expr::Bool(b, _) => Ok(Value::Bool(*b)),
         Expr::Money(m, _) => Ok(Value::Money(*m)),
         Expr::Int(n, _) => match i64::try_from(*n) {
@@ -4843,6 +4846,22 @@ mod tests {
         assert_eq!((given[0].clone(), r), (Value::List(vec![Value::Int(1)].into()), Value::List(vec![Value::Int(1), Value::Int(2)].into())));
     }
 
+    /// `+` adds to a text nothing else holds in place, its buffer kept; a text another
+    /// value holds is copied first and that value is unchanged.
+    #[test]
+    fn a_text_nothing_else_holds_grows_in_place_and_a_shared_one_is_copied() {
+        let mut s = String::with_capacity(64);
+        s.push_str("ab");
+        let t = value::Shared::new(s);
+        let buffer = t.as_ptr() as usize;
+        let Value::Text(out) = arith(ArithOp::Add, Value::Text(t), Value::text("cd")).unwrap() else { panic!() };
+        assert_eq!((out.as_str(), out.as_ptr() as usize), ("abcd", buffer), "copied though nothing else held it");
+        let other = out.clone();
+        let Value::Text(more) = arith(ArithOp::Add, Value::Text(out), Value::text("e")).unwrap() else { panic!() };
+        assert_eq!((other.as_str(), more.as_str()), ("abcd", "abcde"));
+        assert!(!value::Shared::ptr_eq(&other, &more));
+    }
+
     /// `random_int` draws within its bounds, over every width up to all of Int, and
     /// evenly: each of three values about a third of the time (a deviation of seven
     /// standard deviations in any of them would happen less than once in a trillion runs).
@@ -4872,7 +4891,7 @@ mod tests {
     /// only past it: each is tried at the longest result allowed and one byte beyond.
     #[test]
     fn library_functions_keep_text_within_its_limit() {
-        let text = |s: String| Value::Text(s);
+        let text = |s: String| Value::text(s);
         let too_long = |r: Result<Value, Failure>| matches!(r, Err(f) if f.kind == FailKind::Value && f.message.contains("longer than"));
         // base64: four characters for every three bytes, rounded up.
         let most = MAX_TEXT_BYTES / 4 * 3;

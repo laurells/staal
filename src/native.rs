@@ -435,7 +435,7 @@ unsafe extern "C" fn rt_closure(c: *mut Ctx, name: i64, argv: *const i64, n: i64
         };
         // SAFETY: `argv` and `n` are the array and count generated code passed (this helper's contract).
         let captured = unsafe { take_args(c, argv, n) }?;
-        Ok(c.put(Value::Func { name, captured }))
+        Ok(c.put(Value::Func { name: String::clone(&name), captured }))
     })
 }
 
@@ -1882,7 +1882,7 @@ impl Tables {
         let mut consts = Vec::new();
         for c in j["consts"].as_array().ok_or_else(bad)? {
             consts.push(match (c.get("text"), c.get("money")) {
-                (Some(Json::String(t)), None) => Value::Text(t.clone()),
+                (Some(Json::String(t)), None) => Value::text(t.clone()),
                 (None, Some(m)) => from_json(&named("Money"), m, &Default::default(), "constant").map_err(|e| format!("{}: {e}", bad()))?,
                 _ => return Err(bad()),
             });
@@ -2541,7 +2541,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                 Ok(self.b.ins().iconst(types::I64, n))
             }
             Expr::Bool(v, _) => Ok(self.b.ins().iconst(types::I64, *v as i64)),
-            Expr::Str(s, _) => Ok(self.konst(Value::Text(s.clone()))),
+            Expr::Str(s, _) => Ok(self.konst(Value::text(s.clone()))),
             Expr::Money(m, _) => Ok(self.konst(Value::Money(*m))),
             Expr::Var(n, _) => {
                 let (var, t) = {
@@ -2855,7 +2855,7 @@ impl<M: Module> Gen<'_, '_, '_, M> {
                     held.push(self.as_handle(v, &t));
                 }
                 let argv = self.argv(&held);
-                self.tables.consts.push(Value::Text(name.clone()));
+                self.tables.consts.push(Value::text(name.clone()));
                 let idx = self.b.ins().iconst(types::I64, (self.tables.consts.len() - 1) as i64);
                 let n = self.b.ins().iconst(types::I64, held.len() as i64);
                 Ok(self.call_checked(self.h.closure, &[idx, argv, n]))
@@ -3007,10 +3007,10 @@ fn first_with(words: List<Text, 10>, c: Text) -> Text {
         assert_eq!(native.call("skip", &mut ctx, &[Value::Int(7)]).unwrap().unwrap(), Value::Int(10000));
         assert!(ctx.peak <= 12, "at most {} values were alive at once", ctx.peak);
         assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
-        let words = Value::List(["cat", "dog", "bird"].iter().map(|w| Value::Text(w.to_string())).collect::<Vec<_>>().into());
+        let words = Value::List(["cat", "dog", "bird"].iter().map(|w| Value::text(*w)).collect::<Vec<_>>().into());
         let mut ctx = Ctx::new(0, 10_000_000, 1, 256);
-        let r = native.call("first_with", &mut ctx, &[words, Value::Text("i".into())]).unwrap().unwrap();
-        assert_eq!(r, Value::Text("bird".into()));
+        let r = native.call("first_with", &mut ctx, &[words, Value::text("i")]).unwrap().unwrap();
+        assert_eq!(r, Value::text("bird"));
         assert_eq!(ctx.arena.len() - ctx.free.len(), 0);
     }
 
@@ -3081,7 +3081,7 @@ fn total(n: Int) -> Int {
         let want = Value::Enum {
             ty: "Shape".into(),
             variant: "Square".into(),
-            fields: vec![("side".into(), Value::Int(4)), ("name".into(), Value::Text("s".into()))],
+            fields: vec![("side".into(), Value::Int(4)), ("name".into(), Value::text("s"))],
         };
         assert_eq!(sq, want);
         assert_eq!(native.call("area", &mut ctx, &[sq]).unwrap().unwrap(), Value::Int(16));

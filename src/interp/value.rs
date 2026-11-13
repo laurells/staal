@@ -48,6 +48,13 @@ pub type Shared<T> = std::sync::Arc<T>;
 
 /// The contents of `v`, to change: in place when nothing else holds them, copied first
 /// otherwise.
+impl Value {
+    /// A text value.
+    pub fn text(s: impl Into<String>) -> Value {
+        Value::Text(Shared::new(s.into()))
+    }
+}
+
 pub fn make_mut<T: Clone>(v: &mut Shared<T>) -> &mut T {
     Shared::make_mut(v)
 }
@@ -60,7 +67,9 @@ pub fn into_inner<T: Clone>(v: Shared<T>) -> T {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Unit,
-    Text(String),
+    /// A text, held shared as a list is: copying one copies a pointer, and `+` adds to
+    /// one in place when nothing else holds it.
+    Text(Shared<String>),
     Int(i64),
     Bool(bool),
     Money(Money),
@@ -222,7 +231,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
             Ok(Value::List(out.into()))
         }
         Ty::Named(n) => match n.as_str() {
-            "Text" => json.as_str().map(|s| Value::Text(s.to_string())).ok_or_else(|| expected("a string")),
+            "Text" => json.as_str().map(|s| Value::text(s.to_string())).ok_or_else(|| expected("a string")),
             "Bool" => json.as_bool().map(Value::Bool).ok_or_else(|| expected("true or false")),
             "Int" => match json {
                 Json::Number(num) => num.as_i64().map(Value::Int).ok_or_else(|| {
@@ -301,7 +310,7 @@ pub fn key_order(a: &Value, b: &Value) -> std::cmp::Ordering {
 /// `to_json` writes it (no sign for positive numbers, no leading zeros, no `-0`).
 fn key_from_json(kt: &Ty, k: &str) -> Option<Value> {
     match kt {
-        Ty::Named(n) if n == "Text" => Some(Value::Text(k.to_string())),
+        Ty::Named(n) if n == "Text" => Some(Value::text(k.to_string())),
         Ty::Named(n) if n == "Int" => {
             let v: i64 = k.parse().ok()?;
             (v.to_string() == k).then_some(Value::Int(v))
@@ -350,7 +359,7 @@ fn describe(json: &Json) -> &'static str {
 pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
     Ok(match v {
         Value::Unit => Json::Null,
-        Value::Text(s) => Json::String(s.clone()),
+        Value::Text(s) => Json::String(String::clone(&s.clone())),
         Value::Int(n) => json!(n),
         Value::Bool(b) => json!(b),
         Value::Money(m) => json!({ "amount": m.amount_string(), "currency": m.currency.code }),
@@ -376,10 +385,10 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
             for (k, v) in entries.iter() {
                 let key = match k {
                     Value::Text(t) => t.clone(),
-                    Value::Int(n) => n.to_string(),
+                    Value::Int(n) => crate::interp::value::Shared::new(n.to_string()),
                     _ => return Err("a map key that is neither Text nor Int".into()),
                 };
-                obj.insert(key, to_json(v, for_model)?);
+                obj.insert(String::clone(&key), to_json(v, for_model)?);
             }
             Json::Object(obj)
         }

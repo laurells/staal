@@ -27,7 +27,7 @@ libc = "0.2.191"
 rusqlite = { version = "0.41.0", features = ["bundled", "limits", "hooks"] }
 # serde's own traits, for reading JSON with every object's names distinct
 # (src/agent/strict_json.rs); the version serde_json already uses.
-serde = "1.0.229"
+serde = { version = "1.0.229", features = ["rc"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 # HTTP client for `net.http`, TLS through rustls with the ring provider and the
