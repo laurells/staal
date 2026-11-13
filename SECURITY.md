@@ -11,8 +11,8 @@ is fixed by upgrading.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.28.x  | Yes       |
-| < 0.28  | No        |
+| 0.29.x  | Yes       |
+| < 0.29  | No        |
 
 ## Reporting a vulnerability
 

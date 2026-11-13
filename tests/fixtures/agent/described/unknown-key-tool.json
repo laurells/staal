@@ -2,7 +2,7 @@
   "agent": "support-refunds",
   "dependencies": [],
   "described": "0.1",
-  "staalc": "0.28.0",
+  "staalc": "0.29.0",
   "tools": [
     {
       "consumer_analysis": {

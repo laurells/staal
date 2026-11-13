@@ -22,8 +22,9 @@ GitHub release holding them all, with the changelog's notes for the version.
    `staal-node`, `fuzz/Cargo.lock`, and the two `"version"` fields of
    `node/package-lock.json` and `editors/vscode/package-lock.json`), since builds with
    `--locked` refuse to change them; in `site/index.html`'s stamp; and in the
-   placeholder of `.github/ISSUE_TEMPLATE/bug_report.yml`; and, for a new minor version,
-   in `SECURITY.md`'s table of supported versions.
+   placeholder of `.github/ISSUE_TEMPLATE/bug_report.yml`; in the `"staalc"` field of
+   the agent descriptions under `tests/fixtures/agent/`, which a description records;
+   and, for a new minor version, in `SECURITY.md`'s table of supported versions.
    `cargo test --test release_test` fails until all of them and the changelog agree.
 3. Commit, then tag and push: `git tag -a vX.Y.Z -m "staalc X.Y.Z"` and
    `git push origin vX.Y.Z`. The workflow refuses a tag that is not `v` and the

@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "staal-node"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -1471,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "staalc"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",

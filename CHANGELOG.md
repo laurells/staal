@@ -4,7 +4,7 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
-## Unreleased
+## 0.29.0 — 2026-11-13
 
 This release refuses requests to private addresses unless a grant lists them, and
 changes how C functions run by default. A `net.http.*`, `net.tcp.exchange` or
