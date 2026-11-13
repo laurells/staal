@@ -873,7 +873,9 @@ enum Arg {
     },
 }
 
-/// What a library capability's grant supplies for one of its `needs`.
+/// What a library capability's grant supplies for one of its `needs`. A few are made
+/// for each grant when a run starts, so the size of `Cap` costs nothing.
+#[allow(clippy::large_enum_variant)]
 enum NeedArg {
     /// A runtime capability, granted by the operator and then narrowed to the limits
     /// the library declared for it.
@@ -1064,7 +1066,7 @@ fn parse_grant(
                     Ty::Named(x) if x == "Secret" => {
                         let secret = load_secret(v, &nat, runtime.values.as_ref())?;
                         runtime.secrets.push(secret.value.clone());
-                        needs.push(NeedArg::Data(Value::Secret(secret)));
+                        needs.push(NeedArg::Data(Value::Secret(Box::new(secret))));
                     }
                     Ty::Named(x) if x == "Text" => {
                         let text = v.as_str().ok_or(format!("{nat}: expected a string"))?;
@@ -1330,7 +1332,7 @@ fn debug_shown(v: &Value, secrets: &[values::Value]) -> crate::debug::Shown {
         Value::Map(entries) => Shown::Map(entries.iter().map(|(k, v)| (debug_shown(k, secrets), debug_shown(v, secrets))).collect()),
         Value::Func { name, .. } => Shown::Function(name.clone()),
         Value::Proposed { raw, .. } => {
-            let mut raw = raw.clone();
+            let mut raw = (**raw).clone();
             scrub_json(secrets, &mut raw);
             Shown::Proposed(raw)
         }
@@ -1341,7 +1343,7 @@ fn debug_shown(v: &Value, secrets: &[values::Value]) -> crate::debug::Shown {
         Value::Secret(s) => Shown::Secret { name: s.name.clone() },
         Value::Header { name, value } => Shown::Header {
             name: name.clone(),
-            value: Box::new(match value {
+            value: Box::new(match &**value {
                 HeaderValue::Text(t) => Shown::Text(scrub_text(secrets, t)),
                 HeaderValue::Secret(s) => Shown::Secret { name: s.name.clone() },
             }),
@@ -1593,7 +1595,7 @@ impl Setup {
                     let spec = secrets.get(&p.name).ok_or(format!("{at}: missing; '{entry}' needs this secret"))?;
                     let secret = load_secret(spec, &at, runtime.values.as_ref())?;
                     runtime.secrets.push(secret.value.clone());
-                    args.push(Arg::Data(Value::Secret(secret)));
+                    args.push(Arg::Data(Value::Secret(Box::new(secret))));
                 }
                 ty => {
                     let at = format!("inputs.{}", p.name);
@@ -1699,25 +1701,46 @@ enum Flow {
     Return(Value),
 }
 
-/// Variables of one function invocation: a stack of block scopes.
-struct Frame {
-    scopes: Vec<HashMap<String, Value>>,
+/// Variables of one function invocation, innermost last. Each is named by the name its
+/// `let`, parameter, `for` or pattern declares, borrowed from the program. A block
+/// marks where its variables start, and its end drops them. A function has few
+/// variables, so finding one by name is a short scan from the innermost, which finds
+/// the one in scope, as nested scopes did.
+struct Frame<'p> {
+    vars: Vec<(&'p str, Value)>,
+    /// Where each open block's variables start in `vars`.
+    marks: Vec<usize>,
     /// The value of the variable a `set` replaces, moved out of it while the new value
     /// is computed (`Interp::moves`): its one read takes it, so nothing else holds it and
     /// a list, map, set or text it is built from is changed in place.
-    moved: Option<(String, Value)>,
+    moved: Option<(&'p str, Value)>,
 }
 
-impl Frame {
-    fn new() -> Frame {
-        Frame { scopes: vec![HashMap::new()], moved: None }
+impl<'p> Frame<'p> {
+    fn new() -> Frame<'p> {
+        Frame { vars: Vec::new(), marks: Vec::new(), moved: None }
+    }
+
+    /// Opens a block: the variables declared from here on are its own.
+    fn open(&mut self) {
+        self.marks.push(self.vars.len());
+    }
+
+    /// Closes the innermost block, dropping its variables.
+    fn close(&mut self) {
+        let from = self.marks.pop().unwrap_or(0);
+        self.vars.truncate(from);
+    }
+
+    fn slot(&mut self, name: &str) -> Option<&mut Value> {
+        self.vars.iter_mut().rev().find(|(n, _)| *n == name).map(|(_, v)| v)
     }
 
     /// The value of variable `name`, as an expression reads it: the moved value, taken,
     /// if it is the variable a `set` moved; a copy otherwise.
     fn read(&mut self, name: &str) -> Result<Value, Failure> {
         if let Some((n, _)) = &self.moved
-            && n == name
+            && *n == name
         {
             return Ok(self.moved.take().expect("checked").1);
         }
@@ -1726,52 +1749,88 @@ impl Frame {
 
     /// Moves the value of `name` out of it, for a `set` of `name`; Unit stands in it
     /// meanwhile, and no expression reads it (`Interp::moves`).
-    fn move_out(&mut self, name: &str) -> Result<(), Failure> {
-        for s in self.scopes.iter_mut().rev() {
-            if let Some(slot) = s.get_mut(name) {
-                self.moved = Some((name.to_string(), std::mem::replace(slot, Value::Unit)));
-                return Ok(());
+    fn move_out(&mut self, name: &'p str) -> Result<(), Failure> {
+        match self.slot(name) {
+            Some(slot) => {
+                let v = std::mem::replace(slot, Value::Unit);
+                self.moved = Some((name, v));
+                Ok(())
             }
+            None => internal(format!("`set` of undeclared variable '{name}'")),
         }
-        internal(format!("`set` of undeclared variable '{name}'"))
     }
 
     fn get(&self, name: &str) -> Result<Value, Failure> {
-        for s in self.scopes.iter().rev() {
-            if let Some(v) = s.get(name) {
-                return Ok(v.clone());
-            }
+        match self.vars.iter().rev().find(|(n, _)| *n == name) {
+            Some((_, v)) => Ok(v.clone()),
+            None => internal(format!("undefined variable '{name}'")),
         }
-        internal(format!("undefined variable '{name}'"))
     }
 
-    /// `set name = v`: replaces the value in the innermost scope that declares `name`.
+    /// `set name = v`: replaces the value of the innermost variable named `name`.
     fn assign(&mut self, name: &str, v: Value) -> Result<(), Failure> {
-        for s in self.scopes.iter_mut().rev() {
-            if let Some(slot) = s.get_mut(name) {
+        match self.slot(name) {
+            Some(slot) => {
                 *slot = v;
-                return Ok(());
-            }
-        }
-        internal(format!("`set` of undeclared variable '{name}'"))
-    }
-
-    fn set(&mut self, name: &str, v: Value) -> Result<(), Failure> {
-        match self.scopes.last_mut() {
-            Some(s) => {
-                s.insert(name.to_string(), v);
                 Ok(())
             }
-            None => internal("no scope to bind into"),
+            None => internal(format!("`set` of undeclared variable '{name}'")),
+        }
+    }
+
+    /// Declares `name` in the innermost block, holding `v`.
+    fn set(&mut self, name: &'p str, v: Value) -> Result<(), Failure> {
+        self.vars.push((name, v));
+        Ok(())
+    }
+
+    /// Drops every variable, keeping the space for a later call.
+    fn clear(&mut self) {
+        self.vars.clear();
+        self.marks.clear();
+        self.moved = None;
+    }
+
+    /// Every variable in scope and its value, outermost first.
+    fn all(&self) -> impl Iterator<Item = (&'p str, &Value)> {
+        self.vars.iter().map(|(n, v)| (*n, v))
+    }
+}
+
+/// FNV-1a, for the interpreter's tables keyed by the program's own function names and
+/// by addresses in the program: no input chooses those keys, so the default hasher's
+/// protection against chosen keys buys nothing, and this one is several times faster on
+/// short keys. Lookups still compare keys exactly.
+#[derive(Clone, Copy)]
+struct Fnv(u64);
+
+impl Default for Fnv {
+    fn default() -> Fnv {
+        Fnv(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl std::hash::Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3);
         }
     }
 }
 
+type FnvMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<Fnv>>;
+
 struct Interp<'p> {
     /// For each `set`'s expression, by its address in the program, whether the `set`
     /// moves its variable's value (`moves`).
-    moves: HashMap<usize, bool>,
-    fns: HashMap<&'p str, &'p FnDecl>,
+    moves: FnvMap<usize, bool>,
+    fns: FnvMap<&'p str, &'p FnDecl>,
+    /// Frames of calls that have finished, emptied, for later calls to reuse.
+    spare: Vec<Frame<'p>>,
     types: Types,
     provider: Box<dyn Provider + Send>,
     adapter: Box<dyn Adapter + Send>,
@@ -1913,8 +1972,9 @@ impl<'p> Interp<'p> {
         journal: Journal,
     ) -> Self {
         Interp {
-            moves: HashMap::new(),
+            moves: FnvMap::default(),
             fns: prog.fns.iter().map(|f| (f.name.as_str(), f)).collect(),
+            spare: Vec::new(),
             types: types_of(prog),
             provider,
             adapter,
@@ -2232,7 +2292,7 @@ impl<'p> Interp<'p> {
                 return r;
             }
         }
-        let mut frame = Frame::new();
+        let mut frame = self.spare.pop().unwrap_or_else(Frame::new);
         for (p, v) in f.params.iter().zip(args) {
             let v = match &p.ty {
                 Ty::Cap { limits, .. } => self.narrow(v, limits)?,
@@ -2249,6 +2309,8 @@ impl<'p> Interp<'p> {
             self.debug_stack.push((name.to_string(), f.pos));
         }
         let flow = self.exec_block(&mut frame, &f.body);
+        frame.clear();
+        self.spare.push(frame);
         if self.debug.is_some() {
             self.debug_stack.pop();
         }
@@ -2469,8 +2531,8 @@ impl<'p> Interp<'p> {
         }
     }
 
-    fn exec_block(&mut self, frame: &mut Frame, body: &[Stmt]) -> Result<Flow, Failure> {
-        frame.scopes.push(HashMap::new());
+    fn exec_block(&mut self, frame: &mut Frame<'p>, body: &'p [Stmt]) -> Result<Flow, Failure> {
+        frame.open();
         let mut result = Ok(Flow::Next);
         for s in body {
             match self.exec_stmt(frame, s) {
@@ -2481,7 +2543,7 @@ impl<'p> Interp<'p> {
                 }
             }
         }
-        frame.scopes.pop();
+        frame.close();
         result
     }
 
@@ -2498,7 +2560,7 @@ impl<'p> Interp<'p> {
         Ok(())
     }
 
-    fn exec_stmt(&mut self, frame: &mut Frame, s: &Stmt) -> Result<Flow, Failure> {
+    fn exec_stmt(&mut self, frame: &mut Frame<'p>, s: &'p Stmt) -> Result<Flow, Failure> {
         self.tick()?;
         if let Some(mut hook) = self.debug.take() {
             let at = s.pos();
@@ -2508,10 +2570,8 @@ impl<'p> Interp<'p> {
             let secrets = &self.secrets;
             let vars = || {
                 let mut seen = std::collections::BTreeMap::new();
-                for scope in &frame.scopes {
-                    for (k, v) in scope {
-                        seen.insert(k.clone(), debug_shown(v, secrets));
-                    }
+                for (k, v) in frame.all() {
+                    seen.insert(k.to_string(), debug_shown(v, secrets));
                 }
                 seen.into_iter().collect()
             };
@@ -2545,7 +2605,7 @@ impl<'p> Interp<'p> {
                 let r = self.eval(frame, value);
                 // Not read (a branch not taken): it is back where it was, then replaced.
                 if let Some((n, v)) = frame.moved.take() {
-                    frame.assign(&n, v)?;
+                    frame.assign(n, v)?;
                 }
                 frame.assign(name, r?)?;
                 Ok(Flow::Next)
@@ -2624,7 +2684,7 @@ impl<'p> Interp<'p> {
                     }
                     _ => return internal("`match` on a value that is neither an enum nor optional"),
                 };
-                frame.scopes.push(HashMap::new());
+                frame.open();
                 let mut bound = Ok(());
                 for (to, v) in binds {
                     if let Err(e) = frame.set(to, v) {
@@ -2633,7 +2693,7 @@ impl<'p> Interp<'p> {
                     }
                 }
                 let flow = bound.and_then(|()| self.exec_block(frame, &arm.body));
-                frame.scopes.pop();
+                frame.close();
                 flow
             }
             Stmt::For { var, list, body, .. } => {
@@ -2642,10 +2702,10 @@ impl<'p> Interp<'p> {
                 };
                 for item in crate::interp::value::into_inner(items) {
                     self.tick()?;
-                    frame.scopes.push(HashMap::new());
+                    frame.open();
                     let bound = frame.set(var, item);
                     let flow = bound.and_then(|()| self.exec_block(frame, body));
-                    frame.scopes.pop();
+                    frame.close();
                     match flow? {
                         Flow::Next | Flow::Continue => {}
                         Flow::Break => break,
@@ -2675,6 +2735,7 @@ impl<'p> Interp<'p> {
         Interp {
             moves: self.moves.clone(),
             fns: self.fns.clone(),
+            spare: Vec::new(),
             types: self.types.clone(),
             provider: self.provider.fork(),
             adapter: self.adapter.fork(),
@@ -2721,7 +2782,7 @@ impl<'p> Interp<'p> {
     /// steps, budgets, counts and logs are added to this run's in the list's order, and
     /// the first failure by position is the result, one that stops the run (in doubt,
     /// the journal) before any other.
-    fn parallel(&mut self, frame: &mut Frame, list: &Expr, item: &str, call: &Expr) -> Result<Value, Failure> {
+    fn parallel(&mut self, frame: &mut Frame<'p>, list: &'p Expr, item: &'p str, call: &'p Expr) -> Result<Value, Failure> {
         let Value::List(items) = self.eval(frame, list)? else { return internal("`parallel` of a value that is not a list") };
         let Expr::Call { name, args, .. } = call else { return internal("`parallel` of something that is not a call") };
         // Everything the call is given besides the item, evaluated once, here.
@@ -2857,7 +2918,7 @@ impl<'p> Interp<'p> {
         }
     }
 
-    fn eval(&mut self, frame: &mut Frame, e: &Expr) -> Result<Value, Failure> {
+    fn eval(&mut self, frame: &mut Frame<'p>, e: &'p Expr) -> Result<Value, Failure> {
         match e {
             Expr::Parallel { list, item, call, .. } => self.parallel(frame, list, item, call),
             Expr::Var(n, _) => frame.read(n),
@@ -3047,7 +3108,7 @@ impl<'p> Interp<'p> {
             }
             Expr::Parse { ty, text, .. } => match self.eval(frame, text)? {
                 Value::Text(t) => match serde_json::from_str::<Json>(&t) {
-                    Ok(raw) => Ok(Value::Proposed { ty: ty.clone(), raw, lenient: true }),
+                    Ok(raw) => Ok(Value::Proposed { ty: Box::new(ty.clone()), raw: Box::new(raw), lenient: true }),
                     Err(e) => fail(FailKind::Validation, format!("`parse` was given text that is not JSON: {e}")),
                 },
                 _ => internal("`parse` was given a value that is not Text"),
@@ -3179,7 +3240,7 @@ impl<'p> Interp<'p> {
                             "receipt": id, "replayed": replayed }),
                 );
                 self.broker().charge(h, amount).or_else(internal)?;
-                Ok(Value::Receipt(Receipt { id, capability: path, method: method.to_string() }))
+                Ok(Value::Receipt(Box::new(Receipt { id, capability: path, method: method.to_string() })))
             }
             Err(msg) => {
                 // An adapter's failure does not say whether anything happened.
@@ -3245,7 +3306,7 @@ impl<'p> Interp<'p> {
                     json!({ "capability": path, "method": method, "amount": amount_text, "target": target, "receipt": id }),
                 );
                 self.broker().charge(h, amount).or_else(internal)?;
-                Ok(Value::Receipt(Receipt { id: String::clone(&id), capability: path.to_string(), method: method.to_string() }))
+                Ok(Value::Receipt(Box::new(Receipt { id: String::clone(&id), capability: path.to_string(), method: method.to_string() })))
             }
             Ok(_) => internal("a capability action returned something that is not Text"),
             Err(f) => {
@@ -3294,7 +3355,7 @@ impl<'p> Interp<'p> {
             Some(Value::List(hs)) => {
                 for h in crate::interp::value::into_inner(hs) {
                     match h {
-                        Value::Header { name, value } => headers.push((name, value)),
+                        Value::Header { name, value } => headers.push((name, *value)),
                         _ => return internal("a header list holds something that is not a header"),
                     }
                 }
@@ -3477,7 +3538,7 @@ impl<'p> Interp<'p> {
                 match (method, v["text"].as_str(), v["receipt"].as_str()) {
                     ("read", Some(t), _) => Ok(Value::text(t.to_string())),
                     ("write", _, Some(id)) => {
-                        Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
+                        Ok(Value::Receipt(Box::new(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() })))
                     }
                     _ => fail(FailKind::Journal, format!("malformed file result in the journal: {v}")),
                 }
@@ -3694,7 +3755,7 @@ impl<'p> Interp<'p> {
                         return fail(FailKind::Journal, format!("malformed reply result in the journal: {v}"));
                     };
                     self.performed += 1;
-                    Value::Receipt(Receipt { id: r.to_string(), capability: path.to_string(), method: method.to_string() })
+                    Value::Receipt(Box::new(Receipt { id: r.to_string(), capability: path.to_string(), method: method.to_string() }))
                 };
                 self.emit("action_performed", json!({ "capability": path, "method": method, "target": target, "replayed": replayed }));
                 Ok(value)
@@ -3764,7 +3825,7 @@ impl<'p> Interp<'p> {
                 match (method, v["text"].as_str(), v["receipt"].as_str()) {
                     ("query", Some(t), _) => Ok(Value::text(t.to_string())),
                     ("execute", _, Some(id)) => {
-                        Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
+                        Ok(Value::Receipt(Box::new(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() })))
                     }
                     _ => fail(FailKind::Journal, format!("malformed database result in the journal: {v}")),
                 }
@@ -3842,7 +3903,7 @@ impl<'p> Interp<'p> {
                 match (method, v["text"].as_str(), v["receipt"].as_str()) {
                     ("query", Some(t), _) => Ok(Value::text(t.to_string())),
                     ("execute", _, Some(id)) => {
-                        Ok(Value::Receipt(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() }))
+                        Ok(Value::Receipt(Box::new(Receipt { id: id.to_string(), capability: path.to_string(), method: method.to_string() })))
                     }
                     _ => fail(FailKind::Journal, format!("malformed database result in the journal: {v}")),
                 }
@@ -4078,7 +4139,7 @@ impl<'p> Interp<'p> {
             );
         }
         match reply.output {
-            Ok(raw) => Ok(Value::Proposed { ty: ty.clone(), raw, lenient: false }),
+            Ok(raw) => Ok(Value::Proposed { ty: Box::new(ty.clone()), raw: Box::new(raw), lenient: false }),
             Err(e) => fail(FailKind::Provider, e),
         }
     }
@@ -4276,7 +4337,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         (Builtin::Header, [Value::Text(name), v]) => {
             let value = match v {
                 Value::Text(t) => HeaderValue::Text(String::clone(&t.clone())),
-                Value::Secret(s) => HeaderValue::Secret(s.clone()),
+                Value::Secret(s) => HeaderValue::Secret((**s).clone()),
                 _ => return internal("`header` value is neither Text nor a Secret"),
             };
             let check = match &value {
@@ -4284,7 +4345,7 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
                 HeaderValue::Secret(s) => http::check_header(name, &s.value),
             };
             check.map_err(|e| Failure { raised: None, kind: FailKind::Value, message: e })?;
-            Ok(Value::Header { name: String::clone(&name.clone()), value })
+            Ok(Value::Header { name: String::clone(&name.clone()), value: Box::new(value) })
         }
         (Builtin::FillSecret, [Value::Text(template), Value::Secret(key)]) => {
             // Exactly once. The program writes its own placeholder; a second one can only
@@ -4307,11 +4368,11 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
                 return fail(FailKind::Value, format!("text would be longer than {MAX_TEXT_BYTES} bytes"));
             }
             let placeholder = format!("{{secret {}}}", key.name);
-            Ok(Value::Secret(Secret {
+            Ok(Value::Secret(Box::new(Secret {
                 name: key.name.clone(),
                 value: values::Value::new(template.replace("{secret}", &key.value)),
                 shown: template.replace("{secret}", &key.shown.replace("{secret}", &placeholder)),
-            }))
+            })))
         }
         (Builtin::Replace, [Value::Text(t), Value::Text(from), Value::Text(to)]) => {
             if from.is_empty() {
@@ -4809,6 +4870,43 @@ fn flatten_evidence(v: &Value, out: &mut Vec<Json>) {
 mod tests {
     use super::*;
 
+    /// A block's end drops the variables it declared and only those; a name finds the
+    /// innermost variable of that name; and a frame emptied for reuse holds nothing,
+    /// not even a value a `set` had moved out.
+    #[test]
+    fn a_frame_holds_each_blocks_variables_until_its_end() {
+        let mut f = Frame::new();
+        f.set("x", Value::Int(1)).unwrap();
+        for i in 0..1000 {
+            f.open();
+            f.set("x", Value::Int(i)).unwrap();
+            f.set("y", Value::Int(-i)).unwrap();
+            assert!(matches!(f.get("x"), Ok(Value::Int(n)) if n == i));
+            f.assign("x", Value::Int(i + 1)).unwrap();
+            f.close();
+        }
+        assert_eq!(f.vars.len(), 1, "every block's variables dropped at its end");
+        assert!(matches!(f.get("x"), Ok(Value::Int(1))), "the outer x, untouched by the inner ones");
+        assert!(f.get("y").is_err());
+        f.move_out("x").unwrap();
+        assert!(matches!(f.read("x"), Ok(Value::Int(1))), "the one read takes the moved value");
+        f.move_out("x").unwrap();
+        f.clear();
+        assert!(f.vars.is_empty() && f.marks.is_empty() && f.moved.is_none());
+        assert!(f.read("x").is_err(), "nothing of the last call is left");
+    }
+
+    /// The published FNV-1a 64-bit test vectors.
+    #[test]
+    fn fnv_is_fnv_1a() {
+        use std::hash::Hasher;
+        for (input, want) in [("", 0xcbf2_9ce4_8422_2325u64), ("a", 0xaf63_dc4c_8601_ec8c), ("foobar", 0x8594_4171_f739_67e8)] {
+            let mut h = Fnv::default();
+            h.write(input.as_bytes());
+            assert_eq!(h.finish(), want, "{input:?}");
+        }
+    }
+
     /// A list, map or set nothing else holds is changed in place by the built-ins that
     /// make a new one from it, its contents kept where they are; one another value holds
     /// is copied first, and that other value is unchanged. In place is what makes
@@ -4962,7 +5060,7 @@ mod tests {
 
     #[test]
     fn hollow_evidence_holds_no_receipt() {
-        let receipt = Value::Receipt(Receipt { id: "r1".into(), capability: "email.send".into(), method: "send".into() });
+        let receipt = Value::Receipt(Box::new(Receipt { id: "r1".into(), capability: "email.send".into(), method: "send".into() }));
         let ok = |held: Value| Value::Outcome { ok: true, error: String::new(), held: Some(Box::new(held)), raised: None };
         // Real proof: a receipt, directly or through an outcome or a nested Done.
         assert_eq!(receipt_count(&receipt), 1);

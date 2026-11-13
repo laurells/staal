@@ -257,6 +257,13 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   in, so `append`, `put`, `add`, `concat` and `+` change it in place (RUNTIME.md section
   15, "How values are held"). 10,000 appends took 2.1 s and take 19 ms. Nothing a
   program can see changes.
+- The interpreter runs function calls and variables in less than half the
+  instructions: a call's variables are one list, ended blocks cut from it, where each
+  block had a map of its own with every name copied in; finished calls' frames are
+  reused; functions are found with a faster hash; and the rarely used large values
+  (a model's output not yet checked, a receipt, a secret, a header) are boxed, so every
+  value is 72 bytes where it was 168. `fib(22)` takes 118M instructions, where it took
+  279M. Nothing a program can see changes.
 - Money arithmetic and comparisons in native code are machine instructions, where
   each went through the interpreter's general functions for values: the money
   benchmark (1,000,000 lines) takes 12.6 ms, where it took 211 ms. Failures and their

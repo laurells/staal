@@ -293,6 +293,8 @@ fn a_session_given_values_reads_them_and_not_the_environment() {
     let config = serde_json::json!({
         "entry": "main",
         "secrets": { "key": { "env": NAME } },
+        // The loop at the end runs until cancelled: no step limit it could reach first.
+        "limits": { "max_steps": 1_000_000_000_000_000u64 },
         "model": { "provider": "script", "responses": [{ "output": { "name": format!("leak {KEY} here") }, "output_tokens": 3 }] }
     });
     let given = || staalc::interp::Attached {

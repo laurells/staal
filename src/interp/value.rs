@@ -93,17 +93,17 @@ pub enum Value {
     /// Raw output from outside (a model, or text given to `parse`), not yet checked
     /// against `ty`. `lenient`: fields the type does not declare are dropped when it is
     /// validated, as services add fields over time. Model output is strict.
-    Proposed { ty: Ty, raw: Json, lenient: bool },
-    Receipt(Receipt),
+    Proposed { ty: Box<Ty>, raw: Box<Json>, lenient: bool },
+    Receipt(Box<Receipt>),
     /// `held` is the successful result a `try` produced (hidden from programs).
     /// `raised` is what a callee declaring `fails E` raised, read as `.failure`.
     Outcome { ok: bool, error: String, held: Option<Box<Value>>, raised: Option<Box<Value>> },
     Done(Vec<Value>),
     /// A handle into the capability broker.
     Cap(usize),
-    Secret(Secret),
+    Secret(Box<Secret>),
     /// An HTTP header, made by `header(name, value)`.
-    Header { name: String, value: HeaderValue },
+    Header { name: String, value: Box<HeaderValue> },
 }
 
 /// Declared types: records (name -> fields in declaration order) and enums (name ->
@@ -160,7 +160,7 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
     }
     let expected = |what: &str| format!("{path}: expected {what}, found {}", describe(json));
     match ty {
-        Ty::Proposed(inner) => Ok(Value::Proposed { ty: (**inner).clone(), raw: json.clone(), lenient: false }),
+        Ty::Proposed(inner) => Ok(Value::Proposed { ty: inner.clone(), raw: Box::new(json.clone()), lenient: false }),
         Ty::Cap { .. } => Err(format!("{path}: a capability cannot be supplied as data")),
         Ty::Func(..) => Err(format!("{path}: a function value cannot be supplied as data")),
         // `null` is none; anything else must be a valid T. (The checker refuses
@@ -396,7 +396,7 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
         Value::Func { .. } => return Err("a function value is not data and cannot be written as JSON".into()),
         Value::Opt(None) => Json::Null,
         Value::Opt(Some(inner)) => to_json(inner, for_model)?,
-        Value::Proposed { raw, .. } => raw.clone(),
+        Value::Proposed { raw, .. } => (**raw).clone(),
         Value::Receipt(r) => json!({ "receipt": r.id, "capability": r.capability, "method": r.method }),
         Value::Outcome { ok, error, .. } => json!({ "ok": ok, "error": error }),
         Value::Done(items) => {
@@ -407,7 +407,7 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
         // A secret's value is never encoded anywhere; for the log, only its name.
         Value::Secret(_) | Value::Header { .. } if for_model => return Err("a secret cannot be sent to a model".into()),
         Value::Secret(s) => json!({ "secret": s.name, "shown": s.shown }),
-        Value::Header { name, value } => match value {
+        Value::Header { name, value } => match &**value {
             HeaderValue::Text(t) => json!({ "header": name, "value": t }),
             HeaderValue::Secret(s) => json!({ "header": name, "value": { "secret": s.name, "shown": s.shown } }),
         },
