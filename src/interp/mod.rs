@@ -39,7 +39,7 @@ use serde_json::{json, Map, Value as Json};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
-use value::{from_json, from_json_lenient, key_order, schema, to_json, HeaderValue, Receipt, Secret, Types, Value};
+use value::{from_json, from_json_lenient, key_order, schema, to_json, HeaderValue, Key, Receipt, Secret, Types, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailKind {
@@ -1328,8 +1328,8 @@ fn debug_shown(v: &Value, secrets: &[values::Value]) -> crate::debug::Shown {
         Value::Enum { ty, variant, fields: fs } => Shown::Enum { ty: ty.clone(), variant: variant.clone(), fields: fields(fs) },
         Value::List(items) => Shown::List(all(items)),
         Value::Tuple(items) => Shown::Tuple(all(items)),
-        Value::Set(items) => Shown::Set(all(items)),
-        Value::Map(entries) => Shown::Map(entries.iter().map(|(k, v)| (debug_shown(k, secrets), debug_shown(v, secrets))).collect()),
+        Value::Set(items) => Shown::Set(items.iter().map(|i| debug_shown(&i.value(), secrets)).collect()),
+        Value::Map(entries) => Shown::Map(entries.iter().map(|(k, v)| (debug_shown(&k.value(), secrets), debug_shown(v, secrets))).collect()),
         Value::Func { name, .. } => Shown::Function(name.clone()),
         Value::Proposed { raw, .. } => {
             let mut raw = (**raw).clone();
@@ -2586,7 +2586,7 @@ impl<'p> Interp<'p> {
                 let mut v = self.eval(frame, value)?;
                 // `[]` takes its declared type, which may be a set.
                 if matches!(ty, Some(Ty::Set(..))) && matches!(value, Expr::List(items, _) if items.is_empty()) {
-                    v = Value::Set(Vec::new().into());
+                    v = Value::Set(Default::default());
                 }
                 if let Some(Ty::Cap { limits, .. }) = ty {
                     v = self.narrow(v, limits)?;
@@ -4249,25 +4249,23 @@ pub(crate) fn builtin_owned(f: Builtin, mut args: Vec<Value>) -> Result<Value, F
             Ok(Value::List(xs))
         }
         (Builtin::Put, [Value::Map(es), k, v, Value::Int(cap)]) => {
+            let key = Key::of(k).map_or_else(|| internal("a map key that is neither Text nor Int"), Ok)?;
             let mut es = std::mem::take(es);
-            match es.binary_search_by(|(x, _)| key_order(x, k)) {
-                Ok(i) => make_mut(&mut es)[i].1 = take(v),
-                Err(i) => {
-                    if es.len() as i64 >= *cap {
-                        return fail(FailKind::Value, format!("the map is full: it holds at most {cap} entries, so {} cannot be added", shown(k)));
-                    }
-                    make_mut(&mut es).insert(i, (take(k), take(v)));
-                }
+            // Replacing a key's value needs no room; a new key does.
+            if !es.contains_key(&key) && es.len() as i64 >= *cap {
+                return fail(FailKind::Value, format!("the map is full: it holds at most {cap} entries, so {} cannot be added", shown(k)));
             }
+            make_mut(&mut es).insert(key, take(v));
             Ok(Value::Map(es))
         }
         (Builtin::Add, [Value::Set(xs), v, Value::Int(cap)]) => {
+            let key = Key::of(v).map_or_else(|| internal("a set item that is neither Text nor Int"), Ok)?;
             let mut xs = std::mem::take(xs);
-            if let Err(i) = xs.binary_search_by(|x| key_order(x, v)) {
+            if !xs.contains(&key) {
                 if xs.len() as i64 >= *cap {
                     return fail(FailKind::Value, format!("the set is full: it holds at most {cap} items, so {} cannot be added", shown(v)));
                 }
-                make_mut(&mut xs).insert(i, take(v));
+                make_mut(&mut xs).insert(key);
             }
             Ok(Value::Set(xs))
         }
@@ -4276,19 +4274,20 @@ pub(crate) fn builtin_owned(f: Builtin, mut args: Vec<Value>) -> Result<Value, F
             make_mut(&mut a).extend(b.iter().cloned());
             Ok(Value::List(a))
         }
-        // Found by binary search (the order is kept); a key that is not there leaves the
-        // map or set as it is, with nothing copied.
+        // A key that is not there leaves the map or set as it is, with nothing copied.
         (Builtin::Remove, [Value::Map(es), k]) => {
+            let key = Key::of(k).map_or_else(|| internal("a map key that is neither Text nor Int"), Ok)?;
             let mut es = std::mem::take(es);
-            if let Ok(i) = es.binary_search_by(|(x, _)| key_order(x, k)) {
-                make_mut(&mut es).remove(i);
+            if es.contains_key(&key) {
+                make_mut(&mut es).remove(&key);
             }
             Ok(Value::Map(es))
         }
         (Builtin::Remove, [Value::Set(xs), v]) => {
+            let key = Key::of(v).map_or_else(|| internal("a set item that is neither Text nor Int"), Ok)?;
             let mut xs = std::mem::take(xs);
-            if let Ok(i) = xs.binary_search_by(|x| key_order(x, v)) {
-                make_mut(&mut xs).remove(i);
+            if xs.contains(&key) {
+                make_mut(&mut xs).remove(&key);
             }
             Ok(Value::Set(xs))
         }
@@ -4309,28 +4308,26 @@ pub(crate) fn builtin(f: Builtin, args: &[Value]) -> Result<Value, Failure> {
         (Builtin::Len, [Value::Set(xs)]) => count(xs.len()),
         (Builtin::Contains, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.contains(b.as_str()))),
         (Builtin::Contains, [Value::List(xs), v]) => Ok(Value::Bool(xs.contains(v))),
-        // A map's entries and a set's items are kept in key order (`key_order`, a total
-        // order on the keys a map or set can hold, equal exactly when the keys are), so
-        // a key is found by binary search.
-        (Builtin::Contains, [Value::Map(es), k]) => Ok(Value::Bool(es.binary_search_by(|(x, _)| key_order(x, k)).is_ok())),
-        (Builtin::Contains, [Value::Set(xs), v]) => Ok(Value::Bool(xs.binary_search_by(|x| key_order(x, v)).is_ok())),
-        (Builtin::Get, [Value::Map(es), k]) => {
-            Ok(Value::Opt(es.binary_search_by(|(x, _)| key_order(x, k)).ok().map(|i| Box::new(es[i].1.clone()))))
-        }
+        // A map or set is a tree in key order (`Key`), so a key is found in a number of
+        // steps that grows with the logarithm of its size.
+        (Builtin::Contains, [Value::Map(es), k]) => Ok(Value::Bool(Key::of(k).is_some_and(|k| es.contains_key(&k)))),
+        (Builtin::Contains, [Value::Set(xs), v]) => Ok(Value::Bool(Key::of(v).is_some_and(|k| xs.contains(&k)))),
+        (Builtin::Get, [Value::Map(es), k]) => Ok(Value::Opt(Key::of(k).and_then(|k| es.get(&k)).map(|v| Box::new(v.clone())))),
         // Changing a value is one implementation, `builtin_owned`; given arguments it
         // does not own, its first is shared, so it is copied before it changes.
         (Builtin::Put | Builtin::Add | Builtin::Append | Builtin::Concat | Builtin::Remove, _) => builtin_owned(f, args.to_vec()),
-        (Builtin::Keys, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>().into())),
-        (Builtin::Values, [Value::Map(es)]) => Ok(Value::List(es.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>().into())),
+        (Builtin::Keys, [Value::Map(es)]) => Ok(Value::List(es.keys().map(Key::value).collect::<Vec<_>>().into())),
+        (Builtin::Values, [Value::Map(es)]) => Ok(Value::List(es.values().cloned().collect::<Vec<_>>().into())),
         (Builtin::Entries, [Value::Map(es)]) => {
-            Ok(Value::List(es.iter().map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()])).collect::<Vec<_>>().into()))
+            Ok(Value::List(es.iter().map(|(k, v)| Value::Tuple(vec![k.value(), v.clone()])).collect::<Vec<_>>().into()))
         }
-        (Builtin::Items, [Value::Set(xs)]) => Ok(Value::List(xs.clone())),
+        (Builtin::Items, [Value::Set(xs)]) => Ok(Value::List(xs.iter().map(Key::value).collect::<Vec<_>>().into())),
         (Builtin::ToSet, [Value::List(xs)]) => {
-            let mut xs = value::into_inner(xs.clone());
-            xs.sort_by(key_order);
-            xs.dedup();
-            Ok(Value::Set(xs.into()))
+            let mut set = std::collections::BTreeSet::new();
+            for x in xs.iter() {
+                set.insert(Key::of(x).map_or_else(|| internal("a set item that is neither Text nor Int"), Ok)?);
+            }
+            Ok(Value::Set(set.into()))
         }
         (Builtin::StartsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.starts_with(b.as_str()))),
         (Builtin::EndsWith, [Value::Text(a), Value::Text(b)]) => Ok(Value::Bool(a.ends_with(b.as_str()))),
@@ -4655,13 +4652,14 @@ fn parse_int(t: &str) -> Option<i64> {
 /// A map literal from its keys and values, alternating, in the order written. A key
 /// given twice is a failure: which value was meant cannot be known.
 pub(crate) fn map_literal(vals: Vec<Value>) -> Result<Value, Failure> {
-    let mut es: Vec<(Value, Value)> = Vec::with_capacity(vals.len() / 2);
+    let mut es = std::collections::BTreeMap::new();
     let mut it = vals.into_iter();
     while let (Some(k), Some(v)) = (it.next(), it.next()) {
-        match es.binary_search_by(|(x, _)| key_order(x, &k)) {
-            Ok(_) => return fail(FailKind::Value, format!("key {} appears twice in a map literal", shown(&k))),
-            Err(i) => es.insert(i, (k, v)),
+        let key = Key::of(&k).map_or_else(|| internal("a map key that is neither Text nor Int"), Ok)?;
+        if es.contains_key(&key) {
+            return fail(FailKind::Value, format!("key {} appears twice in a map literal", shown(&k)));
         }
+        es.insert(key, v);
     }
     Ok(Value::Map(es.into()))
 }
@@ -4927,17 +4925,17 @@ mod tests {
         assert!(!value::Shared::ptr_eq(&changed, &other));
         assert_eq!((other.len(), changed.len()), (2, 3));
         // A map and a set the same way.
-        let map = value::Shared::new(vec![(Value::Int(1), Value::Int(10))]);
+        let map = value::Shared::new(std::collections::BTreeMap::from([(Key::Int(1), Value::Int(10))]));
         let at = value::Shared::as_ptr(&map) as usize;
         let Value::Map(m) = builtin_owned(Builtin::Put, vec![Value::Map(map), Value::Int(1), Value::Int(11), Value::Int(4)]).unwrap() else { panic!() };
         assert_eq!(value::Shared::as_ptr(&m) as usize, at);
         let keep = m.clone();
         let Value::Map(m2) = builtin_owned(Builtin::Put, vec![Value::Map(m), Value::Int(2), Value::Int(20), Value::Int(4)]).unwrap() else { panic!() };
-        assert_eq!((keep.len(), m2.len(), keep[0].1.clone()), (1, 2, Value::Int(11)));
-        let set = value::Shared::new(vec![Value::Int(1)]);
+        assert_eq!((keep.len(), m2.len(), keep[&Key::Int(1)].clone()), (1, 2, Value::Int(11)));
+        let set = value::Shared::new(std::collections::BTreeSet::from([Key::Int(1)]));
         let at = value::Shared::as_ptr(&set) as usize;
         let Value::Set(s2) = builtin_owned(Builtin::Add, vec![Value::Set(set), Value::Int(0), Value::Int(4)]).unwrap() else { panic!() };
-        assert_eq!((value::Shared::as_ptr(&s2) as usize, s2.to_vec()), (at, vec![Value::Int(0), Value::Int(1)]));
+        assert_eq!((value::Shared::as_ptr(&s2) as usize, s2.iter().cloned().collect::<Vec<_>>()), (at, vec![Key::Int(0), Key::Int(1)]));
         // The borrowing form never changes what it is given.
         let given = vec![Value::List(value::Shared::new(vec![Value::Int(1)])), Value::Int(2), Value::Int(4)];
         let r = builtin(Builtin::Append, &given).unwrap();

@@ -14,7 +14,9 @@
     "money.ts",
     "lists.ts",
     "maps.ts",
+    "bigmap.ts",
     "text.ts",
+    "textread.ts",
     "startup.ts"
   ]
 }

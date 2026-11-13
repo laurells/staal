@@ -1031,8 +1031,8 @@ unsafe extern "C" fn rt_empty(c: *mut Ctx, kind: i64) -> i64 {
     guard(unsafe { ctx(c) }, |c| {
         let v = match kind {
             0 => Value::List(Vec::new().into()),
-            1 => Value::Set(Vec::new().into()),
-            2 => Value::Map(Vec::new().into()),
+            1 => Value::Set(Default::default()),
+            2 => Value::Map(Default::default()),
             _ => return Err(internal(format!("native code: no empty collection of kind {kind}"))),
         };
         Ok(c.put(v))

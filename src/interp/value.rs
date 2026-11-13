@@ -5,7 +5,7 @@
 use super::money::{Currency, Money};
 use crate::ast::{Ty, Variants};
 use serde_json::{json, Map, Value as Json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// A secret from the run config (an API key), or a template filled with one by
 /// `fill_secret`. Its value is only ever placed in an HTTP request (a header or the
@@ -85,9 +85,9 @@ pub enum Value {
     /// A tuple: its elements, in order.
     Tuple(Vec<Value>),
     /// A map: its entries, each key once, in key order (`key_order`). Shared, as a list.
-    Map(Shared<Vec<(Value, Value)>>),
+    Map(Shared<BTreeMap<Key, Value>>),
     /// A set: its items, each once, in order (`key_order`). Shared, as a list.
-    Set(Shared<Vec<Value>>),
+    Set(Shared<BTreeSet<Key>>),
     /// A function value: function `name`, called with `captured` before its arguments.
     Func { name: String, captured: Vec<Value> },
     /// Raw output from outside (a model, or text given to `parse`), not yet checked
@@ -188,15 +188,16 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
             if obj.len() as u64 > *max {
                 return Err(format!("{path}: at most {max} entries allowed, found {}", obj.len()));
             }
-            let mut out: Vec<(Value, Value)> = Vec::with_capacity(obj.len());
+            let mut out = BTreeMap::new();
+            let mut twice = false;
             for (k, v) in obj {
                 let key = key_from_json(kt, k).ok_or_else(|| format!("{path}: '{}' is not a {kt} key", crate::clip::clip(k)))?;
                 let val = from_json_at(vt, v, types, &format!("{path}[{}]", serde_json::to_string(&crate::clip::clip(k)).unwrap_or_default()), depth + 1, lenient)?;
-                out.push((key, val));
+                let key = Key::of(&key).ok_or_else(|| format!("{path}: '{}' is not a {kt} key", crate::clip::clip(k)))?;
+                twice |= out.insert(key, val).is_some();
             }
-            out.sort_by(|a, b| key_order(&a.0, &b.0));
             // `"1"` and `"01"` would be the same Int key; only the canonical form is read.
-            if out.windows(2).any(|w| w[0].0 == w[1].0) {
+            if twice {
                 return Err(format!("{path}: a key appears twice"));
             }
             Ok(Value::Map(out.into()))
@@ -210,12 +211,18 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
             for (i, item) in items.iter().enumerate() {
                 out.push(from_json_at(t, item, types, &format!("{path}[{i}]"), depth + 1, lenient)?);
             }
+            // The item that appears twice and comes first in order, as when the items
+            // were sorted and the first pair of equal neighbours named.
             out.sort_by(key_order);
             if let Some(w) = out.windows(2).find(|w| w[0] == w[1]) {
                 let shown = to_json(&w[0], false).map(|j| j.to_string()).unwrap_or_default();
                 return Err(format!("{path}: {} appears twice; a set holds each item once", crate::clip::clip(&shown)));
             }
-            Ok(Value::Set(out.into()))
+            let mut set = BTreeSet::new();
+            for item in &out {
+                set.insert(Key::of(item).ok_or_else(|| format!("{path}: a set item is neither Text nor Int"))?);
+            }
+            Ok(Value::Set(set.into()))
         }
         Ty::List(inner, max) => {
             let items = json.as_array().ok_or_else(|| expected("a list"))?;
@@ -296,6 +303,36 @@ fn from_json_at(ty: &Ty, json: &Json, types: &Types, path: &str, depth: usize, l
 
 /// The order of map keys and set items: Ints by value, Texts by their bytes (which
 /// is the order of their Unicode code points).
+/// A map's key or a set's item: an Int or a Text, the only types the checker allows
+/// there (`check_key`). Ordered as `key_order` orders those values: every Int before
+/// every Text, Ints by value, texts by their bytes. A map or set is a tree in that
+/// order, so a key is found, added or removed in a number of steps that grows with
+/// the logarithm of its size, and its keys are read in that order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Key {
+    Int(i64),
+    Text(Shared<String>),
+}
+
+impl Key {
+    /// The key a value is, if it is an Int or a Text.
+    pub fn of(v: &Value) -> Option<Key> {
+        match v {
+            Value::Int(n) => Some(Key::Int(*n)),
+            Value::Text(t) => Some(Key::Text(t.clone())),
+            _ => None,
+        }
+    }
+
+    /// The value this key is.
+    pub fn value(&self) -> Value {
+        match self {
+            Key::Int(n) => Value::Int(*n),
+            Key::Text(t) => Value::Text(t.clone()),
+        }
+    }
+}
+
 pub fn key_order(a: &Value, b: &Value) -> std::cmp::Ordering {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => x.cmp(y),
@@ -384,15 +421,14 @@ pub fn to_json(v: &Value, for_model: bool) -> Result<Json, String> {
             let mut obj = Map::new();
             for (k, v) in entries.iter() {
                 let key = match k {
-                    Value::Text(t) => t.clone(),
-                    Value::Int(n) => crate::interp::value::Shared::new(n.to_string()),
-                    _ => return Err("a map key that is neither Text nor Int".into()),
+                    Key::Text(t) => String::clone(t),
+                    Key::Int(n) => n.to_string(),
                 };
-                obj.insert(String::clone(&key), to_json(v, for_model)?);
+                obj.insert(key, to_json(v, for_model)?);
             }
             Json::Object(obj)
         }
-        Value::Set(items) => Json::Array(items.iter().map(|i| to_json(i, for_model)).collect::<Result<Vec<_>, _>>()?),
+        Value::Set(items) => Json::Array(items.iter().map(|i| to_json(&i.value(), for_model)).collect::<Result<Vec<_>, _>>()?),
         Value::Func { .. } => return Err("a function value is not data and cannot be written as JSON".into()),
         Value::Opt(None) => Json::Null,
         Value::Opt(Some(inner)) => to_json(inner, for_model)?,

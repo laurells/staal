@@ -1,0 +1,25 @@
+// A map of n distinct keys, put in scattered order, then each looked up once.
+fn main(n: Int) -> Int {
+    let m: Map<Int, Int, 100000> = [0: 0]
+    let i = 1
+    loop {
+        if i >= n {
+            break
+        }
+        set m = put(m, rem(i * 7919, 1000003), i)
+        set i = i + 1
+    }
+    let s = 0
+    let j = 0
+    loop {
+        if j >= n {
+            break
+        }
+        match get(m, rem(j * 7919, 1000003)) {
+            some(v) => { set s = s + v }
+            none => { set s = s - 1 }
+        }
+        set j = j + 1
+    }
+    return s
+}

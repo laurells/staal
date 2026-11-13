@@ -55,6 +55,16 @@ fn full() -> Map<Text, Int, 2> {
     return m
 }
 
+// A full map still takes a new value for a key it holds, and a full set an item it
+// holds: neither needs room.
+fn at_capacity() -> Text {
+    let m: Map<Text, Int, 2> = ["a": 1, "b": 2]
+    set m = put(m, "a", 5)
+    let s: Set<Int, 2> = to_set([7, 3])
+    set s = add(s, 7)
+    return json(m) + " " + json(s)
+}
+
 fn twice(k: Text) -> Map<Text, Int, 2> {
     return [k: 1, "x": 2]
 }

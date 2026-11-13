@@ -218,7 +218,7 @@ fn the_map_cases_really_run_native_code() {
     let prog = staalc::check_program(&src).unwrap();
     let mut got: Vec<String> = staalc::native::eligible(&prog).into_iter().collect();
     got.sort();
-    let want = ["amounts", "drop", "full", "has", "names", "same", "seen", "sorted", "stock", "tags", "tally", "total", "twice"];
+    let want = ["amounts", "at_capacity", "drop", "full", "has", "names", "same", "seen", "sorted", "stock", "tags", "tally", "total", "twice"];
     assert_eq!(got, want);
 }
 

@@ -268,8 +268,11 @@ and C code that opens files, sockets or programs fails when contained. Grant tho
   each went through the interpreter's general functions for values: the money
   benchmark (1,000,000 lines) takes 12.6 ms, where it took 211 ms. Failures and their
   messages are the interpreter's (RUNTIME.md section 15).
-- A map or set finds a key by binary search, where it read each key in turn; `remove`
-  takes a key out in place when nothing else holds the map or set.
+- A map or set is a tree of its keys, where it was a list read key by key: finding,
+  adding and removing a key take a number of steps that grows with the logarithm of its
+  size. A map of 100,000 distinct keys is built and read in 121 ms in native code,
+  where it took 13.8 s; `remove` takes a key out in place when nothing else holds the
+  map or set. Keys are read back in the same order as before.
 - A text is held shared, as a list is: reading a text variable no longer copies the
   text, and `set t = t + x` adds to `t` in place when nothing else holds it.
 - Native code computes `rem`, `abs`, `min` and `max` of Ints in machine code, where it

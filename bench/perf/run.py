@@ -39,7 +39,9 @@ WORKLOADS = {
     "money": 1_000_000,
     "lists": 10_000,
     "maps": 20_000,
+    "bigmap": 100_000,
     "text": 50_000,
+    "textread": 100_000,
 }
 
 # How the cost of building a list and a text grows with its size.

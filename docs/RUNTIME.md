@@ -1891,8 +1891,10 @@ expression reads the variable, and a failure while it is evaluated either leaves
 function or, caught by a `try` within the expression, lets it go on without reading
 the variable again. A text is held shared in the same way: reading a text variable
 copies a pointer, and `set t = t + x` adds to `t` where it is when nothing else holds
-it. A map or set keeps its keys in order, so `get`, `contains`, `put` and `remove` find
-a key by binary search rather than by reading each key in turn.
+it. A map or set is a tree of its keys in order (every Int before every Text, Ints by
+value, texts by their bytes), so `get`, `contains`, `put`, `add` and `remove` take a
+number of steps that grows with the logarithm of its size, and its keys are read back
+in that order.
 
 Native code holds Int, Bool and Money in machine words inside a function. An amount of
 money is two words, its minor amount and its currency, and `+`, `-`, `*` and the
