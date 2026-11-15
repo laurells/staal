@@ -1,6 +1,5 @@
 // examples/support_agent/, the support agent the examples README shows: it is a valid
-// agent whose committed description is the fresh one, its own tests pass on both
-// engines, and it refunds, declines and escalates as its rules say against a local
+// agent whose committed description is the fresh one, its own tests pass, and it refunds, declines and escalates as its rules say against a local
 // server that answers refunds like a payment API, with a scripted model in Claude's
 // place. What reached the server is the test's evidence, not the agent's own answer.
 
@@ -62,8 +61,9 @@ fn it_is_a_valid_agent_and_its_description_is_the_fresh_one() {
 }
 
 #[test]
-fn its_own_tests_pass_on_both_engines() {
-    let (ok, out) = staalc(&["test", "--engine", "both", "support_test.staal"]);
+fn its_own_tests_pass() {
+    // On both engines when staalc has native code, as `staalc test` does by default.
+    let (ok, out) = staalc(&["test", "support_test.staal"]);
     assert!(ok && out.contains("5 passed, 0 failed"), "{out}");
 }
 
