@@ -1,0 +1,89 @@
+// A customer-support agent. A customer writes about one of their orders; Claude reads
+// the message and chooses what to do; the program holds that choice to the business's
+// rules before any money moves.
+//
+// What the compiler proves before this ever runs:
+//   - the customer's message can inform Claude but never instruct it (it is data);
+//   - Claude's answer is used only after it is checked against Decision;
+//   - the agent can refund, and nothing else: no email, no files, no other service;
+//   - one refund at most, of at most 100 USD, whatever the code or Claude says;
+//   - at most one model call of 1500 tokens per run.
+// And at run time, before each refund is sent, the runtime checks it against those
+// limits and against the one address the business granted for its payment service.
+
+pub type Order { id: Text, paid: Money }
+
+type RefundRequest { order: Text, cents: Int, currency: Text }
+
+// The business's own payment service: its address and key are the business's,
+// supplied when it installs the agent. The agent can reach nothing else.
+capability shop.payments {
+    needs post: cap net.http.post
+    needs key: Secret
+    needs base: Text
+
+    canonical(order: Text) -> Text {
+        return trim(order)
+    }
+
+    action refund(order: Text @target, amount: Money @amount) -> Text {
+        let r = post.post(base + "/refunds",
+            form(RefundRequest { order: trim(order), cents: minor_units(amount), currency: currency(amount) }),
+            [header("Authorization", fill_secret("Bearer {secret}", key))])
+        if r.status != 200 {
+            fail("the payment service answered " + json(r.status))
+        }
+        return r.body
+    }
+}
+
+// What Claude may answer: exactly one of these, with exactly these fields.
+pub enum Decision {
+    Refund { cents: Int, reason: Text },
+    Decline { reason: Text },
+    Escalate { reason: Text },
+}
+
+// What the agent did, for the business's own app to show the customer.
+pub enum Action {
+    Refunded { amount: Money, reason: Text },
+    Declined { reason: Text },
+    Escalated { reason: Text },
+}
+
+// The business's rules, in plain code. Claude proposes; this decides.
+pub fn decide(d: Decision, order: Order) -> Action {
+    match d {
+        Refund { cents, reason } => {
+            if cents <= 0 {
+                return Action.Declined { reason: reason }
+            }
+            let amount = 0.01 USD * cents
+            if amount > order.paid {
+                return Action.Escalated { reason: "the proposed refund is more than the customer paid" }
+            }
+            if amount > 100.00 USD {
+                return Action.Escalated { reason: "refunds above 100 USD need a person" }
+            }
+            return Action.Refunded { amount: amount, reason: reason }
+        }
+        Decline { reason } => { return Action.Declined { reason: reason } }
+        Escalate { reason } => { return Action.Escalated { reason: reason } }
+    }
+}
+
+fn handle(customer: Text, order: Order, message: Text,
+    pay: cap shop.payments.refund(each: 100 USD, uses: 1)) -> Text budget(calls: 1, tokens: 1500) {
+    let d: Decision = validate propose(Decision,
+        instruct: "You handle refund requests for an online shop. Read the customer's message about their order and choose: Refund (with the refund in US cents and a one-sentence reason), Decline, or Escalate to a person. Refund only for a real problem with the order.",
+        data: [message, order],
+        tokens: 1500)
+    match decide(d, order) {
+        Refunded { amount, reason } => {
+            let receipt = pay.refund(customer + "/" + order.id, amount)
+            return "Refunded " + to_text(amount) + ": " + reason
+        }
+        Declined { reason } => { return "Declined: " + reason }
+        Escalated { reason } => { return "Passed to a person: " + reason }
+    }
+}

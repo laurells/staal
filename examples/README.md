@@ -52,6 +52,18 @@ Build staalc first:
 
     cargo build --release
 
+## A support agent, ready to publish
+
+`support_agent/` goes further: Claude chooses to refund, decline or escalate, the
+agent's rules decide, and it refunds through the business's own payment service, at
+most once and at most 100 USD. It is a complete agent, with the description a business
+reads before installing it (`agent.json`) and what `staalc` worked out the program can
+do (`agent.described.json`):
+
+    staalc agent check examples/support_agent
+
+Its README shows how to run it with your own Claude key and payment service.
+
 ## SMS through Termii
 
 `sms_termii/send.staal` sends one SMS. The API key is read from the environment and

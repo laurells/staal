@@ -1,0 +1,42 @@
+// The business's refund rules, tested on their own: no model, no money, no authority.
+import support
+
+fn order() -> support.Order {
+    return support.Order { id: "ord_1", paid: 39.99 USD }
+}
+
+fn expect(got: support.Action, want: Text) {
+    let kind = ""
+    match got {
+        Refunded { amount, .. } => { set kind = "refund " + to_text(amount) }
+        Declined { .. } => { set kind = "declined" }
+        Escalated { .. } => { set kind = "escalated" }
+    }
+    if kind != want {
+        fail("expected " + want + ", got " + kind)
+    }
+}
+
+fn test_a_fair_refund_is_paid() {
+    expect(support.decide(support.Decision.Refund { cents: 3999, reason: "broken" }, order()), "refund 39.99 USD")
+}
+
+fn test_more_than_the_customer_paid_goes_to_a_person() {
+    expect(support.decide(support.Decision.Refund { cents: 4000, reason: "x" }, order()), "escalated")
+}
+
+fn test_above_100_usd_goes_to_a_person() {
+    let big = support.Order { id: "ord_2", paid: 250.00 USD }
+    expect(support.decide(support.Decision.Refund { cents: 10001, reason: "x" }, big), "escalated")
+    expect(support.decide(support.Decision.Refund { cents: 10000, reason: "x" }, big), "refund 100.00 USD")
+}
+
+fn test_a_zero_or_negative_refund_is_declined() {
+    expect(support.decide(support.Decision.Refund { cents: 0, reason: "x" }, order()), "declined")
+    expect(support.decide(support.Decision.Refund { cents: -500, reason: "x" }, order()), "declined")
+}
+
+fn test_decline_and_escalate_are_kept() {
+    expect(support.decide(support.Decision.Decline { reason: "no fault" }, order()), "declined")
+    expect(support.decide(support.Decision.Escalate { reason: "unclear" }, order()), "escalated")
+}

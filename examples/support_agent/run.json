@@ -1,0 +1,19 @@
+{
+  "entry": "handle",
+  "inputs": {
+    "customer": "cus_481",
+    "order": { "id": "ord_1092", "paid": { "amount": "39.99", "currency": "USD" } },
+    "message": "My blender arrived with a cracked jug and leaks everywhere."
+  },
+  "grants": {
+    "pay": {
+      "cap": "shop.payments.refund",
+      "needs": {
+        "post": { "cap": "net.http.post", "only": ["https://payments.example.com/refunds"] },
+        "key": { "env": "PAYMENTS_KEY" },
+        "base": "https://payments.example.com"
+      }
+    }
+  },
+  "model": { "provider": "anthropic", "model": "claude-haiku-5-5", "api_key": { "env": "ANTHROPIC_API_KEY" } }
+}

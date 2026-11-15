@@ -4,6 +4,16 @@ All notable changes to `staalc` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org); before 1.0, a minor version may change
 the language or its file formats.
 
+## Unreleased
+
+### Added
+
+- `examples/support_agent`: a complete agent, ready to publish. Claude chooses to
+  refund, decline or escalate a customer's request; the agent's rules decide; it refunds
+  through the business's own payment service, at most once and at most 100 USD. With
+  its `agent.json`, its computed `agent.described.json`, tests of its rules, and
+  `tests/support_agent_test.rs`, which runs it against a local payment service.
+
 ## 0.29.0 — 2026-11-13
 
 This release refuses requests to private addresses unless a grant lists them, and

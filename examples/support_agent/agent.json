@@ -1,0 +1,91 @@
+{
+  "manifest": "0.1",
+  "agent": "support-refunds-claude",
+  "version": "0.1.0",
+  "requires_staalc": ">=0.29.0",
+  "title": "Support refunds with Claude",
+  "summary": "Reads a customer's message about their order, has Claude choose refund, decline or escalate, and refunds within the business's rules.",
+  "publisher": {
+    "id": "github:laurells",
+    "name": "Laurels Ozy Echichinwo",
+    "security_contact": "https://github.com/laurells/staal/security"
+  },
+  "license": "Apache-2.0",
+  "categories": [
+    "customer-operations",
+    "finance"
+  ],
+  "tools": [
+    {
+      "name": "handle_refund_request",
+      "description": "Handle one signed-in customer's refund request about one of their orders: refund up to 100 USD, decline, or pass it to a person.",
+      "program": "support.staal",
+      "entry": "handle",
+      "app_inputs": [
+        "customer",
+        "order"
+      ],
+      "app_input_requirements": {
+        "customer": "the id of the customer the business's own application has authenticated",
+        "order": "that customer's own order, with the amount they paid, from the business's records"
+      },
+      "grants": {
+        "pay": {
+          "suggested": {
+            "each": {
+              "amount": "100.00",
+              "currency": "USD"
+            },
+            "uses": 1
+          },
+          "needs": {
+            "post": {
+              "reach": [
+                "https://{{PAYMENTS}}/refunds"
+              ],
+              "idempotency_key": true
+            }
+          }
+        }
+      },
+      "once": {
+        "by": [
+          "order"
+        ],
+        "keep": "30d"
+      },
+      "quota": {
+        "suggested": {
+          "window": "24h",
+          "calls": 500,
+          "money": {
+            "amount": "2000.00",
+            "currency": "USD"
+          }
+        }
+      },
+      "deadline": "120s"
+    }
+  ],
+  "data": {
+    "reads": [
+      "the customer's message and the order the business supplies"
+    ],
+    "writes": [],
+    "sends": [
+      "the message and the order to the business's model provider",
+      "a refund request to the business's payment service"
+    ],
+    "categories": [
+      "customer messages",
+      "payment references"
+    ],
+    "processors": [
+      "the business's model provider (Anthropic)",
+      "the business's payment service"
+    ],
+    "retention": "nothing is kept by the agent beyond the business's own journals",
+    "model_training": "as the business's agreement with its model provider says; the agent asks for no training use",
+    "regions": "wherever the business's model provider and payment service process data"
+  }
+}
