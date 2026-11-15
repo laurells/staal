@@ -2172,7 +2172,7 @@ before anything the program does, an event `{"event": "unchecked", "capability",
 and `resume` print `this run is unchecked: it loaded C code for ...` to standard
 error; the C interface's result carries `"unchecked": [capabilities]`; and
 `RunResult::unchecked()` lists them. `staalc doc` shows `foreign` declarations
-under "C libraries (unchecked)".
+under "C libraries".
 
 ### Calls and the journal
 
