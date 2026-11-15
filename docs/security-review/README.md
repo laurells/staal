@@ -38,7 +38,7 @@ Read in this order:
 | [sbom/](sbom/) | CycloneDX 1.5 SBOMs, one per release platform |
 
 The specifications the package refers to: [GUARANTEES.md](../GUARANTEES.md) (the
-claims), [RUNTIME.md](../RUNTIME.md), [GUIDE.md](../GUIDE.md), [MCP.md](../MCP.md),
+claims), [RUNTIME.md](../RUNTIME.md), [the error codes](../reference/errors.md), [MCP.md](../MCP.md),
 [PACKAGES.md](../PACKAGES.md), and [SECURITY.md](../../SECURITY.md) (disclosure).
 
 ## Reporting findings

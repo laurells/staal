@@ -32,7 +32,7 @@ google-adk = ["google-adk>=2.12.0"]
 Homepage = "https://laurells.github.io/staal/"
 Source = "https://github.com/laurells/staal"
 Issues = "https://github.com/laurells/staal/issues"
-Documentation = "https://github.com/laurells/staal/blob/main/docs/GUIDE.md"
+Documentation = "https://github.com/laurells/staal/blob/main/docs/README.md"
 
 [project.scripts]
 staalc = "staal._cli:main"

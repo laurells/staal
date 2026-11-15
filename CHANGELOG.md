@@ -14,6 +14,16 @@ the language or its file formats.
   its `agent.json`, its computed `agent.described.json`, tests of its rules, and
   `tests/support_agent_test.rs`, which runs it against a local payment service.
 
+### Changed
+
+- The documentation is rewritten as a set of pages: `docs/get-started/` (install, a
+  first program, a first agent), `docs/guides/` (one page per topic) and
+  `docs/reference/` (command line, error codes, run config, language, standard
+  library). `tests/docs_test.rs` saves every file a page names, runs every command it
+  shows and compares the output exactly, checks every other Staal block and JSON
+  block, and checks every relative link. `docs/GUIDE.md` and `docs/TUTORIAL.md` are
+  removed; their test records are in `docs/security-review/ASSURANCE.md`, section 4.
+
 ## 0.29.0 — 2026-11-13
 
 This release refuses requests to private addresses unless a grant lists them, and

@@ -830,7 +830,7 @@ places, both of which take the scope from trusted data rather than from the mode
    a read capability the operator granted, and narrows its refund capability to that
    order's payment before using it. The narrowing is code, reviewed with the program,
    checked by the compiler and recorded in the journal. A program can narrow only to
-   limits written in the code (GUIDE.md, "Policy from your app"), not to a value it
+   limits written in the code ([Calling Staal from an app](guides/apps.md)), not to a value it
    computes.
 2. **In the app, when Staal runs in-process.** The app computes each call's grants
    from what it knows about the request (the signed-in user, the order in front of

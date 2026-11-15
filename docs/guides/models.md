@@ -165,15 +165,47 @@ it (E007); sibling fields can be sent. Passing blinded data to another function 
 that function's parameter to make the same promise. `@blind` alone blinds the whole
 value.
 
-The check also covers indirect paths. A value computed from blinded data reveals it. A
-model call made inside `if order.customer.email == x` reveals the email through the
-decision to make it, and so does a call after an operation that can fail on it, unless
-that operation is under `try`. The analysis is conservative and refuses some safe
-programs.
+The rules (E007):
 
-Blinding keeps data from models only. Sending `order.customer.email` through an email
-capability is allowed. The provider can observe when requests arrive; wall-clock timing
-is not covered.
+- **Paths.** Paths overlap when one contains the other: blinding `order.customer`
+  blinds every field inside it, and sending `order` reveals `order.customer.email`.
+- **Values.** The check follows `let` aliases. Anything computed reveals all of its
+  inputs: function results, action results, comparisons, and model output (a model that
+  saw a value may repeat it). `blind_to:` entries must name data directly, not computed
+  values.
+- **Branches.** Code inside `if order.customer.email == x { ... }` reveals the email:
+  every value bound there, and the decision to call a model there. The same holds for
+  code after an `if` whose branch can `return` or `break`, and for a whole loop body when
+  a `break` depends on blinded data. A branch that always returns does not affect later
+  code.
+- **Partial operations.** An action or a call to a function that can fail, not under
+  `try`, and any call to a function that may not finish (it contains `loop` or
+  recursion), is partial: code after it runs only for some values of its arguments, so
+  it reveals them. Pure helpers, with no actions, `loop` or recursion, are not partial;
+  `repeat N` is allowed.
+
+```text
+mail.send(order.customer.email)            // stops here if it fails...
+let s = propose(...)                       // ...so this call reveals success: E007
+
+let sent = try mail.send(order.customer.email)
+let s = propose(...)                       // runs either way: allowed
+if sent.ok { let t = propose(...) }        // depends on success: E007
+```
+
+The analysis is conservative and refuses some safe programs. Use `try` when code must
+continue past an action on blinded data.
+
+What blinding covers and does not:
+
+- Whether a model call happens, how many, their order and their inputs, and so their
+  token use, are fixed by data that is not blinded.
+- Wall-clock timing is not covered. Slow work done only for some blinded values shifts
+  when a model call starts; a provider with precise timestamps could infer which branch
+  ran. The model itself has no clock.
+- Blinding keeps data from models only. Sending `order.customer.email` through an email
+  capability is allowed.
+- Every model call starts from a fresh context; no conversation is reused across calls.
 
 ## Budgets
 

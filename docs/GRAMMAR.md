@@ -2,8 +2,8 @@
 
 The complete syntax of Staal source files (`.staal`), as `staalc` parses it
 (`src/lexer.rs`, `src/parser.rs`). What a program means, and which well-formed
-programs the checker refuses, is in [GUIDE.md](GUIDE.md) and
-[RUNTIME.md](RUNTIME.md). `tests/grammar_test.rs` checks this document against the
+programs the checker refuses, is in the [language reference](reference/language.md),
+the [error codes](reference/errors.md) and [RUNTIME.md](RUNTIME.md). `tests/grammar_test.rs` checks this document against the
 compiler: every reserved word, contextual word and built-in function the compiler
 knows appears here, and every example here parses (a `staal` block as a file, a
 `staal-statements` block as the body of a function, a `staal-types` block one type
@@ -162,7 +162,7 @@ fn first<T: Priced + Named>(xs: List<T, 10>, who: Text @blind) -> Optional<T> {
 Every `needs` comes before `canonical` and every `action`; a capability has at most
 one `canonical`, and `canonical` and `action` may come in any order after the
 needs. Which signatures a capability's functions may have is the checker's to say
-(GUIDE.md, "Capabilities from libraries").
+([RUNTIME.md](RUNTIME.md), section 13).
 
 ```staal
 capability sms.termii {
@@ -210,8 +210,7 @@ fn checksum(c: cap ffi.zlib.crc32, data: Text) -> Int {
                 | "only" ":" "[" ( STRING ( "," STRING )* ","? )? "]"
 
 A function type without `->` returns nothing. Each capability limit is given at
-most once; an `only` pattern must be a valid pattern (GUIDE.md, "Capability
-limits").
+most once; an `only` pattern must be a valid pattern ([Capabilities](guides/capabilities.md)).
 
 ```staal-types
 List<Text, 100>

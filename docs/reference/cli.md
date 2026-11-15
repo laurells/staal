@@ -50,9 +50,13 @@ entry of its own run, without a journal. Without `--engine`, each test runs on b
 engines when `staalc` was built with native code, and on the interpreter otherwise; it
 passes only if every engine gives the same outcome and log.
 
+A test passes if it returns and fails if it fails: `fail("...")` is its assertion, and
+any failure counts. Functions of modules a test file imports are never its tests.
+
 A test holds no authority. `--config` may contain only `model`, `adapters` and
 `limits`, and its model must be scripted (`"provider": "script"`). Without a config,
-the model is scripted with no replies.
+the model is scripted with no replies. With one, every test on every engine starts from
+the config's first reply. A test that prints prints once per engine.
 
 Prints one line per test, `ok` or `FAIL` with the failure's kind and message, then the
 totals. Exits 0 when every test passes; 1 when a test fails, a file has check errors or

@@ -64,7 +64,7 @@ not memory corruption.
 generated code passes the pointers the contract states (checked by running every
 runtime case on both engines and comparing results, logs and journals:
 `engines_test.rs`, `aot_test.rs`; 27 deliberate faults in the native compiler each
-caught, [GUIDE.md](../GUIDE.md) "Native code and the C interface"); and that the
+caught, [ASSURANCE.md](ASSURANCE.md) section 4.5); and that the
 module's code is not freed while a function from it runs (`Drop` for the module).
 
 **A panic inside a helper.** A helper's body returns failures as values, so a panic

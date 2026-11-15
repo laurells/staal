@@ -87,8 +87,9 @@ from source.
 
 **Status.** A preview: tested on all four platforms above, with no independent
 security review yet.
-The [tutorial](https://github.com/laurells/staal/blob/main/docs/TUTORIAL.md) takes
-about an hour.
+Start with [Your first program](https://github.com/laurells/staal/blob/main/docs/get-started/first-program.md);
+[Calling Staal from an app](https://github.com/laurells/staal/blob/main/docs/guides/apps.md)
+covers this package.
 
 **Licence.** Apache-2.0 WITH LLVM-exception. The package contains staalc and its Rust
 dependencies, whose licences are in `LICENSE-THIRD-PARTY.txt`.
