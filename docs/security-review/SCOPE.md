@@ -58,7 +58,7 @@ Where the author is least sure, and where an outside eye is worth most.
   contrived, get a `Proposed<T>` value to an action without `validate`, widen a
   capability, or move blinded data to a model through a path the flow analysis
   misses (closures, `parallel`, modules, packages, pattern matching, error values)?
-  The rules are in [GUIDE.md](../GUIDE.md) "What the compiler enforces"; the 628
+  The rules are in [the error codes](../reference/errors.md); the 628
   failing fixtures in `tests/fixtures/fail` are the attempts so far.
 - **Q2. Can the broker be got past?** By a target that canonicalises differently
   from what the library contacts, by an amount in another currency, by a capability

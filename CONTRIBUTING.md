@@ -67,7 +67,8 @@ them is not finished, however well it works.
   might have changed, an answer that might be cut short), the code refuses, with a
   message that says what was refused and what to do.
 - **Documentation in the same change.** What a program or an operator can see
-  changes the docs: [GUIDE.md](docs/GUIDE.md) for programmers,
+  changes the docs: the pages under [docs/](docs/README.md) for programmers (checked by
+  `tests/docs_test.rs`),
   [RUNTIME.md](docs/RUNTIME.md) for exact behaviour, [GRAMMAR.md](docs/GRAMMAR.md)
   for syntax, and [CHANGELOG.md](CHANGELOG.md) under "Unreleased". Write what the
   code does, never what it is meant to do, and say plainly what it does not do.

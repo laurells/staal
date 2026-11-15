@@ -136,9 +136,9 @@ only; to make a run crash-safe, give it a journal
 
 No account or key is needed: with no payment service configured, Staal uses a
 simulated one. The same in Node.js, and both files in full, are in
-`examples/quickstart/`; the test suite checks this output. Next, the
-[tutorial](docs/TUTORIAL.md) adds a model's decision, and the guide's "Policy from
-your app" shows the pattern in depth.
+`examples/quickstart/`; the test suite checks this output. Next,
+[your first agent](docs/get-started/first-agent.md) adds a model's decision, and
+[Calling Staal from an app](docs/guides/apps.md) shows the pattern in depth.
 
 ## Example
 
@@ -163,8 +163,9 @@ $ staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
 {"amount":"187501.50","currency":"NGN"}
 ```
 
-The [language guide](docs/GUIDE.md) covers capabilities, models, budgets,
-evidence, modules, packages and the rest.
+The [guides](docs/README.md#guides) cover capabilities, models, budgets,
+evidence, packages and the rest; the [language reference](docs/reference/language.md)
+covers the syntax and types.
 
 ## Features
 
@@ -208,7 +209,7 @@ interpreter. `staalc build` links a program into a single executable.
 **Callable from other languages.** A C interface (`include/staal.h`) runs programs
 from any language that can call C, with packages for Python (`python/`) and for Node.js and
 TypeScript (`node/`): your application decides the policy, Staal enforces it
-(GUIDE.md, "Policy from your app"). `staalc schema` prints the JSON Schemas of a
+([Calling Staal from an app](docs/guides/apps.md)). `staalc schema` prints the JSON Schemas of a
 function's inputs and result, so a program can be described as a tool to agent
 frameworks, and `staalc mcp` serves programs as tools to any Model Context Protocol
 client, with each call an ordinary run under the grants the operator's manifest gives,
@@ -264,10 +265,15 @@ continued.
 
 [docs/README.md](docs/README.md) indexes all of it.
 
-- Learn: [the tutorial](docs/TUTORIAL.md), the same agent on [five agent
+- Get started: [install](docs/get-started/install.md), [your first
+  program](docs/get-started/first-program.md), [your first
+  agent](docs/get-started/first-agent.md).
+- Learn: [the guides](docs/README.md#guides), the same agent on [five agent
   frameworks](docs/frameworks/), [writing a package](docs/PACKAGES.md), and
   [examples](examples/README.md).
-- Reference: [the language guide](docs/GUIDE.md), [the runtime
+- Reference: [the command line](docs/reference/cli.md), [error
+  codes](docs/reference/errors.md), [run config](docs/reference/run-config.md), [the
+  language](docs/reference/language.md), [the runtime
   specification](docs/RUNTIME.md), [the grammar](docs/GRAMMAR.md) and [the C
   interface](include/staal.h).
 - Tools and guarantees: [tools and the MCP server](docs/MCP.md) and [what is

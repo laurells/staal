@@ -15,7 +15,7 @@ For a first program that needs no account, see `invoice/`:
 `policy/app.py` runs `policy/refund.staal` from Python and grants each run a
 refund limit from the customer's tier and the order's cost. Staal refuses any
 refund above it, and never one above the 500 USD the code allows, whatever the app
-grants. GUIDE.md, "Policy from your app", explains it. You need the C library and
+grants. [Calling Staal from an app](../docs/guides/apps.md) explains it. You need the C library and
 an Anthropic API key:
 
     cargo build --release

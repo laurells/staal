@@ -4,7 +4,7 @@ What Staal is made of, how data moves through it, and where trust changes. The
 threat model ([THREAT_MODEL.md](THREAT_MODEL.md)) is organised by the boundaries
 named here (B1 to B12). Line counts are of the reviewed commit
 ([README.md](README.md)); the specifications are [RUNTIME.md](../RUNTIME.md),
-[GUIDE.md](../GUIDE.md), [MCP.md](../MCP.md) and [PACKAGES.md](../PACKAGES.md).
+[the language reference](../reference/language.md), [MCP.md](../MCP.md) and [PACKAGES.md](../PACKAGES.md).
 
 ## 1. What Staal is
 
