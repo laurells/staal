@@ -1869,9 +1869,10 @@ journals. Native code:
   same function makes it);
 - evaluates left to right, and `and`/`or` evaluate their right side only when it
   decides the answer;
-- holds Text, Money, records and lists in an arena owned by the runtime, and does
+- holds Text, records, lists, maps and sets in an arena owned by the runtime, and does
   every operation on them with the interpreter's own functions (arithmetic,
-  comparison, built-ins, indexing, record building);
+  comparison, built-ins, indexing, record building); Money is held in machine words
+  inside a function ("How values are held", below);
 - copies a value when a variable is read, as the interpreter does (a field or item
   read from a variable copies only that field or item), and drops a variable's value
   when it is reassigned or leaves scope, so memory use matches the interpreter's;
