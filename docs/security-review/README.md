@@ -19,6 +19,19 @@ package are built from it, each with a build provenance attestation. The package
 implementation's author; it is the starting point for an independent review, not
 its result.
 
+## Changes since the reviewed commit
+
+These change what the package says about the repository at `main`, not about the
+reviewed commit:
+
+- GitHub Actions workflows (`ci`, `supply-chain`, `fuzz`, `frameworks-latest`) run only
+  for a release tag or when started by hand, no longer on every push or weekly. Every
+  change is tested in full locally before it is merged.
+- `docs/GUIDE.md` and `docs/TUTORIAL.md` were replaced by the pages under
+  `docs/get-started/`, `docs/guides/` and `docs/reference/`. References to them in this
+  package now point to those pages, and the deliberate-fault records GUIDE.md held are
+  in [ASSURANCE.md](ASSURANCE.md), section 4.
+
 ## Contents
 
 Read in this order:

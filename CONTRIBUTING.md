@@ -31,8 +31,9 @@ cargo clippy --all-targets --features failpoints -- -D warnings
 (cd editors/vscode && npm ci && npm test)
 ```
 
-CI runs exactly these on Linux and macOS, with Rust 1.97.0. A change is ready
-when all of them pass.
+A change is ready when all of them pass locally; it is then merged to `main`. GitHub
+Actions runs the same commands on Linux and macOS, with Rust 1.97.0, only for a
+release tag.
 
 `fuzz/` holds the fuzzers (see [fuzz/README.md](fuzz/README.md)). Run the one for
 the part you changed for a few minutes before sending a change to the parser,

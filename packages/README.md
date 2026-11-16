@@ -43,10 +43,10 @@ than round it. Neither documents an idempotency key, so grant their `post` witho
 `idempotency_key`: a refund a crash leaves unanswered stops the run in doubt, for an
 operator to check in the dashboard, instead of being sent twice.
 
-Each package's code has been run against a local server standing in for its
-service (`tests/packages_test.rs` for the first four, `tests/*.json` in each folder
-for the rest, on both engines), and the first four have been fetched from their GitHub repositories
-with `staalc fetch`. Runs against the live services need your own keys.
+Each package is run on both engines against a local server standing in for its
+service: the first four by `tests/packages_test.rs`, the rest by the `tests/*.json`
+cases in their folders. The first four have been fetched from their GitHub
+repositories with `staalc fetch`. None has been run against its live service.
 
 ### `code`: GitHub
 
@@ -160,5 +160,4 @@ A new package is reviewed against this list, in addition to the rules in
   documentation shows, with at least one action refused by `only` before any request
   is made, passing with and without `--features failpoints`.
 - A README section with a grant example.
-- An honest status: tested against a live test-mode account, or tested against a
-  local server only.
+- A status: tested against a live test-mode account, or against a local server only.

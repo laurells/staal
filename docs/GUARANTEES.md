@@ -10,8 +10,8 @@ The running example is a financial operations agent (`examples/finops/`). It rea
 signed-in customer's record and orders, refunds part of an order, books the refund,
 texts the customer, and works within daily limits. `examples/finops/attacks.py`
 attacks it on purpose. Each attack is judged by what the stand-in bank and SMS
-service record in their own ledgers, not by what Staal reports. CI runs it on both
-engines (`tests/capi_test.rs`, `the_finance_agent_holds_under_attack_on_each_engine`):
+service record in their own ledgers, not by what Staal reports. The test suite runs it
+on both engines (`tests/capi_test.rs`, `the_finance_agent_holds_under_attack_on_each_engine`):
 
     python3 examples/finops/attacks.py /tmp/finops [interpreter|native]
 
@@ -63,8 +63,8 @@ the customer's record (whose name, in the demo, carries a planted instruction).
   open, it cannot: the ledger reads the clock as at most one minute ahead of the time
   since boot. Across a restart there is no such reference, so a jump forward is warned
   about, not refused (docs/MCP.md section 6). For a tool that moves money, keep `once`
-  keys for ever (the host's `keep="forever"`), which no clock can expire, and keep the clock with
-  NTP. The demo keeps them for the default 90 days.
+  keys forever (the host's `keep="forever"`), which no clock can expire, and keep the
+  clock synchronized with NTP. The demo keeps them for the default 90 days.
 - **C code called through `cap ffi`,** which the broker cannot check: a tool granted
   it gets a warning at start, and the run is marked unchecked.
 

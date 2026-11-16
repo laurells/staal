@@ -955,23 +955,22 @@ nothing is retried. They are tested through each framework's own agent loop with
 model (python/tests/test_adapters.py, node/test/frameworks/), against the framework
 versions pinned in python/tests/frameworks.txt and node/test/frameworks/package.json. The
 Claude Agent SDK's loop runs in the Claude Code CLI it ships, pointed at a local server
-answering as the Messages API does. A weekly workflow, `frameworks-latest`, runs the same
-tests against each framework's latest release.
+answering as the Messages API does. The `frameworks-latest` workflow, run for each release tag,
+runs the same tests against each framework's latest release.
 
 
 ## 12. Remote transport (built; served only by a test build until reviewed)
 
-**Status: being built (12.7).** A release build serves stdio only and refuses
-`server.http` until the release gate of 12.7 is met. Built and tested so far, in a test
-build: stage 1 (the HTTP server, its settings, TLS and the checks of 12.3, in
-`src/mcp/http.rs`), and of stage 2 the token verification (`src/mcp/jwt.rs`), the keys
-(`src/mcp/keys.rs`), the protected resource metadata, the 401 and 403 challenges, tool
-scopes, the principal's scope and key fingerprint (`src/mcp/principal.rs`), app
-inputs from claims and the limits per principal; and stage 3, the crash, duplicate
-and cancellation tests over HTTP; and of stage 4, SDK conformance. What remains of the
-release gate is the independent security review, after which a release build may
-serve `server.http`. Tests: `tests/mcp_http_test.rs`, `tests/mcp_keys_test.rs`,
-`tests/mcp_sdk_test.rs`.
+**Status: built, awaiting review.** A release build serves standard input and output
+only, and refuses `server.http`. A test build (`--features failpoints`) serves it;
+without authentication (`"auth": "none"`), only on a loopback address. Every stage of 12.7 is built and tested: the HTTP server, its
+settings, TLS and the checks of 12.3 (`src/mcp/http.rs`); token verification
+(`src/mcp/jwt.rs`), keys (`src/mcp/keys.rs`), the protected resource metadata, the
+401 and 403 challenges, tool scopes, the principal (`src/mcp/principal.rs`), app inputs
+from claims and limits per principal; the crash, duplicate and cancellation tests over
+HTTP; and conformance with the official SDKs. The remaining release gate is an
+independent security review. Tests: `tests/mcp_http_test.rs`,
+`tests/mcp_keys_test.rs`, `tests/mcp_sdk_test.rs`.
 
 It is written against MCP 2026-07-28 (the Streamable HTTP
 transport and the authorization specification of that revision) and the RFCs they

@@ -6,8 +6,9 @@ failpoints --no-fail-fast` and `cargo test --no-default-features --no-fail-fast`
 clippy and the lock files checked. A version tag then runs every workflow: `ci.yml`
 and `supply-chain.yml` on every platform, the fuzz and frameworks checks, and the
 release itself; when the release workflow succeeds, `pages.yml` publishes the site as
-it was at the tag (from main, the only branch the `github-pages` environment deploys). So what only another platform shows (macOS, Linux on ARM) is first
-seen at the release: a tag whose `ci.yml` fails is not published.
+it was at the tag (from main, the only branch the `github-pages` environment
+deploys). So what only another platform shows (macOS, Linux on ARM) is first seen at
+the release: a tag whose `ci.yml` fails is not published.
 
 A release is a version tag. Pushing one runs `.github/workflows/release.yml`, which
 on Linux (in a manylinux_2_28 container, so for glibc 2.28 and later), Apple Silicon

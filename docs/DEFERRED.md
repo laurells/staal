@@ -72,9 +72,8 @@ Windows builds and tests, Linux with musl (index.js already looks for a
 `linux-<arch>-musl` addon, none is built), cross-compiling, wasm, and `staalc build`
 executables on macOS.
 
-The CI badge was taken off the top of README.md on 2026-10-27, because it showed
-failing runs. CI now passes on all four platforms; put it back if wanted:
-`[![ci](https://github.com/laurells/staal/actions/workflows/ci.yml/badge.svg)](https://github.com/laurells/staal/actions/workflows/ci.yml)`
+There is no CI badge in README.md: CI runs only for release tags, so a badge would
+show the last release's run, not the state of `main`.
 
 ## Isolation
 
@@ -122,9 +121,9 @@ at every journal transition.
 
 ## Reliability, to do before more features
 
-CI tests on four platforms, and six fuzz targets exist (fuzz/README.md). Not yet
-done: a security review by someone other than the author (the package for it is
-docs/security-review/), fuzzing with AddressSanitizer and in CI, fuzzing the network
-code, and load and long-running tests (many connections, hours of running, large
+CI tests on four platforms for each release, and seven fuzz targets exist, run with
+AddressSanitizer (fuzz/README.md). Not yet done: a security review by someone other
+than the author (the package for it is docs/security-review/), a fuzzing campaign
+longer than the release workflow's 20 minutes per target, fuzzing the network code, and load and long-running tests (many connections, hours of running, large
 journals).
 

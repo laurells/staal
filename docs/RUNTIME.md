@@ -1391,7 +1391,7 @@ check: those folders should be writable only by whoever runs the program.
   by looking for its key: it happened exactly when its key is there. The crash tests
   check both, at every crash point.
 
-Linux only so far; elsewhere every database action fails.
+Linux only; elsewhere every database action fails.
 
 ### PostgreSQL
 
@@ -1941,7 +1941,7 @@ once (section 11).
 ## 17. Executables
 
 `staalc build <file.staal> -o <executable> [--runtime <libstaalc.a>]` makes a
-standalone executable (Linux only, for now; elsewhere it refuses):
+standalone executable (Linux only; elsewhere it refuses):
 
 1. The program is checked as by `staalc check`, packages and authority included. A
    program with errors is not built (exit 1).
@@ -2160,7 +2160,7 @@ writable by neither group nor others. A worker in `/tmp`, or in a directory anot
 user owns, is refused, saying which directory. The Node.js package installs no `staalc`: set
 `STAALC_FFI_WORKER` to one of this version to call C from it.
 
-No time limit applies to a call yet: a C function that never returns holds its run,
+No time limit applies to a call: a C function that never returns holds its run,
 contained or not.
 
 ### Unchecked

@@ -23,6 +23,10 @@ the language or its file formats.
   shows and compares the output exactly, checks every other Staal block and JSON
   block, and checks every relative link. `docs/GUIDE.md` and `docs/TUTORIAL.md` are
   removed; their test records are in `docs/security-review/ASSURANCE.md`, section 4.
+- The remaining documentation was checked against the implementation and corrected:
+  claims that CI runs on every push or weekly (it runs for release tags), the Node.js
+  version LangGraph.js needs (20), the agent manifest's status (its format and checks
+  are built), the MCP HTTP transport's status, and stale counts.
 
 ## 0.29.0 — 2026-11-13
 

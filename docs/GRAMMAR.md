@@ -3,8 +3,8 @@
 The complete syntax of Staal source files (`.staal`), as `staalc` parses it
 (`src/lexer.rs`, `src/parser.rs`). What a program means, and which well-formed
 programs the checker refuses, is in the [language reference](reference/language.md),
-the [error codes](reference/errors.md) and [RUNTIME.md](RUNTIME.md). `tests/grammar_test.rs` checks this document against the
-compiler: every reserved word, contextual word and built-in function the compiler
+the [error codes](reference/errors.md) and [RUNTIME.md](RUNTIME.md).
+`tests/grammar_test.rs` checks this document against the compiler: every reserved word, contextual word and built-in function the compiler
 knows appears here, and every example here parses (a `staal` block as a file, a
 `staal-statements` block as the body of a function, a `staal-types` block one type
 a line).
