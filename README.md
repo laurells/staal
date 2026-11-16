@@ -20,83 +20,45 @@
   <a href="https://github.com/laurells/staal"><img src="https://img.shields.io/github/stars/laurells/staal?style=flat&color=2a5d8f" alt="GitHub stars"></a>
 </p>
 
-## What it is
+Staal is a statically typed language for the code an AI agent runs to act: moving
+money, sending messages, changing files and records, and calling models. This
+repository holds `staalc`, its compiler and reference runtime, written in Rust.
+("Staal" is Dutch and Afrikaans for steel, said "stahl".)
 
-Staal is a statically typed programming language for the code an AI agent runs to
-act: moving money, sending messages, changing files and records, and calling AI
-models.
+Enforcement happens twice:
 
-The work is split in two. Before a program runs, the compiler checks that it follows
-the language's safety rules: every action has a capability in scope, no capability is
-widened, a model's output is validated before it is used, untrusted text never
-becomes a model's instruction, and model use cannot exceed its declared budget. While
-it runs, the capability broker enforces the permissions and limits your application
-actually granted, and a journaled run records every external effect, so after a
-crash it resumes without blindly repeating a payment or a message.
+- **Before a run**, the compiler refuses a program that acts without a capability,
+  widens one, uses model output without validating it, puts untrusted text in a
+  model's instruction, can exceed its model budget, calls a model in an unbounded loop,
+  lets blinded data reach a model, or claims completion without evidence (E001 to
+  E008).
+- **During a run**, a broker enforces the limits the application granted (`only`,
+  `uses`, `each`, `max`) before each action, and a journal records every external
+  effect, so a crashed run resumes without repeating an action that may already have
+  happened.
 
-Staal is said "stahl": it is Dutch and Afrikaans for steel. This repository holds
-`staalc`, the Staal compiler and reference runtime, written in Rust.
+Your application stays in the languages it uses now. Staal holds the part that acts
+on the world, and your application grants each run what it may do.
 
-## Where Staal fits
+## Install
 
-You do not build your application in Staal. Your API, frontend, database layer and
-business logic stay in the languages and frameworks you use now. Staal is for the
-paths where an AI agent takes actions with consequences: a support agent that issues
-refunds, an agent that sends SMS, email or Slack messages, one that changes records in
-PostgreSQL or SQLite or files on disk, or one that calls any HTTP API through a
-library capability. Your application decides what each run may do; Staal checks the
-program and enforces those permissions while it runs.
-
-## Installing
-
-The Python and Node.js packages each include the compiler and runtime, with no Rust
-needed, on Linux (x86_64, arm64) and macOS (Apple Silicon, Intel):
-
-```
-pip install staal
-npm install @staal/node
-```
-
-The `staalc` command alone, from a release:
-
-```
+```sh
+pip install staal              # Python package, with the staalc command
+npm install @staal/node        # Node.js package (no staalc command)
 curl -fsSL https://raw.githubusercontent.com/laurells/staal/main/install.sh | sh
 ```
 
-[install.sh](install.sh) downloads the latest release's archive for your machine,
-refuses it unless its SHA-256 matches the release's, unpacks it into `~/.staal`, and
-links `staalc` into `~/.local/bin`. Or unpack the archive yourself and run its
-`staalc`, or install the wheel with `pip install staal-X.Y.Z-py3-none-<platform>.whl`,
-which gives the `staalc` command and the `staal` Python package
-([docs/RELEASING.md](docs/RELEASING.md) says what a release holds). Releases are
-made for Linux on x86_64 and arm64 (glibc 2.28 and later) and macOS on Apple
-Silicon (11 and later) and Intel (10.12 and later); arm64 Linux from 0.24.0.
-
-### From source
-
-Rust 1.89 or newer ([rustup.rs](https://rustup.rs)), `git` to
-fetch packages, and a C compiler (`cc`) to build executables. Developed and
-tested with Rust 1.97.0.
-
-```
-git clone https://github.com/laurells/staal.git
-cd staal
-cargo build --release
-./target/release/staalc check examples/invoice/invoice.staal
-./target/release/staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
-```
-
-To build without the native compiler (smaller, interpreter only):
-`cargo build --release --no-default-features`.
+`install.sh` downloads the latest release for the machine, refuses it unless its
+SHA-256 matches the release's checksum file, unpacks it into `~/.staal`, and links
+`staalc` into `~/.local/bin`. Releases are built for Linux on x86_64 and arm64 (glibc
+2.28 or later) and macOS on Apple Silicon (11 or later) and Intel (10.12 or later).
+Building from source needs Rust 1.89 or later; see [Install](docs/get-started/install.md).
 
 ## Quick start
 
-Keep your app in Python or Node.js; write the part that moves money or messages in
-Staal. Your app decides the policy, Staal enforces it:
+`refund.staal` moves the money:
 
-`refund.staal`, the part that moves money:
-
-```
+```staal
 // Refunds an order, never by more than the app allows.
 fn main(order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -> Text {
     let receipt = pay.refund(order, amount)
@@ -104,13 +66,13 @@ fn main(order: Text, amount: Money, pay: cap payments.refund(each: 500 USD)) -> 
 }
 ```
 
-`app.py`, your app, granting each run a limit by customer tier:
+`app.py` grants each run a limit from the customer's tier:
 
 ```python
 import staal
 
 lib = staal.Library()
-LIMIT = {"gold": 500, "standard": 50}  # USD per refund, decided by your app
+LIMIT = {"gold": 500, "standard": 50}  # USD per refund, decided by the app
 
 def refund(tier, order, amount):
     return lib.run("refund.staal", {
@@ -123,164 +85,63 @@ print(refund("standard", "4417", "35.00")["result"])
 print(refund("standard", "4417", "300.00")["failure"]["message"])
 ```
 
-```
+```text
 Refunded 35.00 USD for order 4417
 'payments.refund' allows at most 50.00 USD per action; this action needs 300.00 USD
 ```
 
-The tier comes from your application's own records, such as the signed-in
-customer's account, never from the model. This example shows capability enforcement
-only; to make a run crash-safe, give it a journal
-(`lib.run(..., journal="refund-4417.journal")`), and a crashed run then continues with
-`lib.resume`.
+The tier comes from the application's records, never from the model. A grant above
+the code's `each: 500 USD` is narrowed to it. With no payment service configured, the
+runtime uses a simulated one, so no account or key is needed. Both files, and the same
+app in Node.js, are in [examples/quickstart](examples/quickstart/), and the test suite
+checks this output.
 
-No account or key is needed: with no payment service configured, Staal uses a
-simulated one. The same in Node.js, and both files in full, are in
-`examples/quickstart/`; the test suite checks this output. Next,
-[your first agent](docs/get-started/first-agent.md) adds a model's decision, and
-[Calling Staal from an app](docs/guides/apps.md) shows the pattern in depth.
-
-## Example
-
-```
-type Line { item: Text, price: Money, qty: Int }
-
-fn line_total(line: Line) -> Money {
-    return line.price * line.qty
-}
-
-fn total(lines: List<Line, 20>) -> Money {
-    let sum = 0.00 NGN
-    for line in lines {
-        set sum = sum + line_total(line)
-    }
-    return sum
-}
-```
-
-```
-$ staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
-{"amount":"187501.50","currency":"NGN"}
-```
-
-The [guides](docs/README.md#guides) cover capabilities, models, budgets,
-evidence, packages and the rest; the [language reference](docs/reference/language.md)
-covers the syntax and types.
-
-## Features
-
-**Safety checked at compile time.** Eight rules (E001 to E008) reject a program
-that would act without a capability, widen a capability, use a model's output
-without validating it, let untrusted text instruct a model, exceed a model
-budget, call a model inside an unbounded loop, leak data marked as blinded to a
-model, or claim completion without evidence.
-
-**Authority you can read.** An action needs a capability in scope, and the
-capability's limits (`only`, `uses`, `each`, `max`) are enforced by a broker
-before the action runs. A package declares the authority it needs in its
-manifest, and the compiler refuses code that reaches beyond it.
-
-**Exact money, bounded everything.** Money is a decimal with a currency, never
-floating point. Overflow, division by zero, mixed currencies and out-of-range
-indexes are failures, not wrong answers. Every list declares a maximum length.
-
-**Bounded model use.** A function declares a budget of model calls and tokens
-(`budget(calls: 1, tokens: 400)`). The compiler refuses a function whose worst-case
-use can exceed it (E004) and a model call inside an unbounded loop (E005). At run
-time, a call that the remaining budget cannot cover is refused before it is sent, and
-the budget is charged from the usage the provider reports. Untrusted data is sent to
-the model in a section marked as data, never as its instruction (E006), data marked
-blinded never reaches a model (E007), and a model's output is a `Proposed` value
-that must pass `validate` before it can reach an action (E001).
-
-**Crash recovery built into the runtime.** A journaled run (`--journal`, or
-`journal=` from Python and Node.js) records every external effect before it happens
-and after its outcome is known. If the process crashes, the run resumes from the
-journal without repeating anything whose outcome it recorded. When an action may
-have happened but its outcome was not recorded, it is never guessed: an action the
-service deduplicates by key is made again on resume with the same idempotency key,
-so the service returns its original result, and any other action stops the run until
-an operator records what happened (`staalc resolve`).
-
-**Native code and standalone executables.** Pure functions compile to machine
-code through Cranelift, with results, errors and journals identical to the
-interpreter. `staalc build` links a program into a single executable.
-
-**Callable from other languages.** A C interface (`include/staal.h`) runs programs
-from any language that can call C, with packages for Python (`python/`) and for Node.js and
-TypeScript (`node/`): your application decides the policy, Staal enforces it
-([Calling Staal from an app](docs/guides/apps.md)). `staalc schema` prints the JSON Schemas of a
-function's inputs and result, so a program can be described as a tool to agent
-frameworks, and `staalc mcp` serves programs as tools to any Model Context Protocol
-client, with each call an ordinary run under the grants the operator's manifest gives,
-plus quotas across calls and `once` for calls that must not run twice
-([docs/MCP.md](docs/MCP.md)). The same tools run inside an app (`staal.Tool` in
-Python, `Tool.open` in Node.js), with grants your app computes for each call, and as
-tools of the OpenAI Agents SDK, LangGraph, the Vercel AI SDK, the Claude Agent SDK and Google's ADK ([examples/frameworks](examples/frameworks)).
-
-**An explicit boundary with native code.** A program can call C libraries, granted
-by the library's SHA-256 and each function's exact signature. Staal cannot check what
-C code does, so on Linux each library runs contained by default: in a worker process
-of its own, which the kernel lets only compute after the library has loaded, so it
-cannot act outside the worker. Contained, it still has limits Staal states: while the
-library loads, its initialisers can read files the run's user can read, and a call
-has no time limit (RUNTIME.md section 19). A library granted to run in a separate
-process or in the run's own (the only ways on macOS) can do anything that process
-can, and the run is marked unchecked: in its log, on the command line and in the C
-interface's result. The guarantees above end at that boundary, and Staal says so
-where it applies.
-
-## Command line
-
-| Command | What it does |
-| --- | --- |
-| `staalc check <file.staal>` | Checks a program and reports errors by code |
-| `staalc run <file.staal> [--entry <fn>] [--input <name>=<value>]...` | Runs a program that needs no grants, from the command line |
-| `staalc run <file.staal> --config <run.json>` | Runs a program with the inputs, grants and model a run config gives; add `--journal` for crash-safe runs and `--engine native` for native code |
-| `staalc config <file.staal> [--entry <fn>]` | Prints a run config to fill in for a program |
-| `staalc schema <file.staal> [--entry <fn>]` | Prints the JSON Schemas of a function's inputs and result, for describing it as a tool |
-| `staalc mcp <manifest.json>` | Serves programs as tools to MCP clients, on standard input and output ([docs/MCP.md](docs/MCP.md)) |
-| `staalc mcp status <manifest.json>` | Lists a server's unfinished runs and each tool's quota use |
-| `staalc resume <file.staal> --config <run.json> --journal <run.journal>` | Continues a run that stopped or crashed |
-| `staalc resolve --journal <run.journal> ...` | Records an operator's decision on an action left in doubt |
-| `staalc fetch [<project folder>]` | Fetches the packages named in `staal.json` and writes `staal.lock` |
-| `staalc update [<project folder>] [--package <name>]` | As fetch, moving locked versions to the newest within their ranges |
-| `staalc publish --registry <folder> --git <location> --commit <id>` | Adds a package version to a registry |
-| `staalc yank --registry <folder> --package <name> --version <v> [--undo]` | Marks a published version not to be chosen again |
-| `staalc build <file.staal> -o <app>` | Builds a standalone executable (Linux) |
-| `staalc fmt [--check] <file.staal>...` | Formats files in place, or lists those not formatted |
-| `staalc test [--config <test.json>] <file or folder>...` | Runs the tests written in Staal, in both engines |
-| `staalc doc <file.staal> [-o <out.md>]` | Writes the program's documentation in Markdown |
-| `staalc repl` | Runs Staal one input at a time |
-| `staalc profile <file.staal> --config <run.json>` | Runs a program and shows what each function spent |
-| `staalc debug <file.staal> --config <run.json>` | Runs a program, stopping at breakpoints and steps |
-| `staalc lsp` | A language server for editors: the same errors as `check`, completion, formatting |
-| `staalc --help`, `staalc --version` | Prints the usage, or the version |
-
-Exit codes: `0` success; `1` check errors or a failed run; `2` a usage, file,
-config or journal problem (nothing was run); `3` the run stopped and can be
-continued.
+Next: [Your first program](docs/get-started/first-program.md), then [Your first
+agent](docs/get-started/first-agent.md).
 
 ## Documentation
 
-[docs/README.md](docs/README.md) indexes all of it.
+[docs/README.md](docs/README.md) indexes every page: getting started, a guide per
+topic, the reference (command line, error codes, run config, language, standard
+library), and the specifications ([RUNTIME.md](docs/RUNTIME.md),
+[MCP.md](docs/MCP.md), [AGENT_MANIFEST.md](docs/AGENT_MANIFEST.md),
+[GRAMMAR.md](docs/GRAMMAR.md)). [GUARANTEES.md](docs/GUARANTEES.md) states each
+guarantee, what it depends on, how it is tested and where it stops.
 
-- Get started: [install](docs/get-started/install.md), [your first
-  program](docs/get-started/first-program.md), [your first
-  agent](docs/get-started/first-agent.md).
-- Learn: [the guides](docs/README.md#guides), the same agent on [five agent
-  frameworks](docs/frameworks/), [writing a package](docs/PACKAGES.md), and
-  [examples](examples/README.md).
-- Reference: [the command line](docs/reference/cli.md), [error
-  codes](docs/reference/errors.md), [run config](docs/reference/run-config.md), [the
-  language](docs/reference/language.md), [the runtime
-  specification](docs/RUNTIME.md), [the grammar](docs/GRAMMAR.md) and [the C
-  interface](include/staal.h).
-- Tools and guarantees: [tools and the MCP server](docs/MCP.md) and [what is
-  guaranteed, assumed and not covered](docs/GUARANTEES.md).
-- Project: [changelog](CHANGELOG.md), [deferred work](docs/DEFERRED.md),
-  [releasing](docs/RELEASING.md), [contributing](CONTRIBUTING.md) and
-  [security](SECURITY.md). Editors: [VS Code](editors/vscode).
+## What is built
+
+- The compiler and the eight safety rules; the reference interpreter and a native
+  engine (Cranelift) with identical results, logs and journals; standalone executables
+  (`staalc build`, Linux only).
+- Exact decimal money with currencies; failures, not wrong answers, on overflow,
+  division by zero, mixed currencies and out-of-range indexes; a maximum length on
+  every list.
+- Model calls to Claude, with budgets checked at compile time (E004) and charged from
+  the usage the API reports.
+- The runtime's own capabilities: HTTP, files, TCP and TLS, SQLite (Linux only) and
+  PostgreSQL. Capabilities declared by libraries, written in Staal.
+- Crash-safe journaled runs, `staalc resume` and `staalc resolve`.
+- Packages fetched from git, locked by hash, with versions, registries and declared
+  authority (E108).
+- C library calls, contained in a seccomp-restricted worker on Linux; a run that loads
+  one uncontained is marked unchecked.
+- `parallel`, modules, enums and `match`, optional values, tuples, maps and sets, typed
+  errors, methods, generic functions, interfaces, function values and closures, and a
+  standard library.
+- Hosting: the C interface (`include/staal.h`), Python and Node.js packages, tools for
+  the OpenAI Agents SDK, LangGraph, the Vercel AI SDK, the Claude Agent SDK and Google
+  ADK, an MCP server (`staalc mcp`, tested against the official Python and TypeScript
+  SDKs), and agent folders (`staalc agent`).
+- Developer tools: `fmt`, `test`, `doc`, `repl`, `debug`, `profile`, `lsp`, and a
+  [VS Code extension](editors/vscode).
+
+Not built: other model providers; Windows; `staalc build` and SQLite outside Linux;
+an agent registry; runs against the live services (Claude, Termii, Stripe, Resend,
+Slack) with real keys, which are tested against local stand-ins; and an independent
+security review. [DEFERRED.md](docs/DEFERRED.md) lists work decided on and put off.
+
+Staal is a preview. Before 1.0, a minor version may change the language or its file
+formats; the [changelog](CHANGELOG.md) says when one does.
 
 ## Benchmark
 
@@ -289,120 +150,81 @@ continued.
   <a href="bench/agent"><img src="docs/img/bench-changes.svg" width="400" alt="Risky later changes that shipped broken: Staal 0 of 6, Python alone 6 of 6"></a>
 </p>
 
-Measured by `bench/agent` (`python run.py`, `python mutate.py`, `python loc.py`),
-which CI does not run; the results are in `bench/agent/results/`. The same support
-agent, built twice: in Python alone and in Python with Staal, with
-the same limits, permissions, retries and crash recovery. A model reads a ticket and
-proposes at most one refund (through a simulated Stripe) and one email. Both versions
-face 47 scenarios: policy, prompt injection, malformed model output, permission
-escalation, failing services and lost answers, and crashes before and after every
-external call. A scenario passes when the effects the simulated world ends up with
-are ones the scenario allows and no rule of the specification broke.
+[bench/agent](bench/agent) builds one support agent twice, in Python alone and in
+Python with Staal, to the same specification: a model reads a ticket and proposes at
+most one refund (through a simulated Stripe) and one email, under the same limits,
+permissions, retries and crash recovery. Both face 47 scenarios: policy, prompt
+injection, malformed model output, permission escalation, failing services, lost
+answers, and crashes before and after every external call. A scenario passes when
+the simulated world ends with effects the scenario allows and no rule is broken.
 
 | Metric | Python alone | Python with Staal |
 | --- | --- | --- |
-| Attack and crash scenarios passed | 47 of 47 | 47 of 47 |
+| Scenarios passed | 47 of 47 | 47 of 47 |
 | Code to write and keep | 312 lines | 159 lines |
-| Risky later changes that shipped broken | 6 of 6 | 0 of 6 (4 refused before running, 2 held at run time) |
+| Risky later changes that shipped broken | 6 of 6 | 0 of 6 |
 | Operator interventions (emails in doubt) | 4 | 4 |
 
-Code is counted as lines that are neither blank nor comments. Neither version has
-tests of its own; the 47 scenarios and the simulated world are shared and not
-counted. The Python version's 312 lines are one file that holds, among the rest, its own journal (78 lines), deciding
-whether a request was sent (20), calling and checking the model (60), and the policy
-and actions (82). The Staal version's 159 are the agent (39), the app's grants, run,
-resume and resolve (59), and the Stripe and mail libraries (61), which a team would
-take from packages, leaving 98.
+Lines are neither blank nor comments; the shared scenarios and simulated world are
+not counted. The Python version's 312 lines include its own journal (78), request
+tracking (20), model calling and checking (60), and policy and actions (82). The Staal
+version's 159 are the agent (39), the app's grants and run, resume and resolve (59),
+and Stripe and mail libraries (61) that a team would take from packages.
 
-The six later changes, made identically to both versions:
+The six later changes, applied identically to both:
 
 | Change | Python alone | Python with Staal |
 | --- | --- | --- |
-| Put the ticket into the model's instruction | ships; all 47 scenarios break the rule | refused before it runs (E006) |
-| Drop validation of the model's plan | ships; 4 scenarios act on malformed plans, 1 crashes the job | refused before it runs (E001) |
-| Ask the model again to polish the email | ships; 24 scenarios go over the budget | refused before it runs (E004) |
-| Log every request, headers included | ships; the API keys land in a log | refused before it runs (E101) |
-| Refactor each step into its own helper | ships; two refunds go through where one is allowed | runs; the limits still hold |
-| Resend the email if the mail service fails | ships; a customer is emailed twice when an answer is lost | runs; the limits still hold |
+| Put the ticket into the model's instruction | Ships; all 47 scenarios break the rule | Refused before running (E006) |
+| Drop validation of the model's plan | Ships; 4 scenarios act on malformed plans, 1 crashes | Refused before running (E001) |
+| Ask the model again to polish the email | Ships; 24 scenarios exceed the budget | Refused before running (E004) |
+| Log every request, headers included | Ships; API keys land in the log | Refused before running (E101) |
+| Move each step into its own helper | Ships; two refunds go through where one is allowed | Runs; the limits hold |
+| Resend the email if the mail service fails | Ships; a customer is emailed twice when an answer is lost | Runs; the limits hold |
 
-This is one agent, one specification and six changes. Both versions were written by
-one person who knew the scenarios in advance, which favours the Python version. Careful Python can meet
-the same specification, and on the day it is written it does. What the benchmark
-measures is how much code has to stay right for those guarantees to hold as the
-system changes. Three control changes, to the policy or the order of business (for
-example raising a limit), come out the same in both versions, because neither
-language can tell what the business meant. [bench/agent](bench/agent) has the code, every scenario, the
-controls and the rest of what this does not show.
-
-## Platforms and status
-
-Staal is a preview. Before 1.0, a minor version may change the language or its file
-formats, and the changelog says when one does. Built and tested:
-the compiler and all eight safety rules, the reference runtime, Claude as a
-model provider, exact money, the capability broker, budgets, the crash-safe
-journal, modules, HTTP, file, TCP, SQLite and PostgreSQL capabilities,
-capabilities declared by libraries, packages with versions and registries, an MCP
-server (`staalc mcp`, checked against the official Python and TypeScript SDKs),
-fetched from git and locked by hash, native code, executables, the C interface,
-and calling C libraries (contained on Linux; runs that load one uncontained are marked unchecked); enums and `match`, optional values, tuples, maps
-and sets, typed errors, methods, generic functions, interfaces, function values and
-closures; and a standard library of text, number, list, hashing, encoding and date
-functions, with printing, the clock and random numbers journaled so a resumed run
-replays them.
-
-Platforms: CI runs the whole test suite on every change on Linux (x86_64 and arm64)
-and macOS (Apple Silicon and Intel), including the Python wheel installed and used
-with no Rust. Two features are Linux only so far and refuse elsewhere: `staalc build`
-and the `db.sqlite` capabilities. The Node.js package's crash-injection tests run on
-Linux. Releases, the PyPI wheels and the npm package cover all four platforms.
-
-Not yet done: runs against the live services (Claude, Termii, Stripe, Resend,
-Slack) with real keys, which so far are tested against local stand-ins; other
-model providers; Windows; `staalc build` and SQLite outside Linux; MongoDB; and an
-independent security review. docs/DEFERRED.md lists the work decided on and
-put off.
-
-## Repository layout
-
-```
-src/lexer.rs, parser.rs, ast.rs   source text to syntax tree
-src/checker.rs, budget.rs         type and safety rules, worst-case model cost
-src/modules.rs, packages.rs       modules, manifests, staal.lock, fetching from git
-src/pattern.rs, targets.rs        `only` patterns and canonical targets
-src/interp/                       reference runtime: interpreter, money, broker,
-                                  journal, HTTP, files, model providers (Claude)
-src/native.rs                     native code through Cranelift
-src/capi.rs, include/staal.h      the C interface
-src/cli.rs, main.rs               the command line and built executables' entry
-python/staal/                     Python wrapper over the C interface
-docs/                             language guide and runtime specification
-examples/                         example programs and libraries
-packages/                         packages: sms, payments, email, chat, code, messaging,
-                                  and the template a new one starts from
-site/                             the landing page, published to GitHub Pages
-tests/                            fixtures, runtime cases, crash and engine tests
-```
+Limits of the measurement: it is one agent, one specification and six changes. One
+person wrote both versions knowing the scenarios, which favours the Python version.
+Careful Python meets the specification on the day it is written; the benchmark
+measures how much code must stay right for that to hold as the code changes. Three
+control changes to the business rules, such as raising a limit, come out the same in
+both, since neither can tell what the business meant. CI does not run the benchmark;
+the results are in `bench/agent/results/`.
 
 ## Development
 
-```
+```sh
 cargo test --features failpoints     # every test, with crash injection
-cargo test --no-default-features     # without native code
+cargo test --no-default-features     # without the native engine
 cargo clippy --all-targets --features failpoints -- -D warnings
 scripts/audit.sh                     # dependency advisories (needs network)
 ```
 
-`tests/fixtures/pass/` holds programs that must compile and
-`tests/fixtures/fail/` programs that must be rejected, each starting with
-`// expect: CODE`. To add a rule, write the failing program first, then make the
-checker reject it. CI runs every test on Linux, Apple Silicon and Intel macOS.
-[CONTRIBUTING.md](CONTRIBUTING.md) says what a change needs, and
-[fuzz/README.md](fuzz/README.md) how to run the fuzzers.
+Every change is tested in full locally before it is merged. GitHub Actions runs the
+same suite on Linux (x86_64, arm64) and macOS (Apple Silicon, Intel) for each release
+tag. `tests/fixtures/pass/` holds programs that must compile and `tests/fixtures/fail/`
+programs that must be rejected, each beginning `// expect: CODE`.
+[CONTRIBUTING.md](CONTRIBUTING.md) says what a change needs;
+[fuzz/README.md](fuzz/README.md) covers the fuzzers.
 
-## Related repositories
+| Path | Contents |
+| --- | --- |
+| `src/lexer.rs`, `parser.rs`, `ast.rs` | Source text to syntax tree |
+| `src/checker.rs`, `budget.rs` | Type and safety rules, worst-case model cost |
+| `src/modules.rs`, `packages.rs`, `semver.rs` | Modules, manifests, `staal.lock`, fetching |
+| `src/pattern.rs`, `targets.rs` | `only` patterns and canonical targets |
+| `src/interp/` | The runtime: interpreter, money, broker, journal, HTTP, files, sockets, databases, C calls, model providers |
+| `src/native.rs` | The native engine |
+| `src/capi.rs`, `include/staal.h` | The C interface |
+| `src/host/`, `src/mcp/`, `src/agent/` | The tool host, the MCP server, agent folders |
+| `src/cli.rs`, `main.rs` | The command line and built executables |
+| `python/`, `node/` | The Python and Node.js packages |
+| `docs/` | Documentation |
+| `examples/`, `packages/` | Example programs; reference packages and a template |
+| `bench/agent/` | The benchmark |
+| `site/` | The landing page, published to GitHub Pages |
+| `tests/` | Fixtures, runtime cases, crash, engine and documentation tests |
 
-The reference packages are also published on their own, so projects can depend
-on them by git URL and commit:
+The reference packages are also published as their own repositories:
 [staal-sms](https://github.com/laurells/staal-sms),
 [staal-payments](https://github.com/laurells/staal-payments),
 [staal-email](https://github.com/laurells/staal-email) and
@@ -410,10 +232,8 @@ on them by git URL and commit:
 
 ## License
 
-Copyright 2026 Laurels Ozy Echichinwo. Licensed under the
-[Apache License, Version 2.0, with the LLVM Exceptions](LICENSE)
-(`Apache-2.0 WITH LLVM-exception`), as LLVM, Cranelift and Wasmtime are. The
-exceptions mean an executable `staalc build` makes, which holds parts of the
-runtime, needs no attribution, and that the code can be combined with GPLv2
-software. Contributions are made under the same terms ([CONTRIBUTING.md](CONTRIBUTING.md)).
-The licence grants no right to the name "Staal".
+Copyright 2026 Laurels Ozy Echichinwo. Licensed under the [Apache License 2.0 with
+LLVM Exceptions](LICENSE) (`Apache-2.0 WITH LLVM-exception`). The exceptions mean an
+executable made by `staalc build`, which contains parts of the runtime, needs no
+attribution, and that the code can be combined with GPLv2 software. Contributions are
+made under the same terms. The licence grants no right to the name "Staal".

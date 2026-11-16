@@ -1,150 +1,161 @@
-# Examples that reach real services
+# Examples
 
-Complete programs that act through real APIs: an SMS and an email sent directly
-over `net.http`, and an SMS and a Stripe refund sent through libraries that
-declare their own capabilities. They are checked and run in the test suite against a
-local server that answers like each service. Running them against the real
-services needs your own accounts and keys, as described below.
+Build `staalc` first (`cargo build --release`), or install it. Every example here is
+checked, formatted and documented by the test suite; the last column says which are
+also run.
 
-For a first program that needs no account, see `invoice/`:
+| Folder | What it shows | Run by the tests |
+| --- | --- | --- |
+| `invoice/` | A first program: totals in exact money. No account needed. | No |
+| `quickstart/` | The README's refund example, from Python and Node.js | Yes |
+| `policy/` | An app granting each run a refund limit from its own records | Yes (`python/tests/test_policy.py`) |
+| `claude/` | Claude decides on a refund; the complaint stays data | No: needs an Anthropic key |
+| `support_agent/` | A complete, publishable agent | Yes (`tests/support_agent_test.rs`) |
+| `finops/` | A finance agent attacked on purpose | Yes (`tests/capi_test.rs`) |
+| `frameworks/` | One refund tool on five agent frameworks | Yes (`tests/capi_test.rs`, `node/test/frameworks`) |
+| `sms_termii/`, `email_resend/` | One SMS and one email sent directly over `net.http` | No: need real accounts |
+| `capabilities/` | Libraries for Termii and Stripe that declare their own capabilities | Yes, against local stand-ins (`tests/library_test.rs`) |
 
-    staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
+## `invoice/`
 
-## Policy decided by your app
+```sh
+staalc run examples/invoice/invoice.staal --config examples/invoice/run.json
+```
 
-`policy/app.py` runs `policy/refund.staal` from Python and grants each run a
-refund limit from the customer's tier and the order's cost. Staal refuses any
-refund above it, and never one above the 500 USD the code allows, whatever the app
-grants. [Calling Staal from an app](../docs/guides/apps.md) explains it. You need the C library and
-an Anthropic API key:
+prints `{"amount":"187501.50","currency":"NGN"}`.
 
-    cargo build --release
-    STAAL_LIBRARY=target/release/libstaalc.so ANTHROPIC_API_KEY=... python3 examples/policy/app.py
+## `policy/`
 
-## A financial operations agent, attacked on purpose
+`app.py` grants each run of `refund.staal` a refund limit from the customer's tier and
+the order's cost. Staal refuses any refund above that limit, and never one above the
+500 USD the code allows. See [Calling Staal from an app](../docs/guides/apps.md).
 
-`finops/` is an agent that reads customer records, refunds, books, texts and keeps
-daily limits, and `finops/attacks.py` attacks it: planted instructions, unauthorized
-refunds, malicious arguments, replays, concurrent calls, a process killed mid-refund,
-lost answers, a mistake in the app's policy. Each attack is judged by what the
-stand-in bank and SMS service record, and the tests run it on both engines. It needs
-no account (Linux):
+```sh
+PYTHONPATH=python STAAL_LIBRARY=target/release/libstaalc.so ANTHROPIC_API_KEY=... python3 examples/policy/app.py
+```
 
-    PYTHONPATH=python STAAL_LIBRARY=target/release/libstaalc.so python3 examples/finops/attacks.py /tmp/finops
+With the `staal` package installed, `PYTHONPATH` and `STAAL_LIBRARY` are not needed.
 
-[docs/GUARANTEES.md](../docs/GUARANTEES.md) explains what it shows and where the
-guarantees stop.
+## `claude/`
 
-## A decision by Claude
+`triage.staal` asks Claude whether a complaint deserves a refund and validates the
+answer before using it. The complaint tries to instruct the model; it is passed as
+data.
 
-`claude/triage.staal` asks Claude whether a complaint deserves a refund and
-checks the answer before using it. The complaint tries to instruct the model;
-it stays data. You need an Anthropic API key:
+```sh
+export ANTHROPIC_API_KEY=...
+staalc run examples/claude/triage.staal --config examples/claude/run.json --log triage.jsonl
+```
 
-    export ANTHROPIC_API_KEY=...
-    staalc run examples/claude/triage.staal --config examples/claude/run.json --log triage.jsonl
+The log records the request, the tokens counted before the call, and the tokens the
+API reported. `"model"` in `run.json` selects the Claude model.
 
-The log shows the request, the tokens counted before the call, and the tokens
-the API reported using. Change `"model"` in `run.json` to use another Claude
-model.
+## `support_agent/`
 
-Build staalc first:
+Claude chooses to refund, decline or escalate; the agent's rules decide; it refunds
+through the business's own payment service, at most once and at most 100 USD. The
+folder holds `agent.json` and `agent.described.json`:
 
-    cargo build --release
+```sh
+staalc agent check examples/support_agent
+```
 
-## A support agent, ready to publish
+Its [README](support_agent/README.md) shows how to run it with a Claude key and a
+payment service.
 
-`support_agent/` goes further: Claude chooses to refund, decline or escalate, the
-agent's rules decide, and it refunds through the business's own payment service, at
-most once and at most 100 USD. It is a complete agent, with the description a business
-reads before installing it (`agent.json`) and what `staalc` worked out the program can
-do (`agent.described.json`):
+## `finops/`
 
-    staalc agent check examples/support_agent
+An agent that reads customer records, refunds, books, texts and keeps daily limits.
+`attacks.py` attacks it with planted instructions, unauthorized refunds, malicious
+arguments, replays, concurrent calls, a process killed mid-refund, lost answers and a
+mistake in the app's policy. Each attack is judged by what the stand-in bank and SMS
+service record. Linux only (it uses SQLite); no account needed:
 
-Its README shows how to run it with your own Claude key and payment service.
+```sh
+PYTHONPATH=python STAAL_LIBRARY=target/release/libstaalc.so python3 examples/finops/attacks.py /tmp/finops
+```
 
-## SMS through Termii
+[GUARANTEES.md](../docs/GUARANTEES.md) explains what it shows and where the guarantees
+stop.
 
-`sms_termii/send.staal` sends one SMS. The API key is read from the environment and
-only ever placed inside the JSON body Termii expects; the capability can reach one
-URL, once.
+## `sms_termii/`
 
-1. In your Termii dashboard, find your API key and an approved sender ID. Check
-   which base URL your dashboard shows. The program uses
-   `https://api.ng.termii.com`; if yours is different, change the URL in both
-   places in `send.staal` (the `only` pattern and the request).
-2. Edit `sms_termii/run.json`: `to` (international format without `+`, e.g.
-   `2348012345678`), `text`, `sender`, and `channel` (`generic`, or `dnd` if your
-   account is set up for it).
+`send.staal` sends one SMS. The API key is read from the environment and placed only
+in the request body; the capability reaches one URL, once.
+
+1. In the Termii dashboard, find the API key, an approved sender ID and the base URL.
+   The program uses `https://api.ng.termii.com`; for another base URL, change both the
+   `only` pattern and the request in `send.staal`.
+2. In `run.json`, set `to` (international format without `+`, such as
+   `2348012345678`), `text`, `sender` and `channel` (`generic`, or `dnd` if the account
+   allows it).
 3. Run:
 
-       export TERMII_API_KEY=your-key
-       ./target/release/staalc run examples/sms_termii/send.staal \
-           --config examples/sms_termii/run.json --journal sms.journal
+   ```sh
+   export TERMII_API_KEY=...
+   staalc run examples/sms_termii/send.staal --config examples/sms_termii/run.json --journal sms.journal
+   ```
 
-It prints `"sent, message id ..."`, or Termii's status and answer if it refused.
+It prints `"sent, message id ..."`, or Termii's status and answer.
 
-Termii does not deduplicate requests, so `run.json` does not set
-`idempotency_key`. If the connection breaks after the request was sent, the run
-stops `in_doubt` rather than risk a second SMS. Check your Termii message log; if
-the SMS was sent, record it and finish:
+Termii does not deduplicate requests, so the grant has no `idempotency_key`. If the
+connection breaks after the request may have been sent, the run stops in doubt rather
+than risk a second SMS. Check the Termii message log, then record what happened and
+resume:
 
-    ./target/release/staalc resolve --journal sms.journal --status 200 --body '{"message_id":"...","code":"ok"}'
-    ./target/release/staalc resume examples/sms_termii/send.staal --config examples/sms_termii/run.json --journal sms.journal
+```sh
+staalc resolve --journal sms.journal --status 200 --body '{"message_id":"...","code":"ok"}'   # it was sent
+staalc resolve --journal sms.journal --retry                                                 # it was not
+staalc resume examples/sms_termii/send.staal --config examples/sms_termii/run.json --journal sms.journal
+```
 
-If it was not sent, use `--retry` instead of `--status`.
+## `email_resend/`
 
-## Email through Resend
+`send.staal` sends one email. The API key is placed only in the `Authorization`
+header.
 
-`email_resend/send.staal` sends one email. The API key goes only into the
-`Authorization` header.
-
-1. Create an API key in Resend. Until you verify your own domain, Resend lets you
-   send from `onboarding@resend.dev` to the address of your own account only.
-2. Edit `email_resend/run.json`: `to`, `subject`, `text`, and `sender`.
+1. Create an API key in Resend. Until a domain is verified, Resend sends only from
+   `onboarding@resend.dev` to the account's own address.
+2. In `run.json`, set `to`, `subject`, `text` and `sender`.
 3. Run:
 
-       export RESEND_API_KEY=re_your_key
-       ./target/release/staalc run examples/email_resend/send.staal \
-           --config examples/email_resend/run.json --journal email.journal
+   ```sh
+   export RESEND_API_KEY=...
+   staalc run examples/email_resend/send.staal --config examples/email_resend/run.json --journal email.journal
+   ```
 
-Resend deduplicates by `Idempotency-Key`, so `run.json` sets
-`"idempotency_key": true`, and the runtime sends one with the request. If the
-connection breaks, resuming sends the request again with the same key, and Resend
-returns the first answer instead of sending a second email. Resend keeps keys for
-24 hours: resume within that time.
+Resend deduplicates by `Idempotency-Key`, so the grant sets `"idempotency_key": true`.
+After a broken connection, resuming sends the request again with the same key and
+Resend returns its first answer. Resend keeps keys for 24 hours; resume within that
+time.
 
-## Through a library: `capabilities/`
+## `capabilities/`
 
-`capabilities/termii.staal` and `capabilities/stripe.staal` are libraries that declare
-capabilities (`termii.sms.send`, `stripe.refunds.create`); `remind.staal` and
-`refund.staal` are programs that use them and never see a key or URL. They are
-tested against a local server (`tests/library_test.rs`), not the real services.
-`remind.json` and `refund.json` are run configs whose grants supply the
-libraries' `needs` (`docs/RUNTIME.md` section 13). Edit the phone number, sender
-ID, payment intent id and amount, then:
+`termii.staal` and `stripe.staal` are libraries that declare `termii.sms.send` and
+`stripe.refunds.create`. `remind.staal` and `refund.staal` use them and never hold a
+key or URL; `remind.json` and `refund.json` supply the libraries' `needs`
+([RUNTIME.md](../docs/RUNTIME.md), section 13). `support.staal` combines both with a
+model. After setting the phone number, sender ID, payment intent and amount:
 
-    export TERMII_API_KEY=your-key
-    ./target/release/staalc run examples/capabilities/remind.staal \
-        --config examples/capabilities/remind.json --journal remind.journal
+```sh
+export TERMII_API_KEY=...
+staalc run examples/capabilities/remind.staal --config examples/capabilities/remind.json --journal remind.journal
 
-    export STRIPE_SECRET_KEY=sk_test_your_key
-    ./target/release/staalc run examples/capabilities/refund.staal \
-        --config examples/capabilities/refund.json --journal refund.journal
+export STRIPE_SECRET_KEY=sk_test_...
+staalc run examples/capabilities/refund.staal --config examples/capabilities/refund.json --journal refund.journal
+```
 
-The phone number must match `only` in canonical form (international, no `+` or
-spaces). For Stripe, use a test-mode key and a test payment first. `refund.json`
-grants `post` with `"idempotency_key": true`, since Stripe deduplicates by
-Idempotency-Key, and limits the run to 5.00 USD. The checks listed below apply
-to these runs too.
+The phone number must match `only` in canonical form: international, without `+` or
+spaces. `refund.json` limits the run to 5.00 USD and grants `post` with
+`"idempotency_key": true`, since Stripe deduplicates by key. Use a test-mode key and
+payment first.
 
-## What to check
+## Checking a run against a real service
 
 - The message arrives once.
-- Neither the journal (`sms.journal`, `email.journal`) nor a log written with
-  `--log` contains your key: `grep -c your-key sms.journal` should print 0.
-- Changing the URL in the request to anything outside the `only` pattern makes the
-  run fail with `capability` before anything is sent.
+- Neither the journal nor a log written with `--log` contains the key:
+  `grep -c "$TERMII_API_KEY" sms.journal` prints `0`.
+- A request URL outside the `only` pattern fails with `capability` before anything is
+  sent.
 
-If you are behind a proxy, add `"net": { "proxy": "environment" }` to `run.json`.
+Behind a proxy, add `"net": { "proxy": "environment" }` to the run config.
