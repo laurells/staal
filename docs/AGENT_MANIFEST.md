@@ -1,17 +1,20 @@
-# Staal Agent Manifest Specification, revision v0.1.5 (freeze candidate, pending implementation proof)
+# Staal Agent Manifest Specification
 
-**Status: a design, not built.** Nothing here exists in `staalc` yet except what it
-says it reuses. It is written to be reviewed before any of it is built, as
-[MCP.md](MCP.md) section 12 was. v0.1 took in the first review's decisions (section
-12); v0.1.1 to v0.1.5 resolve the later reviews' points without widening the scope
-(sections 13 to 15, 17 and 18 list each and where it is answered). Section 16 lists what must
-be built and demonstrated before the format is frozen; from v0.1.5 the remaining
-blockers are closed by building those, not by further revisions of this text.
+Revision v0.1.5, format version `0.1`, a freeze candidate.
+
+**Status.** The format and its checks are built: `staalc agent describe` writes
+`agent.described.json`, `staalc agent check` checks a folder, and
+[docs/schemas/](schemas/) holds the JSON Schemas of both files. Every requirement of
+section 16 (R1 to R9) is implemented and demonstrated by the tests listed there. Not
+built: a registry, publication, installation (`staalc agent install`), and the
+Verified and Independently reviewed statuses (section 16). The format is not yet
+frozen. v0.1 took in the first review's decisions (section 12); v0.1.1 to v0.1.5
+resolve the later reviews' points (sections 13 to 15, 17 and 18).
 
 **Revision and format version are separate.** v0.1.5 is a revision of this
 document. The manifest format it defines is version `0.1`, the value of `"manifest"`.
 Review revisions do not change the format version; it is fixed when the specification
-is frozen and first implemented, and changes after that follow section 9.
+is frozen, and changes after that follow section 9.
 
 An agent manifest describes one deployable agent: what it does, what it can touch,
 the most it can do, and what happens when it fails. A business uses it to decide
@@ -966,7 +969,7 @@ check` and `describe`. Each is demonstrated by these tests.
   it does, it must refuse an agent whose analysis is incomplete.
 - R8: `docs/schemas/agent.schema.json` and `docs/schemas/agent.described.schema.json`,
   the value rules of section 4, and `staalc agent check` and `staalc agent describe`
-  (src/agent/). `tests/agent_check_test.rs` runs 87 `agent.json` fixtures
+  (src/agent/). `tests/agent_check_test.rs` runs 107 `agent.json` fixtures
   (tests/fixtures/agent/manifests/, written by `scripts/agent_fixtures.py`: unknown keys
   at every depth, each money, duration and version rule, licenses, categories,
   placeholders, reach, ceilings, grants and needs against the program, the tool host's
