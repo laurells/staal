@@ -3,11 +3,11 @@
 A package turns one service into a library capability: programs ask for it with
 limits, the operator grants it with keys, and the runtime holds every action to both.
 This guide takes one real service, Postmark's email API, from an empty folder to a
-package with tests that pass, ready for a pull request. It takes about an hour, and
-needs no knowledge of the compiler.
+package with tests that pass, ready for a pull request. It needs no knowledge of the
+compiler.
 
 The guide is tested: `tests/package_cases_test.rs` saves every file below into an
-empty folder and runs its tests, so what you read here works as written.
+empty folder and runs its tests.
 
 You need a clone of the repository, Rust (`cargo`), and git:
 
@@ -235,8 +235,8 @@ crash tests:
 Each test is run again, killed after every journal write and between every request
 and its recorded answer, then resumed; an email left in doubt is resolved from what
 the fake really received. Every run must end as the uninterrupted one did, with the
-same emails sent: none lost, none twice. You wrote none of this; it comes with every
-package.
+same emails sent: none lost, none twice. The crash testing needs nothing from the package
+beyond its test files.
 
 When a test fails, it names the test file and says what differed: a request's body,
 a header, the result, or what the service saw after a crash.
@@ -250,8 +250,8 @@ Add your capability to the table in `packages/README.md`, with a grant example:
                          "token": { "env": "POSTMARK_SERVER_TOKEN" },
                          "sender": "results@clinic.org" } }
 
-and an honest status: "tested against a local server only", until someone runs it
-against a real account with a test token.
+and its status: "tested against a local server only", until it has been run against a
+real account with a test token.
 
 Then check your work against the list in `packages/README.md` ("What every package
 must meet"), run `cargo test`, and open a pull request. The first response comes

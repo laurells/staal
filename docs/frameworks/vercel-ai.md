@@ -6,13 +6,13 @@ The model decides what to ask for. Staal decides what happens: a refund over the
 customer's limit is refused before any payment service is called, whatever the prompt
 said, and the model is told why.
 
-It takes about fifteen minutes, in TypeScript (plain JavaScript modules, which
+It is written in TypeScript (plain JavaScript modules, which
 TypeScript runs unchanged). The agent uses Claude through the AI SDK's Anthropic
 provider, so you need Node.js 22 or newer (which `ai` 7 needs) and an [Anthropic API
 key](https://console.anthropic.com); any provider whose models can call tools works the
 same way. No payment account is needed: with none configured, Staal uses a simulated
 payment service. Every file and output on this page is checked by the test suite (the
-Node framework tests), so what you see is what you will get.
+Node framework tests).
 
 This page is for `@staal/node` 0.26.0 or newer, the first release with this adapter.
 
@@ -74,8 +74,8 @@ never an argument the model can fill in. A customer whose tier the policy does n
 is refused outright, rather than given some default. `each` is the most one refund may
 be, and `uses: 1` allows one refund per call. `journals: 'runs'` is the folder where
 every call's journal is kept, so a run a crash interrupts is finished when the folder
-is next opened, and a refund it may already have sent is never sent again
-blind (the end of this page says how).
+is next opened, and a refund it may already have sent is not sent again blindly (see
+the end of this page).
 
 Before any model is involved, try it. Save this as `try_it.mjs`:
 
@@ -222,15 +222,14 @@ to choose: this one has only the refund.
 
 ## What is and isn't covered
 
-What Staal guarantees here: no refund over the customer's limit is made, whatever the
-model asks or the prompt says, and the customer's limit comes only from your app. Every
-call is journaled before it acts. If a crash comes after a refund was sent and before
-its answer was recorded, nobody can know from the app alone whether it happened, so
-Staal never sends it again blind. Every refund carries an idempotency key unique to its
-run and step: when the payment service deduplicates by it, as payment providers do, the
-refund is sent again with the same key and the service answers with the original
-result; otherwise the run stops for a person to check the service's own records and
-record what happened (`staalc resolve`).
+What Staal guarantees here: no refund exceeds the customer's limit, whatever the model
+asks or the prompt says, and that limit comes only from your app. Every call is
+journaled before it acts. If a crash comes after a refund was sent and before its
+answer was recorded, whether it happened is unknown, so Staal does not simply send it
+again. Each refund carries an idempotency key unique to its run and operation. When
+the payment service deduplicates by that key, the refund is sent again with the same
+key and the service returns its original result; otherwise the run stops until an
+operator checks the service's records and records the outcome with `staalc resolve`.
 
 What it doesn't: which refunds the model decides to ask for, or what it says to the
 customer. That is the model's part, and you shape it with the system prompt. Sections 5
