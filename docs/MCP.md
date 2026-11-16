@@ -955,8 +955,8 @@ nothing is retried. They are tested through each framework's own agent loop with
 model (python/tests/test_adapters.py, node/test/frameworks/), against the framework
 versions pinned in python/tests/frameworks.txt and node/test/frameworks/package.json. The
 Claude Agent SDK's loop runs in the Claude Code CLI it ships, pointed at a local server
-answering as the Messages API does. A weekly workflow, `frameworks-latest`, runs the same
-tests against each framework's latest release.
+answering as the Messages API does. The `frameworks-latest` workflow, run for each release tag,
+runs the same tests against each framework's latest release.
 
 
 ## 12. Remote transport (built; served only by a test build until reviewed)

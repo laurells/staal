@@ -26,7 +26,7 @@ With AddressSanitizer, so a memory error stops the run where it happens. It is a
 unstable compiler option; `RUSTC_BOOTSTRAP=1` lets the release toolchain (Rust
 1.97.0, which ships the sanitizer's runtime for x86_64 Linux) accept it, so the code
 fuzzed is compiled by the compiler that builds releases. CI runs every target this
-way weekly (`.github/workflows/fuzz.yml`):
+way for each release tag (`.github/workflows/fuzz.yml`):
 
 ```sh
 RUSTC_BOOTSTRAP=1 cargo fuzz run --sanitizer address engines -- -max_total_time=900 -timeout=10
